@@ -6,6 +6,59 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-29 — Phase 3 API: error envelope, conflict-resolve semantics, wizard state, backup format
+
+Five decisions taken while building the bridge API layer (Phase 3):
+
+1. **Error envelope.** Handled errors return `{"detail": {"code": <machine
+   code>, "message": <human message>}}` via a single `api/errors.py:api_error()`
+   helper. `code` is a stable string the UI branches on (e.g. `wizard_incomplete`,
+   `manual_value_required`, `mapping_not_found`); `message` is for display.
+   FastAPI's own validation (Pydantic `Literal`/`gt`) still returns its native
+   422 shape — we don't wrap those.
+
+2. **Conflict resolution = record now, apply on a later cycle.** `POST
+   /conflicts/{id}/resolve` writes `resolution`/`resolved_value`/`resolved_at`
+   on the row and drops it from the open queue, but performs **no upstream
+   write** (honours the no-auto-resolve hard rule and keeps sync logic in
+   `core/`). `resolved_value` is the chosen side's value (spoolman/filamentdb)
+   or the supplied `manual` value. ⚠️ Engine gap: `core/engine` does not yet
+   read resolved conflicts to push the chosen value upstream (and currently
+   re-queues an unresolved weight conflict every cycle). Wiring the engine to
+   consume resolutions is a Phase 2 follow-up — tracked, not done here.
+
+3. **Wizard decision state lives in `BridgeConfig`, not a new table.** The
+   wizard's direction (`import_direction`), match decisions
+   (`wizard_match_decisions`), and variant groupings (`wizard_variant_decisions`)
+   are persisted as JSON values in the existing key→JSON `BridgeConfig` store.
+   Chosen over a dedicated `wizard_state` table to avoid an Alembic migration for
+   transient setup data; Phase 3b reads these keys to execute (FR-7) and flips
+   `wizard_completed`. The source-of-truth choices reuse the existing
+   `*_source_of_truth` keys directly.
+
+4. **Backup format.** `GET /backup/export` emits a versioned envelope
+   (`schema_version = 1`) containing **bridge state only** — config, filament
+   mappings, spool mappings, and *open* conflicts — never a copy of upstream
+   data (CLAUDE.md). `POST /backup/import` is idempotent: mappings upsert by
+   their unique business key (`spoolman_filament_id` / `spoolman_spool_id`)
+   preserving ids so spool→filament FKs survive a clean restore; conflicts insert
+   only when no equivalent open conflict exists (natural key: entity_type +
+   field_name + the two ids). A mismatched `schema_version` is a 400.
+
+5. **Mapping status enum (the `/mappings` + dashboard contract).** Precedence:
+   `conflict` (an open Conflict references the spool) > `unlinked` (spool mapping
+   has no parent filament mapping) > `pending` (a side has no snapshot yet) >
+   `in_sync` (both snapshots present, no open conflict). Per-side weights and the
+   name/vendor/color display fields come from the last **snapshots** (the
+   Spoolman-side snapshot carries the filament detail; the FDB spool snapshot is
+   trimmed), so the endpoint needs no live upstream fetch.
+
+Test-harness note: the in-memory SQLite fixtures use `StaticPool` (one shared
+connection) because FastAPI's `TestClient` runs sync handlers in a worker thread,
+which would otherwise see its own empty `:memory:` database. `tests/conftest.py`
+also `setdefault`s the required env vars so `cd backend && pytest` is
+self-contained.
+
 ## 2026-05-29 — Async-job / sync-DB bridging approach (Option A — inline)
 
 `run_sync_cycle` is a single `async def` that `await`s client I/O and calls

@@ -1,10 +1,10 @@
 ---
 name: 2026-05-28-phase3-api-layer
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-05-28
 model: opus              # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+completed: 2026-05-29    # filled when the work is done
+result: Bridge API layer landed — sync/conflicts/mappings/config/wizard(read+decision)/backup/sync-log routers on /api, all delegating to core/; 21 new route tests (78 total green). FR-7 wizard execute remains carved out for Phase 3b.
 ---
 
 # Task: Phase 3 — Bridge API layer (wizard + sync/conflict/config/backup routers)

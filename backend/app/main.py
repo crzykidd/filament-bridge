@@ -25,7 +25,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
 from app import __version__
+from app.api import backup as backup_router
+from app.api import config as config_router
+from app.api import conflicts as conflicts_router
 from app.api import health as health_router
+from app.api import mappings as mappings_router
+from app.api import sync as sync_router
+from app.api import sync_log as sync_log_router
+from app.api import wizard as wizard_router
 from app.config import settings
 from app.core.engine import run_sync_cycle
 from app.db import SessionLocal
@@ -149,7 +156,14 @@ app = FastAPI(
 )
 
 app.include_router(health_router.router, prefix="/api")
+app.include_router(sync_router.router, prefix="/api")
+app.include_router(conflicts_router.router, prefix="/api")
+app.include_router(mappings_router.router, prefix="/api")
+app.include_router(config_router.router, prefix="/api")
+app.include_router(wizard_router.router, prefix="/api")
+app.include_router(backup_router.router, prefix="/api")
+app.include_router(sync_log_router.router, prefix="/api")
 
-# TODO Phase 5: mount React SPA static assets
+# TODO Phase 4: mount React SPA static assets
 # from fastapi.staticfiles import StaticFiles
 # app.mount("/", StaticFiles(directory="static", html=True), name="static")
