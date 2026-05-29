@@ -1,4 +1,31 @@
 {
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(**)",
+      "Write(**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true,
+    "network": {
+      "allowLocalBinding": true,
+      "allowedDomains": [
+        "localhost",
+        "127.0.0.1",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "registry.npmjs.org"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        "/tmp/**",
+        "~/.cache/**"
+      ]
+    }
+  },
   "hooks": {
     "PreToolUse": [
       {
