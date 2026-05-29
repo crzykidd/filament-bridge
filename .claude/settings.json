@@ -3,7 +3,11 @@
     "allow": [
       "Read(**)",
       "Edit(**)",
-      "Write(**)"
+      "Write(**)",
+      "mcp__vexp__run_pipeline",
+      "mcp__vexp__get_skeleton",
+      "mcp__vexp__index_status",
+      "mcp__vexp__expand_vexp_ref"
     ]
   },
   "sandbox": {
