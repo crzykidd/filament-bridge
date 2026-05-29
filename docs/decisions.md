@@ -22,7 +22,8 @@ unaffected.
 | Phase 0 | Backend foundation — FastAPI skeleton, health (FR-1), upstream clients | ✅ done |
 | Phase 1 | SQLite persistence — models, Alembic, config seed | ✅ done |
 | Phase 2 | Continuous sync engine — snapshot/diff/match/apply/conflict/log (FR-8…FR-14) | next |
-| Phase 3 | Wizard API + remaining routers (sync, conflicts, mappings, config, backup) | planned |
+| Phase 3 | Bridge API layer — wizard read/decision endpoints (FR-1…FR-6) + sync/conflict/mappings/config/backup/log routers | planned |
+| Phase 3b | Wizard execute (FR-7) — the initial-sync write to both upstreams; carved out for risk/isolation | planned |
 | Phase 4 | Frontend SPA + `/static` mount (FR-15…FR-19) | planned |
 
 The forward-references in the two completed prompts under `prompts/done/` were corrected
