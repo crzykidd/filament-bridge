@@ -6,6 +6,71 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-29 — Phase 3b wizard execute (FR-7): create order, idempotency, snapshot seed, fatal vs per-record
+
+Decisions taken while building `POST /api/wizard/execute` — the initial bulk
+write to both upstreams.
+
+1. **Create order = filaments → variants → spools, in three passes.** Phase A
+   resolves every source filament to a target filament id (link to an existing
+   one, or `create_filament`). Phase B applies the FR-6 variant groupings
+   (`update_filament` with `parentId`) as a *second pass* rather than setting
+   `parentId` at create time: the variant decisions are keyed by FDB filament id,
+   and a just-created filament has no id at decision time — so a variant decision
+   can only reference a pre-existing (linked) filament. By the time Phase B runs,
+   every referenced filament exists, so "parents before children" is satisfied
+   for free. Phase C creates the `FilamentMapping`/`SpoolMapping` rows and seeds
+   the spools. The parent id is resolved before spool seeding so the
+   `filamentdb_parent_id` cross-ref and the `FilamentMapping.filamentdb_parent_id`
+   column are written in one shot.
+
+2. **Idempotency is keyed on the bridge's own mapping tables *and* the upstream
+   cross-ref field.** Before creating, we skip if a `FilamentMapping`/`SpoolMapping`
+   row exists (the normal re-run case) *or* if the Spoolman spool already carries a
+   `filamentdb_spool_id` extra value (a prior run wrote upstream but its DB
+   transaction rolled back — the commit is at the very end). This makes a re-run
+   after a partial failure a no-op rather than a duplicator. Nothing upstream is
+   ever deleted to "clean up" a partial run (CLAUDE.md hard rule); the re-run
+   reconciles.
+
+3. **Fatal vs per-record failure governs the `wizard_completed` flip.** A failure
+   to *read* both systems is fatal — we write an error `SyncLog`, do **not** flip
+   `wizard_completed`, and return `502 upstream_fetch_failed` (nothing was
+   written). A single record's API error is isolated (NFR-4): it becomes a
+   `failed` report entry + an `error` `SyncLog` and the run continues; the flag
+   still flips, since the user can re-run to reconcile. There are no conflicts to
+   queue here — the wizard is the user explicitly choosing the initial state
+   (conflicts are an ongoing-sync concept, FR-13).
+
+4. **Seed weights are SET on create, never logged as usage.** New target spools
+   get their converted gross/net weight set directly on `create_spool`. Usage
+   entries (`log_usage`) are reserved for ongoing decrements (FR-9); emitting them
+   for the seed import would invent a fake consumption history.
+
+5. **Snapshots are seeded post-write (best-effort).** Each freshly-linked pair
+   gets both snapshot rows written using the engine's own
+   `_sm_snapshot_dict`/`_fdb_snapshot_dict`/`_upsert_snapshot` helpers, so cycle 1
+   of auto-sync diffs against a correct baseline instead of treating every record
+   as first-seen. A snapshot-write error is swallowed (the engine baselines a
+   first-seen pair anyway) so it can never fail the import.
+
+6. **Tare overrides ride in the execute request body, not BridgeConfig.** Unlike
+   match/variant decisions, the FR-5 per-spool tare overrides are *not* persisted
+   in Phase 3 (there is no `POST /wizard/weights`). The UI collects them on the
+   review screen and submits them with the execute call
+   (`WizardExecuteRequest.tare_overrides`, keyed by whichever spool id the active
+   direction uses). Absent an override, tare falls back to the spool's, then the
+   filament's, `spool_weight`, then the 200 g default.
+
+7. **Direction-model asymmetry (documented limitation).** The persisted
+   `MatchDecision` is Spoolman-keyed (`link`/`create`/`skip` per Spoolman
+   filament). It cleanly drives the `import_direction="spoolman"` path. For
+   `import_direction="filamentdb"` the same link decisions still pair both ids,
+   but FDB filaments with no link decision are created in Spoolman with no
+   per-record skip granularity (the FR-4 "skip this unmatched record" choice for
+   an FDB-only filament isn't representable in the Spoolman-keyed model). Accepted
+   for now; revisit if the FDB-import direction needs per-record skips.
+
 ## 2026-05-29 — Phase 3 API: error envelope, conflict-resolve semantics, wizard state, backup format
 
 Five decisions taken while building the bridge API layer (Phase 3):

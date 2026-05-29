@@ -266,6 +266,52 @@ class WizardVariantsRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Wizard execute (FR-7) — the initial-sync write to both upstreams
+# ---------------------------------------------------------------------------
+
+
+class WizardTareOverride(BaseModel):
+    """A per-spool tare override from the FR-5 weight-review step.
+
+    Weight overrides are not persisted in BridgeConfig (unlike match/variant
+    decisions) — the UI collects them on the review screen and submits them with
+    the execute call. Key by whichever spool id the active import direction uses.
+    """
+
+    spoolman_spool_id: int | None = None
+    filamentdb_spool_id: str | None = None
+    tare: float
+
+
+class WizardExecuteRequest(BaseModel):
+    tare_overrides: list[WizardTareOverride] = Field(default_factory=list)
+
+
+class WizardExecuteRecord(BaseModel):
+    """One per-record line in the FR-7 report, carrying both deep-link IDs."""
+
+    entity_type: Literal["filament", "spool"]
+    action: Literal["created", "updated", "skipped", "failed"]
+    spoolman_filament_id: int | None = None
+    spoolman_spool_id: int | None = None
+    filamentdb_filament_id: str | None = None
+    filamentdb_spool_id: str | None = None
+    detail: str | None = None
+    error: str | None = None
+
+
+class WizardExecuteResponse(BaseModel):
+    cycle_id: str
+    direction: SyncDirection
+    created: int
+    updated: int
+    skipped: int
+    failed: int
+    wizard_completed: bool
+    records: list[WizardExecuteRecord] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Backup (FR-24 / FR-25)
 # ---------------------------------------------------------------------------
 

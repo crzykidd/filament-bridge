@@ -25,7 +25,7 @@ from app.api import (
     sync_log,
     wizard,
 )
-from app.api.config import set_config_value
+from app.api.config import get_config_value, set_config_value
 from app.db import Base, get_db
 from app.models.config import BridgeConfig, seed_defaults
 from app.models.conflict import Conflict
@@ -53,13 +53,17 @@ def _fresh_db():
     return session
 
 
-def _fake_spoolman(spools=None, filaments=None) -> AsyncMock:
+def _fake_spoolman(spools=None, filaments=None, vendors=None) -> AsyncMock:
     client = AsyncMock()
     client.get_spools = AsyncMock(return_value=spools or [])
     client.get_filaments = AsyncMock(return_value=filaments or [])
+    client.get_vendors = AsyncMock(return_value=vendors or [])
     client.get_field_definitions = AsyncMock(return_value=[])
+    client.ensure_extra_fields = AsyncMock(return_value=None)
     client.update_spool = AsyncMock(return_value=MagicMock())
     client.create_spool = AsyncMock(return_value=MagicMock(id=999))
+    client.create_filament = AsyncMock(return_value=MagicMock(id=888))
+    client.create_vendor = AsyncMock(return_value=MagicMock(id=1))
     client.health = AsyncMock(
         return_value={"version": "1.0", "filament_count": 1, "spool_count": 1, "active_spool_count": 1}
     )
@@ -72,7 +76,9 @@ def _fake_filamentdb(filaments=None, detail=None) -> AsyncMock:
     client.get_filament = AsyncMock(return_value=detail)
     client.log_usage = AsyncMock(return_value={})
     client.update_spool = AsyncMock(return_value={})
+    client.update_filament = AsyncMock(return_value=MagicMock(id="fil-x"))
     client.create_spool = AsyncMock(return_value={"_id": "new-spool-id"})
+    client.create_filament = AsyncMock(return_value=MagicMock(id="new-fil-id"))
     client.health = AsyncMock(return_value={"filament_count": 1, "spool_count": 1})
     return client
 
@@ -402,6 +408,186 @@ def test_wizard_connectivity_blocked_when_down(db):
     assert body["blocked"] is True
     assert body["systems"]["spoolman"]["status"] == "error"
     assert body["systems"]["filamentdb"]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Wizard execute (FR-7) — initial-sync write
+# ---------------------------------------------------------------------------
+
+
+def _setup_link_execute(db):
+    """One Spoolman filament (id 10) + spool (id 1), linked to FDB 'fil-1'."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", color_hex="red",
+                                    vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-1"})
+    return spoolman, filamentdb
+
+
+def test_wizard_execute_clean_links_creates_spool_and_maps(db):
+    spoolman, filamentdb = _setup_link_execute(db)
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["wizard_completed"] is True
+    assert body["direction"] == "spoolman_to_filamentdb"
+    assert body["created"] == 1  # the FDB spool
+    assert body["failed"] == 0
+
+    # FDB spool created with the seed weight SET (net 800 + 200 default tare).
+    filamentdb.create_spool.assert_awaited_once()
+    f_args = filamentdb.create_spool.await_args
+    assert f_args.args[0] == "fil-1"
+    assert f_args.args[1]["totalWeight"] == 1000.0
+    assert f_args.args[1]["label"] == "1"  # Spoolman spool id stored in FDB label
+
+    # Cross-ref IDs written back to the Spoolman spool extra fields (JSON-encoded).
+    spoolman.update_spool.assert_awaited_once()
+    extra = spoolman.update_spool.await_args.args[1]["extra"]
+    assert extra["filamentdb_id"] == json.dumps("fil-1")
+    assert extra["filamentdb_spool_id"] == json.dumps("fdb-spool-1")
+
+    # Mapping rows on both sides.
+    fm = db.query(FilamentMapping).one()
+    assert fm.spoolman_filament_id == 10 and fm.filamentdb_id == "fil-1"
+    sm_map = db.query(SpoolMapping).one()
+    assert sm_map.spoolman_spool_id == 1 and sm_map.filamentdb_spool_id == "fdb-spool-1"
+
+    # wizard_completed persisted; snapshots seeded for the pair.
+    assert get_config_value(db, "wizard_completed") is True
+    assert db.query(Snapshot).filter_by(source="spoolman", entity_id="1").count() == 1
+    assert db.query(Snapshot).filter_by(source="filamentdb", entity_id="fdb-spool-1").count() == 1
+
+
+def test_wizard_execute_seed_weight_is_set_not_logged_as_usage(db):
+    spoolman, filamentdb = _setup_link_execute(db)
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+    # Seed weights are SET on create — never decremented via usage entries (FR-9).
+    filamentdb.log_usage.assert_not_called()
+    assert db.query(SyncLog).filter_by(action="create", entity_type="spool").count() == 1
+
+
+def test_wizard_execute_creates_missing_fdb_filament(db):
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 500.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    filamentdb.create_filament.assert_awaited_once()
+    assert body["created"] == 2  # filament + spool
+    assert db.query(FilamentMapping).one().filamentdb_id == "new-fil"
+
+
+def test_wizard_execute_idempotent_rerun_no_duplicates(db):
+    """A re-run over already-linked records creates nothing new."""
+    spoolman, filamentdb = _setup_link_execute(db)
+    # Simulate a prior (partial) run that already persisted the mappings.
+    fm = FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1")
+    db.add(fm)
+    db.flush()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1",
+                        filamentdb_spool_id="fdb-spool-1", filament_mapping_id=fm.id))
+    db.commit()
+
+    body = client = _client(db, spoolman, filamentdb).post("/api/wizard/execute").json()
+    assert body["created"] == 0
+    assert body["failed"] == 0
+    filamentdb.create_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    # No duplicate mapping rows.
+    assert db.query(FilamentMapping).count() == 1
+    assert db.query(SpoolMapping).count() == 1
+
+
+def test_wizard_execute_per_record_error_isolation(db):
+    """One spool's API error → a failed entry; the rest still import; flag flips."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0), _sm_spool(2, 600.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+
+    async def _create_spool(filament_id, payload):
+        if payload["label"] == "2":
+            raise RuntimeError("boom")
+        return {"_id": "fdb-spool-1"}
+
+    filamentdb.create_spool = AsyncMock(side_effect=_create_spool)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["created"] == 1
+    assert body["failed"] == 1
+    assert body["wizard_completed"] is True  # per-record failure is non-fatal
+    # Only the good spool got a mapping row.
+    assert db.query(SpoolMapping).count() == 1
+    assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
+
+
+def test_wizard_execute_fatal_fetch_does_not_complete(db):
+    set_config_value(db, "import_direction", "spoolman")
+    db.commit()
+    spoolman = _fake_spoolman()
+    spoolman.get_filaments = AsyncMock(side_effect=RuntimeError("unreachable"))
+    client = _client(db, spoolman, _fake_filamentdb())
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["code"] == "upstream_fetch_failed"
+    # A fatal fetch failure must NOT flip the wizard-complete flag.
+    assert get_config_value(db, "wizard_completed") is False
+
+
+def test_wizard_execute_filamentdb_direction_seeds_spoolman(db):
+    """Smoke test for the reverse import: create Spoolman records from FDB."""
+    set_config_value(db, "import_direction", "filamentdb")
+    db.commit()
+    fdb = [_fdb_filament("fil-1", "fdb-spool-1", 1000.0, tare=200.0)]
+    spoolman = _fake_spoolman(filaments=[], vendors=[])
+    spoolman.create_vendor = AsyncMock(return_value=SpoolmanVendor(id=5, name="elegoo"))
+    spoolman.create_filament = AsyncMock(
+        return_value=SpoolmanFilament(id=20, name="PLA", vendor=SpoolmanVendor(id=5, name="elegoo")))
+    spoolman.create_spool = AsyncMock(return_value=_sm_spool(50, 800.0))
+    filamentdb = _fake_filamentdb(filaments=fdb)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["direction"] == "filamentdb_to_spoolman"
+    assert body["wizard_completed"] is True
+    assert body["created"] == 2  # Spoolman filament + spool
+    spoolman.create_filament.assert_awaited_once()
+    spoolman.create_spool.assert_awaited_once()
+    # net = 1000 gross - 200 tare = 800
+    assert spoolman.create_spool.await_args.args[0]["remaining_weight"] == 800.0
+    # SM id written back into the FDB spool label.
+    filamentdb.update_spool.assert_awaited_once()
+    assert filamentdb.update_spool.await_args.args[2]["label"] == "50"
+    sm_map = db.query(SpoolMapping).one()
+    assert sm_map.spoolman_spool_id == 50 and sm_map.filamentdb_spool_id == "fdb-spool-1"
 
 
 # ---------------------------------------------------------------------------

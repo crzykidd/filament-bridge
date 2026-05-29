@@ -1,10 +1,10 @@
 ---
 name: 2026-05-28-phase3b-wizard-execute
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-05-28
 model: opus              # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+completed: 2026-05-29    # filled when the work is done
+result: Added POST /api/wizard/execute (FR-7) — direction-aware initial-sync write to both upstreams with cross-ref linking, weight conversion, mappings, snapshot seeding, idempotent re-runs, per-record isolation, and the wizard_completed flip. 7 new tests; suite green (85).
 ---
 
 # Task: Phase 3b — Wizard execute (FR-7, the initial-sync write)
