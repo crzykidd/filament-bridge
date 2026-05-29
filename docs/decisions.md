@@ -6,6 +6,15 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-28 — Synchronous SQLAlchemy (not async) for the persistence layer
+
+Used `create_engine` / `Session` rather than `create_async_engine` / `AsyncSession`.
+SQLite latency is microseconds — the only real bottleneck is the HTTP calls to Spoolman
+and Filament DB. Async SQLAlchemy + Alembic autogenerate also requires a sync
+compatibility shim that adds complexity for zero practical gain. FastAPI runs sync
+`Depends` handlers in a threadpool automatically, so sync DB sessions in route handlers
+are safe without any extra wrapper.
+
 ## 2026-05-28 — Deep-link routes (corrects PRD NFR-7 / CLAUDE.md)
 
 Verified against the live crzynet instances. The spec's guessed patterns were wrong:

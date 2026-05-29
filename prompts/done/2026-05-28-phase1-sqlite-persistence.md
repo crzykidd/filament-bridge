@@ -1,10 +1,16 @@
 ---
 name: 2026-05-28-phase1-sqlite-persistence
-status: pending
+status: completed
 created: 2026-05-28
 model: sonnet
-completed:
-result:
+completed: 2026-05-28
+result: >
+  All five SQLAlchemy models created (FilamentMapping, SpoolMapping, Conflict, SyncLog,
+  Snapshot, BridgeConfig). Alembic initialized with env.py wired to app.db.Base and all
+  model modules. Initial migration generated (9e504c864be4) covering all 6 tables.
+  main.py lifespan updated to run migrations and seed BridgeConfig defaults on startup.
+  Verified: sqlite3 shows all 6 tables, all 6 seed rows present, alembic current reports head.
+  Sync SQLAlchemy decision recorded in docs/decisions.md.
 ---
 
 # Task: Phase 1 — SQLite persistence layer
