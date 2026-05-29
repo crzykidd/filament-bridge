@@ -6,6 +6,90 @@ filament-bridge is a bidirectional sync service between [Filament DB](https://gi
 
 **Read `docs/prd.md` before writing any code.** It contains the full functional requirements, prioritization (P0/P1/P2), data flow diagrams, and open questions. This file is the quick-reference; the PRD is the spec.
 
+## Standards
+
+This project adopts engineering standards from the crzynet `homelab-configs` repo. **Read [`standards.md`](standards.md) at session start** whenever the work could touch branching, commits, PRs, releases, or handoff prompts — it lists every standard and the pinned version this repo actually implements. The hard per-session rules are inlined below; the rest is linked, not restated.
+
+<!--
+Source: standards/code-checkin-and-pr @ v1.1.0 (crzynet/homelab-configs).
+Paste the section below verbatim into the adopting project's CLAUDE.md.
+The full standard (publishing matrix, retention, CI check definitions) lives at:
+https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/code-checkin-and-pr/README.md
+-->
+
+### Code check-in (operational rules)
+
+This project adopts the `code-checkin-and-pr` standard. The full why-and-how lives at
+the source above; the rules below are the per-session do/don'ts a coding agent must
+honor by default:
+
+- **Never push directly to `main`.** `main` is protected. All changes land via a pull
+  request from `dev` → `main`, and only when every required check is green.
+- **Day-to-day work happens on `dev`** (or a short-lived branch off `dev`). Push to
+  `dev` freely.
+- **Commit message prefixes are required** — Conventional-Commits style:
+  - `feat:` — new user-facing feature
+  - `fix:` — bug fix
+  - `chore:` — config, tooling, dependencies, maintenance
+  - `docs:` — documentation-only changes
+- **Do not add `Co-authored-by:` trailers** unless the user explicitly asks.
+- **Doc updates ship in the same commit as the code they describe** — never as a
+  follow-up commit.
+- **Never bypass hooks** (no `--no-verify`, `--no-gpg-sign`, etc.) unless the user
+  explicitly asks. If a hook fails, fix the underlying issue.
+- **Stable releases are tagged from `main` only.** Don't tag from `dev`.
+
+If you're unsure whether an action would violate one of the above, stop and ask before
+acting.
+
+<!--
+Source: standards/release-prep-and-cut @ v1.0.0 (crzynet/homelab-configs).
+Paste the section below verbatim into the adopting project's CLAUDE.md.
+The full standard (two-phase prep/cut workflow, archive trigger, validation
+steps, adoption checklist) lives at:
+https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/release-prep-and-cut/README.md
+-->
+
+### Release process (operational rules)
+
+This project adopts the `release-prep-and-cut` standard. The full why-and-how
+lives at the source above; the rules below are the per-session do/don'ts a
+coding agent must honor by default:
+
+- **The version is stored BARE in the source-of-truth file** — no `v` prefix
+  anywhere in code. The `v` prefix is added in exactly one place: the git tag
+  and matching GitHub release name. Don't add it to README badges, CHANGELOG
+  headers, in-code image tags, or anywhere else.
+- **`CHANGELOG.md` is the single source of truth for release notes.** The PR
+  description (set by `/release-prep`) and the GitHub release body (set by
+  `/release-cut`) reuse the **same section verbatim**. Never author release
+  notes twice.
+- **One commit per release prep.** Version bump + changelog roll + every doc
+  sync ship in a single `chore(release): prepare v<version>` commit. No
+  `Co-authored-by:` trailers.
+- **Never re-tag.** If `v<version>` already exists as a local tag, a remote
+  tag, or a GitHub release, STOP. Never delete-and-recreate; never `--force`.
+  Pick the next version instead.
+- **`/release-cut` only after the PR has merged and CI is green.** The
+  publish-to-`main` workflow must have already pushed `:latest` images to the
+  registry before `/release-cut` runs. If you cannot confirm both — STOP and
+  tell the user to wait.
+- **The release tag is the only thing the cut command writes to `main`.** Both
+  the prep commit and any follow-up docs commit land on `dev` and reach `main`
+  only via PR. Never push directly to `main` as part of a release.
+
+If you're unsure whether an action would violate one of the above, stop and
+ask before acting.
+
+### Handoff prompts
+
+This project follows the
+[`handoff-prompt-workflow`](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
+standard for scoped work: plan → decide → execute → document. Pending tasks live in
+`prompts/` (one file per task, from `prompts/TEMPLATE.md`); completed ones move to
+`prompts/done/` (or `prompts/failed/`). Non-obvious decisions get logged in
+[`docs/decisions.md`](docs/decisions.md). See the standard for the full why.
+
 ## Key concepts
 
 - **Filament DB** — Next.js 14 / MongoDB app for filament profile management, slicer integration, calibrations, NFC tags. REST API at `/api/`. Spools are embedded subdocuments on filament records (not a separate collection). Uses MongoDB ObjectIds (24-char hex). Weight model is GROSS (filament + reel tare). API is unauthenticated. [API docs](https://github.com/hyiger/filament-db/blob/main/docs/api.md)
