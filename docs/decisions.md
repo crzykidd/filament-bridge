@@ -6,6 +6,26 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-29 — Async-job / sync-DB bridging approach (Option A — inline)
+
+`run_sync_cycle` is a single `async def` that `await`s client I/O and calls
+synchronous SQLAlchemy code inline — no thread, no second sync httpx client.
+SQLite latency is microseconds; the only real bottleneck is the HTTP calls to
+Spoolman and Filament DB. The brief loop stall is harmless for a single-container
+homelab service. Rejected Option B (offload DB to `asyncio.to_thread` with a sync
+httpx client) because it would split stack traces across the event loop and a worker
+thread, surface errors a step removed from their cause, and require a parallel sync
+`httpx.Client` purely to make the thread viable. Only revisit if a much larger
+inventory (≫ 1000 spools) makes a cycle long enough to visibly stall the event loop.
+
+## 2026-05-29 — Spoolman extra-field conflict-key definition (Phase 2)
+
+The conflict `field_name` for a weight disagreement is `"weight"` (not
+`"remaining_weight"` or `"totalWeight"`) so the resolution UI can display a
+single unified weight conflict rather than two system-specific column names.
+Field-mapping conflicts use the FDB dotted path (e.g. `"temperatures.nozzle"`)
+as the key, which is the canonical name in the bridge's field-map config.
+
 ## 2026-05-28 — Canonical build-phase numbering (closes the skipped Phase 2)
 
 The handoff prompts grew a numbering gap: Phase 0 (backend foundation) and Phase 1

@@ -4,10 +4,12 @@ Startup sequence:
   1. Config is validated at import time (app/config.py raises SystemExit on missing vars)
   2. Lifespan runs Alembic migrations and seeds default BridgeConfig rows
   3. Lifespan opens async HTTP clients for both upstream APIs
-  4. APScheduler is started with no jobs (auto-sync is OFF by default; Phase 3 adds the cycle)
-  5. Health endpoint is available immediately at GET /api/health
+  4. ensure_extra_fields() creates the three Spoolman cross-ref fields if absent
+  5. APScheduler registers an interval job (SYNC_INTERVAL_SECONDS) that reads
+     auto_sync_enabled from BridgeConfig each tick — if false it is a no-op
+  6. Health endpoint is available immediately at GET /api/health
 
-Phase 5 TODO: mount /static for the React SPA
+Phase 4 TODO: mount /static for the React SPA
 """
 
 import json
@@ -25,8 +27,9 @@ from fastapi import FastAPI
 from app import __version__
 from app.api import health as health_router
 from app.config import settings
+from app.core.engine import run_sync_cycle
 from app.db import SessionLocal
-from app.models.config import seed_defaults
+from app.models.config import BridgeConfig, seed_defaults
 from app.services.filamentdb import FilamentDBClient
 from app.services.spoolman import SpoolmanClient
 
@@ -96,8 +99,37 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.filamentdb = FilamentDBClient(settings.filamentdb_url)
 
     async with app.state.spoolman, app.state.filamentdb:
+        # Ensure Spoolman cross-ref extra fields exist (created once on startup)
+        try:
+            await app.state.spoolman.ensure_extra_fields()
+        except Exception as exc:
+            logger.warning("Could not ensure Spoolman extra fields: %s", exc)
+
+        async def _sync_job() -> None:
+            db = SessionLocal()
+            try:
+                row = db.query(BridgeConfig).filter_by(key="auto_sync_enabled").first()
+                enabled = json.loads(row.value) if row else False
+                if not enabled:
+                    logger.debug("Auto-sync disabled — skipping cycle")
+                    return
+                await run_sync_cycle(db, app.state.spoolman, app.state.filamentdb, dry_run=False)
+            except Exception as exc:
+                logger.error("Unhandled error in sync job: %s", exc, exc_info=True)
+            finally:
+                db.close()
+
+        _scheduler.add_job(
+            _sync_job,
+            "interval",
+            seconds=settings.sync_interval_seconds,
+            id="sync_cycle",
+        )
         _scheduler.start()
-        logger.info("Scheduler started — auto-sync disabled, no jobs scheduled")
+        logger.info(
+            "Scheduler started — interval=%ds, auto-sync gated by BridgeConfig.auto_sync_enabled",
+            settings.sync_interval_seconds,
+        )
         try:
             yield
         finally:

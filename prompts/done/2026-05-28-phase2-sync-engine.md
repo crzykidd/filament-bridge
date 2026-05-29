@@ -1,10 +1,10 @@
 ---
 name: 2026-05-28-phase2-sync-engine
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-05-28
-model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+model: sonnet
+completed: 2026-05-29
+result: core/ engine + helpers, client write methods, scheduler wiring, 57 tests passing
 ---
 
 # Task: Phase 2 — Continuous sync engine
