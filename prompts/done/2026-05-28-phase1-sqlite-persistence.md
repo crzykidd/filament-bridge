@@ -16,7 +16,7 @@ result: >
 # Task: Phase 1 — SQLite persistence layer
 
 Add SQLAlchemy models, Alembic migrations, and a database session factory so that
-Phase 3 (sync engine) and Phase 4 (wizard API) have a working persistence layer to
+Phase 2 (sync engine) and Phase 3 (wizard API) have a working persistence layer to
 write to. No sync logic yet — just schema, seed defaults, and startup wiring.
 
 ## Before you start
@@ -254,7 +254,7 @@ cd backend && DATA_DIR=/tmp/bridge-test \
 - `check_same_thread=False` on the SQLite engine (FastAPI uses multiple threads).
 - All datetimes stored as UTC; no timezone info in the column (SQLite has no native tz type).
 - Data dir comes from `settings.data_dir`; ensure the directory exists before opening the DB.
-- No raw `json.loads`/`json.dumps` calls scattered in routes — that's Phase 3's concern;
+- No raw `json.loads`/`json.dumps` calls scattered in routes — that's Phase 2's concern;
   here just define the columns as `Text` and note they store JSON.
 - Keep models thin — no business logic, no sync rules, just columns + relationships.
 - No tests required yet; the manual sqlite3 check above is sufficient for Phase 1.

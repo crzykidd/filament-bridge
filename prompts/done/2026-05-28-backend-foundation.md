@@ -58,9 +58,9 @@ and ask before touching. Surface unrelated dirty files once as awareness; don't 
    concurrently and returns connectivity status, version, and record counts for each.
    Degraded (one side down) returns 200 with per-system status, not a hard failure (NFR-4).
 8. **`backend/app/main.py`** — FastAPI app; mount the health router; init APScheduler
-   (scheduler created but **no jobs / auto-sync OFF** — Phase 3 adds the cycle);
+   (scheduler created but **no jobs / auto-sync OFF** — Phase 2 adds the cycle);
    structured JSON logging to stdout (NFR-5); leave a commented placeholder for the
-   `/static` SPA mount (Phase 5). App must start fast (NFR-3).
+   `/static` SPA mount (Phase 4). App must start fast (NFR-3).
 9. Verify it runs: `cd backend && uvicorn app.main:app --port 8090` and `GET /api/health`
    returns a sensible shape. (Live upstreams optional — degraded response is fine.)
 

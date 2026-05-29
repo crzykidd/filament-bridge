@@ -6,6 +6,28 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-28 — Canonical build-phase numbering (closes the skipped Phase 2)
+
+The handoff prompts grew a numbering gap: Phase 0 (backend foundation) and Phase 1
+(SQLite persistence) shipped, but the prompts then forward-referenced "Phase 3 (sync
+engine)" and "Phase 4 (wizard API)" — there was never a Phase 2. The Phase 0 prompt only
+mentioned Phase 2 in passing ("clients ... Phase 2 leans on this"). To keep the sequence
+contiguous, the remaining work is renumbered to close the gap. This table is the single
+source of truth for build-phase numbers; product-facing phases in `README.md` (guided
+sync → dry run → auto-sync) and the migration-guide phases are separate schemes and are
+unaffected.
+
+| Build phase | Scope | Status |
+|---|---|---|
+| Phase 0 | Backend foundation — FastAPI skeleton, health (FR-1), upstream clients | ✅ done |
+| Phase 1 | SQLite persistence — models, Alembic, config seed | ✅ done |
+| Phase 2 | Continuous sync engine — snapshot/diff/match/apply/conflict/log (FR-8…FR-14) | next |
+| Phase 3 | Wizard API + remaining routers (sync, conflicts, mappings, config, backup) | planned |
+| Phase 4 | Frontend SPA + `/static` mount (FR-15…FR-19) | planned |
+
+The forward-references in the two completed prompts under `prompts/done/` were corrected
+to match (sync engine 3→2, wizard 4→3, SPA 5→4).
+
 ## 2026-05-28 — Synchronous SQLAlchemy (not async) for the persistence layer
 
 Used `create_engine` / `Session` rather than `create_async_engine` / `AsyncSession`.
