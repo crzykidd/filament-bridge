@@ -11,4 +11,5 @@ daemon.pipe
 mcp.port
 healthy
 parent_workspace.json
+workspace.json
 token-savings-report.md
