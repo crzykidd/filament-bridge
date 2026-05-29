@@ -1,9 +1,12 @@
 # Private data (user-specific exports, configs, API dumps)
 private_data/
 
-# Node
+# Node / frontend
 node_modules/
 dist/
+.vite/
+*.tsbuildinfo
+coverage/
 .env
 .env.*
 !.env.example
@@ -28,6 +31,10 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Logs
 *.log
