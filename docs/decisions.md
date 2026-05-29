@@ -47,6 +47,14 @@ Note: `limit=1000` includes archived (active+archived both returned 223), so fil
 delta when multiple printers decrement one spool between cycles; per-printer attribution
 is out of scope — documented, not silently dropped.
 
+## 2026-05-28 — Docker base images: node:22-alpine (build) + python:3.12-slim-bookworm (runtime)
+
+Multi-stage Dockerfile uses `node:22-alpine` for the React build stage (throw-away, never
+ships) and `python:3.12-slim-bookworm` for the final runtime stage. Slim was chosen over
+distroless/Chainguard because the service is still under active development — no shell
+means no `exec`-based debugging, which is painful for a homelab sync tool. Revisit
+distroless (`gcr.io/distroless/python3-debian12`) once the app is stable.
+
 ## 2026-05-28 — Canonical version file is `backend/app/__init__.py`
 
 For the `release-prep-and-cut` standard, the bare version lives in

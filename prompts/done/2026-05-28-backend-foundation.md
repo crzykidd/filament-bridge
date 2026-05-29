@@ -1,10 +1,10 @@
 ---
 name: 2026-05-28-backend-foundation
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-05-28
-model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+model: sonnet
+completed: 2026-05-28
+result: FastAPI skeleton running; GET /api/health returns 200 (degraded/error) with JSON logs; fail-fast on missing env vars confirmed
 ---
 
 # Task: Backend foundation (Phase 0)
