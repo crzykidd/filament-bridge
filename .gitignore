@@ -1,0 +1,27 @@
+# Private data (user-specific exports, configs, API dumps)
+private_data/
+
+# Node
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+compose.dev.yml
+
+# Logs
+*.log
+logs/
