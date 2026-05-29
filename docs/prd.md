@@ -314,7 +314,7 @@ Field names are configurable via environment variables.
 
 ### NFR-7: Deep-linkable
 - Every spool and filament reference in the UI includes direct links to both Filament DB and Spoolman web UIs
-- Link format: `{FILAMENTDB_URL}/filament/{id}` and `{SPOOLMAN_URL}/#/spool/{id}` (configurable URL patterns)
+- Link format: `{FILAMENTDB_URL}/filaments/{id}` and `{SPOOLMAN_URL}/spool/show/{id}` (configurable URL patterns; verified against live instances)
 - Links open in new tabs
 
 ---
@@ -325,8 +325,8 @@ Throughout the web UI, every record that maps to a spool or filament in either s
 
 | Icon | Target | URL pattern |
 |---|---|---|
-| 🔵 Filament DB icon | Filament detail page | `{FILAMENTDB_URL}/filament/{filamentdb_id}` |
-| 🟢 Spoolman icon | Spool detail page | `{SPOOLMAN_URL}/#/spool/{spoolman_id}` |
+| 🔵 Filament DB icon | Filament detail page (spool rows link here too — no standalone spool page) | `{FILAMENTDB_URL}/filaments/{filamentdb_id}` |
+| 🟢 Spoolman icon | Spool / filament detail page | `{SPOOLMAN_URL}/spool/show/{spoolman_id}` · `/filament/show/{id}` |
 
 These appear in: the initial sync wizard match review (FR-4), the synced records view (FR-19), the conflict resolution UI (FR-16), and the sync log (FR-17). URL base paths are derived from the configured `FILAMENTDB_URL` and `SPOOLMAN_URL` environment variables.
 
@@ -334,18 +334,21 @@ These appear in: the initial sync wizard match review (FR-4), the synced records
 
 ## Open questions
 
-1. **Sync granularity for weight** — do we sync on every weight change, or only when the delta exceeds a threshold? Small rounding differences between the two systems could cause unnecessary sync churn.
+> Resolved 2026-05-28 against the live crzynet instances. Decisions are recorded in
+> [`docs/decisions.md`](decisions.md); raw API evidence in `private_data/findings.md`.
 
-2. **Spoolman extra field creation** — can the bridge auto-create the required extra fields in Spoolman via API, or does the user need to create them manually first?
+1. **Sync granularity for weight** — ✅ **Resolved.** Sync only when the delta ≥ a configurable threshold (default ~2g) to avoid net/gross rounding churn.
 
-3. **Filament DB variant creation via API** — `POST /api/filaments` with `parentId` set should create a variant, but need to confirm this works and that inherited fields resolve correctly.
+2. **Spoolman extra field creation** — ✅ **Resolved.** The bridge creates its cross-ref fields via `POST /api/v1/field/{entity_type}/{key}` on startup (`GET /api/v1/field/spool` returns `[]` today). Extra-field text values round-trip JSON-double-quoted — `json.loads`/`json.dumps` on read/write.
 
-4. **OctoPrint 2.0 impact** — OctoPrint 2.0 may change Spoolman integration patterns. Monitor RC releases.
+3. **Filament DB variant creation via API** — ✅ **Resolved.** `parentId` links variants; `GET /api/filaments/:id` resolves inheritance server-side and reports it in `_inherited[]`/`_parent`/`_variants`. Strip computed fields before PUT; don't write fields listed in `_inherited[]`.
 
-5. **Moonraker compatibility** — Moonraker's Spoolman proxy may affect how the bridge sees weight updates. Need to test.
+4. **OctoPrint 2.0 impact** — ⏳ **Deferred (monitor).** No bridge code depends on it; watch RC releases.
 
-6. **Rate limiting** — neither Filament DB nor Spoolman document rate limits, but aggressive polling on short intervals with large inventories could be an issue. May need to implement incremental sync (only fetch changed records) rather than full snapshot on each cycle.
+5. **Moonraker compatibility** — ⏳ **Deferred.** Test once the sync engine exists.
 
-7. **Multi-printer attribution** — when multiple OctoPrint instances decrement the same spool in Spoolman between sync cycles, the bridge sees one aggregate delta. Is losing per-printer attribution acceptable, or should the bridge try to correlate with OctoPrint job data?
+6. **Rate limiting** — ✅ **Resolved (for now).** Full-snapshot diff each cycle; `GET /api/v1/spool?limit=1000` returns all 223 spools (incl. archived — filter `archived == false` client-side). Add incremental fetch only if a larger inventory demands it.
 
-8. **Filament DB and Spoolman URL path patterns** — need to confirm the exact URL structure for deep links into both web UIs. Filament DB uses Next.js routing (likely `/filament/{id}`), Spoolman uses hash routing (`/#/spool/{id}`).
+7. **Multi-printer attribution** — ✅ **Resolved.** Accept the aggregate delta; per-printer attribution is out of scope (documented, not silently dropped).
+
+8. **Filament DB and Spoolman URL path patterns** — ✅ **Resolved.** Filament DB `{FILAMENTDB_URL}/filaments/{id}` (plural, no standalone spool page); Spoolman `{SPOOLMAN_URL}/spool/show/{id}` and `/filament/show/{id}` (no hash routing).

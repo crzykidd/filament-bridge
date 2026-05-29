@@ -248,9 +248,9 @@ Spoolman `remaining_weight` is net filament. Filament DB `totalWeight` is gross 
 - Spoolman filament has `spool_weight` (tare) which may or may not be set. Default to ~200g if missing during weight conversion.
 
 ### Deep links (UI requirement)
-Every record in the bridge UI must show two clickable icons linking to that record in each upstream system:
-- Filament DB: `{FILAMENTDB_URL}/filament/{filamentdb_id}` (exact path TBD — verify against Filament DB's Next.js routing)
-- Spoolman: `{SPOOLMAN_URL}/#/spool/{spoolman_spool_id}` or `{SPOOLMAN_URL}/#/filament/{spoolman_filament_id}`
+Every record in the bridge UI must show two clickable icons linking to that record in each upstream system. Routes verified against live instances (see `docs/decisions.md`):
+- Filament DB: `{FILAMENTDB_URL}/filaments/{filamentdb_id}` (plural). Filament DB has **no standalone spool page** — spools render under the filament page, so spool rows link to the parent filament URL.
+- Spoolman: `{SPOOLMAN_URL}/spool/show/{spoolman_spool_id}` or `{SPOOLMAN_URL}/filament/show/{spoolman_filament_id}` (no hash routing).
 - URLs are constructed from the `FILAMENTDB_URL` and `SPOOLMAN_URL` env vars
 - Open in new tabs
 
