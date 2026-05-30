@@ -12,6 +12,8 @@ _DEFAULTS = {
     "sync_weight_threshold_grams": "2.0",
     "weight_precision_decimals": "2",
     "wizard_completed": "false",
+    "multicolor_colorname_format": '"name"',
+    "protect_multicolor_color_in_spoolman": "true",
 }
 
 

@@ -242,3 +242,149 @@ async def test_no_snapshot_first_cycle_stores_baseline(db):
     # Snapshots stored
     assert db.query(Snapshot).filter_by(source="spoolman").count() == 1
     assert db.query(Snapshot).filter_by(source="filamentdb").count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Multicolor colorName re-derivation and protect tests
+# ---------------------------------------------------------------------------
+
+
+def _sm_spool_multicolor(
+    spool_id: int,
+    remaining: float,
+    color_hex: str = "93be2f",
+    multi_hexes: str = "cdde1b,68cc16",
+    direction: str = "coaxial",
+    extra: dict | None = None,
+) -> SpoolmanSpool:
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=SpoolmanFilament(
+            id=20,
+            name="Multicolor PLA",
+            vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+            color_hex=color_hex,
+            multi_color_hexes=multi_hexes,
+            multi_color_direction=direction,
+        ),
+        remaining_weight=remaining,
+        archived=False,
+        extra=extra or {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_colorname_set_on_sync_for_multicolor_filament(db):
+    """Engine should PUT colorName to FDB for multicolor Spoolman filaments (hex fmt)."""
+    from app.api.config import set_config_value
+    set_config_value(db, "multicolor_colorname_format", "hex")
+    set_config_value(db, "protect_multicolor_color_in_spoolman", True)
+    db.commit()
+
+    sm_spool = _sm_spool_multicolor(1, 800.0)
+    fdb_fil = _fdb_filament("fil-mc", "spool-mc", 1000.0)
+    _add_spool_mapping(db, 1, "fil-mc", "spool-mc")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-mc", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.update_filament = AsyncMock(return_value=MagicMock())
+
+    with patch("app.core.engine._settings") as mock_settings:
+        mock_settings.filamentdb_spoolman_id_field = "label"
+        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+        mock_settings.parsed_field_mappings = {}
+        mock_settings.parsed_field_mapping_excludes = set()
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_called_once_with(
+        "fil-mc", {"colorName": "cdde1b/68cc16 (coextruded)"}
+    )
+    assert result.updated >= 1
+
+
+@pytest.mark.asyncio
+async def test_colorname_rewritten_on_format_change(db):
+    """Changing multicolor_colorname_format and re-syncing rewrites colorName in FDB."""
+    sm_spool = _sm_spool_multicolor(1, 800.0)
+    fdb_fil = _fdb_filament("fil-mc", "spool-mc", 1000.0)
+    _add_spool_mapping(db, 1, "fil-mc", "spool-mc")
+    # Snapshot records the PREVIOUS colorName (hex format was applied before)
+    _store_snapshot(db, "spoolman", "spool", "1", {
+        "remaining_weight": 800.0,
+        "_colorName": "cdde1b/68cc16 (coextruded)",  # last applied under hex fmt
+    })
+    _store_snapshot(db, "filamentdb", "spool", "spool-mc", {"totalWeight": 1000.0})
+
+    # Config now says "name" format — different from what's in the snapshot
+    from app.api.config import set_config_value
+    set_config_value(db, "multicolor_colorname_format", "name")
+    set_config_value(db, "protect_multicolor_color_in_spoolman", True)
+    db.commit()
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.update_filament = AsyncMock(return_value=MagicMock())
+
+    with patch("app.core.engine._settings") as mock_settings:
+        mock_settings.filamentdb_spoolman_id_field = "label"
+        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+        mock_settings.parsed_field_mappings = {}
+        mock_settings.parsed_field_mapping_excludes = set()
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # update_filament must have been called with a name-format colorName
+    fdb_client.update_filament.assert_called_once()
+    call_args = fdb_client.update_filament.call_args
+    payload = call_args.args[1] if call_args.args else call_args.kwargs.get("payload", {})
+    assert "colorName" in payload
+    colorname = payload["colorName"]
+    # Name format: no raw hex values, must contain direction label
+    assert "cdde1b" not in colorname
+    assert "(coextruded)" in colorname
+
+
+@pytest.mark.asyncio
+async def test_protect_multicolor_blocks_color_field_sync_fdb_to_sm(db):
+    """protect_multicolor=true must skip FDB→SM sync of the 'color' field for multicolor filaments."""
+    from app.core.fields import FieldMapping
+    from app.api.config import set_config_value
+    set_config_value(db, "multicolor_colorname_format", "hex")
+    set_config_value(db, "protect_multicolor_color_in_spoolman", True)
+    set_config_value(db, "material_properties_source_of_truth", "filamentdb")
+    db.commit()
+
+    sm_spool = _sm_spool_multicolor(1, 800.0)
+    fdb_fil = _fdb_filament("fil-mc", "spool-mc", 1000.0)
+    _add_spool_mapping(db, 1, "fil-mc", "spool-mc")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-mc", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.update_filament = AsyncMock(return_value=MagicMock())
+
+    # Simulate a field map that would push FDB 'color' to SM as an extra field
+    color_field_map = FieldMapping(fdb_path="color", sm_key="color_sync_test", direction="fdb_to_sm")
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[color_field_map]):
+        mock_settings.filamentdb_spoolman_id_field = "label"
+        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+        mock_settings.parsed_field_mappings = {"color": "color_sync_test"}
+        mock_settings.parsed_field_mapping_excludes = set()
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # spoolman.update_spool must NOT have been called with a color extra field write
+    for call in spoolman.update_spool.call_args_list:
+        args, kwargs = call
+        payload = args[1] if len(args) > 1 else kwargs.get("payload", {})
+        extra = payload.get("extra", {})
+        assert "color_sync_test" not in extra, "protect_multicolor should block color field sync"

@@ -72,6 +72,8 @@ def _config_response(db: Session) -> ConfigResponse:
         auto_sync_enabled=bool(cfg.get("auto_sync_enabled", False)),
         wizard_completed=bool(cfg.get("wizard_completed", False)),
         import_direction=cfg.get("import_direction"),
+        multicolor_colorname_format=cfg.get("multicolor_colorname_format", "name"),
+        protect_multicolor_color_in_spoolman=bool(cfg.get("protect_multicolor_color_in_spoolman", True)),
     )
 
 

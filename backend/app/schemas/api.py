@@ -146,6 +146,9 @@ class MappingUpdateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+MulticolorColornameFmt = Literal["name", "hex"]
+
+
 class ConfigResponse(BaseModel):
     weight_source_of_truth: SourceOfTruth
     material_properties_source_of_truth: SourceOfTruth
@@ -155,6 +158,8 @@ class ConfigResponse(BaseModel):
     auto_sync_enabled: bool
     wizard_completed: bool
     import_direction: SourceOfTruth | None = None
+    multicolor_colorname_format: MulticolorColornameFmt = "name"
+    protect_multicolor_color_in_spoolman: bool = True
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -163,6 +168,8 @@ class ConfigUpdateRequest(BaseModel):
     new_spool_source_of_truth: SourceOfTruth | None = None
     sync_weight_threshold_grams: float | None = Field(default=None, gt=0)
     weight_precision_decimals: int | None = Field(default=None, ge=0, le=4)
+    multicolor_colorname_format: MulticolorColornameFmt | None = None
+    protect_multicolor_color_in_spoolman: bool | None = None
 
 
 # ---------------------------------------------------------------------------

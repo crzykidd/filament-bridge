@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from app.config import settings as _settings
+from app.core.color import project_colorname
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_field_map, should_skip_inherited
 from app.core.matcher import match_filaments
@@ -154,14 +155,24 @@ def _queue_conflict(
 # ---------------------------------------------------------------------------
 
 
-def _sm_snapshot_dict(spool: SpoolmanSpool, field_maps: list[FieldMapping]) -> dict:
-    """Build the snapshot dict for a Spoolman spool including decoded extra values."""
+def _sm_snapshot_dict(
+    spool: SpoolmanSpool,
+    field_maps: list[FieldMapping],
+    colorname: str | None = None,
+) -> dict:
+    """Build the snapshot dict for a Spoolman spool including decoded extra values.
+
+    ``colorname`` is stored as ``_colorName`` so the next cycle can detect when
+    the format setting changed and the FDB colorName needs rewriting.
+    """
     d = spool.model_dump()
     if field_maps:
         d["_extra_decoded"] = {
             fm.sm_key: decode_extra_value(spool.extra.get(fm.sm_key))
             for fm in field_maps
         }
+    if colorname is not None:
+        d["_colorName"] = colorname
     return d
 
 
@@ -197,6 +208,7 @@ async def _apply_field_changes(
     filamentdb: FilamentDBClient,
     sm_snapshot: dict,
     fdb_snapshot: dict,
+    protect_multicolor: bool = True,
 ) -> None:
     """Evaluate and apply field-mapping changes for one spool pair (FR-11)."""
     # Fetch FDB detail (needed for _inherited[] and full field surface)
@@ -263,6 +275,13 @@ async def _apply_field_changes(
             logger.info(
                 "Cycle %s: skipping inherited field %s on FDB filament %s",
                 cycle_id, fc.field_name, fdb_filament_id,
+            )
+            result.skipped += 1
+            continue
+        if protect_multicolor and sm_spool.filament.multi_color_hexes and fc.field_name == "color":
+            logger.debug(
+                "Cycle %s: skipping color field sync FDB→SM for multicolor filament %s (protect enabled)",
+                cycle_id, sm_spool.filament.id,
             )
             result.skipped += 1
             continue
@@ -557,6 +576,8 @@ async def run_sync_cycle(
     threshold: float = float(config.get("sync_weight_threshold_grams", 2.0))
     precision: int = int(config.get("weight_precision_decimals", 2))
     fdb_field_name: str = _settings.filamentdb_spoolman_id_field  # default "label"
+    multicolor_fmt: str = str(config.get("multicolor_colorname_format", "name"))
+    protect_multicolor: bool = bool(config.get("protect_multicolor_color_in_spoolman", True))
 
     # ---- Fetch upstream state ----
     try:
@@ -593,6 +614,14 @@ async def run_sync_cycle(
     filament_mappings_by_fdb: dict[str, FilamentMapping] = {
         m.filamentdb_id: m for m in filament_mappings
     }
+
+    # Reverse index for colorName snapshot propagation: fdb_filament_id → [sm_spool_ids]
+    sm_spool_ids_by_fdb_filament: dict[str, list[int]] = {}
+    for m in spool_mappings:
+        sm_spool_ids_by_fdb_filament.setdefault(m.filamentdb_filament_id, []).append(m.spoolman_spool_id)
+
+    # colorName updates deferred to apply after the main pair loop (one PUT per filament)
+    colorname_updates: dict[str, str] = {}  # fdb_filament_id → computed colorname
 
     # ---- Resolve field mappings (FR-11) ----
     field_maps: list[FieldMapping] = []
@@ -780,7 +809,49 @@ async def run_sync_cycle(
                     db, cycle_id, result, dry_run,
                     sm_spool, fdb_filament_id, fdb_spool.id,
                     field_maps, spoolman, filamentdb, sm_snap, fdb_snap,
+                    protect_multicolor,
                 )
+
+        # ---- ColorName re-derivation for multicolor filaments ----
+        sm_fil = sm_spool.filament
+        if sm_fil.multi_color_hexes:
+            computed = project_colorname(
+                sm_fil.color_hex, sm_fil.multi_color_hexes,
+                sm_fil.multi_color_direction, fmt=multicolor_fmt,
+            )
+            if computed is not None and sm_snap.get("_colorName") != computed:
+                colorname_updates[fdb_filament_id] = computed
+
+    # ---- Apply deferred colorName updates (one PUT per FDB filament) ----
+    for fdb_id, colorname in colorname_updates.items():
+        if not dry_run:
+            try:
+                await filamentdb.update_filament(fdb_id, {"colorName": colorname})
+                _log(
+                    db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                    fdb_filament_id=fdb_id, field_name="colorName", new_value=colorname,
+                )
+                for sm_id in sm_spool_ids_by_fdb_filament.get(fdb_id, []):
+                    sm_spool = sm_spools.get(sm_id)
+                    if sm_spool:
+                        _upsert_snapshot(
+                            db, "spoolman", "spool", str(sm_id),
+                            _sm_snapshot_dict(sm_spool, field_maps, colorname=colorname),
+                        )
+                result.updated += 1
+            except Exception as exc:
+                logger.error("Cycle %s: colorName update for FDB filament %s: %s", cycle_id, fdb_id, exc)
+                _log(
+                    db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                    fdb_filament_id=fdb_id, field_name="colorName", error_message=str(exc),
+                )
+                result.errors += 1
+        else:
+            result.preview.append({
+                "action": "update", "direction": "spoolman_to_filamentdb",
+                "field": "colorName", "fdb_filament_id": fdb_id, "new": colorname,
+            })
+            result.updated += 1
 
     # ---- New spool detection (FR-12) ----
     for sm_spool in sm_spools.values():

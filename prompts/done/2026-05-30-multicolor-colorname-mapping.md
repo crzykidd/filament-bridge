@@ -1,10 +1,10 @@
 ---
 name: 2026-05-30-multicolor-colorname-mapping
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-05-30
 model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+completed: 2026-05-30
+result: core/color.py (pure projection helper, 100-color palette, coaxial→coextruded/longitudinal→gradient vocab); wizard execute sets colorName on create + updates linked multicolor filaments; engine recomputes colorName per cycle (format-change triggers rewrite via _colorName snapshot tracking) and guards FDB→SM color field sync behind protect_multicolor; two new BridgeConfig keys + ConfigResponse/ConfigUpdateRequest fields; Settings UI format dropdown + protect checkbox with loss warning; 131 backend tests pass + frontend build clean.
 ---
 
 # Task: Multicolor filament mapping — colorName projection + protect setting
