@@ -1,0 +1,36 @@
+services:
+  filament-bridge:
+    build: .
+    ports:
+      - "8090:8090"
+    volumes:
+      - bridge-data:/data
+    environment:
+      FILAMENTDB_URL: http://filament-db:3000
+      SPOOLMAN_URL: http://spoolman:7912
+      # DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/...
+    depends_on:
+      - filament-db
+      - spoolman
+    restart: unless-stopped
+
+  filament-db:
+    image: hyiger/filament-db:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - filamentdb-data:/data
+    restart: unless-stopped
+
+  spoolman:
+    image: donkie/spoolman:latest
+    ports:
+      - "7912:7912"
+    volumes:
+      - spoolman-data:/home/app/.local/share/spoolman
+    restart: unless-stopped
+
+volumes:
+  bridge-data:
+  filamentdb-data:
+  spoolman-data:

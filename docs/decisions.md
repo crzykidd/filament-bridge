@@ -6,6 +6,40 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-29 — Phase 4 Web UI: SPA scaffold, static mount, deep-link bases, hooks
+
+Key decisions taken while building the React SPA.
+
+1. **`frontend/dist` → `static/` in the Docker image; mount guarded by `is_dir()`.**
+   The Vite build writes to `frontend/dist`; the Dockerfile copies it to `/app/static/`
+   in the runtime image. `main.py` resolves `Path(__file__).parent.parent.parent / "static"`
+   and only calls `app.mount` when the directory exists — so `pytest` and local
+   `uvicorn --reload` (no frontend build) pass without error. `html=True` on
+   `StaticFiles` provides the SPA fallback for client-side routes.
+
+2. **Deep-link bases come from `/api/health` `systems[*].url`, not env vars.**
+   The backend already returns the configured `FILAMENTDB_URL` / `SPOOLMAN_URL` in the
+   health response. `DeepLinkContext` fetches `/health` once on mount and provides the
+   bases to all `DeepLinks` components. This means the UI never needs its own copy of the
+   env vars and stays correct even if the backend is pointed at non-default URLs.
+
+3. **Plain `fetch` + hooks, no react-query.**
+   Two hooks — `useApi` (one-shot, re-runs on dep change) and `usePoll` (interval
+   auto-refresh for the dashboard). Avoids a heavy dependency for a simple internal tool;
+   adding react-query later is straightforward if the data requirements grow.
+
+4. **Tare overrides are held in WizardShell state, not in a URL or context file.**
+   The FR-5 weight-review step collects per-spool tare overrides and passes them into the
+   `WizardShell` component's `tareOverrides` state. Step 6 submits them in the execute
+   body. This matches the backend contract (the server does not persist tare overrides
+   between calls) and keeps the wizard self-contained.
+
+5. **Wizard step navigation is driven by the stepper index + React Router.**
+   `WizardShell` owns the current step index and calls `navigate('/wizard/<path>')` on
+   `next()`/`prev()`. Steps are plain route components with no shared session storage —
+   each re-fetches its data from the API when mounted. This is correct for a wizard that
+   is run once; it avoids stale cached state if the user navigates back and re-fetches.
+
 ## 2026-05-29 — Phase 3b wizard execute (FR-7): create order, idempotency, snapshot seed, fatal vs per-record
 
 Decisions taken while building `POST /api/wizard/execute` — the initial bulk

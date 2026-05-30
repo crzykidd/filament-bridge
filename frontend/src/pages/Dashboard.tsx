@@ -1,0 +1,208 @@
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { getSyncStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/client'
+import { usePoll } from '../api/hooks'
+import { SystemStatusBadge } from '../components/StatusBadge'
+import type { CycleResultResponse } from '../api/types'
+
+function fmt(ts: string | null) {
+  if (!ts) return '—'
+  return new Date(ts).toLocaleString()
+}
+
+export default function Dashboard() {
+  const { data, loading, error, reload } = usePoll(getSyncStatus, 15_000)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState<CycleResultResponse | null>(null)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [togglingAuto, setTogglingAuto] = useState(false)
+  const navigate = useNavigate()
+
+  async function handleManualSync() {
+    setSyncing(true)
+    setSyncResult(null)
+    setSyncError(null)
+    try {
+      const result = await triggerSync()
+      setSyncResult(result)
+      void reload()
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function handleDryRun() {
+    setSyncing(true)
+    setSyncResult(null)
+    setSyncError(null)
+    try {
+      const result = await triggerDryRun()
+      setSyncResult(result)
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  async function handleAutoSyncToggle() {
+    if (!data) return
+    setTogglingAuto(true)
+    try {
+      await setAutoSync({ enabled: !data.auto_sync_enabled })
+      void reload()
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setTogglingAuto(false)
+    }
+  }
+
+  if (loading && !data) {
+    return <div className="p-8 text-gray-500">Loading…</div>
+  }
+
+  if (error && !data) {
+    return (
+      <div className="p-8">
+        <div className="bg-red-50 border border-red-200 rounded p-4 text-red-700">
+          <p className="font-medium">Could not reach the bridge API</p>
+          <p className="text-sm mt-1">{error}</p>
+        </div>
+      </div>
+    )
+  }
+
+  const counts = data?.counts ?? {}
+
+  return (
+    <div className="p-8 space-y-6 max-w-4xl">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        {!data?.wizard_completed && (
+          <button
+            onClick={() => navigate('/wizard')}
+            className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700"
+          >
+            Run setup wizard
+          </button>
+        )}
+      </div>
+
+      {/* Sync state */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {[
+          { label: 'In Sync', value: counts['in_sync'] ?? 0, color: 'text-green-600' },
+          { label: 'Pending', value: counts['pending'] ?? 0, color: 'text-yellow-600' },
+          { label: 'Conflicts', value: counts['conflict'] ?? 0, color: 'text-red-600' },
+          { label: 'Unlinked', value: counts['unlinked'] ?? 0, color: 'text-gray-500' },
+        ].map(c => (
+          <div key={c.label} className="bg-white rounded-lg border border-gray-200 p-4">
+            <p className="text-sm text-gray-500">{c.label}</p>
+            <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Sync timing + controls */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div>
+            <span className="text-gray-500">Last sync</span>
+            <p className="font-medium">{fmt(data?.last_sync_at ?? null)}</p>
+          </div>
+          <div>
+            <span className="text-gray-500">Next sync</span>
+            <p className="font-medium">{fmt(data?.next_sync_at ?? null)}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={handleManualSync}
+            disabled={syncing}
+            className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {syncing ? 'Syncing…' : 'Sync now'}
+          </button>
+          <button
+            onClick={handleDryRun}
+            disabled={syncing}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+          >
+            Dry run
+          </button>
+          <button
+            onClick={handleAutoSyncToggle}
+            disabled={togglingAuto}
+            className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+              data?.auto_sync_enabled
+                ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            Auto-sync: {data?.auto_sync_enabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        {syncError && (
+          <p className="text-sm text-red-600">{syncError}</p>
+        )}
+
+        {syncResult && (
+          <div className={`rounded p-3 text-sm ${syncResult.dry_run ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
+            <p className="font-medium mb-1">{syncResult.dry_run ? 'Dry run preview' : 'Sync complete'}</p>
+            <div className="flex gap-4 text-xs text-gray-600">
+              <span>Created: {syncResult.created}</span>
+              <span>Updated: {syncResult.updated}</span>
+              <span>Conflicts: {syncResult.conflicts}</span>
+              <span>Skipped: {syncResult.skipped}</span>
+              {syncResult.errors > 0 && <span className="text-red-600">Errors: {syncResult.errors}</span>}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Systems */}
+      {data?.systems && (
+        <div className="bg-white rounded-lg border border-gray-200 p-5">
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">Connected systems</h2>
+          <div className="space-y-3">
+            {Object.entries(data.systems).map(([name, sys]) => (
+              <div key={name} className="flex items-center justify-between">
+                <div>
+                  <span className="font-medium text-sm capitalize">{name}</span>
+                  <span className="ml-2 text-xs text-gray-400">{sys.url}</span>
+                  {sys.version && <span className="ml-2 text-xs text-gray-400">v{sys.version}</span>}
+                  {sys.error && <span className="ml-2 text-xs text-red-500">{sys.error}</span>}
+                </div>
+                <div className="flex items-center gap-3 text-xs text-gray-500">
+                  {Object.entries(sys.counts).map(([k, v]) => (
+                    <span key={k}>{k}: {v}</span>
+                  ))}
+                  <SystemStatusBadge status={sys.status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {data?.pending_conflicts != null && data.pending_conflicts > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded p-4 flex items-center justify-between">
+          <p className="text-red-700 text-sm font-medium">
+            {data.pending_conflicts} open conflict{data.pending_conflicts !== 1 ? 's' : ''} need resolution
+          </p>
+          <button
+            onClick={() => navigate('/conflicts')}
+            className="text-sm text-red-600 underline hover:text-red-800"
+          >
+            Resolve
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}

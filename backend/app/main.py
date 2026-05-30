@@ -9,7 +9,7 @@ Startup sequence:
      auto_sync_enabled from BridgeConfig each tick — if false it is a no-op
   6. Health endpoint is available immediately at GET /api/health
 
-Phase 4 TODO: mount /static for the React SPA
+Phase 4: /static is mounted when the directory exists (built image only)
 """
 
 import json
@@ -164,6 +164,10 @@ app.include_router(wizard_router.router, prefix="/api")
 app.include_router(backup_router.router, prefix="/api")
 app.include_router(sync_log_router.router, prefix="/api")
 
-# TODO Phase 4: mount React SPA static assets
-# from fastapi.staticfiles import StaticFiles
-# app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Serve the React SPA from /static when the directory exists (built image only).
+# Guarded so `pytest` and `uvicorn --reload` work without a frontend build.
+_static_dir = Path(__file__).parent.parent.parent / "static"
+if _static_dir.is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
