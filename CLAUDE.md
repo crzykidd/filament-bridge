@@ -82,10 +82,10 @@ If you're unsure whether an action would violate one of the above, stop and
 ask before acting.
 
 <!--
-Source: standards/vexp-context-engine @ v1.0.0 (crzynet/homelab-configs).
+Source: standards/vexp-context-engine @ v2.0.0 (crzynet/homelab-configs).
 Paste the section below verbatim into the adopting project's CLAUDE.md.
 The full standard (scope, the two pushes, the manifest-not-tracked shape,
-adoption + gate procedure) lives at:
+adoption + gate + verification procedure) lives at:
 https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/vexp-context-engine/README.md
 -->
 
@@ -108,9 +108,17 @@ default:
 - **Don't chain vexp calls or fan out `Explore` agents to free-search.** One
   `run_pipeline` replaces capsule + impact + memory; if a subagent needs context, run
   `run_pipeline` first and pass the result into the agent's prompt.
-- **Never run `vexp` CLI commands to manage the daemon** (`daemon-cmd`, `setup`,
-  `setup-llm`, even `--status`) — they can knock over the VS Code-managed daemon. The
-  daemon is owned by the VS Code extension; use only the `mcp__vexp__*` tools.
+- **The vexp daemon runs as a standalone `systemd`-user service — NOT the VS Code
+  extension.** The supervisor is `vexp.service` (`ExecStart=vexp serve`), `enabled` + linger,
+  auto-restarting; it starts/adopts the per-repo daemon on demand. Managing it with
+  `systemctl --user … vexp.service` or `vexp daemon-cmd start|stop|status|logs` is the
+  expected control path, not forbidden. Do **not** run vexp from the VS Code extension
+  (deprecated here — older bundled core, contends for the socket/port).
+- **Start/manage the daemon in the host process namespace (un-sandboxed).** A daemon
+  spawned inside a sandboxed shell gets a throwaway PID namespace + socket the host-side
+  MCP can't reach, and dies when that shell exits. If `index_status` reports "Cannot
+  connect to daemon," run `vexp daemon-cmd start` un-sandboxed and wait for "Socket ready"
+  (first start loads the local LLM, so allow >12s).
 
 If you're unsure whether an action would violate one of the above, stop and ask before
 acting.
