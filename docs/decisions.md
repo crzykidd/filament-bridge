@@ -1,5 +1,35 @@
 # Decision record
 
+## 2026-05-30 — Multicolor filament mapping (Spoolman ↔ Filament DB)
+
+Spoolman models multicolor (`multi_color_hexes` CSV + `multi_color_direction` =
+`coaxial`/`longitudinal`; 29/175 of the live set). Filament DB has **no multicolor
+support** — one `color` hex + a `colorName` string. Note: FDB's UI "Notes" field is
+actually `settings.filament_notes` inside the **off-limits slicer-passthrough bag**, so we
+never write there. Decisions:
+
+1. **Spoolman is authoritative for color; the bridge's own DB is canonical.** FDB can't hold
+   multicolor and has no structured extension field, so nothing is stored in FDB beyond a
+   display projection. No data loss — Spoolman + the bridge snapshot retain the full set.
+2. **FDB gets primary `color_hex` → `color`, plus a human projection in `colorName`** (a
+   real top-level field, never `notes`/`settings`). Format is a config choice
+   (`multicolor_colorname_format`): `name` (default — fuzzy nearest-named-color over a
+   standard palette, e.g. `"Yellow/Green (coextruded)"`) or `hex`
+   (`"cdde1b/68cc16 (coextruded)"`). Type vocabulary is friendly: `coaxial`→**coextruded**,
+   `longitudinal`→**gradient**.
+3. **`colorName` is a bridge-managed derived field** — recomputed from Spoolman data + the
+   current format on each apply for multicolor filaments, so changing the format setting and
+   re-running sync rewrites it (the differ won't see a Spoolman-side change). The fuzzy name
+   match is approximate by design; switching to `hex` is the escape hatch.
+4. **Protect multicolor on write-back.** New setting `protect_multicolor_color_in_spoolman`
+   (default **true**): ongoing FDB→Spoolman sync never writes color fields for filaments
+   Spoolman marks multicolor, regardless of the material-properties source-of-truth, so
+   `multi_color_hexes`/`direction`/`color_hex` can't be flattened. Disabling it carries a UI
+   loss-warning.
+5. **Forward path:** an upstream feature request was filed for native FDB multicolor. If it
+   lands, replace the `colorName` projection with a real field mapping and push correctly —
+   no data-model rework, since Spoolman + the bridge already hold the truth.
+
 ## 2026-05-30 — Phase 5 sync fixes (PATCH, weight precision, material default, wizard gating)
 
 Four concrete bugs exposed by the first live end-to-end run (223 Spoolman spools):

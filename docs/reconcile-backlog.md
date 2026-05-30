@@ -40,3 +40,13 @@ returns zero groups when the target FDB database is empty. Decide whether to als
 the *to-be-created* filaments during initial import, keyed by vendor + material with
 color stripped — this would let the bridge set `parentId` at create time rather than
 requiring a second reconcile pass.
+
+## 5. Multicolor filaments (29) — SPECCED, not deferred
+
+Filament DB is single-color; 29/175 Spoolman filaments are multicolor
+(`multi_color_hexes` + `coaxial`/`longitudinal`). Unlike items 1–4 this one is **already
+decided and has its own handoff prompt** — see the "Multicolor filament mapping" entry in
+`docs/decisions.md` and `prompts/2026-05-30-multicolor-colorname-mapping.md`. Summary: keep
+Spoolman authoritative, project primary `color_hex` → FDB `color` + a configurable
+`colorName` string, and protect Spoolman's multicolor fields from being overwritten on
+write-back. Listed here so the issue inventory from the first live run stays complete.
