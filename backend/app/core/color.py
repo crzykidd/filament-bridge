@@ -1,8 +1,11 @@
-"""Multicolor colorName projection — pure helper, no I/O.
+"""Color helpers — pure, no I/O.
 
-Maps Spoolman multicolor fields (multi_color_hexes + multi_color_direction) to a
-human-readable FDB colorName string.  For single-color filaments (multi_color_hexes
-absent / empty) the functions return None so callers leave colorName untouched.
+``to_fdb_color`` / ``to_sm_color`` normalise the hex-color representation at the
+boundary between systems (FDB expects a leading ``#``; Spoolman stores bare hex).
+
+``project_colorname`` maps Spoolman multicolor fields (multi_color_hexes +
+multi_color_direction) to a human-readable FDB colorName string.  Returns None for
+single-color filaments so callers leave colorName untouched.
 """
 
 from __future__ import annotations
@@ -117,6 +120,30 @@ _TYPE_VOCAB: dict[str, str] = {
     "coaxial": "coextruded",
     "longitudinal": "gradient",
 }
+
+
+def to_fdb_color(value: str | None) -> str | None:
+    """Ensure exactly one leading '#' for a Filament DB color value.
+
+    ``"93BE2F"`` → ``"#93BE2F"``, ``"#93BE2F"`` → ``"#93BE2F"``.
+    None / empty → None.  Case is preserved; only the '#' is the contract.
+    """
+    if not value:
+        return None
+    stripped = value.lstrip("#")
+    return f"#{stripped}" if stripped else None
+
+
+def to_sm_color(value: str | None) -> str | None:
+    """Strip leading '#' for a Spoolman color_hex value.
+
+    ``"#93BE2F"`` → ``"93BE2F"``, ``"93BE2F"`` → ``"93BE2F"``.
+    None / empty → None.
+    """
+    if not value:
+        return None
+    stripped = value.lstrip("#")
+    return stripped if stripped else None
 
 
 def _hex_to_rgb(hex_str: str) -> tuple[int, int, int] | None:

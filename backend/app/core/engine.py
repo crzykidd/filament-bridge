@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
 from app.config import settings as _settings
-from app.core.color import project_colorname
+from app.core.color import project_colorname, to_fdb_color, to_sm_color
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_field_map, should_skip_inherited
 from app.core.matcher import match_filaments
@@ -287,7 +287,8 @@ async def _apply_field_changes(
             continue
         if not dry_run:
             try:
-                encoded = encode_extra_value(fc.new_value)
+                write_value = to_sm_color(fc.new_value) if fc.field_name == "color" else fc.new_value
+                encoded = encode_extra_value(write_value)
                 await spoolman.update_spool(
                     sm_spool.id, {"extra": {fm.sm_key: encoded}}
                 )
@@ -328,7 +329,8 @@ async def _apply_field_changes(
         # Collect into a single PUT
         parts = fc.field_name.split(".", 1)
         if len(parts) == 1:
-            fdb_put_payload[fc.field_name] = fc.new_value
+            write_value = to_fdb_color(fc.new_value) if fc.field_name == "color" else fc.new_value
+            fdb_put_payload[fc.field_name] = write_value
         else:
             fdb_put_payload.setdefault(parts[0], {})[parts[1]] = fc.new_value
 

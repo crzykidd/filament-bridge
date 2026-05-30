@@ -1,6 +1,73 @@
-"""Tests for core/color.py — multicolor colorName projection helper."""
+"""Tests for core/color.py — hex-format helpers and colorName projection."""
 
-from app.core.color import nearest_color_name, project_colorname
+from app.core.color import nearest_color_name, project_colorname, to_fdb_color, to_sm_color
+
+
+# ---------------------------------------------------------------------------
+# to_fdb_color — FDB expects '#'-prefixed hex
+# ---------------------------------------------------------------------------
+
+
+class TestToFdbColor:
+    def test_bare_hex_gets_hash(self):
+        assert to_fdb_color("93BE2F") == "#93BE2F"
+
+    def test_already_prefixed_unchanged(self):
+        assert to_fdb_color("#93BE2F") == "#93BE2F"
+
+    def test_none_returns_none(self):
+        assert to_fdb_color(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert to_fdb_color("") is None
+
+    def test_case_preserved(self):
+        assert to_fdb_color("aAbBcC") == "#aAbBcC"
+
+    def test_multiple_hashes_collapsed(self):
+        # Defensive: "##93BE2F" should still yield "#93BE2F"
+        assert to_fdb_color("##93BE2F") == "#93BE2F"
+
+
+# ---------------------------------------------------------------------------
+# to_sm_color — Spoolman expects bare hex (no '#')
+# ---------------------------------------------------------------------------
+
+
+class TestToSmColor:
+    def test_prefixed_hex_stripped(self):
+        assert to_sm_color("#93BE2F") == "93BE2F"
+
+    def test_bare_hex_unchanged(self):
+        assert to_sm_color("93BE2F") == "93BE2F"
+
+    def test_none_returns_none(self):
+        assert to_sm_color(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert to_sm_color("") is None
+
+    def test_case_preserved(self):
+        assert to_sm_color("#aAbBcC") == "aAbBcC"
+
+
+# ---------------------------------------------------------------------------
+# Round-trip: SM → FDB → SM must be identity (no flap)
+# ---------------------------------------------------------------------------
+
+
+class TestColorRoundTrip:
+    def test_sm_to_fdb_to_sm(self):
+        original = "93BE2F"
+        fdb_form = to_fdb_color(original)
+        back_to_sm = to_sm_color(fdb_form)
+        assert back_to_sm == original
+
+    def test_fdb_to_sm_to_fdb(self):
+        original = "#93BE2F"
+        sm_form = to_sm_color(original)
+        back_to_fdb = to_fdb_color(sm_form)
+        assert back_to_fdb == original
 
 
 # ---------------------------------------------------------------------------

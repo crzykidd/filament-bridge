@@ -23,7 +23,7 @@ from app.api.config import get_config_value, set_config_value
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
-from app.core.color import project_colorname
+from app.core.color import project_colorname, to_fdb_color, to_sm_color
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
 from app.core.matcher import match_filaments, normalize_name, normalize_vendor
 from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross
@@ -68,7 +68,7 @@ def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
         spoolman_filament_id=sm.id,
         name=sm.name,
         vendor=sm.vendor.name if sm.vendor else None,
-        color=sm.color_hex,
+        color=sm.color_hex,  # display-only ref; bare Spoolman format is fine here
     )
 
 
@@ -365,7 +365,7 @@ def _fdb_filament_payload_from_sm(sm: SpoolmanFilament, multicolor_fmt: str = "n
         "name": sm.name,
         "vendor": sm.vendor.name if sm.vendor else None,
         "type": material,
-        "color": sm.color_hex,
+        "color": to_fdb_color(sm.color_hex),
         "density": sm.density,
         "spoolWeight": sm.spool_weight,
     }
@@ -390,7 +390,7 @@ def _sm_filament_payload_from_fdb(fdb: FDBFilament, vendor_id: int | None) -> di
     payload: dict = {
         "name": fdb.name,
         "material": fdb.type,
-        "color_hex": (fdb.color or "").lstrip("#") or None,
+        "color_hex": to_sm_color(fdb.color),
         "density": fdb.density,
         "spool_weight": fdb.spoolWeight,
     }

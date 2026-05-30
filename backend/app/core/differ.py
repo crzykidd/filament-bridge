@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from app.core.matcher import normalize_color
 from app.core.weight import weight_changed
 
 if TYPE_CHECKING:
@@ -96,6 +97,14 @@ def diff_spool_pair(
             sm_then = sm_extra_snap.get(fm.sm_key)
             fdb_now = fdb_field_values.get(fm.fdb_path)
             fdb_then = fdb_fields_snap.get(fm.fdb_path)
+
+            # Normalise color representation before comparing so bare-vs-# differences
+            # don't generate spurious change events and cause perpetual flapping.
+            if fm.fdb_path == "color":
+                sm_now = normalize_color(sm_now)
+                sm_then = normalize_color(sm_then)
+                fdb_now = normalize_color(fdb_now)
+                fdb_then = normalize_color(fdb_then)
 
             sm_fc = sm_then != sm_now
             fdb_fc = fdb_then != fdb_now

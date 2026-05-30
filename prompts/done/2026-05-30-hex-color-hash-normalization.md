@@ -1,10 +1,10 @@
 ---
 name: 2026-05-30-hex-color-hash-normalization
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-05-30
 model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+completed: 2026-05-30
+result: Added to_fdb_color/to_sm_color helpers; fixed SM→FDB write in wizard + engine; fixed FDB→SM write in wizard + engine; normalized color comparison in differ to stop flapping; 149 tests green
 ---
 
 # Task: Normalize hex-color `#` prefix between Spoolman and Filament DB
