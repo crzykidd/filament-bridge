@@ -6,6 +6,41 @@ entries short — the *why*, not a tutorial. Part of the
 [handoff-prompt-workflow](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/handoff-prompt-workflow/README.md)
 standard (see `standards.md`).
 
+## 2026-05-30 — Make docker-compose deployable + SPA route fallback
+
+Bringing the stack up locally surfaced four problems; all fixed.
+
+1. **Upstream images live on GHCR, not Docker Hub.** `docker-compose.yml` referenced
+   `hyiger/filament-db` and `donkie/spoolman` (both nonexistent on Docker Hub →
+   `pull access denied`). Correct refs: `ghcr.io/hyiger/filament-db:latest`,
+   `ghcr.io/donkie/spoolman:latest`.
+2. **Spoolman listens on 8000 internally.** The compose mapped `7912:7912` but Spoolman
+   binds 8000 by default, so nothing answered on 7912. Set `SPOOLMAN_PORT: "7912"` so the
+   host mapping *and* the in-network `http://spoolman:7912` (used by the bridge service)
+   both resolve. The whole project assumes Spoolman on 7912.
+3. **Filament DB needs MongoDB.** It's a Next.js app that 500s on every API call without
+   `MONGODB_URI`. Added a `mongo:7` service + `MONGODB_URI: mongodb://mongo:27017/filamentdb`,
+   and dropped the meaningless `filamentdb-data:/data` volume (its state lives in Mongo).
+4. **SPA route fallback.** Phase 4 served the build with `StaticFiles(html=True)`, which
+   only serves `index.html` at the root — every client route (`/conflicts`, `/wizard`, …)
+   404'd on hard refresh / direct load / shared link, since the app uses `BrowserRouter`.
+   Replaced with: mount `/assets` for hashed bundles, plus a catch-all `GET /{full_path:path}`
+   that returns the matching file if it exists else `index.html`. Guarded to still 404
+   unknown `/api/*` paths (as JSON) rather than swallowing them into the SPA shell. Whole
+   block stays behind `if _static_dir.is_dir()`, so pytest / `uvicorn --reload` are
+   unaffected (no `/static` dir in dev).
+
+**`docker-compose.dev.yml`** (tracked): same services with data bind-mounted under the
+gitignored `./private_data/` instead of named volumes — lets you seed/inspect data from
+the host. Safe to track because no real data is ever committed.
+
+**Deep-link base caveat (known, not fixed):** the UI builds deep links from the URLs the
+bridge reports (`systems[*].url`), which in compose are docker-internal names
+(`http://filament-db:3000`). Browsers can't resolve those, so deep-link icons don't click
+through in a localhost-only compose run. In a real LAN deployment the upstream URLs resolve
+from both the bridge and the browser, so they work; for local poking, run the bridge in
+host dev mode (uvicorn + `backend/.env` → `localhost:3000`/`7912`).
+
 ## 2026-05-29 — Phase 4 Web UI: SPA scaffold, static mount, deep-link bases, hooks
 
 Key decisions taken while building the React SPA.

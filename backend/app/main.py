@@ -168,6 +168,25 @@ app.include_router(sync_log_router.router, prefix="/api")
 # Guarded so `pytest` and `uvicorn --reload` work without a frontend build.
 _static_dir = Path(__file__).parent.parent.parent / "static"
 if _static_dir.is_dir():
+    from fastapi import HTTPException
+    from fastapi.responses import FileResponse
     from fastapi.staticfiles import StaticFiles
 
-    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
+    _index = _static_dir / "index.html"
+    _assets_dir = _static_dir / "assets"
+    if _assets_dir.is_dir():
+        # Hashed, immutable bundles are served directly.
+        app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+    # Everything else falls back to index.html so client-side (BrowserRouter)
+    # routes survive a hard refresh / direct load / shared deep link. Registered
+    # after the /api routers, so the API always wins; unknown /api paths still 404
+    # as JSON rather than silently returning the SPA shell.
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str) -> FileResponse:
+        if full_path.startswith("api"):
+            raise HTTPException(status_code=404)
+        candidate = _static_dir / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_index)

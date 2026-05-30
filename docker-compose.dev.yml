@@ -1,10 +1,19 @@
+# Local dev stack — same services as docker-compose.yml, but with the data
+# directories bind-mounted under ./private_data/ instead of named volumes, so
+# you can inspect/seed them from the host (e.g. drop a prod spoolman.db into
+# ./private_data/spoolman/). ./private_data/ is gitignored, so this file is safe
+# to track: no real data is ever committed.
+#
+# First run: `mkdir -p private_data/{filament-bridge,filament-db,spoolman}` so the
+# dirs are owned by you (otherwise Compose creates them as root). Then:
+#   docker compose -f docker-compose.dev.yml up -d --build
 services:
   filament-bridge:
     build: .
     ports:
       - "8090:8090"
     volumes:
-      - bridge-data:/data
+      - ./private_data/filament-bridge:/data
     environment:
       FILAMENTDB_URL: http://filament-db:3000
       SPOOLMAN_URL: http://spoolman:7912
@@ -29,7 +38,7 @@ services:
   mongo:
     image: mongo:7
     volumes:
-      - mongo-data:/data/db
+      - ./private_data/filament-db:/data/db
     restart: unless-stopped
 
   spoolman:
@@ -42,10 +51,5 @@ services:
       # service) resolve to the same port.
       SPOOLMAN_PORT: "7912"
     volumes:
-      - spoolman-data:/home/app/.local/share/spoolman
+      - ./private_data/spoolman:/home/app/.local/share/spoolman
     restart: unless-stopped
-
-volumes:
-  bridge-data:
-  mongo-data:
-  spoolman-data:
