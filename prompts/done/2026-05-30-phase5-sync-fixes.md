@@ -1,10 +1,10 @@
 ---
 name: 2026-05-30-phase5-sync-fixes
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-05-30
-model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+model: sonnet
+completed: 2026-05-30
+result: PATCH fix (A), material default "Unknown" (B), weight_precision_decimals config 0-4 + UI dropdown (C), wizard_completed gated on failed==0 (D); 99 tests green, frontend build clean
 ---
 
 # Task: Phase 5 — one-way sync correctness fixes + configurable weight precision

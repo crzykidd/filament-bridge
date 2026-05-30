@@ -54,6 +54,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_DEFAULT_FDB_MATERIAL = "Unknown"
+
 
 # ---------------------------------------------------------------------------
 # Ref builders
@@ -351,10 +353,17 @@ class _ExecResult:
 
 def _fdb_filament_payload_from_sm(sm: SpoolmanFilament) -> dict:
     """Map a Spoolman filament onto the FDB create-filament body (core fields only)."""
+    material = sm.material
+    if not material:
+        logger.warning(
+            "SM filament %s (%s) has no material; defaulting to '%s'",
+            sm.id, sm.name, _DEFAULT_FDB_MATERIAL,
+        )
+        material = _DEFAULT_FDB_MATERIAL
     payload: dict = {
         "name": sm.name,
         "vendor": sm.vendor.name if sm.vendor else None,
-        "type": sm.material,
+        "type": material,
         "color": sm.color_hex,
         "density": sm.density,
         "spoolWeight": sm.spool_weight,
@@ -417,6 +426,7 @@ async def _execute_spoolman_to_fdb(
     decisions_by_sm: dict[int, dict],
     parent_of_fdb: dict[str, str],
     tare_by_sm_spool: dict[int, float],
+    precision: int = 2,
 ) -> None:
     """Import direction "spoolman": seed Filament DB from Spoolman."""
     fdb_field_name = _settings.filamentdb_spoolman_id_field
@@ -516,7 +526,7 @@ async def _execute_spoolman_to_fdb(
                 tare = sm_spool.spool_weight if sm_spool.spool_weight is not None else (
                     sm_spool.filament.spool_weight if sm_spool.filament else None
                 )
-            gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, tare)
+            gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, tare, precision=precision)
             try:
                 # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
                 raw = await filamentdb.create_spool(fdb_id, {
@@ -559,6 +569,7 @@ async def _execute_fdb_to_spoolman(
     decisions_by_sm: dict[int, dict],
     parent_of_fdb: dict[str, str],
     tare_by_fdb_spool: dict[str, float],
+    precision: int = 2,
 ) -> None:
     """Import direction "filamentdb": seed Spoolman from Filament DB.
 
@@ -650,7 +661,7 @@ async def _execute_fdb_to_spoolman(
             tare = tare_by_fdb_spool.get(fdb_spool.id)
             if tare is None:
                 tare = fdb_fil.spoolWeight
-            net_res = fdb_to_spoolman_net(fdb_spool.totalWeight or 0.0, tare)
+            net_res = fdb_to_spoolman_net(fdb_spool.totalWeight or 0.0, tare, precision=precision)
             try:
                 new_sm_spool = await spoolman.create_spool({
                     "filament_id": sm_filament_id,
@@ -697,6 +708,7 @@ async def wizard_execute(
     overrides = payload.tare_overrides if payload else []
     tare_by_sm_spool = {o.spoolman_spool_id: o.tare for o in overrides if o.spoolman_spool_id is not None}
     tare_by_fdb_spool = {o.filamentdb_spool_id: o.tare for o in overrides if o.filamentdb_spool_id is not None}
+    precision: int = int(get_config_value(db, "weight_precision_decimals", 2))
 
     match_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     variant_decisions = get_config_value(db, "wizard_variant_decisions", []) or []
@@ -734,22 +746,26 @@ async def wizard_execute(
             db, res, spoolman, filamentdb,
             sm_filaments, sm_spools, fdb_filaments,
             decisions_by_sm, parent_of_fdb, tare_by_sm_spool,
+            precision=precision,
         )
     else:
         await _execute_fdb_to_spoolman(
             db, res, spoolman, filamentdb,
             sm_filaments, fdb_filaments,
             decisions_by_sm, parent_of_fdb, tare_by_fdb_spool,
+            precision=precision,
         )
 
-    # No fatal error → the initial sync is complete. Per-record failures do not
-    # block the flip (the user can re-run to reconcile them — idempotent).
-    set_config_value(db, "wizard_completed", True)
+    # Only flip wizard_completed when the run had zero failures. A partial run
+    # leaves the flag false so the user can fix issues and re-run (idempotent).
+    wizard_done = res.failed == 0
+    if wizard_done:
+        set_config_value(db, "wizard_completed", True)
     db.commit()
 
     logger.info(
-        "wizard execute %s (%s) — created=%d updated=%d skipped=%d failed=%d",
-        cycle_id, sync_direction, res.created, res.updated, res.skipped, res.failed,
+        "wizard execute %s (%s) — created=%d updated=%d skipped=%d failed=%d wizard_completed=%s",
+        cycle_id, sync_direction, res.created, res.updated, res.skipped, res.failed, wizard_done,
     )
     return WizardExecuteResponse(
         cycle_id=cycle_id,
@@ -758,6 +774,6 @@ async def wizard_execute(
         updated=res.updated,
         skipped=res.skipped,
         failed=res.failed,
-        wizard_completed=True,
+        wizard_completed=wizard_done,
         records=res.records,
     )

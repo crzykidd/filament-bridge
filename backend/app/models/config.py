@@ -10,6 +10,7 @@ _DEFAULTS = {
     "new_spool_source_of_truth": '"spoolman"',
     "auto_sync_enabled": "false",
     "sync_weight_threshold_grams": "2.0",
+    "weight_precision_decimals": "2",
     "wizard_completed": "false",
 }
 

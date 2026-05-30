@@ -520,7 +520,7 @@ def test_wizard_execute_idempotent_rerun_no_duplicates(db):
 
 
 def test_wizard_execute_per_record_error_isolation(db):
-    """One spool's API error → a failed entry; the rest still import; flag flips."""
+    """One spool's API error → a failed entry; the rest still import; flag stays false."""
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",
                      [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
@@ -542,7 +542,9 @@ def test_wizard_execute_per_record_error_isolation(db):
     body = client.post("/api/wizard/execute").json()
     assert body["created"] == 1
     assert body["failed"] == 1
-    assert body["wizard_completed"] is True  # per-record failure is non-fatal
+    # wizard_completed stays false when any record fails — user must re-run after fixing
+    assert body["wizard_completed"] is False
+    assert get_config_value(db, "wizard_completed") is False
     # Only the good spool got a mapping row.
     assert db.query(SpoolMapping).count() == 1
     assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
@@ -685,3 +687,165 @@ def test_backup_import_rejects_bad_version(db):
     })
     assert resp.status_code == 400
     assert resp.json()["detail"]["code"] == "unsupported_schema_version"
+
+
+# ---------------------------------------------------------------------------
+# Fix A — update_spool uses PATCH not PUT
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_spoolman_update_spool_uses_patch():
+    """update_spool must call PATCH, not PUT (Spoolman v0.23.1 returns 405 on PUT)."""
+    from app.services.spoolman import SpoolmanClient
+
+    spool_response = {
+        "id": 1, "filament": {"id": 1, "name": "PLA", "vendor": {"id": 1, "name": "ELEGOO"},
+                               "color_hex": None, "material": "PLA", "density": None,
+                               "spool_weight": None, "settings_extruder_temp": None,
+                               "settings_bed_temp": None, "extra": {}},
+        "remaining_weight": 500.0, "used_weight": 0.0, "archived": False,
+        "spool_weight": None, "extra": {},
+    }
+
+    # Inject a mock directly — bypass __aenter__/__aexit__ to avoid real httpx connections
+    client = SpoolmanClient("http://spoolman.test")
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = spool_response
+    mock_http = AsyncMock()
+    mock_http.patch = AsyncMock(return_value=mock_response)
+    mock_http.put = AsyncMock()
+    client._client = mock_http
+
+    await client.update_spool(1, {"remaining_weight": 500.0})
+
+    mock_http.patch.assert_awaited_once_with("/api/v1/spool/1", json={"remaining_weight": 500.0})
+    mock_http.put.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fix B — null material falls back to "Unknown" with a warning
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_execute_null_material_uses_default(db):
+    """A Spoolman filament with no material imports with 'Unknown' instead of 400-failing."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        # material=None (the default) — FDB would reject this without the fallback
+        filaments=[SpoolmanFilament(id=10, name="Silk Pumpkin Orange",
+                                    vendor=SpoolmanVendor(id=1, name="eSUN"), material=None)],
+        spools=[_sm_spool(1, 400.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+    filamentdb.create_filament.assert_awaited_once()
+    payload = filamentdb.create_filament.await_args.args[0]
+    assert payload["type"] == "Unknown"
+
+
+def test_wizard_execute_null_material_warning_logged(db, caplog):
+    """A warning naming the Spoolman filament id must be emitted when material is missing."""
+    import logging
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 77, "action": "create"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=77, name="No Material",
+                                    vendor=SpoolmanVendor(id=1, name="X"), material=None)],
+        spools=[],
+    )
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="fil-77"))
+    client = _client(db, spoolman, filamentdb)
+
+    with caplog.at_level(logging.WARNING, logger="app.api.wizard"):
+        client.post("/api/wizard/execute")
+
+    assert any("77" in r.message and "Unknown" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Fix C — weight precision config round-trips and is applied
+# ---------------------------------------------------------------------------
+
+
+def test_config_weight_precision_default_is_two(db):
+    body = _client(db).get("/api/config").json()
+    assert body["weight_precision_decimals"] == 2
+
+
+def test_config_weight_precision_update_and_bounds(db):
+    client = _client(db)
+    resp = client.put("/api/config", json={"weight_precision_decimals": 0})
+    assert resp.status_code == 200
+    assert resp.json()["weight_precision_decimals"] == 0
+
+    # Out-of-bounds (le=4)
+    assert client.put("/api/config", json={"weight_precision_decimals": 5}).status_code == 422
+    # Negative (ge=0)
+    assert client.put("/api/config", json={"weight_precision_decimals": -1}).status_code == 422
+
+
+def test_wizard_execute_weight_precision_applied(db):
+    """Configured precision rounds the seed weight in the FDB spool create."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "weight_precision_decimals", 0)  # whole grams
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    # remaining_weight with many decimals — will be rounded to whole gram
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 539.4936014320408)],
+    )
+    spoolman.get_spools.return_value[0].spool_weight = None  # trigger default 200 tare
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-1"})
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+    payload = filamentdb.create_spool.await_args.args[1]
+    # 539.4936... + 200 tare = 739.4936... → rounded to 0 decimals = 739.0
+    assert payload["totalWeight"] == 739.0
+
+
+# ---------------------------------------------------------------------------
+# Fix D — wizard_completed only flips on zero failures
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_completed_flips_true_on_zero_failures(db):
+    spoolman, filamentdb = _setup_link_execute(db)
+    body = _client(db, spoolman, filamentdb).post("/api/wizard/execute").json()
+    assert body["wizard_completed"] is True
+    assert get_config_value(db, "wizard_completed") is True
+
+
+def test_wizard_completed_stays_false_on_any_failure(db):
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.create_spool = AsyncMock(side_effect=RuntimeError("boom"))
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 1
+    assert body["wizard_completed"] is False
+    assert get_config_value(db, "wizard_completed") is False

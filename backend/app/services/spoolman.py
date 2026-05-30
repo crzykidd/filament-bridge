@@ -106,8 +106,8 @@ class SpoolmanClient:
     # ------------------------------------------------------------------
 
     async def update_spool(self, spool_id: int, payload: dict) -> SpoolmanSpool:
-        """PUT /api/v1/spool/{id} — update weight, extra fields, location, etc."""
-        resp = await self._http.put(f"/api/v1/spool/{spool_id}", json=payload)
+        """PATCH /api/v1/spool/{id} — update weight, extra fields, location, etc."""
+        resp = await self._http.patch(f"/api/v1/spool/{spool_id}", json=payload)
         resp.raise_for_status()
         return SpoolmanSpool.model_validate(resp.json())
 

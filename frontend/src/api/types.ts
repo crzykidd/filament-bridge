@@ -139,6 +139,7 @@ export interface ConfigResponse {
   material_properties_source_of_truth: SourceOfTruth
   new_spool_source_of_truth: SourceOfTruth
   sync_weight_threshold_grams: number
+  weight_precision_decimals: number
   auto_sync_enabled: boolean
   wizard_completed: boolean
   import_direction: SourceOfTruth | null
@@ -149,6 +150,7 @@ export interface ConfigUpdateRequest {
   material_properties_source_of_truth?: SourceOfTruth | null
   new_spool_source_of_truth?: SourceOfTruth | null
   sync_weight_threshold_grams?: number | null
+  weight_precision_decimals?: number | null
 }
 
 // ---------------------------------------------------------------------------

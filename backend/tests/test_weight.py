@@ -58,6 +58,35 @@ class TestFdbToSpoolmanNet:
         assert net == pytest.approx(750.0)
 
 
+class TestWeightPrecision:
+    def test_spoolman_to_fdb_rounds_to_default_2(self):
+        result = spoolman_to_fdb_gross(539.4936014320408, None)
+        assert result.total_weight == pytest.approx(739.49)
+
+    def test_spoolman_to_fdb_rounds_to_zero(self):
+        result = spoolman_to_fdb_gross(539.4936014320408, None, precision=0)
+        assert result.total_weight == 739.0
+
+    def test_spoolman_to_fdb_rounds_to_one(self):
+        result = spoolman_to_fdb_gross(539.4936014320408, None, precision=1)
+        assert result.total_weight == pytest.approx(739.5)
+
+    def test_fdb_to_spoolman_rounds_to_default_2(self):
+        result = fdb_to_spoolman_net(739.4936014320408, None)
+        assert result.remaining_weight == pytest.approx(539.49)
+
+    def test_fdb_to_spoolman_rounds_to_zero(self):
+        result = fdb_to_spoolman_net(739.4936014320408, None, precision=0)
+        assert result.remaining_weight == 539.0
+
+    def test_roundtrip_stable_at_precision_2(self):
+        net_original = 750.123456
+        gross = spoolman_to_fdb_gross(net_original, 200.0).total_weight
+        net_back = fdb_to_spoolman_net(gross, 200.0).remaining_weight
+        # round-trip at precision 2 stays within rounding error
+        assert abs(net_back - round(net_original, 2)) < 0.005
+
+
 class TestWeightChanged:
     def test_above_threshold(self):
         assert weight_changed(1000.0, 995.0, 2.0) is True

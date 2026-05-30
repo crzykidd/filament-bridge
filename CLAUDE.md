@@ -254,7 +254,7 @@ Spoolman `remaining_weight` is net filament. Filament DB `totalWeight` is gross 
 ### Spoolman API endpoints the bridge uses
 - `GET /api/v1/spool?limit=1000` — list spools (MUST set limit, default paginates)
 - `GET /api/v1/spool/{id}` — single spool with nested filament and vendor
-- `PUT /api/v1/spool/{id}` — update spool (remaining_weight, extra fields, location, etc.)
+- `PATCH /api/v1/spool/{id}` — update spool (remaining_weight, extra fields, location, etc.)
 - `POST /api/v1/spool` — create spool (requires filament_id)
 - `GET /api/v1/filament` — list filaments with nested vendor
 - `GET /api/v1/filament/{id}` — single filament

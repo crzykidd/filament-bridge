@@ -151,6 +151,7 @@ class ConfigResponse(BaseModel):
     material_properties_source_of_truth: SourceOfTruth
     new_spool_source_of_truth: SourceOfTruth
     sync_weight_threshold_grams: float
+    weight_precision_decimals: int
     auto_sync_enabled: bool
     wizard_completed: bool
     import_direction: SourceOfTruth | None = None
@@ -161,6 +162,7 @@ class ConfigUpdateRequest(BaseModel):
     material_properties_source_of_truth: SourceOfTruth | None = None
     new_spool_source_of_truth: SourceOfTruth | None = None
     sync_weight_threshold_grams: float | None = Field(default=None, gt=0)
+    weight_precision_decimals: int | None = Field(default=None, ge=0, le=4)
 
 
 # ---------------------------------------------------------------------------

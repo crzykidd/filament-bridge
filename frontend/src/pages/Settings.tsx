@@ -43,6 +43,7 @@ export default function Settings() {
   const [matSot, setMatSot] = useState<SOT | null>(null)
   const [newSpoolSot, setNewSpoolSot] = useState<SOT | null>(null)
   const [threshold, setThreshold] = useState('')
+  const [precision, setPrecision] = useState<number | null>(null)
 
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -57,6 +58,7 @@ export default function Settings() {
   const mSot = matSot ?? data.material_properties_source_of_truth
   const nSot = newSpoolSot ?? data.new_spool_source_of_truth
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
+  const prec = precision ?? data.weight_precision_decimals
 
   async function handleSave() {
     setSaving(true)
@@ -67,6 +69,7 @@ export default function Settings() {
         material_properties_source_of_truth: mSot,
         new_spool_source_of_truth: nSot,
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
+        weight_precision_decimals: prec,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -133,6 +136,18 @@ export default function Settings() {
             onChange={e => setThreshold(e.target.value)}
             className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
           />
+        </div>
+        <div className="flex items-center justify-between py-3">
+          <span className="text-sm font-medium text-gray-700">Weight precision (decimal places)</span>
+          <select
+            value={prec}
+            onChange={e => setPrecision(Number(e.target.value))}
+            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          >
+            {[0, 1, 2, 3, 4].map(n => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
         </div>
         <div className="pt-2 flex items-center gap-3">
           <button

@@ -1,5 +1,33 @@
 # Decision record
 
+## 2026-05-30 — Phase 5 sync fixes (PATCH, weight precision, material default, wizard gating)
+
+Four concrete bugs exposed by the first live end-to-end run (223 Spoolman spools):
+
+1. **`PATCH /api/v1/spool/{id}`, not `PUT`.** Spoolman v0.23.1 returns 405 on `PUT` for
+   spool updates; `PATCH` returns 200. This affected both the wizard cross-ref write-back
+   and the FR-10 ongoing weight sync (both go through `update_spool`). `CLAUDE.md`
+   endpoint list corrected accordingly.
+
+2. **Configurable weight precision (default 2 decimal places).** Without rounding,
+   Spoolman's full-precision floats flowed straight through (e.g. `739.4936014320408`).
+   `precision` is now a keyword arg on both `spoolman_to_fdb_gross` / `fdb_to_spoolman_net`
+   (default 2), threaded from the `weight_precision_decimals` config key (range 0–4).
+   Safe from sync churn: the maximum rounding delta at precision 2 is 0.005 g, far below
+   the `sync_weight_threshold_grams` default of 2 g.
+
+3. **Missing `material` defaults to `"Unknown"`.** Spoolman allows `material: null`;
+   Filament DB requires the `type` field and returns 400 without it. When material is
+   absent, the bridge substitutes `"Unknown"`, logs a warning naming the Spoolman filament
+   id, and continues. Silent invention was rejected — the warning makes the substitution
+   auditable.
+
+4. **`wizard_completed` only flips on zero failures.** Previously the flag was set
+   unconditionally after any non-fatal run, so a run with 211 failures still reported
+   completion. Now `wizard_completed` is only set `true` when `failed == 0`. Users can
+   re-run after fixing issues; idempotency already skips already-linked records so reruns
+   are safe.
+
 Architecture / approach decisions for filament-bridge, newest at top. One entry per
 non-obvious call: a change of approach, a rejected alternative, or a workaround. Keep
 entries short — the *why*, not a tutorial. Part of the

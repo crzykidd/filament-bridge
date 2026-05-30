@@ -68,6 +68,7 @@ def _config_response(db: Session) -> ConfigResponse:
         material_properties_source_of_truth=cfg.get("material_properties_source_of_truth", "filamentdb"),
         new_spool_source_of_truth=cfg.get("new_spool_source_of_truth", "spoolman"),
         sync_weight_threshold_grams=float(cfg.get("sync_weight_threshold_grams", 2.0)),
+        weight_precision_decimals=int(cfg.get("weight_precision_decimals", 2)),
         auto_sync_enabled=bool(cfg.get("auto_sync_enabled", False)),
         wizard_completed=bool(cfg.get("wizard_completed", False)),
         import_direction=cfg.get("import_direction"),

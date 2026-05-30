@@ -356,6 +356,7 @@ async def _handle_new_sm_spool(
     filamentdb: FilamentDBClient,
     spoolman: SpoolmanClient,
     fdb_field_name: str,
+    precision: int = 2,
 ) -> None:
     """Handle a Spoolman spool that has no filamentdb_spool_id extra field yet."""
     filament_mapping = filament_mappings_by_sm_filament.get(sm_spool.filament.id)
@@ -397,7 +398,7 @@ async def _handle_new_sm_spool(
         return
 
     tare = fdb_filament.spoolWeight
-    gross, used_default = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0, tare)
+    gross, used_default = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0, tare, precision=precision)
     if used_default:
         logger.warning("Cycle %s: using default tare for new FDB spool from SM spool %s", cycle_id, sm_spool.id)
 
@@ -453,6 +454,7 @@ async def _handle_new_fdb_spool(
     spoolman: SpoolmanClient,
     filamentdb: FilamentDBClient,
     fdb_field_name: str,
+    precision: int = 2,
 ) -> None:
     """Handle a Filament DB spool that has no Spoolman ID in its label yet."""
     filament_mapping = filament_mappings_by_fdb.get(fdb_filament.id)
@@ -482,7 +484,7 @@ async def _handle_new_fdb_spool(
         return
 
     tare = fdb_filament.spoolWeight
-    net, used_default = fdb_to_spoolman_net(fdb_spool.totalWeight or 0, tare)
+    net, used_default = fdb_to_spoolman_net(fdb_spool.totalWeight or 0, tare, precision=precision)
     if used_default:
         logger.warning("Cycle %s: using default tare for new SM spool from FDB spool %s", cycle_id, fdb_spool.id)
 
@@ -553,6 +555,7 @@ async def run_sync_cycle(
     weight_sot: str = config.get("weight_source_of_truth", "spoolman")
     matprop_sot: str = config.get("material_properties_source_of_truth", "filamentdb")
     threshold: float = float(config.get("sync_weight_threshold_grams", 2.0))
+    precision: int = int(config.get("weight_precision_decimals", 2))
     fdb_field_name: str = _settings.filamentdb_spoolman_id_field  # default "label"
 
     # ---- Fetch upstream state ----
@@ -695,7 +698,7 @@ async def run_sync_cycle(
                         )
                     else:
                         # Weight increased → update totalWeight (correction)
-                        gross, used_default = spoolman_to_fdb_gross(new_w or 0.0, tare)
+                        gross, used_default = spoolman_to_fdb_gross(new_w or 0.0, tare, precision=precision)
                         if used_default:
                             logger.warning("Cycle %s: using default tare for FDB spool %s", cycle_id, fdb_spool.id)
                         await filamentdb.update_spool(fdb_filament_id, fdb_spool.id, {"totalWeight": gross})
@@ -734,7 +737,7 @@ async def run_sync_cycle(
                     raise ValueError(f"FDB spool {fdb_spool.id} absent in detail view")
                 usage_sum = sum(u.grams for u in detail_spool.usageHistory if u.grams > 0)
                 new_w = cs.fdb_weight_change.new_value or 0.0
-                net, used_default = fdb_to_spoolman_net(new_w, tare, usage_sum)
+                net, used_default = fdb_to_spoolman_net(new_w, tare, usage_sum, precision=precision)
                 if used_default:
                     logger.warning("Cycle %s: using default tare for SM spool %s", cycle_id, sm_spool.id)
                 if not dry_run:
@@ -791,6 +794,7 @@ async def run_sync_cycle(
             db, cycle_id, result, dry_run,
             sm_spool, filament_mappings_by_sm, fdb_filaments,
             filamentdb, spoolman, fdb_field_name,
+            precision=precision,
         )
 
     for fdb_f in fdb_filaments_all:
@@ -804,6 +808,7 @@ async def run_sync_cycle(
                 db, cycle_id, result, dry_run,
                 fdb_f, fdb_spool, filament_mappings_by_fdb,
                 spoolman, filamentdb, fdb_field_name,
+                precision=precision,
             )
 
     if not dry_run:
