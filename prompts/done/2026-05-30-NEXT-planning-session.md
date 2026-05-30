@@ -1,10 +1,10 @@
 ---
 name: 2026-05-30-NEXT-planning-session
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-05-30
 model: opus              # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+completed: 2026-05-30    # filled when the work is done
+result: Session re-oriented on project state; prompt archived (planning closed out by user request).
 ---
 
 # Task: Planning session — orient on filament-bridge, scope the next phase
