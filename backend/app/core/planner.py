@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_fdb_color
+from app.core.matcher import sm_prop_conflicts
 from app.core.weight import spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
@@ -34,6 +35,8 @@ class _FilamentPlanItem:
     resolved: bool = False  # True = has/will-have an fdb_id; spool items are planned
     detail: str | None = None
     error: str | None = None
+    variant_master_sm_id: int | None = None  # set when this SM filament is a variant
+    prop_conflicts: list = dc_field(default_factory=list)  # list[dict] from sm_prop_conflicts
 
 
 @dataclass
@@ -54,7 +57,7 @@ class _SyncPlan:
     direction: str = "spoolman_to_filamentdb"
     filament_items: list = dc_field(default_factory=list)
     spool_items: list = dc_field(default_factory=list)
-    variant_updates: dict = dc_field(default_factory=dict)  # fdb_id → parent_id
+    master_of_sm: dict = dc_field(default_factory=dict)  # variant_sm_id → master_sm_id
 
 
 def _fdb_filament_payload_from_sm(sm: SpoolmanFilament) -> dict:
@@ -99,7 +102,7 @@ def _plan_spoolman_to_fdb(
     sm_spools: list,
     fdb_filaments: list[FDBFilament],
     decisions_by_sm: dict[int, dict],
-    parent_of_fdb: dict[str, str],
+    master_of_sm: dict[int, int],
     tare_by_sm_spool: dict[int, float],
     precision: int = 2,
 ) -> _SyncPlan:
@@ -171,8 +174,16 @@ def _plan_spoolman_to_fdb(
             )
             plan.filament_items.append(item)
 
-    # ---- Phase B: pass through variant parentage decisions ----
-    plan.variant_updates = dict(parent_of_fdb)
+    # ---- Phase B: annotate variants with master SM id + property conflicts ----
+    plan.master_of_sm = dict(master_of_sm)
+    sm_by_id: dict[int, SpoolmanFilament] = {f.id: f for f in sm_filaments}
+    for item in plan.filament_items:
+        master_sm_id = master_of_sm.get(item.sm_filament.id)
+        if master_sm_id is not None:
+            item.variant_master_sm_id = master_sm_id
+            master_sm_fil = sm_by_id.get(master_sm_id)
+            if master_sm_fil is not None and not item.error:
+                item.prop_conflicts = sm_prop_conflicts(master_sm_fil, item.sm_filament)
 
     # ---- Phase C: plan spool creates for each resolved filament ----
     for item in plan.filament_items:

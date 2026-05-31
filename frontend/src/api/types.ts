@@ -254,8 +254,39 @@ export interface VariantGroupRow {
   variants: FilamentRef[]
 }
 
+export interface VariantPropConflict {
+  field: string
+  master_value: unknown
+  member_value: unknown
+}
+
+export interface SMVariantMemberRow {
+  ref: FilamentRef
+  is_master: boolean
+  conflicts: VariantPropConflict[]
+}
+
+export interface SMVariantGroupRow {
+  base_name: string
+  vendor: string | null
+  material: string | null
+  suggested_master: FilamentRef
+  members: SMVariantMemberRow[]
+}
+
+export interface SMVariantDecision {
+  master_spoolman_filament_id: number
+  variant_spoolman_filament_ids: number[]
+}
+
+export interface SMVariantsRequest {
+  groups: SMVariantDecision[]
+}
+
 export interface WizardVariantsResponse {
-  groups: VariantGroupRow[]
+  direction: string
+  sm_groups: SMVariantGroupRow[]
+  fdb_groups: VariantGroupRow[]
 }
 
 export interface VariantDecision {
@@ -347,6 +378,7 @@ export interface WizardPreviewResponse {
   empty_active: EmptyActiveEntry[]
   default_tare: DefaultTareEntry[]
   variant_groups: VariantGroupPreviewEntry[]
+  variant_plan: SMVariantGroupRow[]
 }
 
 // ---------------------------------------------------------------------------

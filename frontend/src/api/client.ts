@@ -13,6 +13,7 @@ import type {
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
+  SMVariantsRequest,
   SyncLogResponse,
   SyncStatusResponse,
   WizardConnectivityResponse,
@@ -161,6 +162,8 @@ export const getWizardWeights = () => request<WizardWeightsResponse>('/wizard/we
 export const getWizardVariants = () => request<WizardVariantsResponse>('/wizard/variants')
 export const postWizardVariants = (body: WizardVariantsRequest) =>
   json<WizardDecisionAck>('/wizard/variants', 'POST', body)
+export const postWizardSmVariants = (body: SMVariantsRequest) =>
+  json<WizardDecisionAck>('/wizard/variants/sm', 'POST', body)
 
 export const getWizardPreview = () => request<WizardPreviewResponse>('/wizard/preview')
 

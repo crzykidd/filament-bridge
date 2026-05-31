@@ -270,8 +270,46 @@ class VariantGroupRow(BaseModel):
     variants: list[FilamentRef]
 
 
+# ---------------------------------------------------------------------------
+# SM-direction variant grouping (FR-6, import_direction="spoolman")
+# ---------------------------------------------------------------------------
+
+
+class VariantPropConflict(BaseModel):
+    """A property that disagrees between a variant and its proposed master."""
+
+    field: str
+    master_value: Any = None
+    member_value: Any = None
+
+
+class SMVariantMemberRow(BaseModel):
+    ref: FilamentRef
+    is_master: bool
+    conflicts: list[VariantPropConflict] = Field(default_factory=list)
+
+
+class SMVariantGroupRow(BaseModel):
+    base_name: str
+    vendor: str | None = None
+    material: str | None = None
+    suggested_master: FilamentRef
+    members: list[SMVariantMemberRow]
+
+
+class SMVariantDecision(BaseModel):
+    master_spoolman_filament_id: int
+    variant_spoolman_filament_ids: list[int]
+
+
+class SMVariantsRequest(BaseModel):
+    groups: list[SMVariantDecision]
+
+
 class WizardVariantsResponse(BaseModel):
-    groups: list[VariantGroupRow]
+    direction: str = "filamentdb"  # "spoolman" | "filamentdb"
+    sm_groups: list[SMVariantGroupRow] = Field(default_factory=list)
+    fdb_groups: list[VariantGroupRow] = Field(default_factory=list)
 
 
 class VariantDecision(BaseModel):
@@ -386,6 +424,7 @@ class WizardPreviewResponse(BaseModel):
     empty_active: list[EmptyActiveEntry]
     default_tare: list[DefaultTareEntry]
     variant_groups: list[VariantGroupPreviewEntry]
+    variant_plan: list[SMVariantGroupRow] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ The wizard and the sync engine (FR-12 new-record detection) both call this.
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament
@@ -63,6 +64,63 @@ class MatchResult:
     unmatched_fdb: list[FDBFilament] = field(default_factory=list)
     # (SM filament, list of ambiguous FDB candidates)
     ambiguous: list[tuple[SpoolmanFilament, list[FDBFilament]]] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# SM variant-grouping helpers (FR-6 SM direction)
+# ---------------------------------------------------------------------------
+
+_SM_COLOR_WORDS: frozenset[str] = frozenset({
+    "red", "blue", "black", "white", "grey", "gray", "green", "yellow",
+    "orange", "purple", "pink", "silver", "gold", "transparent", "natural",
+    "brown", "cyan", "magenta", "beige", "navy", "teal", "violet", "bronze",
+    "copper", "clear",
+})
+
+
+def strip_color_and_words(name: str, color_hex: str | None) -> str:
+    """Strip hex code and color-word lexicon from a filament name, then normalize.
+
+    Used for SM variant clustering so "PLA Red" and "PLA Blue" share a base name.
+    Falls back to the normalized original name when stripping leaves it empty.
+    """
+    base = name
+    if color_hex:
+        for v in (color_hex, color_hex.lstrip("#")):
+            base = base.replace(v, "").replace(v.lower(), "").replace(v.upper(), "")
+    tokens = base.split()
+    filtered = [t for t in tokens if normalize_name(t) not in _SM_COLOR_WORDS]
+    result = normalize_name(" ".join(filtered))
+    return result or normalize_name(name)
+
+
+def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str, str]:
+    """Return (vendor, material, base_name) for SM variant group clustering."""
+    vendor = normalize_vendor(sm.vendor.name if sm.vendor else None)
+    material = normalize_name(sm.material or "")
+    base = strip_color_and_words(sm.name, sm.color_hex)
+    return (vendor, material, base)
+
+
+def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> list[dict[str, Any]]:
+    """Compare shared filament properties; return [{field, master_value, member_value}] for each mismatch.
+
+    Both-None is not a conflict. One-None vs non-None is a conflict.
+    """
+    conflicts: list[dict[str, Any]] = []
+    checks = [
+        ("material", master.material, member.material),
+        ("density", master.density, member.density),
+        ("spool_weight", master.spool_weight, member.spool_weight),
+        ("settings_extruder_temp", master.settings_extruder_temp, member.settings_extruder_temp),
+        ("settings_bed_temp", master.settings_bed_temp, member.settings_bed_temp),
+    ]
+    for field_name, mv, memv in checks:
+        if mv is None and memv is None:
+            continue
+        if mv != memv:
+            conflicts.append({"field": field_name, "master_value": mv, "member_value": memv})
+    return conflicts
 
 
 def match_filaments(

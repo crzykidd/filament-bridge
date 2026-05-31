@@ -237,6 +237,14 @@ write to both upstreams.
    `filamentdb_parent_id` cross-ref and the `FilamentMapping.filamentdb_parent_id`
    column are written in one shot.
 
+   **Superseded for the `spoolman` direction (2026-05-31, see below):** the
+   FDB-keyed two-pass rationale only ever held because variant decisions were
+   keyed by FDB filament id. That breaks in a greenfield FDB (no ids to key on),
+   so the `_execute_spoolman_to_fdb` path now keys decisions by *Spoolman*
+   filament id and injects `parentId` at create time (Pass 2), not via a
+   post-hoc `update_filament`. The two-pass `update_filament(parentId)` approach
+   survives only for the `filamentdb` direction (`_execute_fdb_to_spoolman`).
+
 2. **Idempotency is keyed on the bridge's own mapping tables *and* the upstream
    cross-ref field.** Before creating, we skip if a `FilamentMapping`/`SpoolMapping`
    row exists (the normal re-run case) *or* if the Spoolman spool already carries a
@@ -476,3 +484,45 @@ For the `release-prep-and-cut` standard, the bare version lives in
 FastAPI app would have to parse it at runtime, whereas `__version__` is a native
 import that also feeds the in-app version display). The file doesn't exist yet — it's
 created when the backend lands.
+
+## 2026-05-31 — Spoolman→FDB variant grouping: SM-keyed master-promote
+
+The initial-sync wizard can now collapse a set of flat Spoolman filaments
+(e.g. "ELEGOO PLA Red/Blue/…") into one FDB parent + variants *before* the
+write, for the `import_direction="spoolman"` greenfield flow.
+
+**Master = parent (a real filament, not a synthesized one).** Each SM filament
+still maps 1:1 to an FDB filament; grouping only orders master-before-variants
+and stamps `parentId` on the non-masters. The master is a normal filament with
+its own color and spools. The user picks the master (radio) and prunes members
+(checkbox); a group reduced to master-only dissolves to flat creates.
+
+**SM-keyed persistence — new `wizard_sm_variant_decisions` key.** Decisions are
+keyed by Spoolman filament id (`{master_spoolman_filament_id,
+variant_spoolman_filament_ids[]}`), not FDB id, because a greenfield FDB has no
+ids to key on. The legacy FDB-keyed `wizard_variant_decisions` +
+`VariantDecision` + `_execute_fdb_to_spoolman` path is untouched; the two keys
+coexist, one per direction. This corrects the earlier Phase-B rationale (above),
+which documented the FDB-keyed two-pass `update_filament(parentId)` as
+intentional — it was a workaround for FDB-keyed decisions and does not apply to
+the spoolman direction, which injects `parentId` at create time.
+
+**Clustering strips a color-word lexicon, not just the hex.** `_strip_color`
+only removed a hex code, which under-clustered real names like "ELEGOO PLA Red".
+Clustering now keys on `(normalize_vendor, normalize_name(material), base_name)`
+where `base_name` strips both the hex and a known color-word lexicon
+(red/blue/black/white/grey/green/…). Clusters are **hints only** — the GUI is
+authoritative. Suggested master heuristic: most spools, tie-break shortest name.
+Singletons (cluster of 1) are excluded.
+
+**Shared properties are flagged, never auto-resolved.** `sm_prop_conflicts`
+compares material/density/spool_weight/extruder_temp/bed_temp between master and
+each member; mismatches surface as inline warnings in the preview
+(`variant_plan`). The bridge never auto-picks a value (CLAUDE.md hard rule). A
+group whose master has a `skip` match-decision is rejected at save; a variant
+whose master failed to resolve at execute time emits a `failed` report entry
+(no orphan `parentId`).
+
+**Un-grouping after a successful run is out of scope.** The wizard builds the
+tree before the first write only; reorganizing an already-synced parent/variant
+tree is a separate, later concern.

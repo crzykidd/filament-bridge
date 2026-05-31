@@ -1060,3 +1060,558 @@ def test_health_warns_when_fdb_too_old_for_multicolor(db):
     fdb_sys = body["systems"]["filamentdb"]
     assert fdb_sys["version"] == "1.32.5"
     assert any("1.33.0" in w for w in fdb_sys["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# SM variant grouping — pure unit tests (no HTTP)
+# ---------------------------------------------------------------------------
+
+
+def test_sm_prop_conflicts_agreement_returns_empty():
+    from app.core.matcher import sm_prop_conflicts
+    a = SpoolmanFilament(id=1, name="PLA", material="PLA", density=1.24,
+                         spool_weight=200.0, settings_extruder_temp=210, settings_bed_temp=60)
+    b = SpoolmanFilament(id=2, name="PLA Red", material="PLA", density=1.24,
+                         spool_weight=200.0, settings_extruder_temp=210, settings_bed_temp=60)
+    assert sm_prop_conflicts(a, b) == []
+
+
+def test_sm_prop_conflicts_each_field_independently():
+    from app.core.matcher import sm_prop_conflicts
+    base = SpoolmanFilament(id=1, name="PLA", material="PLA", density=1.24,
+                            spool_weight=200.0, settings_extruder_temp=210, settings_bed_temp=60)
+
+    diff_material = SpoolmanFilament(id=2, name="PLA Red", material="PETG", density=1.24,
+                                     spool_weight=200.0, settings_extruder_temp=210, settings_bed_temp=60)
+    c = sm_prop_conflicts(base, diff_material)
+    assert len(c) == 1 and c[0]["field"] == "material"
+
+    diff_density = SpoolmanFilament(id=3, name="PLA Blue", material="PLA", density=1.27,
+                                    spool_weight=200.0, settings_extruder_temp=210, settings_bed_temp=60)
+    c = sm_prop_conflicts(base, diff_density)
+    assert len(c) == 1 and c[0]["field"] == "density"
+
+    diff_nozzle = SpoolmanFilament(id=4, name="PLA Green", material="PLA", density=1.24,
+                                   spool_weight=200.0, settings_extruder_temp=220, settings_bed_temp=60)
+    c = sm_prop_conflicts(base, diff_nozzle)
+    assert len(c) == 1 and c[0]["field"] == "settings_extruder_temp"
+
+
+def test_sm_prop_conflicts_none_vs_value_is_conflict():
+    from app.core.matcher import sm_prop_conflicts
+    a = SpoolmanFilament(id=1, name="A", density=1.24)
+    b = SpoolmanFilament(id=2, name="B", density=None)
+    c = sm_prop_conflicts(a, b)
+    assert any(x["field"] == "density" for x in c)
+
+
+def test_sm_prop_conflicts_both_none_not_conflict():
+    from app.core.matcher import sm_prop_conflicts
+    a = SpoolmanFilament(id=1, name="A", density=None, spool_weight=None)
+    b = SpoolmanFilament(id=2, name="B", density=None, spool_weight=None)
+    assert sm_prop_conflicts(a, b) == []
+
+
+def test_strip_color_and_words_removes_hex_and_words():
+    from app.core.matcher import strip_color_and_words
+    assert strip_color_and_words("ELEGOO PLA Red", None) == "elegoo pla"
+    assert strip_color_and_words("Silk PLA Black #000000", "#000000") == "silk pla"
+    assert strip_color_and_words("PLA", None) == "pla"
+    # Falls back to original normalized when stripping empties it
+    assert strip_color_and_words("Red", None) == "red"
+
+
+def test_sm_variant_cluster_key():
+    from app.core.matcher import sm_variant_cluster_key
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    a = SpoolmanFilament(id=1, name="PLA Red", vendor=elegoo, material="PLA", color_hex="#ff0000")
+    b = SpoolmanFilament(id=2, name="PLA Blue", vendor=elegoo, material="PLA", color_hex="#0000ff")
+    c = SpoolmanFilament(id=3, name="PETG Red", vendor=elegoo, material="PETG", color_hex="#ff0000")
+    assert sm_variant_cluster_key(a) == sm_variant_cluster_key(b), "same base → same cluster key"
+    assert sm_variant_cluster_key(a) != sm_variant_cluster_key(c), "different material → different key"
+
+
+# ---------------------------------------------------------------------------
+# SM variant grouping — wizard/variants GET endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_variants_spoolman_direction_clusters_by_base_name(db):
+    set_config_value(db, "import_direction", "spoolman")
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", color_hex="#ff0000"),
+        SpoolmanFilament(id=11, name="PLA Blue", vendor=elegoo, material="PLA", color_hex="#0000ff"),
+        SpoolmanFilament(id=12, name="PETG Red", vendor=elegoo, material="PETG", color_hex="#ff0000"),
+    ]
+    sm_spools = [_sm_spool(1, 500.0)]  # spool_id=1 belongs to filament 10 (default fixture)
+    sm_spools[0].filament = SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA")
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=sm_spools), _fake_filamentdb())
+
+    body = client.get("/api/wizard/variants").json()
+    assert body["direction"] == "spoolman"
+    groups = body["sm_groups"]
+    # PLA Red + PLA Blue should cluster; PETG Red is a singleton
+    pla_group = next((g for g in groups if "pla" in g["base_name"]), None)
+    assert pla_group is not None
+    member_ids = [m["ref"]["spoolman_filament_id"] for m in pla_group["members"]]
+    assert set(member_ids) == {10, 11}
+    assert not any("petg" in g["base_name"].lower() for g in groups)
+
+
+def test_wizard_variants_spoolman_master_heuristic_most_spools(db):
+    """Master = filament with most spools; tie-break = shortest name."""
+    set_config_value(db, "import_direction", "spoolman")
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA"),
+        SpoolmanFilament(id=11, name="PLA Blue", vendor=elegoo, material="PLA"),
+    ]
+    spool_for_10 = _sm_spool(1, 500.0)
+    spool_for_10.filament = SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo)
+    spool_for_10b = _sm_spool(2, 300.0)
+    spool_for_10b.filament = SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo)
+    client = _client(db,
+        _fake_spoolman(filaments=sm_filaments, spools=[spool_for_10, spool_for_10b]),
+        _fake_filamentdb())
+
+    body = client.get("/api/wizard/variants").json()
+    groups = body["sm_groups"]
+    assert len(groups) == 1
+    # filament 10 has 2 spools → should be master
+    assert groups[0]["suggested_master"]["spoolman_filament_id"] == 10
+
+
+def test_wizard_variants_spoolman_conflict_flags(db):
+    """Members with differing material/density get conflict entries."""
+    set_config_value(db, "import_direction", "spoolman")
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+        SpoolmanFilament(id=11, name="PLA Blue", vendor=elegoo, material="PLA", density=1.27),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/variants").json()
+    groups = body["sm_groups"]
+    assert len(groups) == 1
+    master_id = groups[0]["suggested_master"]["spoolman_filament_id"]
+    non_master = next(m for m in groups[0]["members"] if m["ref"]["spoolman_filament_id"] != master_id)
+    assert any(c["field"] == "density" for c in non_master["conflicts"])
+
+
+def test_wizard_variants_filamentdb_direction_returns_fdb_groups(db):
+    """FDB direction still returns fdb_groups (legacy behavior)."""
+    set_config_value(db, "import_direction", "filamentdb")
+    db.commit()
+    fdb_filaments = [
+        FDBFilament.model_validate({"_id": "f1", "name": "PLA", "vendor": "ELEGOO"}),
+        FDBFilament.model_validate({"_id": "f2", "name": "PLA RED", "vendor": "ELEGOO"}),
+    ]
+    client = _client(db, _fake_spoolman(), _fake_filamentdb(filaments=fdb_filaments))
+    body = client.get("/api/wizard/variants").json()
+    assert body["direction"] == "filamentdb"
+    assert "fdb_groups" in body
+    assert "sm_groups" in body
+
+
+# ---------------------------------------------------------------------------
+# SM variant decisions persistence — POST /wizard/variants/sm
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_save_sm_variants_persists_to_new_key(db):
+    client = _client(db)
+    resp = client.post("/api/wizard/variants/sm", json={"groups": [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11, 12]},
+    ]})
+    assert resp.status_code == 200
+    assert resp.json()["persisted"] == 1
+    from app.api.config import get_config_value
+    stored = get_config_value(db, "wizard_sm_variant_decisions", [])
+    assert stored[0]["master_spoolman_filament_id"] == 10
+    assert set(stored[0]["variant_spoolman_filament_ids"]) == {11, 12}
+
+
+def test_wizard_save_variants_legacy_key_unchanged(db):
+    """POST /wizard/variants still writes to the legacy FDB-keyed key."""
+    client = _client(db)
+    resp = client.post("/api/wizard/variants", json={"groups": [
+        {"parent_filamentdb_id": "fil-1", "variant_filamentdb_ids": ["fil-2", "fil-3"]},
+    ]})
+    assert resp.status_code == 200
+    from app.api.config import get_config_value
+    stored = get_config_value(db, "wizard_variant_decisions", [])
+    assert stored[0]["parent_filamentdb_id"] == "fil-1"
+    # SM key is untouched
+    assert get_config_value(db, "wizard_sm_variant_decisions", []) == []
+
+
+def test_wizard_save_sm_variants_rejects_skipped_master(db):
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "skip"}])
+    db.commit()
+    client = _client(db)
+    resp = client.post("/api/wizard/variants/sm", json={"groups": [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ]})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "master_is_skipped"
+
+
+def test_wizard_save_sm_and_legacy_variants_coexist(db):
+    """Both SM and FDB decisions can be saved independently."""
+    client = _client(db)
+    client.post("/api/wizard/variants/sm", json={"groups": [
+        {"master_spoolman_filament_id": 5, "variant_spoolman_filament_ids": [6]},
+    ]})
+    client.post("/api/wizard/variants", json={"groups": [
+        {"parent_filamentdb_id": "fil-p", "variant_filamentdb_ids": ["fil-v"]},
+    ]})
+    from app.api.config import get_config_value
+    assert get_config_value(db, "wizard_sm_variant_decisions", []) != []
+    assert get_config_value(db, "wizard_variant_decisions", []) != []
+
+
+# ---------------------------------------------------------------------------
+# Planner with master_of_sm
+# ---------------------------------------------------------------------------
+
+
+def test_planner_master_of_sm_annotates_variants():
+    """Variant items get variant_master_sm_id; master item stays None."""
+    from app.core.planner import _plan_spoolman_to_fdb
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA"),   # master
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA"),  # variant
+    ]
+    decisions = {
+        10: {"action": "create"},
+        11: {"action": "create"},
+    }
+    master_of_sm = {11: 10}
+    db = _fresh_db()
+    plan = _plan_spoolman_to_fdb(db, sm_filaments, [], [], decisions, master_of_sm, {})
+    items_by_id = {i.sm_filament.id: i for i in plan.filament_items}
+    assert items_by_id[10].variant_master_sm_id is None, "master should have no parent"
+    assert items_by_id[11].variant_master_sm_id == 10, "variant should point to master"
+
+
+def test_planner_master_of_sm_skip_preserves_flat():
+    """A group with no variants in master_of_sm → all items are ungrouped (flat)."""
+    from app.core.planner import _plan_spoolman_to_fdb
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo),
+    ]
+    decisions = {10: {"action": "create"}, 11: {"action": "create"}}
+    db = _fresh_db()
+    plan = _plan_spoolman_to_fdb(db, sm_filaments, [], [], decisions, {}, {})
+    for item in plan.filament_items:
+        assert item.variant_master_sm_id is None, "no grouping → all flat"
+
+
+def test_planner_prop_conflicts_populated():
+    """Variant items with differing density get prop_conflicts filled."""
+    from app.core.planner import _plan_spoolman_to_fdb
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA", density=1.24),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA", density=1.27),
+    ]
+    decisions = {10: {"action": "create"}, 11: {"action": "create"}}
+    master_of_sm = {11: 10}
+    db = _fresh_db()
+    plan = _plan_spoolman_to_fdb(db, sm_filaments, [], [], decisions, master_of_sm, {})
+    items_by_id = {i.sm_filament.id: i for i in plan.filament_items}
+    assert any(c["field"] == "density" for c in items_by_id[11].prop_conflicts)
+    assert items_by_id[10].prop_conflicts == []
+
+
+def test_planner_echoes_master_of_sm_on_plan():
+    from app.core.planner import _plan_spoolman_to_fdb
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo),
+    ]
+    decisions = {10: {"action": "create"}, 11: {"action": "create"}}
+    master_of_sm = {11: 10}
+    db = _fresh_db()
+    plan = _plan_spoolman_to_fdb(db, sm_filaments, [], [], decisions, master_of_sm, {})
+    assert plan.master_of_sm == {11: 10}
+
+
+# ---------------------------------------------------------------------------
+# Executor — variant grouping end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_execute_variant_group_creates_with_parent_id(db):
+    """Greenfield group: master create + 2 variant creates; variants get parentId injected."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+        {"spoolman_filament_id": 12, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11, 12]},
+    ])
+    db.commit()
+
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA"),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA"),
+        SpoolmanFilament(id=12, name="PLA Blue", vendor=elegoo, material="PLA"),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb(filaments=[])
+
+    create_calls = []
+    async def _create_filament(payload):
+        create_calls.append(payload)
+        return MagicMock(id=f"fdb-fil-{len(create_calls)}")
+
+    filamentdb.create_filament = AsyncMock(side_effect=_create_filament)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+    assert body["created"] == 3  # 3 filament creates
+
+    # Master (id=10) must be created without parentId
+    master_call = next(c for c in create_calls if c.get("name") == "PLA" and "parentId" not in c)
+    assert master_call is not None
+
+    # Both variants must have parentId in their create payload
+    variant_calls = [c for c in create_calls if "parentId" in c]
+    assert len(variant_calls) == 2
+    assert all(c["parentId"] is not None for c in variant_calls)
+
+    # FilamentMapping for variants has filamentdb_parent_id set
+    maps = {m.spoolman_filament_id: m for m in db.query(FilamentMapping).all()}
+    assert maps[11].filamentdb_parent_id is not None
+    assert maps[12].filamentdb_parent_id is not None
+    assert maps[10].filamentdb_parent_id is None
+
+
+def test_wizard_execute_link_variant_calls_update_filament(db):
+    """Link variant: update_filament called with parentId on the existing FDB record."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fdb-master"},
+        {"spoolman_filament_id": 11, "action": "link", "filamentdb_id": "fdb-variant"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    db.commit()
+
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo),
+    ]
+    fdb_filaments = [
+        _fdb_filament("fdb-master", "s-master", 0.0),
+        _fdb_filament("fdb-variant", "s-variant", 0.0),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb(filaments=fdb_filaments)
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+
+    update_calls = filamentdb.update_filament.call_args_list
+    parent_set = [c for c in update_calls if c.args[1].get("parentId") == "fdb-master"]
+    assert len(parent_set) == 1
+    assert parent_set[0].args[0] == "fdb-variant"
+
+
+def test_wizard_execute_master_skip_fails_variant(db):
+    """When master has skip decision, variants get a failed record (no orphan parentId)."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "skip"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    db.commit()
+
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb(filaments=[])
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] >= 1
+    failed_records = [r for r in body["records"] if r["action"] == "failed"
+                      and r["spoolman_filament_id"] == 11]
+    assert len(failed_records) == 1
+
+
+def test_wizard_execute_variant_spool_cross_ref_has_parent_id(db):
+    """Spool extra filamentdb_parent_id is set to the master's FDB id."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    db.commit()
+
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA"),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA"),
+    ]
+    spool_for_11 = _sm_spool(101, 500.0)
+    spool_for_11.filament = SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo)
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[spool_for_11])
+
+    created_fdb_ids = []
+    async def _create_filament(payload):
+        fid = f"fdb-{10 + len(created_fdb_ids)}"
+        created_fdb_ids.append(fid)
+        return MagicMock(id=fid)
+
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(side_effect=_create_filament)
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-101"})
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+
+    # The cross-ref extra on SM spool 101 should have a non-empty filamentdb_parent_id
+    update_calls = spoolman.update_spool.call_args_list
+    spool_update = next(c for c in update_calls if c.args[0] == 101)
+    extra = spool_update.args[1]["extra"]
+    assert extra["filamentdb_parent_id"] != json.dumps("")
+
+
+def test_wizard_execute_variant_idempotent_rerun(db):
+    """Re-running after partial failure on variants does not create duplicates."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    db.commit()
+
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA"),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA"),
+    ]
+    # Pre-seed the mapping as if a prior partial run created the master
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fdb-master"))
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="fdb-variant"))
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    # Master is skipped (already linked); variant is created fresh
+    assert body["failed"] == 0
+    assert db.query(FilamentMapping).count() == 2
+
+
+# ---------------------------------------------------------------------------
+# Preview — variant_plan populated, no writes
+# ---------------------------------------------------------------------------
+
+
+def test_preview_variant_plan_populated_from_sm_decisions(db):
+    """variant_plan reflects saved SM variant decisions with conflict flags."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    db.commit()
+
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA", density=1.24),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA", density=1.27),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb(filaments=[]))
+
+    resp = client.get("/api/wizard/preview")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "variant_plan" in body
+    assert len(body["variant_plan"]) == 1
+    group = body["variant_plan"][0]
+    # Master member has no conflicts; variant member has density conflict
+    master_m = next(m for m in group["members"] if m["is_master"])
+    assert master_m["conflicts"] == []
+    variant_m = next(m for m in group["members"] if not m["is_master"])
+    assert any(c["field"] == "density" for c in variant_m["conflicts"])
+
+
+def test_preview_variant_plan_empty_when_no_sm_decisions(db):
+    """No wizard_sm_variant_decisions → variant_plan is empty."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    client = _client(
+        db,
+        _fake_spoolman(filaments=[SpoolmanFilament(id=10, name="PLA", vendor=elegoo)], spools=[]),
+        _fake_filamentdb(filaments=[]),
+    )
+    body = client.get("/api/wizard/preview").json()
+    assert body["variant_plan"] == []
+
+
+def test_preview_with_sm_decisions_makes_no_writes(db):
+    """Preview with SM variant decisions must not call any mutating upstream method."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA", vendor=elegoo),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb(filaments=[])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.get("/api/wizard/preview")
+    assert resp.status_code == 200
+    filamentdb.create_filament.assert_not_called()
+    filamentdb.update_filament.assert_not_called()
+    spoolman.update_spool.assert_not_called()
