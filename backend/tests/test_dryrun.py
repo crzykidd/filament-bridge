@@ -67,6 +67,7 @@ def _fake_filamentdb(filaments=None) -> AsyncMock:
     client = AsyncMock()
     client.get_filaments = AsyncMock(return_value=filaments or [])
     client.get_filament = AsyncMock(return_value=None)
+    client.get_version = AsyncMock(return_value="1.33.0")
     # These should never be called in a dry-run
     client.create_spool = AsyncMock(side_effect=AssertionError("no writes in dry-run"))
     client.update_spool = AsyncMock(side_effect=AssertionError("no writes in dry-run"))
@@ -372,6 +373,7 @@ async def test_run_sync_cycle_live_still_writes(db):
     fdb = AsyncMock()
     fdb.get_filaments = AsyncMock(return_value=[fdb_fil_with_spool])
     fdb.get_filament = AsyncMock(return_value=fdb_fil_with_spool)
+    fdb.get_version = AsyncMock(return_value="1.33.0")
     fdb.log_usage = AsyncMock(return_value={})
 
     result = await run_sync_cycle(db, sm, fdb, dry_run=False)

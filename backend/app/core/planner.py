@@ -13,7 +13,7 @@ from dataclasses import field as dc_field
 from sqlalchemy.orm import Session
 
 from app.config import settings as _settings
-from app.core.color import project_colorname, to_fdb_color
+from app.core.color import sm_multicolor_to_fdb, to_fdb_color
 from app.core.weight import spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
@@ -57,8 +57,12 @@ class _SyncPlan:
     variant_updates: dict = dc_field(default_factory=dict)  # fdb_id → parent_id
 
 
-def _fdb_filament_payload_from_sm(sm: SpoolmanFilament, multicolor_fmt: str = "name") -> dict:
-    """Map a Spoolman filament onto the FDB create-filament body (core fields only)."""
+def _fdb_filament_payload_from_sm(sm: SpoolmanFilament) -> dict:
+    """Map a Spoolman filament onto the FDB create-filament body (core fields only).
+
+    Structured multicolor (color/secondaryColors/optTags) is included for v1.33.0+
+    Filament DB; on older instances the unknown keys are harmless extras.
+    """
     material = sm.material
     if not material:
         logger.warning(
@@ -66,14 +70,19 @@ def _fdb_filament_payload_from_sm(sm: SpoolmanFilament, multicolor_fmt: str = "n
             sm.id, sm.name, _DEFAULT_FDB_MATERIAL,
         )
         material = _DEFAULT_FDB_MATERIAL
+    mc = sm_multicolor_to_fdb(sm.color_hex, sm.multi_color_hexes, sm.multi_color_direction)
     payload: dict = {
         "name": sm.name,
         "vendor": sm.vendor.name if sm.vendor else None,
         "type": material,
-        "color": to_fdb_color(sm.color_hex),
+        "color": mc["color"],
         "density": sm.density,
         "spoolWeight": sm.spool_weight,
     }
+    if mc["secondaryColors"]:
+        payload["secondaryColors"] = mc["secondaryColors"]
+    if mc["optTags"]:
+        payload["optTags"] = mc["optTags"]
     temps: dict = {}
     if sm.settings_extruder_temp is not None:
         temps["nozzle"] = sm.settings_extruder_temp
@@ -81,12 +90,6 @@ def _fdb_filament_payload_from_sm(sm: SpoolmanFilament, multicolor_fmt: str = "n
         temps["bed"] = sm.settings_bed_temp
     if temps:
         payload["temperatures"] = temps
-    if sm.multi_color_hexes:
-        colorname = project_colorname(
-            sm.color_hex, sm.multi_color_hexes, sm.multi_color_direction, fmt=multicolor_fmt,
-        )
-        if colorname:
-            payload["colorName"] = colorname
     return {k: v for k, v in payload.items() if v is not None}
 
 
@@ -99,7 +102,6 @@ def _plan_spoolman_to_fdb(
     parent_of_fdb: dict[str, str],
     tare_by_sm_spool: dict[int, float],
     precision: int = 2,
-    multicolor_fmt: str = "name",
 ) -> _SyncPlan:
     """Compute what _execute_spoolman_to_fdb would do — no writes, no upstream I/O.
 
@@ -156,7 +158,7 @@ def _plan_spoolman_to_fdb(
                 )
             plan.filament_items.append(item)
         elif action == "create":
-            payload = _fdb_filament_payload_from_sm(sm_fil, multicolor_fmt)
+            payload = _fdb_filament_payload_from_sm(sm_fil)
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="create",
                 fdb_id=None, fdb_payload=payload, resolved=True,

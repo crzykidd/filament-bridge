@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { getConfig, updateConfig, exportBackup, importBackup } from '../api/client'
 import { useApi } from '../api/hooks'
-import type { MulticolorColornameFmt, SourceOfTruth } from '../api/types'
+import type { SourceOfTruth } from '../api/types'
 
 type SOT = SourceOfTruth
 
@@ -45,9 +45,6 @@ export default function Settings() {
   const [threshold, setThreshold] = useState('')
   const [precision, setPrecision] = useState<number | null>(null)
 
-  const [multicolorFmt, setMulticolorFmt] = useState<MulticolorColornameFmt | null>(null)
-  const [protectMulticolor, setProtectMulticolor] = useState<boolean | null>(null)
-
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -62,8 +59,6 @@ export default function Settings() {
   const nSot = newSpoolSot ?? data.new_spool_source_of_truth
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
   const prec = precision ?? data.weight_precision_decimals
-  const mcFmt = multicolorFmt ?? data.multicolor_colorname_format
-  const protect = protectMulticolor ?? data.protect_multicolor_color_in_spoolman
 
   async function handleSave() {
     setSaving(true)
@@ -75,8 +70,6 @@ export default function Settings() {
         new_spool_source_of_truth: nSot,
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
         weight_precision_decimals: prec,
-        multicolor_colorname_format: mcFmt,
-        protect_multicolor_color_in_spoolman: protect,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -155,35 +148,6 @@ export default function Settings() {
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
-        </div>
-        <div className="flex items-center justify-between py-3 border-b border-gray-100">
-          <span className="text-sm font-medium text-gray-700">Multicolor colorName format</span>
-          <select
-            value={mcFmt}
-            onChange={e => setMulticolorFmt(e.target.value as MulticolorColornameFmt)}
-            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          >
-            <option value="name">Name (fuzzy)</option>
-            <option value="hex">Hex</option>
-          </select>
-        </div>
-        <div className="py-3 space-y-2">
-          <label className="flex items-center gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={protect}
-              onChange={e => setProtectMulticolor(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
-            />
-            <span className="text-sm font-medium text-gray-700">
-              Protect multicolor settings in Spoolman
-            </span>
-          </label>
-          {!protect && (
-            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-              ⚠️ Turning this off can overwrite and lose your multicolor settings in Spoolman.
-            </p>
-          )}
         </div>
         <div className="pt-2 flex items-center gap-3">
           <button

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 # Fields on an FDBFilamentDetail that the bridge is allowed to sync
 _FDB_SCALAR_FIELDS: frozenset[str] = frozenset({
-    "name", "color", "colorName", "vendor", "type", "cost", "density", "diameter",
+    "name", "color", "vendor", "type", "cost", "density", "diameter",
     "maxVolumetricSpeed", "spoolWeight", "netFilamentWeight", "dryingTemperature",
     "dryingTime", "transmissionDistance", "glassTempTransition", "heatDeflectionTemp",
     "shoreHardnessA", "shoreHardnessD", "minPrintSpeed", "maxPrintSpeed", "spoolType",

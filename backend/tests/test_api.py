@@ -74,6 +74,7 @@ def _fake_filamentdb(filaments=None, detail=None) -> AsyncMock:
     client = AsyncMock()
     client.get_filaments = AsyncMock(return_value=filaments or [])
     client.get_filament = AsyncMock(return_value=detail)
+    client.get_version = AsyncMock(return_value="1.33.0")
     client.log_usage = AsyncMock(return_value={})
     client.update_spool = AsyncMock(return_value={})
     client.update_filament = AsyncMock(return_value=MagicMock(id="fil-x"))
@@ -1032,3 +1033,30 @@ def test_preview_variant_group_on_empty_fdb(db):
     # PETG is unique → no group
     assert not any(g["material"] == "PETG" for g in groups)
     assert body["flag_counts"]["variant_group"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Health endpoint — FDB version + multicolor upgrade warning
+# ---------------------------------------------------------------------------
+
+
+def test_health_reports_fdb_version_and_no_warning_when_current(db):
+    fdb = _fake_filamentdb()
+    fdb.health = AsyncMock(return_value={"version": "1.33.0", "filament_count": 2, "spool_count": 3})
+    client = _client(db, filamentdb=fdb)
+
+    body = client.get("/api/health").json()
+    fdb_sys = body["systems"]["filamentdb"]
+    assert fdb_sys["version"] == "1.33.0"
+    assert fdb_sys["warnings"] == []
+
+
+def test_health_warns_when_fdb_too_old_for_multicolor(db):
+    fdb = _fake_filamentdb()
+    fdb.health = AsyncMock(return_value={"version": "1.32.5", "filament_count": 1, "spool_count": 1})
+    client = _client(db, filamentdb=fdb)
+
+    body = client.get("/api/health").json()
+    fdb_sys = body["systems"]["filamentdb"]
+    assert fdb_sys["version"] == "1.32.5"
+    assert any("1.33.0" in w for w in fdb_sys["warnings"])

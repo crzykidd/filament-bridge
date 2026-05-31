@@ -23,7 +23,7 @@ from app.api.config import get_config_value, set_config_value
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
-from app.core.color import project_colorname, to_sm_color
+from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
 from app.core.matcher import match_filaments, normalize_name, normalize_vendor
 from app.core.planner import (
@@ -414,7 +414,6 @@ async def _execute_spoolman_to_fdb(
     parent_of_fdb: dict[str, str],
     tare_by_sm_spool: dict[int, float],
     precision: int = 2,
-    multicolor_fmt: str = "name",
 ) -> None:
     """Import direction "spoolman": seed Filament DB from Spoolman.
 
@@ -423,7 +422,7 @@ async def _execute_spoolman_to_fdb(
     """
     plan = _plan_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
-        decisions_by_sm, parent_of_fdb, tare_by_sm_spool, precision, multicolor_fmt,
+        decisions_by_sm, parent_of_fdb, tare_by_sm_spool, precision,
     )
 
     fdb_field_name = _settings.filamentdb_spoolman_id_field
@@ -484,21 +483,26 @@ async def _execute_spoolman_to_fdb(
         fdb_id = item.fdb_id
         parent_id = plan.variant_updates.get(fdb_id)
 
-        # Apply colorName for linked/prior-linked multicolor filaments.
-        # Creates already have colorName baked into the create payload.
+        # Push structured multicolor for linked/prior-linked multicolor filaments.
+        # Creates already have color/secondaryColors/optTags baked into the create payload.
         if item.sm_filament.multi_color_hexes and fdb_id not in just_created_fdb_ids:
-            colorname = project_colorname(
+            existing = fdb_by_id.get(fdb_id)
+            mc = sm_multicolor_to_fdb(
                 item.sm_filament.color_hex, item.sm_filament.multi_color_hexes,
-                item.sm_filament.multi_color_direction, fmt=multicolor_fmt,
+                item.sm_filament.multi_color_direction,
+                existing_opt_tags=existing.optTags if existing else None,
             )
-            if colorname:
-                try:
-                    await filamentdb.update_filament(fdb_id, {"colorName": colorname})
-                except Exception as exc:
-                    logger.warning(
-                        "wizard execute %s: colorName update for FDB filament %s failed: %s",
-                        res.cycle_id, fdb_id, exc,
-                    )
+            try:
+                await filamentdb.update_filament(fdb_id, {
+                    "color": mc["color"],
+                    "secondaryColors": mc["secondaryColors"],
+                    "optTags": mc["optTags"],
+                })
+            except Exception as exc:
+                logger.warning(
+                    "wizard execute %s: multicolor update for FDB filament %s failed: %s",
+                    res.cycle_id, fdb_id, exc,
+                )
 
         fil_map = fil_map_by_sm.get(item.sm_filament.id)
         if fil_map is None:
@@ -775,7 +779,6 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         "spoolman_to_filamentdb" if import_direction == "spoolman" else "filamentdb_to_spoolman"
     )
     precision: int = int(get_config_value(db, "weight_precision_decimals", 2))
-    multicolor_fmt: str = str(get_config_value(db, "multicolor_colorname_format", "name"))
 
     match_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     variant_decisions = get_config_value(db, "wizard_variant_decisions", []) or []
@@ -809,7 +812,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     plan = _plan_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
         decisions_by_sm, parent_of_fdb, {},  # no tare overrides for preview
-        precision=precision, multicolor_fmt=multicolor_fmt,
+        precision=precision,
     )
 
     _action_for_plan: dict[str, str] = {
@@ -879,7 +882,6 @@ async def wizard_execute(
     tare_by_sm_spool = {o.spoolman_spool_id: o.tare for o in overrides if o.spoolman_spool_id is not None}
     tare_by_fdb_spool = {o.filamentdb_spool_id: o.tare for o in overrides if o.filamentdb_spool_id is not None}
     precision: int = int(get_config_value(db, "weight_precision_decimals", 2))
-    multicolor_fmt: str = str(get_config_value(db, "multicolor_colorname_format", "name"))
 
     match_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     variant_decisions = get_config_value(db, "wizard_variant_decisions", []) or []
@@ -918,7 +920,6 @@ async def wizard_execute(
             sm_filaments, sm_spools, fdb_filaments,
             decisions_by_sm, parent_of_fdb, tare_by_sm_spool,
             precision=precision,
-            multicolor_fmt=multicolor_fmt,
         )
     else:
         await _execute_fdb_to_spoolman(

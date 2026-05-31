@@ -228,19 +228,26 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold text-gray-700 mb-3">Connected systems</h2>
           <div className="space-y-3">
             {Object.entries(data.systems).map(([name, sys]) => (
-              <div key={name} className="flex items-center justify-between">
-                <div>
-                  <span className="font-medium text-sm capitalize">{name}</span>
-                  <span className="ml-2 text-xs text-gray-400">{sys.url}</span>
-                  {sys.version && <span className="ml-2 text-xs text-gray-400">v{sys.version}</span>}
-                  {sys.error && <span className="ml-2 text-xs text-red-500">{sys.error}</span>}
+              <div key={name}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <span className="font-medium text-sm capitalize">{name}</span>
+                    <span className="ml-2 text-xs text-gray-400">{sys.url}</span>
+                    {sys.version && <span className="ml-2 text-xs text-gray-400">v{sys.version}</span>}
+                    {sys.error && <span className="ml-2 text-xs text-red-500">{sys.error}</span>}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs text-gray-500">
+                    {Object.entries(sys.counts).map(([k, v]) => (
+                      <span key={k}>{k}: {v}</span>
+                    ))}
+                    <SystemStatusBadge status={sys.status} />
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-gray-500">
-                  {Object.entries(sys.counts).map(([k, v]) => (
-                    <span key={k}>{k}: {v}</span>
-                  ))}
-                  <SystemStatusBadge status={sys.status} />
-                </div>
+                {sys.warnings?.map(w => (
+                  <p key={w} className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    ⚠️ {w}
+                  </p>
+                ))}
               </div>
             ))}
           </div>

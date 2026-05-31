@@ -175,11 +175,10 @@ async def plan_dry_run(db: Session, spoolman, filamentdb) -> CycleResult:
 
     # Run the planner for matched (link) and unmatched (create) SM filaments.
     precision = int(config.get("weight_precision_decimals", 2))
-    multicolor_fmt = str(config.get("multicolor_colorname_format", "name"))
     plan = _plan_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
         decisions_by_sm, {}, {},
-        precision=precision, multicolor_fmt=multicolor_fmt,
+        precision=precision,
     )
 
     # Emit filament-level plan entries.

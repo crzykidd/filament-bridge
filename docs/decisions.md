@@ -88,6 +88,34 @@ never write there. Decisions:
    lands, replace the `colorName` projection with a real field mapping and push correctly —
    no data-model rework, since Spoolman + the bridge already hold the truth.
 
+## 2026-05-31 — Structured multicolor sync supersedes the colorName projection
+
+Filament DB **v1.33.0** (closing [hyiger/filament-db#477](https://github.com/hyiger/filament-db/issues/477))
+shipped native structured multicolor, so the "forward path" above has landed. The interim
+`colorName`-text projection (decisions 2–4 of the 2026-05-30 entry) is **removed entirely**
+— pre-first-release, so no migration. Replacement decisions:
+
+1. **Structured field mapping, both directions.** FDB `color` (nullable) + `secondaryColors[]`
+   + arrangement in `optTags` (tag **29 = coextruded**, **28 = gradient**, coextruded wins)
+   ↔ Spoolman `color_hex` + `multi_color_hexes` + `multi_color_direction`. Helpers live in
+   `core/color.py` (`sm_multicolor_to_fdb`, `fdb_multicolor_to_sm`). coaxial → FDB `color`=null
+   & all hexes in `secondaryColors`; longitudinal → `color`=primary, rest secondary. optTag
+   writes preserve unrelated tags.
+2. **Bidirectional, mirroring the field-diff model.** Multicolor is a filament-level property,
+   so `engine._sync_multicolor` runs over filament mappings with a system-agnostic
+   `multicolor_signature` stored as filament-level snapshots. One-sided change → directional
+   write; both sides changed & disagree → queued conflict (`field_name="multicolor"`), never
+   auto-resolved. SoT is not consulted for one-sided changes (consistent with field sync).
+   The generic `color` field-map sync is skipped for multicolor filaments (the structured path
+   owns it), which replaces the old `protect_multicolor` setting.
+3. **Version-gated.** FDB has no version endpoint; we read `GET /api/openapi` → `info.version`
+   (`FilamentDBClient.get_version`, cached, refreshed per health probe). `core/version.py`
+   gates on `>= 1.33.0` (`MULTICOLOR_MIN_FDB`). On older FDB, multicolor sync is skipped and
+   `/api/health` (+ sync status) surface an "upgrade to 1.33.0" warning; single-color `color`
+   sync is unaffected.
+4. **Removed config** — `multicolor_colorname_format` and `protect_multicolor_color_in_spoolman`
+   (defaults, schemas, API, and Settings UI controls) are gone.
+
 ## 2026-05-30 — Phase 5 sync fixes (PATCH, weight precision, material default, wizard gating)
 
 Four concrete bugs exposed by the first live end-to-end run (223 Spoolman spools):

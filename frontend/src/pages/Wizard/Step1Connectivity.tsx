@@ -33,6 +33,9 @@ export default function Step1Connectivity({ next }: WizardCtx) {
                       <span key={k} className="text-xs text-gray-500">{k}: {v}</span>
                     ))}
                   </div>
+                  {sys.warnings?.map(w => (
+                    <p key={w} className="text-xs text-amber-700 mt-1">⚠️ {w}</p>
+                  ))}
                 </div>
                 <SystemStatusBadge status={sys.status} />
               </div>

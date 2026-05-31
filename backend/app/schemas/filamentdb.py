@@ -89,6 +89,7 @@ class FDBVariantRef(BaseModel):
     id: str = Field(alias="_id")
     name: str
     color: str | None = None
+    secondaryColors: list[str] = Field(default_factory=list)
     cost: float | None = None
     optTags: list[Any] = Field(default_factory=list)
 
@@ -103,6 +104,7 @@ class FDBFilament(BaseModel):
     vendor: str | None = None
     type: str | None = None
     color: str | None = None
+    secondaryColors: list[str] = Field(default_factory=list)
     cost: float | None = None
     density: float | None = None
     temperatures: FDBTemperatures | None = None
@@ -132,6 +134,7 @@ class FDBFilamentDetail(BaseModel):
     vendor: str | None = None
     type: str | None = None
     color: str | None = None
+    secondaryColors: list[str] = Field(default_factory=list)
     colorName: str | None = None
     cost: float | None = None
     density: float | None = None

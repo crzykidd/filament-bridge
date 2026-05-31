@@ -117,6 +117,12 @@ class SpoolmanClient:
         resp.raise_for_status()
         return SpoolmanSpool.model_validate(resp.json())
 
+    async def update_filament(self, filament_id: int, payload: dict) -> SpoolmanFilament:
+        """PATCH /api/v1/filament/{id} — update filament fields (color, multi_color, etc.)."""
+        resp = await self._http.patch(f"/api/v1/filament/{filament_id}", json=payload)
+        resp.raise_for_status()
+        return SpoolmanFilament.model_validate(resp.json())
+
     async def create_filament(self, payload: dict) -> SpoolmanFilament:
         """POST /api/v1/filament — create a new filament record."""
         resp = await self._http.post("/api/v1/filament", json=payload)

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app import __version__
 from app.config import settings
+from app.core.version import MULTICOLOR_MIN_FDB, version_gte
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,6 +28,7 @@ class SystemHealth(BaseModel):
     url: str
     version: str | None = None
     counts: dict[str, int] = {}
+    warnings: list[str] = []
     error: str | None = None
 
 
@@ -59,13 +61,20 @@ async def _check_filamentdb(request: Request) -> SystemHealth:
     url = settings.filamentdb_url
     try:
         info = await request.app.state.filamentdb.health()
+        warnings: list[str] = []
+        if not version_gte(info.get("version"), MULTICOLOR_MIN_FDB):
+            warnings.append(
+                "Filament DB < 1.33.0 — upgrade for structured multicolor sync"
+            )
         return SystemHealth(
             status="ok",
             url=url,
+            version=info.get("version"),
             counts={
                 "filaments": info["filament_count"],
                 "spools": info["spool_count"],
             },
+            warnings=warnings,
         )
     except Exception as exc:
         logger.warning("Filament DB health check failed: %s", exc)

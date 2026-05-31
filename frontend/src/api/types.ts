@@ -14,6 +14,7 @@ export interface SystemHealth {
   url: string
   version: string | null
   counts: Record<string, number>
+  warnings: string[]
   error: string | null
 }
 
@@ -32,6 +33,7 @@ export interface SystemStatus {
   url: string
   version: string | null
   counts: Record<string, number>
+  warnings: string[]
   error: string | null
 }
 
@@ -149,8 +151,6 @@ export interface MappingUpdateRequest {
 // Config
 // ---------------------------------------------------------------------------
 
-export type MulticolorColornameFmt = 'name' | 'hex'
-
 export interface ConfigResponse {
   weight_source_of_truth: SourceOfTruth
   material_properties_source_of_truth: SourceOfTruth
@@ -160,8 +160,6 @@ export interface ConfigResponse {
   auto_sync_enabled: boolean
   wizard_completed: boolean
   import_direction: SourceOfTruth | null
-  multicolor_colorname_format: MulticolorColornameFmt
-  protect_multicolor_color_in_spoolman: boolean
 }
 
 export interface ConfigUpdateRequest {
@@ -170,8 +168,6 @@ export interface ConfigUpdateRequest {
   new_spool_source_of_truth?: SourceOfTruth | null
   sync_weight_threshold_grams?: number | null
   weight_precision_decimals?: number | null
-  multicolor_colorname_format?: MulticolorColornameFmt | null
-  protect_multicolor_color_in_spoolman?: boolean | null
 }
 
 // ---------------------------------------------------------------------------

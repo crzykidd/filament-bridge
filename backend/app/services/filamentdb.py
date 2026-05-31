@@ -34,6 +34,8 @@ class FilamentDBClient:
     def __init__(self, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
+        self._version: str | None = None
+        self._version_fetched = False
 
     async def __aenter__(self) -> "FilamentDBClient":
         self._client = httpx.AsyncClient(
@@ -150,15 +152,38 @@ class FilamentDBClient:
     # Health / connectivity
     # ------------------------------------------------------------------
 
-    async def health(self) -> dict[str, Any]:
-        """Probe Filament DB and return record counts.
+    async def get_version(self) -> str | None:
+        """Resolve the Filament DB app version (best-effort, cached for the client's life).
 
-        Uses the filament list endpoint (no dedicated health/version endpoint exists).
+        Filament DB has no dedicated version endpoint, but ``GET /api/openapi`` returns
+        an OpenAPI document whose ``info.version`` is injected from package.json.
+        Returns None if the endpoint is absent or unparseable.
+        """
+        if self._version_fetched:
+            return self._version
+        try:
+            resp = await self._http.get("/api/openapi")
+            resp.raise_for_status()
+            self._version = (resp.json().get("info") or {}).get("version")
+        except Exception:
+            self._version = None
+        self._version_fetched = True
+        return self._version
+
+    async def health(self) -> dict[str, Any]:
+        """Probe Filament DB and return version + record counts.
+
+        Uses the filament list endpoint for counts and ``/api/openapi`` for the version
+        (no dedicated health endpoint exists). The version is refreshed on each probe so
+        an upstream upgrade is detected without restarting the bridge.
         Raises on network/HTTP errors so the caller can report the system as unreachable.
         """
+        self._version_fetched = False  # force a fresh version read per probe
+        version = await self.get_version()
         filaments = await self.get_filaments()
         spool_count = sum(len(f.spools) for f in filaments)
         return {
+            "version": version,
             "filament_count": len(filaments),
             "spool_count": spool_count,
         }
