@@ -17,6 +17,7 @@ from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.api.mappings import build_mapping_rows
 from app.config import settings
+from app.core.dryrun import plan_dry_run
 from app.core.engine import run_sync_cycle
 from app.db import get_db
 from app.models.conflict import Conflict
@@ -56,9 +57,13 @@ async def trigger_sync(request: Request, db: Session = Depends(get_db)) -> Cycle
 
 @router.post("/sync/dry-run", response_model=CycleResultResponse)
 async def dry_run_sync(request: Request, db: Session = Depends(get_db)) -> CycleResultResponse:
-    """Compute the next cycle's full changeset without applying anything (FR-14)."""
-    result = await run_sync_cycle(
-        db, request.app.state.spoolman, request.app.state.filamentdb, dry_run=True
+    """Compute the full changeset without applying anything (FR-14).
+
+    Uses the unified matcher-driven planner so it reports created/updated/
+    conflicted/skipped regardless of bridge state (empty or linked).
+    """
+    result = await plan_dry_run(
+        db, request.app.state.spoolman, request.app.state.filamentdb
     )
     return _to_response(result)
 

@@ -5,6 +5,11 @@ Data-model mismatches surfaced by the first live end-to-end sync run (223 Spoolm
 FR-4 match/reconcile UI — they cannot be silently resolved by the bridge. Each item is a
 deferred handoff; none are built in Phase 5.
 
+**Status as of 2026-05-31:** Items 1–4 are **surfaced (preview)** in
+`GET /api/wizard/preview` (FR-4 foundation). Decision UI (FR-4 full) is pending. The
+Dashboard dry-run (`POST /api/sync/dry-run`) now uses the same planner and correctly
+reports create/update/conflict/skipped for ALL records regardless of bridge state.
+
 ## 1. Filament name uniqueness collisions (43 × 409)
 
 Filament DB enforces a **unique filament name**; Spoolman allows duplicates across

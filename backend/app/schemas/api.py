@@ -54,6 +54,7 @@ class SyncPreviewEntry(BaseModel):
     old: Any = None
     new: Any = None
     reason: str | None = None
+    candidates: list[str] | None = None  # FDB filament IDs for ambiguous-match conflicts
     spoolman_id: int | None = None
     fdb_filament_id: str | None = None
     fdb_spool_id: str | None = None

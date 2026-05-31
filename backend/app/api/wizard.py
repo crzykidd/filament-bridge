@@ -23,17 +23,31 @@ from app.api.config import get_config_value, set_config_value
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
-from app.core.color import project_colorname, to_fdb_color, to_sm_color
+from app.core.color import project_colorname, to_sm_color
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
 from app.core.matcher import match_filaments, normalize_name, normalize_vendor
+from app.core.planner import (
+    _DEFAULT_FDB_MATERIAL,
+    _FilamentPlanItem,
+    _SpoolPlanItem,
+    _SyncPlan,
+    _fdb_filament_payload_from_sm,
+    _plan_spoolman_to_fdb,
+)
 from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross
 from app.db import get_db
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.api import (
     AmbiguousRow,
+    DefaultTareEntry,
+    EmptyActiveEntry,
     FilamentRef,
     MatchPairRow,
+    NameCollisionEntry,
+    PreviewFlagCounts,
     SystemStatus,
+    VariantGroupPreviewEntry,
+    VariantGroupRow,
     WeightPreviewRow,
     WizardConnectivityResponse,
     WizardDecisionAck,
@@ -43,10 +57,10 @@ from app.schemas.api import (
     WizardExecuteResponse,
     WizardMatchesRequest,
     WizardMatchesResponse,
+    WizardPreviewResponse,
     WizardVariantsRequest,
     WizardVariantsResponse,
     WizardWeightsResponse,
-    VariantGroupRow,
 )
 from app.schemas.filamentdb import FDBFilament, FDBSpool
 from app.schemas.spoolman import SpoolmanFilament, decode_extra_value, encode_extra_value
@@ -54,9 +68,6 @@ from app.schemas.spoolman import SpoolmanFilament, decode_extra_value, encode_ex
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-_DEFAULT_FDB_MATERIAL = "Unknown"
-
 
 # ---------------------------------------------------------------------------
 # Ref builders
@@ -302,6 +313,7 @@ def wizard_save_variants(payload: WizardVariantsRequest, db: Session = Depends(g
 # initial state, so there are no conflicts to queue here (conflicts are FR-13).
 
 
+
 class _ExecResult:
     """Accumulates the FR-7 report (counts + per-record detail)."""
 
@@ -351,38 +363,6 @@ class _ExecResult:
             error_message=error,
         )
 
-
-def _fdb_filament_payload_from_sm(sm: SpoolmanFilament, multicolor_fmt: str = "name") -> dict:
-    """Map a Spoolman filament onto the FDB create-filament body (core fields only)."""
-    material = sm.material
-    if not material:
-        logger.warning(
-            "SM filament %s (%s) has no material; defaulting to '%s'",
-            sm.id, sm.name, _DEFAULT_FDB_MATERIAL,
-        )
-        material = _DEFAULT_FDB_MATERIAL
-    payload: dict = {
-        "name": sm.name,
-        "vendor": sm.vendor.name if sm.vendor else None,
-        "type": material,
-        "color": to_fdb_color(sm.color_hex),
-        "density": sm.density,
-        "spoolWeight": sm.spool_weight,
-    }
-    temps: dict = {}
-    if sm.settings_extruder_temp is not None:
-        temps["nozzle"] = sm.settings_extruder_temp
-    if sm.settings_bed_temp is not None:
-        temps["bed"] = sm.settings_bed_temp
-    if temps:
-        payload["temperatures"] = temps
-    if sm.multi_color_hexes:
-        colorname = project_colorname(
-            sm.color_hex, sm.multi_color_hexes, sm.multi_color_direction, fmt=multicolor_fmt,
-        )
-        if colorname:
-            payload["colorName"] = colorname
-    return {k: v for k, v in payload.items() if v is not None}
 
 
 def _sm_filament_payload_from_fdb(fdb: FDBFilament, vendor_id: int | None) -> dict:
@@ -436,69 +416,54 @@ async def _execute_spoolman_to_fdb(
     precision: int = 2,
     multicolor_fmt: str = "name",
 ) -> None:
-    """Import direction "spoolman": seed Filament DB from Spoolman."""
+    """Import direction "spoolman": seed Filament DB from Spoolman.
+
+    Delegates the decision/planning phase to _plan_spoolman_to_fdb (no writes),
+    then executes each plan item against the live upstream APIs.
+    """
+    plan = _plan_spoolman_to_fdb(
+        db, sm_filaments, sm_spools, fdb_filaments,
+        decisions_by_sm, parent_of_fdb, tare_by_sm_spool, precision, multicolor_fmt,
+    )
+
     fdb_field_name = _settings.filamentdb_spoolman_id_field
     fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}
-
-    sm_spools_by_filament: dict[int, list] = {}
-    for s in sm_spools:
-        if getattr(s, "archived", False):
-            continue
-        sm_spools_by_filament.setdefault(s.filament.id, []).append(s)
-
     fil_map_by_sm: dict[int, FilamentMapping] = {
         m.spoolman_filament_id: m for m in db.query(FilamentMapping).all()
     }
-    mapped_sm_spool_ids: set[int] = {m.spoolman_spool_id for m in db.query(SpoolMapping).all()}
-
-    # ---- Phase A: resolve each Spoolman filament → an FDB filament id ----
-    resolved: list[tuple[SpoolmanFilament, str]] = []
     just_created_fdb_ids: set[str] = set()
-    for sm_fil in sm_filaments:
-        existing = fil_map_by_sm.get(sm_fil.id)
-        if existing is not None:
-            # Already linked by a prior run — idempotent no-op at filament level.
-            resolved.append((sm_fil, existing.filamentdb_id))
-            res.add(db, "filament", "skipped", detail="already linked",
-                    sm_filament_id=sm_fil.id, fdb_filament_id=existing.filamentdb_id)
-            continue
 
-        decision = decisions_by_sm.get(sm_fil.id)
-        if decision is None or decision.get("action") == "skip":
-            res.add(db, "filament", "skipped", detail="no decision" if decision is None else "user skipped",
-                    sm_filament_id=sm_fil.id)
-            continue
-
-        action = decision.get("action")
-        if action == "link":
-            fdb_id = decision.get("filamentdb_id")
-            if not fdb_id or fdb_id not in fdb_by_id:
-                res.add(db, "filament", "failed", error="link target filament not found",
-                        sm_filament_id=sm_fil.id, fdb_filament_id=fdb_id)
-                continue
-            resolved.append((sm_fil, fdb_id))
-            res.add(db, "filament", "updated", detail="linked",
-                    sm_filament_id=sm_fil.id, fdb_filament_id=fdb_id)
-        elif action == "create":
+    # ---- Phase A: record filament decisions; execute creates ----
+    for item in plan.filament_items:
+        if item.action == "skip":
+            if item.error:
+                res.add(db, "filament", "failed", error=item.error,
+                        sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
+            else:
+                res.add(db, "filament", "skipped", detail=item.detail,
+                        sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
+        elif item.action == "link":
+            res.add(db, "filament", "updated", detail=item.detail,
+                    sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
+        elif item.action == "create":
             try:
-                created = await filamentdb.create_filament(
-                    _fdb_filament_payload_from_sm(sm_fil, multicolor_fmt)
-                )
+                created = await filamentdb.create_filament(item.fdb_payload)
+                item.fdb_id = created.id  # fill in the real ID for Phase C
                 fdb_by_id[created.id] = created
                 just_created_fdb_ids.add(created.id)
-                resolved.append((sm_fil, created.id))
-                res.add(db, "filament", "created", sm_filament_id=sm_fil.id, fdb_filament_id=created.id)
+                res.add(db, "filament", "created",
+                        sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
                 logger.error("wizard execute %s: create FDB filament failed (SM %s): %s",
-                             res.cycle_id, sm_fil.id, exc)
-                res.add(db, "filament", "failed", error=str(exc), sm_filament_id=sm_fil.id)
-        else:
-            res.add(db, "filament", "failed", error=f"unknown action '{action}'", sm_filament_id=sm_fil.id)
+                             res.cycle_id, item.sm_filament.id, exc)
+                res.add(db, "filament", "failed", error=str(exc),
+                        sm_filament_id=item.sm_filament.id)
+                item.error = str(exc)
 
-    # ---- Phase B: apply variant groupings (parents already exist by now) ----
-    for fdb_id, parent_id in parent_of_fdb.items():
+    # ---- Phase B: apply variant groupings (parents available by now) ----
+    for fdb_id, parent_id in plan.variant_updates.items():
         if fdb_id not in fdb_by_id or parent_id not in fdb_by_id:
-            continue  # group references a filament outside this import — skip silently
+            continue
         try:
             await filamentdb.update_filament(fdb_id, {"parentId": parent_id})
             res.add(db, "filament", "updated", detail="variant parent set",
@@ -508,14 +473,23 @@ async def _execute_spoolman_to_fdb(
                          res.cycle_id, fdb_id, parent_id, exc)
             res.add(db, "filament", "failed", error=str(exc), fdb_filament_id=fdb_id)
 
-    # ---- Phase C: mappings + spool seeding ----
-    for sm_fil, fdb_id in resolved:
-        parent_id = parent_of_fdb.get(fdb_id)
-        # Apply colorName for linked multicolor filaments (creates already got it in the payload).
-        if sm_fil.multi_color_hexes and fdb_id not in just_created_fdb_ids:
+    # ---- Phase C: FilamentMappings + spool seeding ----
+    spool_items_by_fil: dict[int, list[_SpoolPlanItem]] = {}
+    for si in plan.spool_items:
+        spool_items_by_fil.setdefault(id(si.fil_item), []).append(si)
+
+    for item in plan.filament_items:
+        if item.error or item.fdb_id is None:
+            continue
+        fdb_id = item.fdb_id
+        parent_id = plan.variant_updates.get(fdb_id)
+
+        # Apply colorName for linked/prior-linked multicolor filaments.
+        # Creates already have colorName baked into the create payload.
+        if item.sm_filament.multi_color_hexes and fdb_id not in just_created_fdb_ids:
             colorname = project_colorname(
-                sm_fil.color_hex, sm_fil.multi_color_hexes, sm_fil.multi_color_direction,
-                fmt=multicolor_fmt,
+                item.sm_filament.color_hex, item.sm_filament.multi_color_hexes,
+                item.sm_filament.multi_color_direction, fmt=multicolor_fmt,
             )
             if colorname:
                 try:
@@ -525,64 +499,56 @@ async def _execute_spoolman_to_fdb(
                         "wizard execute %s: colorName update for FDB filament %s failed: %s",
                         res.cycle_id, fdb_id, exc,
                     )
-        fil_map = fil_map_by_sm.get(sm_fil.id)
+
+        fil_map = fil_map_by_sm.get(item.sm_filament.id)
         if fil_map is None:
             fil_map = FilamentMapping(
-                spoolman_filament_id=sm_fil.id,
+                spoolman_filament_id=item.sm_filament.id,
                 filamentdb_id=fdb_id,
                 filamentdb_parent_id=parent_id,
             )
             db.add(fil_map)
             db.flush()
-            fil_map_by_sm[sm_fil.id] = fil_map
+            fil_map_by_sm[item.sm_filament.id] = fil_map
         elif parent_id and fil_map.filamentdb_parent_id != parent_id:
             fil_map.filamentdb_parent_id = parent_id
 
-        for sm_spool in sm_spools_by_filament.get(sm_fil.id, []):
-            # Idempotency: already mapped, or the spool already carries the FDB
-            # cross-ref upstream (a prior run created it but rolled back the row).
-            xref = decode_extra_value(sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id))
-            if sm_spool.id in mapped_sm_spool_ids or xref:
-                res.add(db, "spool", "skipped", detail="already linked",
-                        sm_spool_id=sm_spool.id, fdb_filament_id=fdb_id, fdb_spool_id=xref or None)
+        for spool_item in spool_items_by_fil.get(id(item), []):
+            if spool_item.action == "skip":
+                res.add(db, "spool", "skipped", detail=spool_item.detail,
+                        sm_spool_id=spool_item.sm_spool.id, fdb_filament_id=fdb_id,
+                        fdb_spool_id=spool_item.skip_fdb_spool_id)
                 continue
-
-            tare = tare_by_sm_spool.get(sm_spool.id)
-            if tare is None:
-                tare = sm_spool.spool_weight if sm_spool.spool_weight is not None else (
-                    sm_spool.filament.spool_weight if sm_spool.filament else None
-                )
-            gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, tare, precision=precision)
             try:
                 # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
                 raw = await filamentdb.create_spool(fdb_id, {
-                    "totalWeight": gross_res.total_weight,
-                    fdb_field_name: str(sm_spool.id),
+                    "totalWeight": spool_item.planned_gross,
+                    fdb_field_name: str(spool_item.sm_spool.id),
                 })
                 new_fdb_spool_id = raw.get("_id") or raw.get("id") or ""
                 await spoolman.update_spool(
-                    sm_spool.id, {"extra": _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_id)}
+                    spool_item.sm_spool.id,
+                    {"extra": _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_id)}
                 )
                 db.add(SpoolMapping(
-                    spoolman_spool_id=sm_spool.id,
+                    spoolman_spool_id=spool_item.sm_spool.id,
                     filamentdb_filament_id=fdb_id,
                     filamentdb_spool_id=new_fdb_spool_id,
                     filament_mapping_id=fil_map.id,
                 ))
-                mapped_sm_spool_ids.add(sm_spool.id)
-                # Reflect the cross-ref we just wrote in the seeded snapshot.
-                sm_spool.extra.update(_cross_ref_extra(fdb_id, new_fdb_spool_id, parent_id))
-                _seed_snapshots(db, sm_spool, FDBSpool.model_validate({
-                    "_id": new_fdb_spool_id, "label": str(sm_spool.id),
-                    "totalWeight": gross_res.total_weight, "retired": False,
+                spool_item.sm_spool.extra.update(
+                    _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_id))
+                _seed_snapshots(db, spool_item.sm_spool, FDBSpool.model_validate({
+                    "_id": new_fdb_spool_id, "label": str(spool_item.sm_spool.id),
+                    "totalWeight": spool_item.planned_gross, "retired": False,
                 }))
-                res.add(db, "spool", "created", sm_spool_id=sm_spool.id,
+                res.add(db, "spool", "created", sm_spool_id=spool_item.sm_spool.id,
                         fdb_filament_id=fdb_id, fdb_spool_id=new_fdb_spool_id)
             except Exception as exc:
                 logger.error("wizard execute %s: create FDB spool failed (SM spool %s): %s",
-                             res.cycle_id, sm_spool.id, exc)
+                             res.cycle_id, spool_item.sm_spool.id, exc)
                 res.add(db, "spool", "failed", error=str(exc),
-                        sm_spool_id=sm_spool.id, fdb_filament_id=fdb_id)
+                        sm_spool_id=spool_item.sm_spool.id, fdb_filament_id=fdb_id)
 
 
 async def _execute_fdb_to_spoolman(
@@ -712,6 +678,184 @@ async def _execute_fdb_to_spoolman(
                              res.cycle_id, fdb_spool.id, exc)
                 res.add(db, "spool", "failed", error=str(exc),
                         fdb_filament_id=fdb_fil.id, fdb_spool_id=fdb_spool.id)
+
+
+# ---------------------------------------------------------------------------
+# Preview flag helpers — pure functions over a _SyncPlan
+# ---------------------------------------------------------------------------
+
+
+def _compute_name_collisions(
+    plan: _SyncPlan, fdb_filaments: list[FDBFilament]
+) -> list[NameCollisionEntry]:
+    existing: dict[str, str] = {normalize_name(f.name): f.id for f in fdb_filaments}
+    incoming: dict[str, list[_FilamentPlanItem]] = {}
+    for item in plan.filament_items:
+        if item.action == "create" and not item.error and item.fdb_payload:
+            norm = normalize_name(item.fdb_payload.get("name", "") or "")
+            if norm:
+                incoming.setdefault(norm, []).append(item)
+    result: list[NameCollisionEntry] = []
+    for norm_name, items in incoming.items():
+        vs_existing = norm_name in existing
+        intra_batch = len(items) > 1
+        if vs_existing or intra_batch:
+            result.append(NameCollisionEntry(
+                normalized_name=norm_name,
+                sm_filament_ids=[i.sm_filament.id for i in items],
+                vs_existing=vs_existing,
+                intra_batch=intra_batch,
+                existing_fdb_filament_id=existing.get(norm_name),
+            ))
+    return result
+
+
+def _compute_empty_active(sm_spools: list) -> list[EmptyActiveEntry]:
+    result: list[EmptyActiveEntry] = []
+    for s in sm_spools:
+        if not getattr(s, "archived", False) and (s.remaining_weight or 0.0) == 0.0:
+            result.append(EmptyActiveEntry(
+                spoolman_spool_id=s.id,
+                spoolman_filament_id=s.filament.id if s.filament else None,
+                name=s.filament.name if s.filament else None,
+            ))
+    return result
+
+
+def _compute_default_tare(plan: _SyncPlan) -> list[DefaultTareEntry]:
+    result: list[DefaultTareEntry] = []
+    for si in plan.spool_items:
+        if si.action == "create" and si.tare_source == "default":
+            result.append(DefaultTareEntry(
+                spoolman_spool_id=si.sm_spool.id,
+                spoolman_filament_id=si.sm_spool.filament.id if si.sm_spool.filament else None,
+                name=si.sm_spool.filament.name if si.sm_spool.filament else None,
+                planned_gross=si.planned_gross,
+                default_tare_used=si.used_tare,
+            ))
+    return result
+
+
+def _compute_variant_groups(plan: _SyncPlan) -> list[VariantGroupPreviewEntry]:
+    groups: dict[tuple, list[_FilamentPlanItem]] = {}
+    for item in plan.filament_items:
+        if item.action == "create" and not item.error:
+            sm = item.sm_filament
+            vendor = sm.vendor.name if sm.vendor else None
+            material = sm.material or _DEFAULT_FDB_MATERIAL
+            base = _strip_color(sm.name, sm.color_hex)
+            key = (normalize_vendor(vendor), base, normalize_name(material))
+            groups.setdefault(key, []).append(item)
+    result: list[VariantGroupPreviewEntry] = []
+    for (vendor_key, base_name, material_key), items in groups.items():
+        if len(items) >= 2:
+            result.append(VariantGroupPreviewEntry(
+                base_name=base_name,
+                vendor=items[0].sm_filament.vendor.name if items[0].sm_filament.vendor else None,
+                material=items[0].sm_filament.material or _DEFAULT_FDB_MATERIAL,
+                sm_filament_ids=[i.sm_filament.id for i in items],
+            ))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# FR-4 foundation — GET /api/wizard/preview (read-only)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/wizard/preview", response_model=WizardPreviewResponse)
+async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> WizardPreviewResponse:
+    """Read-only preview: what execute would do, plus reconcile flags (FR-4 foundation).
+
+    Makes no writes to either upstream system. The plan is computed from the same
+    planner as wizard_execute so preview ≡ execute by construction.
+    """
+    import_direction = get_config_value(db, "import_direction", "spoolman")
+    sync_direction = (
+        "spoolman_to_filamentdb" if import_direction == "spoolman" else "filamentdb_to_spoolman"
+    )
+    precision: int = int(get_config_value(db, "weight_precision_decimals", 2))
+    multicolor_fmt: str = str(get_config_value(db, "multicolor_colorname_format", "name"))
+
+    match_decisions = get_config_value(db, "wizard_match_decisions", []) or []
+    variant_decisions = get_config_value(db, "wizard_variant_decisions", []) or []
+    decisions_by_sm = {d["spoolman_filament_id"]: d for d in match_decisions}
+    parent_of_fdb: dict[str, str] = {}
+    for group in variant_decisions:
+        parent = group.get("parent_filamentdb_id")
+        for variant in group.get("variant_filamentdb_ids", []):
+            if parent:
+                parent_of_fdb[variant] = parent
+
+    try:
+        sm_filaments = await request.app.state.spoolman.get_filaments()
+        sm_spools = await request.app.state.spoolman.get_spools()
+        fdb_filaments = await request.app.state.filamentdb.get_filaments()
+    except Exception as exc:
+        logger.error("wizard preview: upstream fetch failed: %s", exc)
+        raise api_error(502, "upstream_fetch_failed",
+                        "Could not read both systems to generate the preview.")
+
+    if import_direction != "spoolman":
+        return WizardPreviewResponse(
+            direction=sync_direction,
+            plan_rows=[],
+            flag_counts=PreviewFlagCounts(
+                name_collision=0, empty_active=0, default_tare=0, variant_group=0,
+            ),
+            name_collisions=[], empty_active=[], default_tare=[], variant_groups=[],
+        )
+
+    plan = _plan_spoolman_to_fdb(
+        db, sm_filaments, sm_spools, fdb_filaments,
+        decisions_by_sm, parent_of_fdb, {},  # no tare overrides for preview
+        precision=precision, multicolor_fmt=multicolor_fmt,
+    )
+
+    _action_for_plan: dict[str, str] = {
+        "create": "created", "link": "updated", "skip": "skipped",
+    }
+    plan_rows: list[WizardExecuteRecord] = []
+    for item in plan.filament_items:
+        action = "failed" if item.error else _action_for_plan.get(item.action, "skipped")
+        plan_rows.append(WizardExecuteRecord(
+            entity_type="filament",
+            action=action,
+            spoolman_filament_id=item.sm_filament.id,
+            filamentdb_filament_id=item.fdb_id,
+            detail=item.detail,
+            error=item.error,
+        ))
+    for si in plan.spool_items:
+        plan_rows.append(WizardExecuteRecord(
+            entity_type="spool",
+            action="created" if si.action == "create" else "skipped",
+            spoolman_spool_id=si.sm_spool.id,
+            spoolman_filament_id=si.sm_spool.filament.id if si.sm_spool.filament else None,
+            filamentdb_filament_id=si.fdb_filament_id,
+            filamentdb_spool_id=si.skip_fdb_spool_id,
+            detail=si.detail,
+        ))
+
+    name_collisions = _compute_name_collisions(plan, fdb_filaments)
+    empty_active = _compute_empty_active(sm_spools)
+    default_tare = _compute_default_tare(plan)
+    variant_groups = _compute_variant_groups(plan)
+
+    return WizardPreviewResponse(
+        direction=sync_direction,
+        plan_rows=plan_rows,
+        flag_counts=PreviewFlagCounts(
+            name_collision=len(name_collisions),
+            empty_active=len(empty_active),
+            default_tare=len(default_tare),
+            variant_group=len(variant_groups),
+        ),
+        name_collisions=name_collisions,
+        empty_active=empty_active,
+        default_tare=default_tare,
+        variant_groups=variant_groups,
+    )
 
 
 @router.post("/wizard/execute", response_model=WizardExecuteResponse)

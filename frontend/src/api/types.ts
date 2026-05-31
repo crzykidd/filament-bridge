@@ -48,6 +48,7 @@ export interface SyncPreviewEntry {
   old: unknown
   new: unknown
   reason: string | null
+  candidates: string[] | null
   spoolman_id: number | null
   fdb_filament_id: string | null
   fdb_spool_id: string | null

@@ -162,6 +162,15 @@ export default function Dashboard() {
               <span>Skipped: {syncResult.skipped}</span>
               {syncResult.errors > 0 && <span className="text-red-600">Errors: {syncResult.errors}</span>}
             </div>
+            {syncResult.dry_run && syncResult.preview.some(p => p.action === 'create' || p.action === 'update') && (
+              <p className="mt-2 text-xs text-gray-500">
+                Created and matched (Updated) items are applied by the{' '}
+                <button onClick={() => navigate('/wizard')} className="underline hover:text-gray-700">
+                  initial-sync wizard
+                </button>
+                , not by &ldquo;Sync now&rdquo;.
+              </p>
+            )}
             {syncResult.dry_run && syncResult.preview.length > 0 && (
               <div className="mt-3 space-y-1">
                 {(['create', 'update', 'conflict', 'skip'] as const).map(action => {

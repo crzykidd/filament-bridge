@@ -378,6 +378,36 @@ distroless/Chainguard because the service is still under active development — 
 means no `exec`-based debugging, which is painful for a homelab sync tool. Revisit
 distroless (`gcr.io/distroless/python3-debian12`) once the app is stable.
 
+## 2026-05-31 — Unified dry-run: shared planner, auto-decisions, orphan bucket
+
+**Shared planner location:** `_plan_spoolman_to_fdb`, `_SyncPlan`, `_FilamentPlanItem`,
+`_SpoolPlanItem`, and `_fdb_filament_payload_from_sm` were extracted from
+`backend/app/api/wizard.py` into `backend/app/core/planner.py`. Both `wizard_execute`
+(FR-7) and `plan_dry_run` (FR-14) import from there — the same planner code means
+preview ≡ execute by construction.
+
+**Matcher → decisions mapping for the dry-run:**
+`match_filaments(unlinked_sm, unlinked_fdb)` is called in `core/dryrun.py::plan_dry_run`
+and its results are converted to `decisions_by_sm` before the planner runs:
+- `matched` (1:1 confidence) → `{action: "link", filamentdb_id: <fdb.id>}` → planner
+  emits `update` (filament_link) preview entries.
+- `unmatched_spoolman` → `{action: "create"}` → planner emits `create` entries.
+- `ambiguous` (multiple FDB candidates) → NOT auto-picked; emitted directly as
+  `conflict` with `candidates: [<fdb_ids>]`. The planner never sees ambiguous SM
+  filaments (they're excluded from `decisions_by_sm`).
+
+**Cross-ref orphan bucket:** SM spools that already carry the `filamentdb_spool_id`
+extra field but have no `SpoolMapping` row (the "167" from the live dataset) are now
+bucketed as `update` with `reason: "re-link from existing cross-ref"`. The engine's
+previous silent `continue` at the xref guard is preserved for live sync — only the
+dry-run re-classifies them. Confirmed with user 2026-05-31.
+
+**False-conflict removal:** `run_sync_cycle(dry_run=True)` buckets SM spools with no
+`FilamentMapping` as `conflict(new_spool)` — this is correct for steady-state but wrong
+for the initial-state dry-run. `plan_dry_run` filters those entries out (criterion:
+`action==conflict, entity_type==spool, field==new_spool, fdb_filament_id==None`) before
+adding the planner's reclassified entries.
+
 ## 2026-05-28 — Canonical version file is `backend/app/__init__.py`
 
 For the `release-prep-and-cut` standard, the bare version lives in
