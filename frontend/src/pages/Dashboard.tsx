@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { getSyncStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/client'
 import { usePoll } from '../api/hooks'
 import { SystemStatusBadge } from '../components/StatusBadge'
+import { DeepLinks } from '../components/DeepLinks'
 import type { CycleResultResponse } from '../api/types'
 
 function fmt(ts: string | null) {
@@ -154,13 +155,60 @@ export default function Dashboard() {
         {syncResult && (
           <div className={`rounded p-3 text-sm ${syncResult.dry_run ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
             <p className="font-medium mb-1">{syncResult.dry_run ? 'Dry run preview' : 'Sync complete'}</p>
-            <div className="flex gap-4 text-xs text-gray-600">
+            <div className="flex gap-4 text-xs text-gray-600 flex-wrap">
               <span>Created: {syncResult.created}</span>
               <span>Updated: {syncResult.updated}</span>
               <span>Conflicts: {syncResult.conflicts}</span>
               <span>Skipped: {syncResult.skipped}</span>
               {syncResult.errors > 0 && <span className="text-red-600">Errors: {syncResult.errors}</span>}
             </div>
+            {syncResult.dry_run && syncResult.preview.length > 0 && (
+              <div className="mt-3 space-y-1">
+                {(['create', 'update', 'conflict', 'skip'] as const).map(action => {
+                  const entries = syncResult.preview.filter(p => p.action === action)
+                  if (entries.length === 0) return null
+                  const sectionLabel = { create: 'Created', update: 'Updated', conflict: 'Conflicts', skip: 'Skipped' }[action]
+                  return (
+                    <details key={action} className="rounded border border-yellow-200 bg-white">
+                      <summary className="px-3 py-1.5 cursor-pointer text-xs font-medium text-gray-700 hover:bg-gray-50 select-none">
+                        {sectionLabel} ({entries.length})
+                      </summary>
+                      <ul className="divide-y divide-gray-100">
+                        {entries.map((entry, i) => (
+                          <li key={i} className="px-3 py-1.5 flex items-start gap-2 text-xs text-gray-600">
+                            <span className="shrink-0 mt-0.5">
+                              <DeepLinks
+                                filamentdbFilamentId={entry.fdb_filament_id}
+                                spoolmanSpoolId={entry.spoolman_id}
+                              />
+                            </span>
+                            <span className="grow min-w-0">
+                              <span className="font-medium">{entry.label}</span>
+                              {entry.direction && (
+                                <span className="ml-1.5 text-gray-400">
+                                  {entry.direction === 'spoolman_to_filamentdb' ? 'SM→FDB' : 'FDB→SM'}
+                                </span>
+                              )}
+                              {entry.field && (
+                                <span className="ml-1.5 text-indigo-600">{entry.field}</span>
+                              )}
+                              {entry.old != null && entry.new != null && (
+                                <span className="ml-1.5 text-gray-500">
+                                  {String(entry.old)} → {String(entry.new)}
+                                </span>
+                              )}
+                              {entry.reason && (
+                                <span className="ml-1.5 text-gray-400 italic">{entry.reason}</span>
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

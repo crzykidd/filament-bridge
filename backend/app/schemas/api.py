@@ -45,6 +45,20 @@ class SystemStatus(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class SyncPreviewEntry(BaseModel):
+    action: Literal["create", "update", "conflict", "skip"]
+    entity_type: Literal["spool", "filament"] | None = None
+    direction: Literal["spoolman_to_filamentdb", "filamentdb_to_spoolman"] | None = None
+    label: str
+    field: str | None = None
+    old: Any = None
+    new: Any = None
+    reason: str | None = None
+    spoolman_id: int | None = None
+    fdb_filament_id: str | None = None
+    fdb_spool_id: str | None = None
+
+
 class CycleResultResponse(BaseModel):
     cycle_id: str
     dry_run: bool
@@ -53,7 +67,7 @@ class CycleResultResponse(BaseModel):
     conflicts: int
     skipped: int
     errors: int
-    preview: list[dict[str, Any]] = Field(default_factory=list)
+    preview: list[SyncPreviewEntry] = Field(default_factory=list)
 
 
 class AutoSyncRequest(BaseModel):
@@ -318,6 +332,65 @@ class WizardExecuteResponse(BaseModel):
     failed: int
     wizard_completed: bool
     records: list[WizardExecuteRecord] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Wizard preview (FR-4 foundation — read-only reconcile surface)
+# ---------------------------------------------------------------------------
+
+
+class NameCollisionEntry(BaseModel):
+    """A filament name that would collide on import into Filament DB."""
+
+    normalized_name: str
+    sm_filament_ids: list[int]
+    vs_existing: bool  # clashes with an already-existing FDB filament
+    intra_batch: bool  # multiple incoming SM filaments share this normalized name
+    existing_fdb_filament_id: str | None = None
+
+
+class EmptyActiveEntry(BaseModel):
+    """A Spoolman spool that is active (not archived) but fully consumed."""
+
+    spoolman_spool_id: int
+    spoolman_filament_id: int | None = None
+    name: str | None = None
+
+
+class DefaultTareEntry(BaseModel):
+    """A planned spool create that used the 200 g default tare (no spool_weight set)."""
+
+    spoolman_spool_id: int
+    spoolman_filament_id: int | None = None
+    name: str | None = None
+    planned_gross: float
+    default_tare_used: float
+
+
+class VariantGroupPreviewEntry(BaseModel):
+    """A proposed variant group among to-be-created filaments (vendor + material + base_name)."""
+
+    base_name: str
+    vendor: str | None = None
+    material: str | None = None
+    sm_filament_ids: list[int]
+
+
+class PreviewFlagCounts(BaseModel):
+    name_collision: int
+    empty_active: int
+    default_tare: int
+    variant_group: int
+
+
+class WizardPreviewResponse(BaseModel):
+    direction: SyncDirection
+    plan_rows: list[WizardExecuteRecord]
+    flag_counts: PreviewFlagCounts
+    name_collisions: list[NameCollisionEntry]
+    empty_active: list[EmptyActiveEntry]
+    default_tare: list[DefaultTareEntry]
+    variant_groups: list[VariantGroupPreviewEntry]
 
 
 # ---------------------------------------------------------------------------

@@ -151,6 +151,33 @@ def _queue_conflict(
 
 
 # ---------------------------------------------------------------------------
+# Dry-run preview helpers
+# ---------------------------------------------------------------------------
+
+
+def _preview_label(
+    *,
+    sm_spool: SpoolmanSpool | None = None,
+    fdb_filament: FDBFilament | None = None,
+) -> str:
+    """Build a human-readable label for a dry-run preview entry.
+
+    Degrades gracefully to IDs when names are unavailable.
+    """
+    if sm_spool is not None:
+        fil = sm_spool.filament
+        vendor = fil.vendor.name if fil.vendor else ""
+        base = " ".join(p for p in [vendor, fil.name, fil.color_hex] if p)
+        base = base or f"SM #{sm_spool.id}"
+        fdb_part = fdb_filament.name if fdb_filament else ""
+        suffix = f" / FDB {fdb_part}" if fdb_part else ""
+        return f"{base} (SM #{sm_spool.id}){suffix}"
+    if fdb_filament is not None:
+        return fdb_filament.name or f"FDB {fdb_filament.id}"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Field-mapping snapshot helpers
 # ---------------------------------------------------------------------------
 
@@ -261,8 +288,16 @@ async def _apply_field_changes(
             )
         else:
             result.preview.append({
-                "action": "conflict", "field": fdb_path,
-                "spoolman_id": sm_spool.id, "fdb_filament_id": fdb_filament_id,
+                "action": "conflict",
+                "entity_type": "filament",
+                "direction": None,
+                "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                "field": fdb_path,
+                "old": sm_val, "new": fdb_val,
+                "reason": "both sides changed",
+                "spoolman_id": sm_spool.id,
+                "fdb_filament_id": fdb_filament_id,
+                "fdb_spool_id": fdb_spool_id,
             })
         result.conflicts += 1
 
@@ -276,6 +311,19 @@ async def _apply_field_changes(
                 "Cycle %s: skipping inherited field %s on FDB filament %s",
                 cycle_id, fc.field_name, fdb_filament_id,
             )
+            if dry_run:
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "filament",
+                    "direction": "filamentdb_to_spoolman",
+                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                    "field": fc.field_name,
+                    "old": None, "new": None,
+                    "reason": "inherited from parent",
+                    "spoolman_id": sm_spool.id,
+                    "fdb_filament_id": fdb_filament_id,
+                    "fdb_spool_id": fdb_spool_id,
+                })
             result.skipped += 1
             continue
         if protect_multicolor and sm_spool.filament.multi_color_hexes and fc.field_name == "color":
@@ -283,6 +331,19 @@ async def _apply_field_changes(
                 "Cycle %s: skipping color field sync FDB→SM for multicolor filament %s (protect enabled)",
                 cycle_id, sm_spool.filament.id,
             )
+            if dry_run:
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "filament",
+                    "direction": "filamentdb_to_spoolman",
+                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                    "field": "color",
+                    "old": None, "new": None,
+                    "reason": "multicolor color protected in Spoolman",
+                    "spoolman_id": sm_spool.id,
+                    "fdb_filament_id": fdb_filament_id,
+                    "fdb_spool_id": fdb_spool_id,
+                })
             result.skipped += 1
             continue
         if not dry_run:
@@ -308,13 +369,22 @@ async def _apply_field_changes(
                 result.errors += 1
         else:
             result.preview.append({
-                "action": "update", "direction": "filamentdb_to_spoolman",
-                "field": fc.field_name, "spoolman_id": sm_spool.id, "old": fc.old_value, "new": fc.new_value,
+                "action": "update",
+                "entity_type": "filament",
+                "direction": "filamentdb_to_spoolman",
+                "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                "field": fc.field_name,
+                "old": fc.old_value, "new": fc.new_value,
+                "reason": None,
+                "spoolman_id": sm_spool.id,
+                "fdb_filament_id": fdb_filament_id,
+                "fdb_spool_id": fdb_spool_id,
             })
             result.updated += 1
 
     # SM → FDB changes
     fdb_put_payload: dict = {}
+    sm_skipped_fields: set[str] = set()
     for fc in cs.sm_field_changes:
         fm = next((m for m in field_maps if m.fdb_path == fc.field_name), None)
         if fm is None:
@@ -324,6 +394,20 @@ async def _apply_field_changes(
                 "Cycle %s: skipping inherited field %s on FDB filament %s",
                 cycle_id, fc.field_name, fdb_filament_id,
             )
+            if dry_run:
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "filament",
+                    "direction": "spoolman_to_filamentdb",
+                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                    "field": fc.field_name,
+                    "old": None, "new": None,
+                    "reason": "inherited from parent",
+                    "spoolman_id": sm_spool.id,
+                    "fdb_filament_id": fdb_filament_id,
+                    "fdb_spool_id": fdb_spool_id,
+                })
+                sm_skipped_fields.add(fc.field_name)
             result.skipped += 1
             continue
         # Collect into a single PUT
@@ -354,11 +438,21 @@ async def _apply_field_changes(
             result.errors += 1
     elif fdb_put_payload and dry_run:
         for fc in cs.sm_field_changes:
+            if fc.field_name in sm_skipped_fields:
+                continue
             result.preview.append({
-                "action": "update", "direction": "spoolman_to_filamentdb",
-                "field": fc.field_name, "spoolman_id": sm_spool.id, "old": fc.old_value, "new": fc.new_value,
+                "action": "update",
+                "entity_type": "filament",
+                "direction": "spoolman_to_filamentdb",
+                "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                "field": fc.field_name,
+                "old": fc.old_value, "new": fc.new_value,
+                "reason": None,
+                "spoolman_id": sm_spool.id,
+                "fdb_filament_id": fdb_filament_id,
+                "fdb_spool_id": fdb_spool_id,
             })
-        result.updated += len(cs.sm_field_changes)
+        result.updated += len(cs.sm_field_changes) - len(sm_skipped_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -392,8 +486,16 @@ async def _handle_new_sm_spool(
             )
         else:
             result.preview.append({
-                "action": "conflict", "reason": "no_filament_mapping",
+                "action": "conflict",
+                "entity_type": "spool",
+                "direction": None,
+                "label": _preview_label(sm_spool=sm_spool),
+                "field": "new_spool",
+                "old": None, "new": None,
+                "reason": "no filament mapping for this Spoolman spool",
                 "spoolman_id": sm_spool.id,
+                "fdb_filament_id": None,
+                "fdb_spool_id": None,
             })
         result.conflicts += 1
         return
@@ -411,9 +513,16 @@ async def _handle_new_sm_spool(
 
     if dry_run:
         result.preview.append({
-            "action": "create", "direction": "spoolman_to_filamentdb",
-            "entity_type": "spool", "spoolman_id": sm_spool.id,
+            "action": "create",
+            "entity_type": "spool",
+            "direction": "spoolman_to_filamentdb",
+            "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filament),
+            "field": None,
+            "old": None, "new": None,
+            "reason": None,
+            "spoolman_id": sm_spool.id,
             "fdb_filament_id": fdb_filament.id,
+            "fdb_spool_id": None,
         })
         result.created += 1
         return
@@ -490,16 +599,32 @@ async def _handle_new_fdb_spool(
             )
         else:
             result.preview.append({
-                "action": "conflict", "reason": "no_filament_mapping",
-                "fdb_filament_id": fdb_filament.id, "fdb_spool_id": fdb_spool.id,
+                "action": "conflict",
+                "entity_type": "spool",
+                "direction": None,
+                "label": _preview_label(fdb_filament=fdb_filament),
+                "field": "new_spool",
+                "old": None, "new": None,
+                "reason": "no filament mapping for this FDB spool",
+                "spoolman_id": None,
+                "fdb_filament_id": fdb_filament.id,
+                "fdb_spool_id": fdb_spool.id,
             })
         result.conflicts += 1
         return
 
     if dry_run:
         result.preview.append({
-            "action": "create", "direction": "filamentdb_to_spoolman",
-            "entity_type": "spool", "fdb_filament_id": fdb_filament.id, "fdb_spool_id": fdb_spool.id,
+            "action": "create",
+            "entity_type": "spool",
+            "direction": "filamentdb_to_spoolman",
+            "label": _preview_label(fdb_filament=fdb_filament),
+            "field": None,
+            "old": None, "new": None,
+            "reason": None,
+            "spoolman_id": None,
+            "fdb_filament_id": fdb_filament.id,
+            "fdb_spool_id": fdb_spool.id,
         })
         result.created += 1
         return
@@ -641,7 +766,21 @@ async def run_sync_cycle(
         fdb_entry = fdb_spool_index.get(mapping.filamentdb_spool_id)
 
         if sm_spool is None:
-            if not dry_run:
+            if dry_run:
+                fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "spool",
+                    "direction": None,
+                    "label": _preview_label(fdb_filament=fdb_fil),
+                    "field": None,
+                    "old": None, "new": None,
+                    "reason": "Spoolman spool archived or not in active set",
+                    "spoolman_id": mapping.spoolman_spool_id,
+                    "fdb_filament_id": mapping.filamentdb_filament_id,
+                    "fdb_spool_id": mapping.filamentdb_spool_id,
+                })
+            else:
                 _log(
                     db, cycle_id, "spoolman_to_filamentdb", "skip", "spool",
                     spoolman_id=mapping.spoolman_spool_id,
@@ -672,7 +811,20 @@ async def run_sync_cycle(
 
         # First time we see this pair — store baseline, no diff yet
         if sm_snap is None or fdb_snap is None:
-            if not dry_run:
+            if dry_run:
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "spool",
+                    "direction": None,
+                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                    "field": None,
+                    "old": None, "new": None,
+                    "reason": "first sync of this pair — baseline stored, no diff yet",
+                    "spoolman_id": sm_spool.id,
+                    "fdb_filament_id": fdb_filament_id,
+                    "fdb_spool_id": fdb_spool.id,
+                })
+            else:
                 _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
                 _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
             result.skipped += 1
@@ -704,8 +856,17 @@ async def run_sync_cycle(
                 )
             else:
                 result.preview.append({
-                    "action": "conflict", "field": "weight",
-                    "spoolman_id": sm_spool.id, "fdb_spool_id": fdb_spool.id,
+                    "action": "conflict",
+                    "entity_type": "spool",
+                    "direction": None,
+                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                    "field": "weight",
+                    "old": sm_spool.remaining_weight,
+                    "new": fdb_spool.totalWeight,
+                    "reason": "both sides changed weight (old=SM remaining, new=FDB totalWeight)",
+                    "spoolman_id": sm_spool.id,
+                    "fdb_filament_id": fdb_filament_id,
+                    "fdb_spool_id": fdb_spool.id,
                 })
             result.conflicts += 1
 
@@ -742,9 +903,16 @@ async def run_sync_cycle(
                     )
                 else:
                     result.preview.append({
-                        "action": "update", "direction": "spoolman_to_filamentdb",
-                        "field": "weight", "spoolman_id": sm_spool.id,
-                        "fdb_spool_id": fdb_spool.id, "old": old_w, "new": new_w,
+                        "action": "update",
+                        "entity_type": "spool",
+                        "direction": "spoolman_to_filamentdb",
+                        "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filament),
+                        "field": "weight",
+                        "old": old_w, "new": new_w,
+                        "reason": None,
+                        "spoolman_id": sm_spool.id,
+                        "fdb_filament_id": fdb_filament_id,
+                        "fdb_spool_id": fdb_spool.id,
                     })
                 result.updated += 1
             except Exception as exc:
@@ -782,9 +950,16 @@ async def run_sync_cycle(
                     )
                 else:
                     result.preview.append({
-                        "action": "update", "direction": "filamentdb_to_spoolman",
-                        "field": "remaining_weight", "spoolman_id": sm_spool.id,
-                        "fdb_spool_id": fdb_spool.id, "old": sm_spool.remaining_weight, "new": net,
+                        "action": "update",
+                        "entity_type": "spool",
+                        "direction": "filamentdb_to_spoolman",
+                        "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filament),
+                        "field": "remaining_weight",
+                        "old": sm_spool.remaining_weight, "new": net,
+                        "reason": None,
+                        "spoolman_id": sm_spool.id,
+                        "fdb_filament_id": fdb_filament_id,
+                        "fdb_spool_id": fdb_spool.id,
                     })
                 result.updated += 1
             except Exception as exc:
@@ -849,9 +1024,19 @@ async def run_sync_cycle(
                 )
                 result.errors += 1
         else:
+            _sm_id_for_label = next(iter(sm_spool_ids_by_fdb_filament.get(fdb_id, [])), None)
+            _sm_for_label = sm_spools.get(_sm_id_for_label) if _sm_id_for_label else None
             result.preview.append({
-                "action": "update", "direction": "spoolman_to_filamentdb",
-                "field": "colorName", "fdb_filament_id": fdb_id, "new": colorname,
+                "action": "update",
+                "entity_type": "filament",
+                "direction": "spoolman_to_filamentdb",
+                "label": _preview_label(sm_spool=_sm_for_label, fdb_filament=fdb_filaments.get(fdb_id)),
+                "field": "colorName",
+                "old": None, "new": colorname,
+                "reason": None,
+                "spoolman_id": _sm_id_for_label,
+                "fdb_filament_id": fdb_id,
+                "fdb_spool_id": None,
             })
             result.updated += 1
 

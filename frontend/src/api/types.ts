@@ -39,6 +39,20 @@ export interface SystemStatus {
 // Sync
 // ---------------------------------------------------------------------------
 
+export interface SyncPreviewEntry {
+  action: 'create' | 'update' | 'conflict' | 'skip'
+  entity_type: 'spool' | 'filament' | null
+  direction: SyncDirection | null
+  label: string
+  field: string | null
+  old: unknown
+  new: unknown
+  reason: string | null
+  spoolman_id: number | null
+  fdb_filament_id: string | null
+  fdb_spool_id: string | null
+}
+
 export interface CycleResultResponse {
   cycle_id: string
   dry_run: boolean
@@ -47,7 +61,7 @@ export interface CycleResultResponse {
   conflicts: number
   skipped: number
   errors: number
-  preview: Record<string, unknown>[]
+  preview: SyncPreviewEntry[]
 }
 
 export interface AutoSyncRequest {

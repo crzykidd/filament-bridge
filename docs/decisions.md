@@ -1,5 +1,31 @@
 # Decision record
 
+## 2026-05-30 — Dashboard dry-run: SyncPreviewEntry shape and skip coverage
+
+Decisions made while implementing FR-14 per-category detail (created/updated/conflicts/skipped).
+
+1. **Typed `SyncPreviewEntry` Pydantic model** (option b). The WIP wizard-preview changes in
+   `schemas/api.py` are purely additive (new model classes at the bottom); `CycleResultResponse`
+   was untouched, so adding `SyncPreviewEntry` + changing the one-line `preview` type was safe
+   and additive. Frontend gets full TypeScript inference with no extra effort.
+
+2. **Preview entry shape** — all 11 fields present on every entry, with `None` for N/A.
+   Consistent shape avoids runtime `?.` chains in the frontend and makes the Pydantic model
+   validator simple. `old`/`new` on weight conflicts hold SM `remaining_weight` and FDB
+   `totalWeight` respectively (labeled in `reason`).
+
+3. **`sm_skipped_fields` set in `_apply_field_changes`** — introduced to prevent the SM→FDB
+   dry-run second-pass from emitting duplicate update entries for inherited-skipped fields.
+   Local to the function, dry-run only. The live-sync path is unchanged.
+
+4. **Skip entries for archived and first-baseline paths** were previously silent (incremented
+   `result.skipped` but produced no preview entry). Now each emits a `skip` entry with a
+   `reason`, so the "Skipped (n)" section in the UI is actually populated.
+
+5. **Label degradation rule** — `_preview_label()` builds "VENDOR NAME COLOR (SM #id) / FDB name"
+   when all data is present; degrades gracefully to just FDB name, just SM id, or "unknown" if
+   parts are missing (e.g. archived spool where sm_spool object is None).
+
 ## 2026-05-30 — Multicolor filament mapping (Spoolman ↔ Filament DB)
 
 Spoolman models multicolor (`multi_color_hexes` CSV + `multi_color_direction` =
