@@ -49,6 +49,7 @@ from app.schemas.api import (
     DefaultTareEntry,
     EmptyActiveEntry,
     FilamentRef,
+    MatchDecision,
     MatchPairRow,
     NameCollisionEntry,
     PreviewFlagCounts,
@@ -92,6 +93,7 @@ def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
         name=sm.name,
         vendor=sm.vendor.name if sm.vendor else None,
         color=sm.color_hex,  # display-only ref; bare Spoolman format is fine here
+        material=sm.material,
     )
 
 
@@ -101,6 +103,7 @@ def _fdb_ref(fdb: FDBFilament) -> FilamentRef:
         name=fdb.name,
         vendor=fdb.vendor,
         color=fdb.color,
+        material=fdb.type,
     )
 
 
@@ -165,7 +168,7 @@ def wizard_direction(payload: WizardDirectionRequest, db: Session = Depends(get_
 
 
 @router.get("/wizard/matches", response_model=WizardMatchesResponse)
-async def wizard_matches(request: Request) -> WizardMatchesResponse:
+async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> WizardMatchesResponse:
     sm_filaments = await request.app.state.spoolman.get_filaments()
     fdb_filaments = await request.app.state.filamentdb.get_filaments()
     mr = match_filaments(sm_filaments, fdb_filaments)
@@ -186,11 +189,14 @@ async def wizard_matches(request: Request) -> WizardMatchesResponse:
         AmbiguousRow(spoolman=_sm_ref(sm), candidates=[_fdb_ref(f) for f in cands])
         for sm, cands in mr.ambiguous
     ]
+    raw_decisions = get_config_value(db, "wizard_match_decisions", []) or []
+    saved_decisions = [MatchDecision.model_validate(d) for d in raw_decisions]
     return WizardMatchesResponse(
         matched=matched,
         unmatched_spoolman=[_sm_ref(s) for s in mr.unmatched_spoolman],
         unmatched_filamentdb=[_fdb_ref(f) for f in mr.unmatched_fdb],
         ambiguous=ambiguous,
+        saved_decisions=saved_decisions,
     )
 
 

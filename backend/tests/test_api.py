@@ -409,9 +409,10 @@ def test_wizard_direction_persists_choices(db):
 
 
 def test_wizard_matches_buckets_and_vendor_hint(db):
-    sm = [SpoolmanFilament(id=10, name="PLA", color_hex="red",
+    sm = [SpoolmanFilament(id=10, name="PLA", color_hex="red", material="PLA",
                            vendor=SpoolmanVendor(id=1, name="ELEGOO"))]
-    fdb = [FDBFilament.model_validate({"_id": "f1", "name": "PLA", "color": "red", "vendor": "Elegoo"})]
+    fdb = [FDBFilament.model_validate({"_id": "f1", "name": "PLA", "color": "red", "vendor": "Elegoo",
+                                       "type": "PLA"})]
     client = _client(db, _fake_spoolman(filaments=sm), _fake_filamentdb(filaments=fdb))
 
     body = client.get("/api/wizard/matches").json()
@@ -420,6 +421,56 @@ def test_wizard_matches_buckets_and_vendor_hint(db):
     assert pair["spoolman"]["spoolman_filament_id"] == 10
     assert pair["filamentdb"]["filamentdb_filament_id"] == "f1"
     assert pair["vendor_dedup_hint"] is not None  # ELEGOO vs Elegoo
+    assert pair["spoolman"]["material"] == "PLA"
+    assert pair["filamentdb"]["material"] == "PLA"
+
+
+def test_wizard_matches_ref_material_fields(db):
+    sm = [SpoolmanFilament(id=5, name="PETG", material="PETG", color_hex=None)]
+    fdb = [FDBFilament.model_validate({"_id": "f2", "name": "PETG", "type": "PETG"})]
+    client = _client(db, _fake_spoolman(filaments=sm), _fake_filamentdb(filaments=fdb))
+
+    body = client.get("/api/wizard/matches").json()
+    pair = body["matched"][0]
+    assert pair["spoolman"]["material"] == "PETG"
+    assert pair["filamentdb"]["material"] == "PETG"
+
+    # Material is None when not set
+    sm2 = [SpoolmanFilament(id=6, name="TPU")]
+    fdb2 = [FDBFilament.model_validate({"_id": "f3", "name": "TPU"})]
+    client2 = _client(db, _fake_spoolman(filaments=sm2), _fake_filamentdb(filaments=fdb2))
+    body2 = client2.get("/api/wizard/matches").json()
+    pair2 = body2["matched"][0]
+    assert pair2["spoolman"]["material"] is None
+    assert pair2["filamentdb"]["material"] is None
+
+
+def test_wizard_matches_saved_decisions_empty(db):
+    sm = [SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="X"))]
+    fdb = [FDBFilament.model_validate({"_id": "f1", "name": "PLA", "vendor": "X"})]
+    client = _client(db, _fake_spoolman(filaments=sm), _fake_filamentdb(filaments=fdb))
+
+    body = client.get("/api/wizard/matches").json()
+    assert body["saved_decisions"] == []
+
+
+def test_wizard_matches_saved_decisions_echoed(db):
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "f1"},
+        {"spoolman_filament_id": 11, "action": "skip", "filamentdb_id": None},
+    ])
+    db.commit()
+
+    sm = [SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="X"))]
+    fdb = [FDBFilament.model_validate({"_id": "f1", "name": "PLA", "vendor": "X"})]
+    client = _client(db, _fake_spoolman(filaments=sm), _fake_filamentdb(filaments=fdb))
+
+    body = client.get("/api/wizard/matches").json()
+    saved = body["saved_decisions"]
+    assert len(saved) == 2
+    assert saved[0] == {"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "f1"}
+    assert saved[1]["spoolman_filament_id"] == 11
+    assert saved[1]["action"] == "skip"
 
 
 def test_wizard_save_matches_persists(db):

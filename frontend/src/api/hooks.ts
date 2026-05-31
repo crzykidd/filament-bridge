@@ -24,7 +24,7 @@ export function useApi<T>(fn: () => Promise<T>, deps: unknown[] = []) {
 
   useEffect(() => { void load() }, [load])
 
-  return { ...state, reload: load }
+  return { ...state, reload: load, refetch: load }
 }
 
 export function usePoll<T>(fn: () => Promise<T>, intervalMs: number, deps: unknown[] = []) {

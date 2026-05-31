@@ -194,6 +194,7 @@ export interface FilamentRef {
   name: string | null
   vendor: string | null
   color: string | null
+  material?: string | null
 }
 
 export interface MatchPairRow {
@@ -213,6 +214,7 @@ export interface WizardMatchesResponse {
   unmatched_spoolman: FilamentRef[]
   unmatched_filamentdb: FilamentRef[]
   ambiguous: AmbiguousRow[]
+  saved_decisions: MatchDecision[]
 }
 
 export interface MatchDecision {

@@ -208,6 +208,7 @@ class FilamentRef(BaseModel):
     name: str | None = None
     vendor: str | None = None
     color: str | None = None
+    material: str | None = None
 
 
 class MatchPairRow(BaseModel):
@@ -229,6 +230,7 @@ class WizardMatchesResponse(BaseModel):
     unmatched_spoolman: list[FilamentRef]
     unmatched_filamentdb: list[FilamentRef]
     ambiguous: list[AmbiguousRow]
+    saved_decisions: list[MatchDecision] = Field(default_factory=list)
 
 
 class MatchDecision(BaseModel):

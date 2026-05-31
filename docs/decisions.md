@@ -1,5 +1,35 @@
 # Decision record
 
+## 2026-05-31 — Match-review redesign: grouped tables, checkboxes, rescan
+
+FR-3/FR-4 match-review step rebuilt from a flat list into four independent grouped/sortable tables.
+
+1. **Status is the top-level grouping — four tables stay separate.** Match status (Matched /
+   Ambiguous / Unmatched-SM / Unmatched-FDB) dictates what action is even possible per row,
+   so it's the outer split. Subgrouping (Material or Brand/vendor) happens *inside* each table
+   via a single shared dimension control.
+
+2. **Checkbox → action mapping (per table).**
+   - Matched: checked = `link` (to the auto-matched FDB filament), unchecked = `skip`.
+   - Unmatched-SM: checked = `create`, unchecked = `skip`. Both default to the "include" action.
+   - Ambiguous: row checkbox only active once a candidate is chosen via the Link picker;
+     toggles between the chosen `link` (preserving `filamentdb_id`) and `skip`. The `filamentdb_id`
+     is preserved in the decision even when `action="skip"` so re-checking restores the link
+     without re-picking.
+   - Unmatched-FDB: informational only — groupable/sortable, no checkboxes.
+   - Subgroup-header checkbox is tri-state (checked/unchecked/indeterminate); table-level checkbox
+     covers all rows in the section.
+
+3. **Rescan keeps choices.** `GET /wizard/matches` now accepts a `db` dependency and returns
+   `saved_decisions: list[MatchDecision]` (echoing `wizard_match_decisions` from BridgeConfig).
+   On first load the UI hydrates `decisions` state from `saved_decisions`. On rescan
+   (`reload()`), existing choices are kept and pruned to the SM ids still present in the new
+   response — keyed by `spoolman_filament_id`.
+
+4. **`material` added to `FilamentRef`.** `_sm_ref` sets `material=sm.material` (Spoolman
+   `SpoolmanFilament.material`); `_fdb_ref` sets `material=fdb.type` (FDB `FDBFilament.type`).
+   Used for the Material subgroup dimension in the UI.
+
 ## 2026-05-31 — Wizard preview (FR-4 foundation): reconcile-flag keys + read-only UI step
 
 `GET /api/wizard/preview` reuses the same `_plan_spoolman_to_fdb` planner as
