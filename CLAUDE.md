@@ -123,6 +123,18 @@ default:
 If you're unsure whether an action would violate one of the above, stop and ask before
 acting.
 
+### Sandbox permissions
+
+This project adopts the
+[`repo-sandbox-permissions`](https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/repo-sandbox-permissions/README.md)
+standard — **scope: repo-wide** (`.claude/settings.json`). Routine in-repo file reads,
+edits, writes, and bash commands run sandboxed without prompts; writes outside the repo
+and network access stay gated (registries allow-listed in `allowedDomains`). The model is
+**confinement, not command-guessing** — don't add `Bash(...)` allow/deny patterns to work
+around a prompt; if a command needs to escape the box, widen the sandbox's
+`allowedDomains`/`allowWrite` instead. The pinned version + filled-in scope live in
+`standards.md`; no `CLAUDE-snippet.md` is shipped for this standard.
+
 ### Handoff prompts
 
 This project follows the
