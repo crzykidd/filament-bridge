@@ -22,6 +22,7 @@ import type {
   WizardExecuteResponse,
   WizardMatchesRequest,
   WizardMatchesResponse,
+  WizardPreviewResponse,
   WizardVariantsRequest,
   WizardWeightsResponse,
   WizardVariantsResponse,
@@ -160,6 +161,8 @@ export const getWizardWeights = () => request<WizardWeightsResponse>('/wizard/we
 export const getWizardVariants = () => request<WizardVariantsResponse>('/wizard/variants')
 export const postWizardVariants = (body: WizardVariantsRequest) =>
   json<WizardDecisionAck>('/wizard/variants', 'POST', body)
+
+export const getWizardPreview = () => request<WizardPreviewResponse>('/wizard/preview')
 
 export const postWizardExecute = (body: WizardExecuteRequest) =>
   json<WizardExecuteResponse>('/wizard/execute', 'POST', body)

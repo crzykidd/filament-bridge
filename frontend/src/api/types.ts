@@ -304,6 +304,56 @@ export interface WizardExecuteResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Wizard preview (FR-4 foundation — read-only reconcile surface)
+// ---------------------------------------------------------------------------
+
+export interface NameCollisionEntry {
+  normalized_name: string
+  sm_filament_ids: number[]
+  vs_existing: boolean
+  intra_batch: boolean
+  existing_fdb_filament_id: string | null
+}
+
+export interface EmptyActiveEntry {
+  spoolman_spool_id: number
+  spoolman_filament_id: number | null
+  name: string | null
+}
+
+export interface DefaultTareEntry {
+  spoolman_spool_id: number
+  spoolman_filament_id: number | null
+  name: string | null
+  planned_gross: number
+  default_tare_used: number
+}
+
+export interface VariantGroupPreviewEntry {
+  base_name: string
+  vendor: string | null
+  material: string | null
+  sm_filament_ids: number[]
+}
+
+export interface PreviewFlagCounts {
+  name_collision: number
+  empty_active: number
+  default_tare: number
+  variant_group: number
+}
+
+export interface WizardPreviewResponse {
+  direction: SyncDirection
+  plan_rows: WizardExecuteRecord[]
+  flag_counts: PreviewFlagCounts
+  name_collisions: NameCollisionEntry[]
+  empty_active: EmptyActiveEntry[]
+  default_tare: DefaultTareEntry[]
+  variant_groups: VariantGroupPreviewEntry[]
+}
+
+// ---------------------------------------------------------------------------
 // Backup
 // ---------------------------------------------------------------------------
 

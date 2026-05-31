@@ -1,5 +1,37 @@
 # Decision record
 
+## 2026-05-31 — Wizard preview (FR-4 foundation): reconcile-flag keys + read-only UI step
+
+`GET /api/wizard/preview` reuses the same `_plan_spoolman_to_fdb` planner as
+`wizard_execute` (so preview ≡ execute), then derives four reconcile-flag lists from the
+plan via pure helpers in `backend/app/api/wizard.py`. The non-obvious grouping keys:
+
+1. **`name_collision`** (`_compute_name_collisions`): key is `normalize_name(payload.name)`
+   over the *create* plan items. A group flags `vs_existing` when the normalized name is
+   also a key in the existing-FDB map, and `intra_batch` when ≥2 incoming creates share the
+   key. One entry per distinct normalized name (not per filament) — so the count is groups,
+   while the backlog's "43" counted the colliding *filaments*.
+2. **`empty_active`** (`_compute_empty_active`): straight over `sm_spools` —
+   `not archived AND (remaining_weight or 0) == 0`. Independent of the plan.
+3. **`default_tare`** (`_compute_default_tare`): create spool items where
+   `tare_source == "default"` (planner substituted the 200 g default because no
+   `spool_weight` was set); reports the planned gross and the default used.
+4. **`variant_group`** (`_compute_variant_groups`): key is
+   `(normalize_vendor(vendor), _strip_color(name, color_hex), normalize_name(material))`
+   over create items, groups of ≥2. Fills FR-6's gap (which only groups *matched* records
+   and returns nothing on an empty FDB) for fresh imports. No `parentId` is written — the
+   proposed groups are surfaced for the future decision UI only.
+
+**UI:** new read-only `frontend/src/pages/Wizard/StepNPreview.tsx`, wired into the stepper
+*before* Execute. Shows the plan summary + flag counts and four collapsible flag sections,
+with a non-blocking notice that flagged items need decisions in a later release. No mutating
+controls.
+
+**E2E (clean FDB, reseeded `spoolman-livedata.db`, 175 fil / 223 spools):** preview returned
+`empty_active=63`, `default_tare=79` (exact backlog match), `name_collision=17` groups /
+60 colliding filaments, `variant_group=1`; FDB stayed empty and Spoolman unchanged (no
+cross-ref extras written) — confirming the read-only guarantee.
+
 ## 2026-05-30 — Dashboard dry-run: SyncPreviewEntry shape and skip coverage
 
 Decisions made while implementing FR-14 per-category detail (created/updated/conflicts/skipped).

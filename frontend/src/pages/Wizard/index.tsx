@@ -6,6 +6,7 @@ import Step2Direction from './Step2Direction'
 import Step3Matches from './Step3Matches'
 import Step4Weights from './Step4Weights'
 import Step5Variants from './Step5Variants'
+import StepNPreview from './StepNPreview'
 import Step6Execute from './Step6Execute'
 
 const STEPS = [
@@ -14,6 +15,7 @@ const STEPS = [
   { path: 'matches', label: 'Matches' },
   { path: 'weights', label: 'Weights' },
   { path: 'variants', label: 'Variants' },
+  { path: 'preview', label: 'Preview' },
   { path: 'execute', label: 'Execute' },
 ]
 
@@ -69,6 +71,7 @@ export function WizardShell() {
         <Route path="matches" element={<Step3Matches {...ctx} />} />
         <Route path="weights" element={<Step4Weights {...ctx} />} />
         <Route path="variants" element={<Step5Variants {...ctx} />} />
+        <Route path="preview" element={<StepNPreview {...ctx} />} />
         <Route path="execute" element={<Step6Execute {...ctx} />} />
       </Routes>
     </div>
