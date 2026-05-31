@@ -5,7 +5,7 @@ import { DeepLinks } from '../../components/DeepLinks'
 import type { FilamentRef, MatchDecision } from '../../api/types'
 import type { WizardCtx } from './index'
 
-function FilamentTag({ ref: f }: { ref: FilamentRef }) {
+function FilamentTag({ filament: f }: { filament: FilamentRef }) {
   if (!f) return null
   return (
     <span className="text-sm">
@@ -96,12 +96,12 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
                   <div className="flex-1 grid grid-cols-2 gap-4">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-emerald-600 font-medium uppercase">SM</span>
-                      <FilamentTag ref={pair.spoolman} />
+                      <FilamentTag filament={pair.spoolman} />
                       <DeepLinks spoolmanFilamentId={pair.spoolman.spoolman_filament_id} />
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-blue-600 font-medium uppercase">FDB</span>
-                      <FilamentTag ref={pair.filamentdb} />
+                      <FilamentTag filament={pair.filamentdb} />
                       <DeepLinks filamentdbFilamentId={pair.filamentdb.filamentdb_filament_id} />
                     </div>
                   </div>
@@ -147,7 +147,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
                 <div key={smId} className="px-5 py-4 space-y-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-emerald-600 font-medium uppercase">SM</span>
-                    <FilamentTag ref={amb.spoolman} />
+                    <FilamentTag filament={amb.spoolman} />
                     <DeepLinks spoolmanFilamentId={smId} />
                   </div>
                   <div className="pl-4 space-y-1">
@@ -163,7 +163,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
                         >
                           Link
                         </button>
-                        <FilamentTag ref={c} />
+                        <FilamentTag filament={c} />
                         <DeepLinks filamentdbFilamentId={c.filamentdb_filament_id} />
                       </div>
                     ))}
@@ -202,7 +202,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
                 <div key={smId} className="px-5 py-3 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-emerald-600 font-medium uppercase">SM</span>
-                    <FilamentTag ref={sm} />
+                    <FilamentTag filament={sm} />
                     <DeepLinks spoolmanFilamentId={smId} />
                   </div>
                   <div className="flex gap-1">
@@ -235,7 +235,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
             {data.unmatched_filamentdb.map(f => (
               <div key={f.filamentdb_filament_id} className="px-5 py-3 flex items-center gap-2">
                 <span className="text-xs text-blue-600 font-medium uppercase">FDB</span>
-                <FilamentTag ref={f} />
+                <FilamentTag filament={f} />
                 <DeepLinks filamentdbFilamentId={f.filamentdb_filament_id} />
               </div>
             ))}
