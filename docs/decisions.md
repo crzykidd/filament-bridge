@@ -1,5 +1,24 @@
 # Decision record
 
+## 2026-05-31 — FDB location semantics: locationId (ObjectId reference), pre-creation required
+
+Verified against the live FDB instance while implementing spool location seeding (SM→FDB wizard
+execute path).
+
+1. **FDB spools use `locationId`, not a bare `location` string.** `POST /api/filaments/:id/spools`
+   with `"location": "name"` silently ignores the key. The correct field is `"locationId"` holding
+   a 24-char MongoDB ObjectId referencing the `locations` collection. The bridge schema
+   `FDBSpoolDetail.location` was wrong and has been corrected to `locationId`.
+
+2. **Locations must be pre-created via `POST /api/locations`.** FDB does not auto-create a location
+   from a name. The wizard seed fetches `GET /api/locations` once per run to build a `name→id`
+   cache, then creates missing locations on-demand per spool. A `create_location` failure is
+   per-record (that spool fails; the run continues) — consistent with the existing NFR-4
+   per-record isolation pattern.
+
+3. **Scope of this change.** Only the SM→FDB initial-seed path (wizard execute). Ongoing-sync
+   location updates (engine diff) and the FDB→SM direction are out of scope — follow-up work.
+
 ## 2026-05-31 — Match-review redesign: grouped tables, checkboxes, rescan
 
 FR-3/FR-4 match-review step rebuilt from a flat list into four independent grouped/sortable tables.

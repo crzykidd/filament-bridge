@@ -595,6 +595,16 @@ async def _execute_spoolman_to_fdb(
     for si in plan.spool_items:
         spool_items_by_fil.setdefault(id(si.fil_item), []).append(si)
 
+    # Pre-fetch FDB locations once; new names are created on-demand within each spool's
+    # try block so a missing location fails only that spool, not the whole run.
+    _fdb_loc_cache: dict[str, str] = {}  # location name → FDB _id
+    try:
+        for loc in await filamentdb.get_locations():
+            if loc.get("name") and loc.get("_id"):
+                _fdb_loc_cache[loc["name"]] = loc["_id"]
+    except Exception as exc:
+        logger.warning("wizard execute %s: could not prefetch FDB locations: %s", res.cycle_id, exc)
+
     for item in plan.filament_items:
         if item.error or item.fdb_id is None:
             continue
@@ -642,11 +652,18 @@ async def _execute_spoolman_to_fdb(
                         fdb_spool_id=spool_item.skip_fdb_spool_id)
                 continue
             try:
-                # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
-                raw = await filamentdb.create_spool(fdb_id, {
+                sm_location = spool_item.sm_spool.location
+                if sm_location and sm_location not in _fdb_loc_cache:
+                    new_loc = await filamentdb.create_location(sm_location)
+                    _fdb_loc_cache[sm_location] = new_loc["_id"]
+                spool_payload: dict = {
                     "totalWeight": spool_item.planned_gross,
                     fdb_field_name: str(spool_item.sm_spool.id),
-                })
+                }
+                if sm_location:
+                    spool_payload["locationId"] = _fdb_loc_cache[sm_location]
+                # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
+                raw = await filamentdb.create_spool(fdb_id, spool_payload)
                 new_fdb_spool_id = raw.get("_id") or raw.get("id") or ""
                 await spoolman.update_spool(
                     spool_item.sm_spool.id,

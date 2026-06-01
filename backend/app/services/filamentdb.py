@@ -142,6 +142,18 @@ class FilamentDBClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_locations(self) -> list[dict]:
+        """GET /api/locations — list all locations."""
+        resp = await self._http.get("/api/locations")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def create_location(self, name: str) -> dict:
+        """POST /api/locations — create a new location by name."""
+        resp = await self._http.post("/api/locations", json={"name": name})
+        resp.raise_for_status()
+        return resp.json()
+
     async def create_filament(self, payload: dict) -> FDBFilamentDetail:
         """POST /api/filaments — create a new filament (set parentId for variants)."""
         resp = await self._http.post("/api/filaments", json=payload)

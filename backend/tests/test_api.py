@@ -80,6 +80,8 @@ def _fake_filamentdb(filaments=None, detail=None) -> AsyncMock:
     client.update_filament = AsyncMock(return_value=MagicMock(id="fil-x"))
     client.create_spool = AsyncMock(return_value={"_id": "new-spool-id"})
     client.create_filament = AsyncMock(return_value=MagicMock(id="new-fil-id"))
+    client.get_locations = AsyncMock(return_value=[])
+    client.create_location = AsyncMock(return_value={"_id": "loc-1", "name": "TestShelf"})
     client.health = AsyncMock(return_value={"filament_count": 1, "spool_count": 1})
     return client
 
@@ -94,13 +96,14 @@ def _client(db, spoolman=None, filamentdb=None) -> TestClient:
     return TestClient(app)
 
 
-def _sm_spool(spool_id: int, remaining: float, extra=None) -> SpoolmanSpool:
+def _sm_spool(spool_id: int, remaining: float, extra=None, location: str | None = None) -> SpoolmanSpool:
     return SpoolmanSpool(
         id=spool_id,
         filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
         remaining_weight=remaining,
         archived=False,
         extra=extra or {},
+        location=location,
     )
 
 
@@ -646,6 +649,91 @@ def test_wizard_execute_per_record_error_isolation(db):
     assert body["wizard_completed"] is False
     assert get_config_value(db, "wizard_completed") is False
     # Only the good spool got a mapping row.
+    assert db.query(SpoolMapping).count() == 1
+    assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
+
+
+def test_wizard_execute_spool_location_included_in_payload(db):
+    """SM spool with a location → FDB create_spool payload includes locationId."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0, location="DryBox")],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-1"})
+    filamentdb.create_location = AsyncMock(return_value={"_id": "loc-99", "name": "DryBox"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["created"] == 1
+    assert body["failed"] == 0
+
+    filamentdb.create_spool.assert_awaited_once()
+    payload = filamentdb.create_spool.await_args.args[1]
+    assert payload["locationId"] == "loc-99"
+    filamentdb.create_location.assert_awaited_once()
+    assert filamentdb.create_location.await_args.args[0] == "DryBox"
+
+
+def test_wizard_execute_spool_no_location_omits_key(db):
+    """SM spool with no location → locationId key is absent (not null)."""
+    spoolman, filamentdb = _setup_link_execute(db)
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-1"})
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+    payload = filamentdb.create_spool.await_args.args[1]
+    assert "locationId" not in payload
+
+
+def test_wizard_execute_location_reuses_prefetched_id(db):
+    """Location already in FDB (returned by get_locations) → create_location not called."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0, location="Shelf A")],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.get_locations = AsyncMock(return_value=[{"_id": "loc-42", "name": "Shelf A"}])
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-1"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+    filamentdb.create_location.assert_not_called()
+    payload = filamentdb.create_spool.await_args.args[1]
+    assert payload["locationId"] == "loc-42"
+
+
+def test_wizard_execute_location_failure_isolates_to_spool(db):
+    """create_location failure → that spool fails; other spools in the run still import."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[
+            _sm_spool(1, 800.0, location="BadShelf"),
+            _sm_spool(2, 600.0),
+        ],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.create_location = AsyncMock(side_effect=RuntimeError("location API down"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-ok"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["created"] == 1   # spool 2 (no location) succeeded
+    assert body["failed"] == 1    # spool 1 (bad location) failed
+    assert body["wizard_completed"] is False
     assert db.query(SpoolMapping).count() == 1
     assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
 

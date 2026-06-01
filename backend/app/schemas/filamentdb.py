@@ -66,7 +66,7 @@ class FDBSpoolDetail(BaseModel):
     label: str | None = None
     totalWeight: float | None = None
     retired: bool = False
-    location: str | None = None
+    locationId: str | None = None
     lotNumber: str | None = None
     usageHistory: list[FDBUsageEntry] = Field(default_factory=list)
 
