@@ -1,95 +1,256 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { getWizardMatches, postWizardMatches } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
-import type { AmbiguousRow, FilamentRef, MatchDecision, MatchPairRow } from '../../api/types'
+import type { FilamentRef, MatchDecision } from '../../api/types'
 import type { WizardCtx } from './index'
 
-type SubgroupDim = 'material' | 'vendor'
+// ── types ─────────────────────────────────────────────────────────────────────
+
+type RowStatus = 'matched' | 'unmatched_sm' | 'ambiguous' | 'unmatched_fdb'
+type GroupDim = 'status' | 'material' | 'vendor'
 type SortDir = 'asc' | 'desc'
-interface SortState { col: string; dir: SortDir }
-type SectionKey = 'matched' | 'unmatched_sm' | 'ambiguous' | 'unmatched_fdb'
+type SortCol = 'name' | 'vendor' | 'material' | 'status' | 'confidence'
 
-function FilamentTag({ filament: f }: { filament: FilamentRef }) {
-  if (!f) return null
-  return (
-    <span className="text-sm">
-      <span className="font-medium">{f.name ?? '—'}</span>
-      {f.vendor && <span className="text-gray-500"> · {f.vendor}</span>}
-      {f.color && <span className="text-gray-400"> · {f.color}</span>}
-    </span>
-  )
+interface FlatRow {
+  status: RowStatus
+  smId: number | null
+  fdbId: string | null
+  sm: FilamentRef | null
+  fdb: FilamentRef | null
+  confidence: number | null
+  vendorDedup: string | null
+  candidates: FilamentRef[]
 }
 
-function TriCheckbox({
-  checked, indeterminate, onChange, disabled,
-}: {
-  checked: boolean; indeterminate: boolean; onChange: (v: boolean) => void; disabled?: boolean
-}) {
-  const ref = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate
-  }, [indeterminate])
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      checked={checked}
-      disabled={disabled}
-      onChange={e => onChange(e.target.checked)}
-      className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed"
-    />
-  )
+// ── constants ──────────────────────────────────────────────────────────────────
+
+const STATUS_LABEL: Record<RowStatus, string> = {
+  matched: 'Matched',
+  ambiguous: 'Ambiguous',
+  unmatched_sm: 'Unmatched (SM)',
+  unmatched_fdb: 'Unmatched (FDB)',
+}
+const STATUS_ORDER: Record<RowStatus, number> = {
+  matched: 0, ambiguous: 1, unmatched_sm: 2, unmatched_fdb: 3,
+}
+const STATUS_COLOR: Record<RowStatus, string> = {
+  matched: 'bg-green-100 text-green-700',
+  ambiguous: 'bg-yellow-100 text-yellow-700',
+  unmatched_sm: 'bg-gray-100 text-gray-600',
+  unmatched_fdb: 'bg-blue-100 text-blue-600',
+}
+const STATUS_HDR_BG: Record<RowStatus, string> = {
+  matched: 'bg-green-50', ambiguous: 'bg-yellow-50',
+  unmatched_sm: 'bg-gray-50', unmatched_fdb: 'bg-gray-50',
 }
 
-function SortBtn({ col, label, sort, onSort }: {
-  col: string; label: string; sort: SortState; onSort: (col: string) => void
-}) {
-  const active = sort.col === col
-  return (
-    <button
-      onClick={() => onSort(col)}
-      className={`flex items-center gap-0.5 text-xs font-medium uppercase tracking-wide ${
-        active ? 'text-indigo-600' : 'text-gray-400 hover:text-indigo-400'
-      }`}
-    >
-      {label}
-      {active && <span className="ml-0.5">{sort.dir === 'asc' ? '↑' : '↓'}</span>}
-    </button>
-  )
+// Shared grid template — must match in header, filter row, and member rows.
+const G = 'grid grid-cols-[2rem_1.5fr_1.5fr_5rem_5.5rem] gap-3 px-4'
+
+// ── row accessors ──────────────────────────────────────────────────────────────
+
+function rName(r: FlatRow) { return r.sm?.name ?? r.fdb?.name ?? '' }
+function rVendor(r: FlatRow) { return r.sm?.vendor ?? r.fdb?.vendor ?? '' }
+function rMaterial(r: FlatRow) { return (r.sm?.material ?? r.fdb?.material ?? '') }
+
+function groupKey(r: FlatRow, dim: GroupDim): string {
+  if (dim === 'status') return r.status
+  if (dim === 'material') return rMaterial(r) || '—'
+  return rVendor(r) || '—'
 }
 
-function getField(ref: FilamentRef, col: string): string {
-  if (col === 'name') return ref.name ?? ''
-  if (col === 'vendor') return ref.vendor ?? ''
-  if (col === 'material') return ref.material ?? ''
-  if (col === 'color') return ref.color ?? ''
+function sortVal(r: FlatRow, col: SortCol): string | number {
+  if (col === 'name') return rName(r).toLowerCase()
+  if (col === 'vendor') return rVendor(r).toLowerCase()
+  if (col === 'material') return rMaterial(r).toLowerCase()
+  if (col === 'status') return STATUS_ORDER[r.status]
+  if (col === 'confidence') return r.confidence ?? -1
   return ''
 }
 
-function sortByRef<T>(items: T[], getRef: (i: T) => FilamentRef, sort: SortState): T[] {
-  return [...items].sort((a, b) => {
-    const cmp = getField(getRef(a), sort.col).localeCompare(getField(getRef(b), sort.col))
-    return sort.dir === 'asc' ? cmp : -cmp
-  })
+function isIncluded(r: FlatRow, decisions: Record<number, MatchDecision>): boolean {
+  if (r.status === 'unmatched_fdb' || r.smId == null) return false
+  const d = decisions[r.smId]
+  if (r.status === 'matched') return (d?.action ?? 'link') !== 'skip'
+  if (r.status === 'unmatched_sm') return (d?.action ?? 'create') !== 'skip'
+  if (r.status === 'ambiguous') return d?.action === 'link'
+  return false
 }
 
-function groupBy<T>(items: T[], keyFn: (i: T) => string): [string, T[]][] {
-  const map = new Map<string, T[]>()
-  for (const item of items) {
-    const k = keyFn(item)
-    if (!map.has(k)) map.set(k, [])
-    map.get(k)!.push(item)
-  }
-  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-}
-
-function triState(flags: boolean[]): { checked: boolean; indeterminate: boolean } {
+function triState(flags: boolean[]) {
   const n = flags.filter(Boolean).length
   if (n === 0) return { checked: false, indeterminate: false }
   if (n === flags.length) return { checked: true, indeterminate: false }
   return { checked: false, indeterminate: true }
 }
+
+// ── sub-components ─────────────────────────────────────────────────────────────
+
+function TriCheckbox({ checked, indeterminate, onChange, disabled }: {
+  checked: boolean; indeterminate: boolean; onChange: (v: boolean) => void; disabled?: boolean
+}) {
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate }, [indeterminate])
+  return (
+    <input ref={ref} type="checkbox" checked={checked} disabled={disabled}
+      onChange={e => onChange(e.target.checked)}
+      className="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed" />
+  )
+}
+
+function FTag({ f, side }: { f: FilamentRef | null; side?: 'sm' | 'fdb' }) {
+  if (!f) return null
+  const sc = side === 'sm' ? 'text-emerald-600' : 'text-blue-600'
+  return (
+    <span className="text-sm flex flex-wrap items-center gap-1">
+      {side && <span className={`text-xs font-medium uppercase ${sc}`}>{side.toUpperCase()}</span>}
+      <span className="font-medium">{f.name ?? '—'}</span>
+      {f.vendor && <span className="text-gray-500">· {f.vendor}</span>}
+      {f.color && <span className="text-gray-400">· {f.color}</span>}
+    </span>
+  )
+}
+
+function StatusPill({ status }: { status: RowStatus }) {
+  return (
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_COLOR[status]}`}>
+      {STATUS_LABEL[status]}
+    </span>
+  )
+}
+
+// ── MemberRow ──────────────────────────────────────────────────────────────────
+
+interface MRProps {
+  row: FlatRow
+  decision: MatchDecision | undefined
+  showStatus: boolean
+  setDec: (id: number, action: MatchDecision['action'], fdbId?: string | null) => void
+  setDecisions: Dispatch<SetStateAction<Record<number, MatchDecision>>>
+}
+
+function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps) {
+  const smId = row.smId ?? 0
+
+  if (row.status === 'matched') {
+    const included = (decision?.action ?? 'link') !== 'skip'
+    return (
+      <div className={`${G} py-3 items-start`}>
+        <TriCheckbox checked={included} indeterminate={false}
+          onChange={v => setDec(smId, v ? 'link' : 'skip', v ? row.fdbId : undefined)} />
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          <FTag f={row.sm} side="sm" />
+          <DeepLinks spoolmanFilamentId={row.sm?.spoolman_filament_id} />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          <FTag f={row.fdb} side="fdb" />
+          <DeepLinks filamentdbFilamentId={row.fdb?.filamentdb_filament_id} />
+          {row.vendorDedup && (
+            <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">
+              vendor: {row.vendorDedup}
+            </span>
+          )}
+        </div>
+        <span className="text-xs text-gray-500 pt-0.5">{rMaterial(row) || '—'}</span>
+        <div className="flex flex-col gap-1 items-start">
+          {showStatus && <StatusPill status="matched" />}
+          {row.confidence != null && (
+            <span className="text-xs text-gray-400">{(row.confidence * 100).toFixed(0)}%</span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (row.status === 'unmatched_sm') {
+    const included = (decision?.action ?? 'create') !== 'skip'
+    return (
+      <div className={`${G} py-3 items-start`}>
+        <TriCheckbox checked={included} indeterminate={false}
+          onChange={v => setDec(smId, v ? 'create' : 'skip')} />
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          <FTag f={row.sm} side="sm" />
+          <DeepLinks spoolmanFilamentId={smId} />
+        </div>
+        <span className="text-xs text-gray-400 italic pt-0.5">
+          {included ? 'Will create in FDB' : 'Skip'}
+        </span>
+        <span className="text-xs text-gray-500 pt-0.5">{rMaterial(row) || '—'}</span>
+        <div>{showStatus && <StatusPill status="unmatched_sm" />}</div>
+      </div>
+    )
+  }
+
+  if (row.status === 'unmatched_fdb') {
+    return (
+      <div className={`${G} py-3 items-start`}>
+        <div />
+        <span className="text-xs text-gray-300 pt-0.5">—</span>
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          <FTag f={row.fdb} side="fdb" />
+          <DeepLinks filamentdbFilamentId={row.fdb?.filamentdb_filament_id} />
+        </div>
+        <span className="text-xs text-gray-500 pt-0.5">{rMaterial(row) || '—'}</span>
+        <div>{showStatus && <StatusPill status="unmatched_fdb" />}</div>
+      </div>
+    )
+  }
+
+  // ambiguous
+  const hasFdb = decision?.filamentdb_id != null
+  const isLinked = decision?.action === 'link'
+  return (
+    <div className="py-3">
+      <div className={`${G} items-start`}>
+        <TriCheckbox checked={isLinked} indeterminate={false} disabled={!hasFdb}
+          onChange={v => {
+            if (!v) {
+              setDecisions(p => ({
+                ...p,
+                [smId]: { spoolman_filament_id: smId, action: 'skip', filamentdb_id: p[smId]?.filamentdb_id },
+              }))
+            } else if (decision?.filamentdb_id) {
+              setDec(smId, 'link', decision.filamentdb_id)
+            }
+          }} />
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+          <FTag f={row.sm} side="sm" />
+          <DeepLinks spoolmanFilamentId={smId} />
+        </div>
+        <span className="text-xs text-gray-400 italic pt-0.5">Pick a match ↓</span>
+        <span className="text-xs text-gray-500 pt-0.5">{rMaterial(row) || '—'}</span>
+        <div>{showStatus && <StatusPill status="ambiguous" />}</div>
+      </div>
+      <div className="pl-16 pr-4 mt-1.5 space-y-1">
+        {row.candidates.map(c => (
+          <div key={c.filamentdb_filament_id} className="flex items-center gap-2">
+            <button
+              onClick={() => setDec(smId, 'link', c.filamentdb_filament_id)}
+              className={`px-2 py-0.5 rounded text-xs font-medium shrink-0 ${
+                isLinked && decision?.filamentdb_id === c.filamentdb_filament_id
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>Link</button>
+            <FTag f={c} side="fdb" />
+            <DeepLinks filamentdbFilamentId={c.filamentdb_filament_id} />
+          </div>
+        ))}
+        <div className="flex gap-1 mt-1">
+          {(['create', 'skip'] as const).map(a => (
+            <button key={a} onClick={() => setDec(smId, a)}
+              className={`px-2 py-0.5 rounded text-xs font-medium ${
+                decision?.action === a ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>{a}</button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Step3Matches ───────────────────────────────────────────────────────────────
 
 export default function Step3Matches({ next, prev }: WizardCtx) {
   const { data, loading, error, reload } = useApi(getWizardMatches)
@@ -97,17 +258,19 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   const [rescanning, setRescanning] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
-  const [subgroupBy, setSubgroupBy] = useState<SubgroupDim>('material')
-  const [sorts, setSorts] = useState<Record<SectionKey, SortState>>({
-    matched: { col: 'name', dir: 'asc' },
-    unmatched_sm: { col: 'name', dir: 'asc' },
-    ambiguous: { col: 'name', dir: 'asc' },
-    unmatched_fdb: { col: 'name', dir: 'asc' },
-  })
+
+  // toolbar
+  const [groupBy, setGroupBy] = useState<GroupDim>('status')
+  const [sortCol, setSortCol] = useState<SortCol>('name')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [search, setSearch] = useState('')
+  const [filterStatus, setFilterStatus] = useState<RowStatus | 'all'>('all')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [colFilter, setColFilter] = useState({ name: '', material: '' })
+
   const hydrated = useRef(false)
 
-  // First load: hydrate from saved_decisions. Rescan: prune SM ids that vanished.
+  // rehydrate decisions on load; prune stale ids on rescan
   useEffect(() => {
     if (!data) return
     if (!hydrated.current) {
@@ -131,21 +294,99 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     }
   }, [data])
 
-  function dec(smId: number): MatchDecision | undefined { return decisions[smId] }
+  // flatten all sections into a single row model
+  const allRows = useMemo<FlatRow[]>(() => {
+    if (!data) return []
+    const rows: FlatRow[] = []
+    for (const p of data.matched) rows.push({
+      status: 'matched', smId: p.spoolman.spoolman_filament_id, fdbId: p.filamentdb.filamentdb_filament_id,
+      sm: p.spoolman, fdb: p.filamentdb, confidence: p.confidence, vendorDedup: p.vendor_dedup_hint, candidates: [],
+    })
+    for (const a of data.ambiguous) rows.push({
+      status: 'ambiguous', smId: a.spoolman.spoolman_filament_id, fdbId: null,
+      sm: a.spoolman, fdb: null, confidence: null, vendorDedup: null, candidates: a.candidates,
+    })
+    for (const s of data.unmatched_spoolman) rows.push({
+      status: 'unmatched_sm', smId: s.spoolman_filament_id, fdbId: null,
+      sm: s, fdb: null, confidence: null, vendorDedup: null, candidates: [],
+    })
+    for (const f of data.unmatched_filamentdb) rows.push({
+      status: 'unmatched_fdb', smId: null, fdbId: f.filamentdb_filament_id,
+      sm: null, fdb: f, confidence: null, vendorDedup: null, candidates: [],
+    })
+    return rows
+  }, [data])
+
+  const filtered = useMemo(() => allRows.filter(r => {
+    if (filterStatus !== 'all' && r.status !== filterStatus) return false
+    if (search) {
+      const lq = search.toLowerCase()
+      const hay = [rName(r), rVendor(r), rMaterial(r), r.fdb?.name ?? ''].join(' ').toLowerCase()
+      if (!hay.includes(lq)) return false
+    }
+    if (colFilter.name && !rName(r).toLowerCase().includes(colFilter.name.toLowerCase())) return false
+    if (colFilter.material && !rMaterial(r).toLowerCase().includes(colFilter.material.toLowerCase())) return false
+    return true
+  }), [allRows, filterStatus, search, colFilter])
+
+  const sorted = useMemo(() => [...filtered].sort((a, b) => {
+    if (sortCol === 'confidence') {
+      const d = (a.confidence ?? -1) - (b.confidence ?? -1)
+      return sortDir === 'asc' ? d : -d
+    }
+    if (sortCol === 'status') {
+      const d = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
+      return sortDir === 'asc' ? d : -d
+    }
+    const cmp = String(sortVal(a, sortCol)).localeCompare(String(sortVal(b, sortCol)))
+    return sortDir === 'asc' ? cmp : -cmp
+  }), [filtered, sortCol, sortDir])
+
+  const groups = useMemo<[string, FlatRow[]][]>(() => {
+    const map = new Map<string, FlatRow[]>()
+    for (const r of sorted) {
+      const k = groupKey(r, groupBy)
+      if (!map.has(k)) map.set(k, [])
+      map.get(k)!.push(r)
+    }
+    if (groupBy === 'status') {
+      const order: RowStatus[] = ['matched', 'ambiguous', 'unmatched_sm', 'unmatched_fdb']
+      return order.filter(s => map.has(s)).map(s => [s, map.get(s)!])
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [sorted, groupBy])
 
   function setDec(smId: number, action: MatchDecision['action'], fdbId?: string | null) {
     setDecisions(d => ({ ...d, [smId]: { spoolman_filament_id: smId, action, filamentdb_id: fdbId } }))
   }
 
-  function toggleSort(s: SectionKey, col: string) {
-    setSorts(ss => ({
-      ...ss,
-      [s]: ss[s].col === col ? { col, dir: ss[s].dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' },
-    }))
+  function bulkSet(rows: FlatRow[], include: boolean) {
+    setDecisions(d => {
+      const n = { ...d }
+      for (const r of rows) {
+        if (r.status === 'unmatched_fdb' || r.smId == null) continue
+        const id = r.smId
+        if (r.status === 'matched') {
+          n[id] = include
+            ? { spoolman_filament_id: id, action: 'link', filamentdb_id: r.fdbId }
+            : { spoolman_filament_id: id, action: 'skip' }
+        } else if (r.status === 'unmatched_sm') {
+          n[id] = { spoolman_filament_id: id, action: include ? 'create' : 'skip' }
+        } else if (r.status === 'ambiguous') {
+          const ex = d[id]
+          n[id] = !include
+            ? { spoolman_filament_id: id, action: 'skip', filamentdb_id: ex?.filamentdb_id }
+            : ex?.filamentdb_id
+            ? { spoolman_filament_id: id, action: 'link', filamentdb_id: ex.filamentdb_id }
+            : (ex ?? { spoolman_filament_id: id, action: 'skip' })
+        }
+      }
+      return n
+    })
   }
 
-  function toggleCollapse(key: string) {
-    setCollapsed(s => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n })
+  function toggleCollapse(k: string) {
+    setCollapsed(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   }
 
   async function handleRescan() {
@@ -155,403 +396,217 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
 
   async function handleSave() {
     if (!data) return
-    setSaving(true)
-    setSaveErr(null)
+    setSaving(true); setSaveErr(null)
     const all: MatchDecision[] = []
-    for (const pair of data.matched) {
-      const smId = pair.spoolman.spoolman_filament_id!
-      all.push(decisions[smId] ?? {
-        spoolman_filament_id: smId,
-        action: 'link',
-        filamentdb_id: pair.filamentdb.filamentdb_filament_id,
-      })
+    for (const p of data.matched) {
+      const id = p.spoolman.spoolman_filament_id!
+      all.push(decisions[id] ?? { spoolman_filament_id: id, action: 'link', filamentdb_id: p.filamentdb.filamentdb_filament_id })
     }
-    for (const sm of data.unmatched_spoolman) {
-      const d = decisions[sm.spoolman_filament_id!]
-      if (d) all.push(d)
-    }
-    for (const amb of data.ambiguous) {
-      const d = decisions[amb.spoolman.spoolman_filament_id!]
-      if (d) all.push(d)
-    }
-    try {
-      await postWizardMatches({ decisions: all })
-      next()
-    } catch (e) {
-      setSaveErr(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSaving(false)
-    }
+    for (const s of data.unmatched_spoolman) { const d = decisions[s.spoolman_filament_id!]; if (d) all.push(d) }
+    for (const a of data.ambiguous) { const d = decisions[a.spoolman.spoolman_filament_id!]; if (d) all.push(d) }
+    try { await postWizardMatches({ decisions: all }); next() }
+    catch (e) { setSaveErr(e instanceof Error ? e.message : String(e)) }
+    finally { setSaving(false) }
   }
 
   if (loading && !data) return <p className="text-gray-500">Loading match data…</p>
   if (error) return <p className="text-red-600">{error}</p>
   if (!data) return null
 
-  const sgKey = (ref: FilamentRef) => (subgroupBy === 'material' ? ref.material : ref.vendor) ?? '—'
-  const sortCols = ['name', 'vendor', 'material'] as const
-
-  function renderSortBar(section: SectionKey) {
-    return (
-      <div className="flex items-center gap-2">
-        {sortCols.map(col => (
-          <SortBtn key={col} col={col} label={col} sort={sorts[section]} onSort={c => toggleSort(section, c)} />
-        ))}
-      </div>
-    )
-  }
-
-  function renderGroupHeader(
-    gKey: string, label: string, count: number,
-    tri?: { checked: boolean; indeterminate: boolean },
-    onTri?: (v: boolean) => void,
-  ) {
-    return (
-      <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-3">
-        {tri && onTri && <TriCheckbox {...tri} onChange={onTri} />}
-        <button
-          onClick={() => toggleCollapse(gKey)}
-          className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800"
-        >
-          <span>{collapsed.has(gKey) ? '▶' : '▼'}</span>
-          <span>{label}</span>
-          <span className="text-gray-400">({count})</span>
-        </button>
-      </div>
-    )
-  }
-
-  // --- Matched ---
-  const matchedSorted = sortByRef(data.matched, p => p.spoolman, sorts.matched)
-  const matchedGroups = groupBy(matchedSorted, p => sgKey(p.spoolman))
-  const matchedIncluded = (p: MatchPairRow) => (dec(p.spoolman.spoolman_filament_id!)?.action ?? 'link') !== 'skip'
-  const matchedTableTri = triState(data.matched.map(matchedIncluded))
-
-  function bulkSetMatched(pairs: MatchPairRow[], include: boolean) {
-    setDecisions(d => {
-      const n = { ...d }
-      for (const p of pairs) {
-        const smId = p.spoolman.spoolman_filament_id!
-        n[smId] = include
-          ? { spoolman_filament_id: smId, action: 'link', filamentdb_id: p.filamentdb.filamentdb_filament_id }
-          : { spoolman_filament_id: smId, action: 'skip' }
-      }
-      return n
-    })
-  }
-
-  // --- Ambiguous ---
-  const ambSorted = sortByRef(data.ambiguous, a => a.spoolman, sorts.ambiguous)
-  const ambGroups = groupBy(ambSorted, a => sgKey(a.spoolman))
-  const ambIncluded = (a: AmbiguousRow) => dec(a.spoolman.spoolman_filament_id!)?.action === 'link'
-  const ambTableTri = triState(data.ambiguous.map(ambIncluded))
-
-  function bulkSetAmb(ambs: AmbiguousRow[], include: boolean) {
-    setDecisions(d => {
-      const n = { ...d }
-      for (const a of ambs) {
-        const smId = a.spoolman.spoolman_filament_id!
-        const existing = d[smId]
-        if (!include) {
-          n[smId] = { spoolman_filament_id: smId, action: 'skip', filamentdb_id: existing?.filamentdb_id }
-        } else if (existing?.filamentdb_id) {
-          n[smId] = { spoolman_filament_id: smId, action: 'link', filamentdb_id: existing.filamentdb_id }
-        }
-      }
-      return n
-    })
-  }
-
-  // --- Unmatched SM ---
-  const unmSMSorted = sortByRef(data.unmatched_spoolman, s => s, sorts.unmatched_sm)
-  const unmSMGroups = groupBy(unmSMSorted, sgKey)
-  const unmSMIncluded = (s: FilamentRef) => (dec(s.spoolman_filament_id!)?.action ?? 'create') !== 'skip'
-  const unmSMTableTri = triState(data.unmatched_spoolman.map(unmSMIncluded))
-
-  function bulkSetUnmSM(items: FilamentRef[], include: boolean) {
-    setDecisions(d => {
-      const n = { ...d }
-      for (const s of items) {
-        const smId = s.spoolman_filament_id!
-        n[smId] = { spoolman_filament_id: smId, action: include ? 'create' : 'skip' }
-      }
-      return n
-    })
-  }
-
-  // --- Unmatched FDB ---
-  const unmFDBSorted = sortByRef(data.unmatched_filamentdb, f => f, sorts.unmatched_fdb)
-  const unmFDBGroups = groupBy(unmFDBSorted, sgKey)
+  const actionable = sorted.filter(r => r.status !== 'unmatched_fdb')
+  const tableTri = triState(actionable.map(r => isIncluded(r, decisions)))
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-800">Match review</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Review auto-matched pairs, resolve ambiguous matches, and decide what to do with unmatched items.
-          </p>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <span className="text-xs text-gray-500">Group by:</span>
-          <div className="flex rounded border border-gray-200 overflow-hidden text-xs">
-            {(['material', 'vendor'] as const).map(dim => (
-              <button
-                key={dim}
-                onClick={() => setSubgroupBy(dim)}
-                className={`px-3 py-1.5 font-medium ${
-                  subgroupBy === dim ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                {dim === 'vendor' ? 'Brand' : 'Material'}
-              </button>
-            ))}
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-gray-800">Match review</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          Review auto-matched pairs, resolve ambiguous matches, and decide what to do with unmatched items.
+        </p>
+      </div>
+
+      {/* Toolbar */}
+      <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500 shrink-0">Group by</span>
+            <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupDim)}
+              className="text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              <option value="status">Status</option>
+              <option value="material">Material</option>
+              <option value="vendor">Brand</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500 shrink-0">Sort by</span>
+            <select value={sortCol} onChange={e => setSortCol(e.target.value as SortCol)}
+              className="text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              <option value="name">Name</option>
+              <option value="vendor">Brand</option>
+              <option value="material">Material</option>
+              <option value="status">Status</option>
+              <option value="confidence">Confidence</option>
+            </select>
+            <button onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
+              title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+              className="px-1.5 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50">
+              {sortDir === 'asc' ? '↑' : '↓'}
+            </button>
+          </label>
+
+          <div className="flex items-center gap-1.5 flex-1 min-w-36">
+            <input type="text" placeholder="Search all fields…" value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="text-xs border border-gray-200 rounded px-2 py-1 w-full focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500" />
           </div>
+
+          <label className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500 shrink-0">Status</span>
+            <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as RowStatus | 'all')}
+              className="text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              <option value="all">All</option>
+              <option value="matched">Matched</option>
+              <option value="ambiguous">Ambiguous</option>
+              <option value="unmatched_sm">Unmatched (SM)</option>
+              <option value="unmatched_fdb">Unmatched (FDB)</option>
+            </select>
+          </label>
+
+          {/* Summary stats */}
+          <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 shrink-0">
+            <span>Total <span className="font-semibold text-gray-700">{allRows.length}</span></span>
+            <span className="text-green-600">✓ {data.matched.length}</span>
+            {data.ambiguous.length > 0 && <span className="text-yellow-600">? {data.ambiguous.length}</span>}
+            {data.unmatched_spoolman.length > 0 && <span>+SM {data.unmatched_spoolman.length}</span>}
+            {data.unmatched_filamentdb.length > 0 && <span>+FDB {data.unmatched_filamentdb.length}</span>}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs">
+          <button onClick={() => setCollapsed(new Set(groups.map(([k]) => k)))}
+            className="text-indigo-600 hover:text-indigo-800">Collapse all</button>
+          <span className="text-gray-300">|</span>
+          <button onClick={() => setCollapsed(new Set())}
+            className="text-indigo-600 hover:text-indigo-800">Expand all</button>
+          {filtered.length !== allRows.length && (
+            <span className="text-gray-400 ml-2">{filtered.length} of {allRows.length} shown</span>
+          )}
         </div>
       </div>
 
-      {/* Matched */}
-      {data.matched.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 bg-green-50 border-b border-gray-200 flex items-center gap-3">
-            <TriCheckbox {...matchedTableTri} onChange={v => bulkSetMatched(data.matched, v)} />
-            <h3 className="text-sm font-semibold text-green-800 flex-1">Matched ({data.matched.length})</h3>
-            {renderSortBar('matched')}
+      {/* Table */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        {/* Column headers + per-column filter inputs */}
+        <div className="bg-gray-50 border-b border-gray-200">
+          <div className={`${G} py-2 items-center`}>
+            <TriCheckbox {...tableTri} onChange={v => bulkSet(actionable, v)} />
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Spoolman</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Filament DB</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Material</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Status</span>
           </div>
-          {matchedGroups.map(([g, pairs]) => {
-            const gKey = `matched:${g}`
-            const gTri = triState(pairs.map(matchedIncluded))
-            return (
-              <div key={g}>
-                {renderGroupHeader(gKey, g, pairs.length, gTri, v => bulkSetMatched(pairs, v))}
-                {!collapsed.has(gKey) && (
-                  <div className="divide-y divide-gray-100">
-                    {pairs.map(pair => {
-                      const smId = pair.spoolman.spoolman_filament_id!
-                      return (
-                        <div key={smId} className="px-5 py-3 flex items-center gap-3">
-                          <TriCheckbox
-                            checked={matchedIncluded(pair)} indeterminate={false}
-                            onChange={v => setDec(smId, v ? 'link' : 'skip', v ? pair.filamentdb.filamentdb_filament_id : undefined)}
-                          />
-                          <div className="flex-1 grid grid-cols-2 gap-4">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-emerald-600 font-medium uppercase">SM</span>
-                              <FilamentTag filament={pair.spoolman} />
-                              <DeepLinks spoolmanFilamentId={pair.spoolman.spoolman_filament_id} />
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-blue-600 font-medium uppercase">FDB</span>
-                              <FilamentTag filament={pair.filamentdb} />
-                              <DeepLinks filamentdbFilamentId={pair.filamentdb.filamentdb_filament_id} />
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1 text-xs text-gray-400 shrink-0">
-                            {pair.vendor_dedup_hint && (
-                              <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded">
-                                vendor: {pair.vendor_dedup_hint}
-                              </span>
-                            )}
-                            <span>{(pair.confidence * 100).toFixed(0)}%</span>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          <div className={`${G} pb-2 items-center`}>
+            <div />
+            <input type="text" placeholder="Name…" value={colFilter.name}
+              onChange={e => setColFilter(f => ({ ...f, name: e.target.value }))}
+              className="text-xs border border-gray-200 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500" />
+            <div />
+            <input type="text" placeholder="Material…" value={colFilter.material}
+              onChange={e => setColFilter(f => ({ ...f, material: e.target.value }))}
+              className="text-xs border border-gray-200 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500" />
+            <div />
+          </div>
         </div>
-      )}
 
-      {/* Ambiguous */}
-      {data.ambiguous.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 bg-yellow-50 border-b border-gray-200 flex items-center gap-3">
-            <TriCheckbox {...ambTableTri} onChange={v => bulkSetAmb(data.ambiguous, v)} />
-            <h3 className="text-sm font-semibold text-yellow-800 flex-1">
-              Ambiguous ({data.ambiguous.length}) — pick one
-            </h3>
-            {renderSortBar('ambiguous')}
+        {groups.length === 0 && (
+          <div className="px-5 py-10 text-center text-sm text-gray-400">
+            No rows match the current filters.
           </div>
-          {ambGroups.map(([g, ambs]) => {
-            const gKey = `ambiguous:${g}`
-            const gTri = triState(ambs.map(ambIncluded))
-            return (
-              <div key={g}>
-                {renderGroupHeader(gKey, g, ambs.length, gTri, v => bulkSetAmb(ambs, v))}
-                {!collapsed.has(gKey) && (
-                  <div className="divide-y divide-gray-100">
-                    {ambs.map(amb => {
-                      const smId = amb.spoolman.spoolman_filament_id!
-                      const d = dec(smId)
-                      const hasFdb = d?.filamentdb_id != null
-                      return (
-                        <div key={smId} className="px-5 py-4 space-y-2">
-                          <div className="flex items-center gap-3">
-                            <TriCheckbox
-                              checked={d?.action === 'link'}
-                              indeterminate={false}
-                              disabled={!hasFdb}
-                              onChange={v => {
-                                if (!v) {
-                                  setDecisions(prev => ({
-                                    ...prev,
-                                    [smId]: { spoolman_filament_id: smId, action: 'skip', filamentdb_id: prev[smId]?.filamentdb_id },
-                                  }))
-                                } else if (d?.filamentdb_id) {
-                                  setDec(smId, 'link', d.filamentdb_id)
-                                }
-                              }}
-                            />
-                            <span className="text-xs text-emerald-600 font-medium uppercase">SM</span>
-                            <FilamentTag filament={amb.spoolman} />
-                            <DeepLinks spoolmanFilamentId={smId} />
-                          </div>
-                          <div className="pl-9 space-y-1">
-                            {amb.candidates.map(c => (
-                              <div key={c.filamentdb_filament_id} className="flex items-center gap-2">
-                                <button
-                                  onClick={() => setDec(smId, 'link', c.filamentdb_filament_id)}
-                                  className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                    d?.action === 'link' && d.filamentdb_id === c.filamentdb_filament_id
-                                      ? 'bg-indigo-600 text-white'
-                                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                  }`}
-                                >
-                                  Link
-                                </button>
-                                <FilamentTag filament={c} />
-                                <DeepLinks filamentdbFilamentId={c.filamentdb_filament_id} />
-                              </div>
-                            ))}
-                            <div className="flex gap-1 mt-1">
-                              {(['create', 'skip'] as const).map(a => (
-                                <button
-                                  key={a}
-                                  onClick={() => setDec(smId, a)}
-                                  className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                    d?.action === a ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                  }`}
-                                >
-                                  {a}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
+        )}
 
-      {/* Unmatched Spoolman */}
-      {data.unmatched_spoolman.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center gap-3">
-            <TriCheckbox {...unmSMTableTri} onChange={v => bulkSetUnmSM(data.unmatched_spoolman, v)} />
-            <h3 className="text-sm font-semibold text-gray-700 flex-1">
-              Unmatched in Spoolman ({data.unmatched_spoolman.length})
-            </h3>
-            {renderSortBar('unmatched_sm')}
-          </div>
-          {unmSMGroups.map(([g, items]) => {
-            const gKey = `unmatched_sm:${g}`
-            const gTri = triState(items.map(unmSMIncluded))
-            return (
-              <div key={g}>
-                {renderGroupHeader(gKey, g, items.length, gTri, v => bulkSetUnmSM(items, v))}
-                {!collapsed.has(gKey) && (
-                  <div className="divide-y divide-gray-100">
-                    {items.map(sm => {
-                      const smId = sm.spoolman_filament_id!
-                      return (
-                        <div key={smId} className="px-5 py-3 flex items-center gap-3">
-                          <TriCheckbox
-                            checked={unmSMIncluded(sm)} indeterminate={false}
-                            onChange={v => setDec(smId, v ? 'create' : 'skip')}
-                          />
-                          <span className="text-xs text-emerald-600 font-medium uppercase">SM</span>
-                          <FilamentTag filament={sm} />
-                          <DeepLinks spoolmanFilamentId={smId} />
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
+        {groups.map(([gKey, rows]) => {
+          const isStatusGrouping = groupBy === 'status'
+          const gStatus = isStatusGrouping ? gKey as RowStatus : null
+          const actionableInGroup = rows.filter(r => r.status !== 'unmatched_fdb')
+          const gTri = triState(actionableInGroup.map(r => isIncluded(r, decisions)))
+          const ambUnresolved = rows.filter(
+            r => r.status === 'ambiguous' && decisions[r.smId!]?.action !== 'link'
+          ).length
+          const isCollapsed = collapsed.has(gKey)
+          const headerBg = isStatusGrouping && gStatus ? STATUS_HDR_BG[gStatus] : 'bg-gray-50'
+          const gLabel = isStatusGrouping ? STATUS_LABEL[gStatus!] : gKey
 
-      {/* Unmatched FDB — informational, no checkboxes */}
-      {data.unmatched_filamentdb.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-          <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center gap-3">
-            <h3 className="text-sm font-semibold text-gray-700 flex-1">
-              Unmatched in Filament DB ({data.unmatched_filamentdb.length}) — will be created in Spoolman
-            </h3>
-            {renderSortBar('unmatched_fdb')}
-          </div>
-          {unmFDBGroups.map(([g, items]) => {
-            const gKey = `unmatched_fdb:${g}`
-            return (
-              <div key={g}>
-                <div className="px-5 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1">
-                  <button
-                    onClick={() => toggleCollapse(gKey)}
-                    className="flex items-center gap-1 text-xs font-medium text-gray-600 hover:text-gray-800"
-                  >
-                    <span>{collapsed.has(gKey) ? '▶' : '▼'}</span>
-                    <span>{g}</span>
-                    <span className="text-gray-400">({items.length})</span>
-                  </button>
-                </div>
-                {!collapsed.has(gKey) && (
-                  <div className="divide-y divide-gray-100">
-                    {items.map(f => (
-                      <div key={f.filamentdb_filament_id} className="px-5 py-3 flex items-center gap-2">
-                        <span className="text-xs text-blue-600 font-medium uppercase">FDB</span>
-                        <FilamentTag filament={f} />
-                        <DeepLinks filamentdbFilamentId={f.filamentdb_filament_id} />
-                      </div>
+          const statusBreakdown = !isStatusGrouping
+            ? (['matched', 'ambiguous', 'unmatched_sm', 'unmatched_fdb'] as RowStatus[])
+                .map(s => ({ s, n: rows.filter(r => r.status === s).length }))
+                .filter(x => x.n > 0)
+            : []
+
+          return (
+            <div key={gKey} className="border-b border-gray-100 last:border-b-0">
+              {/* Group header */}
+              <div className={`${headerBg} px-4 py-2.5 flex items-center gap-3`}>
+                {actionableInGroup.length > 0
+                  ? <TriCheckbox {...gTri} onChange={v => bulkSet(actionableInGroup, v)} />
+                  : <div className="w-4 shrink-0" />}
+                <button onClick={() => toggleCollapse(gKey)}
+                  className="flex items-center gap-1.5 flex-1 text-left min-w-0">
+                  <span className="text-gray-400 text-xs shrink-0">{isCollapsed ? '▶' : '▼'}</span>
+                  <span className="text-sm font-medium text-gray-700 truncate">{gLabel}</span>
+                  <span className="text-xs text-gray-400 shrink-0">({rows.length})</span>
+                </button>
+                {statusBreakdown.length > 0 && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    {statusBreakdown.map(({ s, n }) => (
+                      <span key={s} className={`px-1.5 py-0.5 rounded text-xs ${STATUS_COLOR[s]}`}>
+                        {n} {s === 'matched' ? '✓' : s === 'ambiguous' ? '?' : s === 'unmatched_sm' ? 'SM' : 'FDB'}
+                      </span>
                     ))}
                   </div>
                 )}
+                {ambUnresolved > 0 && (
+                  <span className="text-xs text-amber-600 font-medium shrink-0">
+                    ⚠ {ambUnresolved} unresolved
+                  </span>
+                )}
               </div>
-            )
-          })}
-        </div>
-      )}
+
+              {!isCollapsed && (
+                <div className="divide-y divide-gray-50">
+                  {rows.map(r => (
+                    <MemberRow
+                      key={`${r.status}:${r.smId ?? r.fdbId}`}
+                      row={r}
+                      decision={r.smId != null ? decisions[r.smId] : undefined}
+                      showStatus={!isStatusGrouping}
+                      setDec={setDec}
+                      setDecisions={setDecisions}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
 
       {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
 
       <div className="flex justify-between items-center">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        <button onClick={prev}
+          className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
           ← Back
         </button>
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleRescan}
-            disabled={rescanning || (loading && !saving)}
-            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2"
-          >
+          <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
+            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2">
             {rescanning
               ? <><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />Rescanning…</>
               : '↻ Rescan'}
           </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-          >
+          <button onClick={handleSave} disabled={saving}
+            className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
             {saving ? 'Saving…' : 'Save & Next →'}
           </button>
         </div>

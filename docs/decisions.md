@@ -1,5 +1,14 @@
 # Decision record
 
+## 2026-06-01 — Match-review v2: one unified table, Group-By Status default
+
+Replaced the four fixed status tables (v1) with a single unified table that has a toolbar for Group By, Sort By + direction, global search, Status filter, and per-column filter inputs (Name, Material). Collapsible groups with tri-state checkboxes and right-aligned aggregates.
+
+1. **Group-By Status is the default**, reproducing the v1 four-section feel (Matched / Ambiguous / Unmatched-SM / Unmatched-FDB) while allowing the user to pivot to Material or Brand grouping. Status also appears as a column and filter.
+2. **No backend changes.** All fields needed by the new columns (name, vendor, material, color, confidence, vendorDedup, candidates) were already present on `FilamentRef` / `MatchPairRow` / `AmbiguousRow`. Spool-count aggregates would require fetching spools in `wizard_matches`; omitted as optional per the prompt.
+3. **All v1 decision logic preserved unchanged**: tri-state checkboxes, Rescan + decision pruning, `saved_decisions` rehydration, ambiguous candidate picker, `bulkSet` per-status action mapping. `unmatched_fdb` rows remain informational (no checkboxes) regardless of grouping.
+4. **Status breakdown pills** appear in group headers when Group-By is Material or Brand, showing counts per status within that group. Amber ⚠ badge flags groups with unresolved ambiguous rows.
+
 ## 2026-05-31 — FDB location semantics: locationId (ObjectId reference), pre-creation required
 
 Verified against the live FDB instance while implementing spool location seeding (SM→FDB wizard
