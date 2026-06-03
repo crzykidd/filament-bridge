@@ -1,5 +1,7 @@
 # filament-bridge
 
+![version](https://img.shields.io/badge/version-0.1.0-blue)
+
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
 ## Why?
@@ -153,9 +155,15 @@ A conflict occurs when both sides change the same field between sync cycles. Con
 - Timestamps of both changes
 - A button to pick either value or enter a manual resolution
 
+## What's New
+
+No release has been cut yet. Notable changes are tracked in [CHANGELOG.md](CHANGELOG.md)
+under `[Unreleased]`; per-release entries will appear here starting with v0.1.0.
+
 ## Status
 
-Design phase — see [docs/prd.md](docs/prd.md) for detailed requirements.
+Active development, pre-release (current version `0.1.0`) — see [docs/prd.md](docs/prd.md)
+for detailed requirements.
 
 ## Contributing
 
