@@ -39,6 +39,3 @@ htmlcov/
 # Logs
 *.log
 logs/
-
-# vexp auto-generated per-host agent file (machine-local, not shared via git)
-.claude/CLAUDE.md

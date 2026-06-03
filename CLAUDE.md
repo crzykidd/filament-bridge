@@ -81,48 +81,6 @@ coding agent must honor by default:
 If you're unsure whether an action would violate one of the above, stop and
 ask before acting.
 
-<!--
-Source: standards/vexp-context-engine @ v2.0.0 (crzynet/homelab-configs).
-Paste the section below verbatim into the adopting project's CLAUDE.md.
-The full standard (scope, the two pushes, the manifest-not-tracked shape,
-adoption + gate + verification procedure) lives at:
-https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/vexp-context-engine/README.md
--->
-
-### Context search (operational rules)
-
-This project adopts the `vexp-context-engine` standard. The full why-and-how lives at the
-source above; the rules below are the per-session do/don'ts a coding agent must honor by
-default:
-
-- **Call `run_pipeline` FIRST for any code task** — bug fixes, features, refactors,
-  debugging, "how does X work", "where is Y". It runs context search + impact analysis +
-  memory recall in one call and returns ranked, compressed context.
-- **Do NOT `grep`, `glob`, or `cat` to explore the codebase.** vexp returns pre-indexed,
-  graph-ranked context that is more relevant and cheaper than manual searching. A
-  `PreToolUse` guard hook blocks `Grep`/`Glob` while the vexp daemon is healthy; if the
-  daemon is down it allows the fallback.
-- **Prefer `get_skeleton` over `Read` to inspect files** (minimal/standard/detailed —
-  70–90% fewer tokens). Use `Read` only when you need exact raw content to edit a specific
-  line.
-- **Don't chain vexp calls or fan out `Explore` agents to free-search.** One
-  `run_pipeline` replaces capsule + impact + memory; if a subagent needs context, run
-  `run_pipeline` first and pass the result into the agent's prompt.
-- **The vexp daemon runs as a standalone `systemd`-user service — NOT the VS Code
-  extension.** The supervisor is `vexp.service` (`ExecStart=vexp serve`), `enabled` + linger,
-  auto-restarting; it starts/adopts the per-repo daemon on demand. Managing it with
-  `systemctl --user … vexp.service` or `vexp daemon-cmd start|stop|status|logs` is the
-  expected control path, not forbidden. Do **not** run vexp from the VS Code extension
-  (deprecated here — older bundled core, contends for the socket/port).
-- **Start/manage the daemon in the host process namespace (un-sandboxed).** A daemon
-  spawned inside a sandboxed shell gets a throwaway PID namespace + socket the host-side
-  MCP can't reach, and dies when that shell exits. If `index_status` reports "Cannot
-  connect to daemon," run `vexp daemon-cmd start` un-sandboxed and wait for "Socket ready"
-  (first start loads the local LLM, so allow >12s).
-
-If you're unsure whether an action would violate one of the above, stop and ask before
-acting.
-
 ### Sandbox permissions
 
 This project adopts the

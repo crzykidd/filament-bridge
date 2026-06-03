@@ -3,11 +3,7 @@
     "allow": [
       "Read(**)",
       "Edit(**)",
-      "Write(**)",
-      "mcp__vexp__run_pipeline",
-      "mcp__vexp__get_skeleton",
-      "mcp__vexp__index_status",
-      "mcp__vexp__expand_vexp_ref"
+      "Write(**)"
     ]
   },
   "sandbox": {
@@ -29,19 +25,5 @@
         "~/.cache/**"
       ]
     }
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Grep|Glob|Regex",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/vexp-guard.sh",
-            "timeout": 3000
-          }
-        ]
-      }
-    ]
   }
 }

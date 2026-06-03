@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-01 — De-adopted the vexp-context-engine standard (sunset homelab-wide)
+
+vexp is being removed across the homelab; the `vexp-context-engine` standard is deprecated and
+rewritten as a removal guide at **v3.0.0**. filament-bridge was its first adopter (fully wired at
+v2.1.0); all wiring is stripped here:
+
+- Deleted the `.claude/hooks/vexp-guard.sh` PreToolUse guard hook.
+- Removed the `mcp__vexp__*` entries from `permissions.allow` and the `hooks` block from
+  `.claude/settings.json`. **The `sandbox` block (repo-sandbox-permissions, repo-wide) and the
+  `Read/Edit/Write(**)` allows live in the same file and were preserved intact** — JSON re-validated.
+- Removed the "Context search (operational rules)" section from `CLAUDE.md`.
+- Dropped the vexp `.gitignore` block; untracked `.vexpignore`, `.vexp/.gitignore`,
+  `.vexp/.gitattributes`; deleted the `.vexp/` runtime dir and the gitignored auto-generated
+  `.claude/CLAUDE.md`.
+- Flipped the `standards.md` vexp row to de-adopted/sunset (v3.0.0 guide) and dropped the vexp
+  reference from the `repo-sandbox-permissions` row note.
+
+**Not done from this repo:** host daemon teardown is the Ansible `devworkstation` role's opt-in
+`--tags vexp_teardown`. A still-running daemon transiently recreated the (now-untracked) `.vexp/`
+runtime dir during this change; it clears when the daemon is stopped by the teardown. No
+`CHANGELOG.md` exists yet (pending first release), so this record stands in for the changelog note.
+
 ## 2026-06-01 — Match-review v2: one unified table, Group-By Status default
 
 Replaced the four fixed status tables (v1) with a single unified table that has a toolbar for Group By, Sort By + direction, global search, Status filter, and per-column filter inputs (Name, Material). Collapsible groups with tri-state checkboxes and right-aligned aggregates.
