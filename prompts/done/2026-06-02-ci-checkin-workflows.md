@@ -1,10 +1,18 @@
 ---
 name: 2026-06-02-ci-checkin-workflows
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-06-02
 model: sonnet            # CI wiring from a pinned standard — execution
-completed:
-result:
+completed: 2026-06-03
+result: >
+  All 5 required CI checks + bonus pytest job wired in .github/workflows/ci.yml (workflow
+  name: "CI"). Publish matrix in publish.yml (workflow name: "Build and publish Docker
+  images"): dev→:dev/:sha-*, main→:latest/:sha-*, release→:latest/:semver/:major.
+  Registry: ghcr.io/crzykidd/filament-bridge. Retention in retention.yml (30 sha, 15
+  semver, protected never pruned). main branch protection applied via gh api (5 checks
+  required, PR required, no direct pushes). standards.md code-checkin and release-prep
+  rows flipped to wired/operational. Migration check uses DATA_DIR not DATABASE_URL
+  (documented in decisions.md). First release now unblocked.
 ---
 
 # Task: Wire the `code-checkin-and-pr` CI (5 checks + publish matrix + retention) and `main` protection

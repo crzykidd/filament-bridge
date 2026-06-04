@@ -1,5 +1,121 @@
 # Decision record
 
+## 2026-06-03 — CI workflows, registry, and main branch protection
+
+### Registry / repo slug
+
+GitHub remote is `crzykidd/filament-bridge`; container registry is
+`ghcr.io/crzykidd/filament-bridge`. Image authentication uses `GITHUB_TOKEN` with
+`packages: write` permission — no additional secrets needed.
+
+### Migration check command
+
+`alembic env.py` reads the DB path from `settings.data_dir` (env var `DATA_DIR`), NOT from
+a `DATABASE_URL` env var. The two required env vars `FILAMENTDB_URL`/`SPOOLMAN_URL` must
+also be set for `Settings()` to initialise, even though their values are irrelevant for
+schema-only migration checks. Correct CI command:
+
+```
+FILAMENTDB_URL=http://localhost SPOOLMAN_URL=http://localhost DATA_DIR=/tmp/alembic-check \
+  alembic upgrade head
+```
+
+### CI check names (used in branch protection)
+
+Workflow `CI` → jobs named exactly as follows (branch protection contexts =
+`CI / <job-name>`):
+
+| Context | Trigger |
+|---|---|
+| `CI / Lint` | push + PR |
+| `CI / Config validation` | push + PR |
+| `CI / Migration check` | push + PR |
+| `CI / Compose validation` | push + PR |
+| `CI / Image build` | PR only |
+
+`CI / Test` (pytest) is a bonus job — NOT a required check.
+
+### main branch protection
+
+Applied via `gh api` (see command below). Required: PR + all 5 checks green, no direct
+pushes, no force-pushes. `required_approving_review_count: 0` (single-developer repo).
+`strict: false` (branch need not be current with main before merge).
+
+**Verify check names after first CI run.** GitHub registers check contexts only after
+they've executed. If the names above don't match what appears in
+Settings → Branches → main protection, update them there or re-run the command below.
+
+```bash
+gh api -X PUT /repos/crzykidd/filament-bridge/branches/main/protection \
+  --input - << 'EOF'
+{
+  "required_status_checks": {
+    "strict": false,
+    "contexts": [
+      "CI / Lint",
+      "CI / Config validation",
+      "CI / Migration check",
+      "CI / Compose validation",
+      "CI / Image build"
+    ]
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+EOF
+```
+
+## 2026-06-03 — Wizard: merged Variances step, downstream filtering, master-tare rule
+
+Two coupled problems fixed together:
+
+1. **Downstream steps now filter to the chosen-to-sync set.** An SM filament is *included*
+   iff its `wizard_match_decisions` action is `link` or `create`. `skip` and no-decision are
+   excluded everywhere: `wizard_weights`, `wizard_variants`, and the new `wizard_variances`
+   endpoint. Helper `_included_sm_ids(db)` is the single definition; all three endpoints call
+   it. Before this change, the Weights and Variants steps re-fetched and showed the entire
+   Spoolman library, forcing users to deal with filaments they had already decided to skip.
+
+2. **Weights + Variants merged into one "Variances" step.** Wizard order is now 6 steps:
+   Connectivity → Direction → Matches → **Variances** → Preview → Execute.
+   `Step4Weights.tsx` and `Step5Variants.tsx` are deleted; `StepVariances.tsx` replaces them.
+   The FDB import direction reuses the old `GET /wizard/variants` and `GET /wizard/weights`
+   endpoints directly from within `FDBVariancesStep`; no backend changes for that direction.
+
+3. **Tare is per filament/group, not per spool.** Filament DB stores one `spoolWeight` per
+   filament (not per spool). The new `GET /wizard/variances` endpoint returns one tare per
+   SM filament (from the filament-level `spool_weight`; default 200 g). The UI shows one
+   editable tare input per variant group (the master's) and one per standalone filament. On
+   save, the frontend expands these to per-spool `WizardTareOverride[]` entries covering every
+   spool of every filament in each group. The execute contract (`WizardExecuteRequest.
+   tare_overrides`) is unchanged — tare overrides still ride in the request body.
+
+4. **Master-tare-wins with a visible warning.** All variants in a group share the master's
+   tare. A banner on the UI makes this explicit: "All variants in this group will use the
+   master's empty-reel tare: N g." This is the only correct model given FDB's single-tare
+   per-filament constraint.
+
+5. **Editable variant membership; clusters are hints only.** The user can un-check a member
+   to remove it from a group (it becomes standalone with its own tare), or click "+ Add
+   member" to pull any other included-but-ungrouped SM filament into the group. The saved
+   `SMVariantDecision[]` (in `wizard_sm_variant_decisions`) is authoritative; the API's
+   suggested groupings are hints only. Groups reduced to master-only are treated as flat
+   (no `SMVariantDecision` entry emitted).
+
+6. **Conflicts recompute live.** `VariancesFilament` carries comparable props
+   (material/density/spool_weight/temps). When the user changes the master radio button,
+   the frontend recomputes conflicts via `computeConflicts()` — a pure function that
+   mirrors `sm_prop_conflicts` from `backend/app/core/matcher.py` — without a round-trip.
+
+7. **Step3Matches row separator fix.** Group-body `divide-gray-50` changed to
+   `divide-gray-100` so member row dividers are visible on white backgrounds.
+
 ## 2026-06-01 — De-adopted the vexp-context-engine standard (sunset homelab-wide)
 
 vexp is being removed across the homelab; the `vexp-context-engine` standard is deprecated and
