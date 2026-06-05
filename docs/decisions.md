@@ -1,5 +1,75 @@
 # Decision record
 
+## 2026-06-04 — Wizard variant-resolution redesign: D1 grouping key, D2 suggest-exclude, D3 FDB-parent attach, D4 empty-spool toggle
+
+Implements `docs/wizard-redesign.md` decisions D1–D4 in full. Source of truth is that spec;
+this entry records the settled contract and the Q1 simplification.
+
+### D1 — Grouping key is `(vendor, material)` — drop base_name
+
+`sm_variant_cluster_key` in `matcher.py` now returns a 2-tuple `(normalize_vendor, normalize_name(material))`.
+The old 3-tuple included `base_name = strip_color_and_words(name, color_hex)`, which caused filaments
+whose name IS a color word (e.g. "Brown", "Beige") to produce different base_names and never cluster.
+
+All callers (`wizard_variants`, `wizard_variances`, `_compute_variant_groups`) updated to unpack 2-tuples.
+Group display `base_name` is now `normalize_name("{vendor} {material}")` — consistent across all paths.
+
+**Q1 simplification (deliberate):** finish/line tokens (PLA Matte / Silk / PLA-CF) are NOT parsed out in
+this pass. If two filaments share vendor+material but belong to different lines, D2's `suggest_exclude`
+signal (driven by `sm_prop_conflicts`: density, temps) surfaces the divergence. No regex line-parsing.
+
+### D2 — Per-member exclude, pre-flagged by `sm_prop_conflicts`
+
+`VariancesFilament` gains `suggest_exclude: bool = False`. Set to `True` for non-master members where
+`sm_prop_conflicts(master, member)` returns ≥1 mismatch (density, extruder_temp, bed_temp, etc.).
+Conflicts are still surfaced, never auto-resolved. The flag is a *hint* only — the user remains in
+control via the membership checkboxes in `StepVariances.tsx`.
+
+Pre-suggested-excluded members start unchecked in the initial `groupMembership` state (frontend).
+
+Standalones also gain checkbox select + "Group as variants" action: select 2+ standalone filaments
+and click the button to create an editable extra group (pick master via radio). This is the only
+path to manually group filaments that the auto-clustering didn't detect.
+
+### D3 — Load FDB state; resolve each incoming color as Attach / Create
+
+`wizard_variances` now also loads `filamentdb.get_filaments()` and builds a
+`(vendor_norm, material_norm) → FilamentRef` map of existing FDB parent lines (filaments with
+`hasVariants=True` or with children pointing to them via `parentId`).
+
+`VariancesGroupRow` gains `existing_fdb_parent: FilamentRef | None`. When set, the frontend offers
+a per-group choice: **Attach to existing FDB parent** (default) vs **Create new parent**.
+
+`SMVariantDecision` gains `existing_fdb_parent_id: str | None = None`. Semantics:
+- **None** → SM-keyed master-promote (unchanged behavior: master becomes the FDB parent).
+- **set** → ALL members (including the "master") are created with `parentId = existing_fdb_parent_id`;
+  no new parent is created. The existing FDB parent is **never modified or deleted** — only `parentId`
+  is written on newly-created variants.
+
+New helper `_build_attach_parent_for_sm(decisions) → {sm_id: existing_fdb_parent_id}` in `wizard.py`.
+In `_execute_spoolman_to_fdb` Pass 1: attach-group masters get `parentId` injected into the create
+payload; `master_map[master_sm_id]` is set to `existing_fdb_parent_id` (not the newly-created FDB id),
+so Pass 2 variants correctly receive `parentId = existing_fdb_parent_id`.
+
+### D4 — "Include empty / depleted spools" toggle
+
+Config key `wizard_include_empty_spools` (bool, default `False`) persisted via `get/set_config_value`.
+"Empty" is defined as `not archived AND remaining_weight == 0.0` — same predicate as `_compute_empty_active`.
+
+Applied in three places:
+1. `wizard_variances` `spool_ids_per_filament`: empty spools omitted from `spool_ids` when toggle=False.
+2. `_plan_spoolman_to_fdb` Phase C: `include_empty_spools: bool = True` parameter; when False, skips
+   spool plan items for zero-weight spools. The filament/color plan item is still created (toggle only
+   controls the *inventory record*, not the color definition).
+3. `wizard_preview` / `wizard_execute` both pass the toggle to the planner.
+
+New `GET /wizard/direction` endpoint returns `{import_direction, include_empty_spools}`.
+`POST /wizard/direction` extended with `include_empty_spools: bool | None` (optional, backward-compatible).
+
+Frontend Step 2 (`Step2Direction.tsx`): "Include empty / depleted spools" checkbox, default unchecked.
+`StepNPreview.tsx` `EmptyActiveEntry` panel: badge turns blue (informational) when toggle=False with copy
+"skipped by setting"; amber when toggle=True ("will be imported").
+
 ## 2026-06-03 — CI workflows, registry, and main branch protection
 
 ### Registry / repo slug

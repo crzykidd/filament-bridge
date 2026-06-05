@@ -573,7 +573,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
               </div>
 
               {!isCollapsed && (
-                <div className="divide-y divide-gray-50">
+                <div className="divide-y divide-gray-100">
                   {rows.map(r => (
                     <MemberRow
                       key={`${r.status}:${r.smId ?? r.fdbId}`}

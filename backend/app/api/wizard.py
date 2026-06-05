@@ -31,17 +31,15 @@ from app.core.matcher import (
     normalize_vendor,
     sm_prop_conflicts,
     sm_variant_cluster_key,
-    strip_color_and_words,
 )
 from app.core.planner import (
     _DEFAULT_FDB_MATERIAL,
     _FilamentPlanItem,
     _SpoolPlanItem,
     _SyncPlan,
-    _fdb_filament_payload_from_sm,
     _plan_spoolman_to_fdb,
 )
-from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross
+from app.core.weight import DEFAULT_TARE_GRAMS, fdb_to_spoolman_net, spoolman_to_fdb_gross
 from app.db import get_db
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.api import (
@@ -53,11 +51,13 @@ from app.schemas.api import (
     MatchPairRow,
     NameCollisionEntry,
     PreviewFlagCounts,
-    SMVariantDecision,
     SMVariantGroupRow,
     SMVariantMemberRow,
     SMVariantsRequest,
     SystemStatus,
+    VariancesFilament,
+    VariancesGroupRow,
+    VariancesResponse,
     VariantGroupPreviewEntry,
     VariantGroupRow,
     VariantPropConflict,
@@ -65,6 +65,7 @@ from app.schemas.api import (
     WizardConnectivityResponse,
     WizardDecisionAck,
     WizardDirectionRequest,
+    WizardDirectionResponse,
     WizardExecuteRecord,
     WizardExecuteRequest,
     WizardExecuteResponse,
@@ -76,7 +77,7 @@ from app.schemas.api import (
     WizardWeightsResponse,
 )
 from app.schemas.filamentdb import FDBFilament, FDBSpool
-from app.schemas.spoolman import SpoolmanFilament, decode_extra_value, encode_extra_value
+from app.schemas.spoolman import SpoolmanFilament, encode_extra_value
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,19 @@ def _fdb_ref(fdb: FDBFilament) -> FilamentRef:
         color=fdb.color,
         material=fdb.type,
     )
+
+
+def _included_sm_ids(db: Session) -> set[int]:
+    """Return the set of SM filament ids with a link or create match decision."""
+    decisions = get_config_value(db, "wizard_match_decisions", []) or []
+    return {d["spoolman_filament_id"] for d in decisions if d.get("action") in ("link", "create")}
+
+
+def _sm_filament_tare(sm: SpoolmanFilament) -> tuple[float, str]:
+    """Return (tare_grams, tare_source) for a Spoolman filament (filament-level spool_weight)."""
+    if sm.spool_weight is not None:
+        return (sm.spool_weight, "spoolman")
+    return (DEFAULT_TARE_GRAMS, "default")
 
 
 def _vendor_hint(sm_vendor: str | None, fdb_vendor: str | None) -> str | None:
@@ -144,6 +158,13 @@ async def wizard_connectivity(request: Request) -> WizardConnectivityResponse:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/wizard/direction", response_model=WizardDirectionResponse)
+def wizard_get_direction(db: Session = Depends(get_db)) -> WizardDirectionResponse:
+    direction = get_config_value(db, "import_direction", None)
+    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    return WizardDirectionResponse(import_direction=direction, include_empty_spools=include_empty)
+
+
 @router.post("/wizard/direction", response_model=WizardDecisionAck)
 def wizard_direction(payload: WizardDirectionRequest, db: Session = Depends(get_db)) -> WizardDecisionAck:
     persisted = 0
@@ -158,6 +179,9 @@ def wizard_direction(payload: WizardDirectionRequest, db: Session = Depends(get_
         if value is not None:
             set_config_value(db, key, value)
             persisted += 1
+    if payload.include_empty_spools is not None:
+        set_config_value(db, "wizard_include_empty_spools", payload.include_empty_spools)
+        persisted += 1
     db.commit()
     return WizardDecisionAck(persisted=persisted)
 
@@ -219,9 +243,12 @@ async def wizard_weights(request: Request, db: Session = Depends(get_db)) -> Wiz
 
     if import_direction == "spoolman":
         direction = "spoolman_to_filamentdb"
+        included = _included_sm_ids(db)
         spools = await request.app.state.spoolman.get_spools()
         for s in spools:
             if s.archived:
+                continue
+            if s.filament and s.filament.id not in included:
                 continue
             tare = s.spool_weight if s.spool_weight is not None else (
                 s.filament.spool_weight if s.filament else None
@@ -281,19 +308,22 @@ async def wizard_variants(request: Request, db: Session = Depends(get_db)) -> Wi
     if import_direction == "spoolman":
         sm_filaments: list[SpoolmanFilament] = await request.app.state.spoolman.get_filaments()
         sm_spools = await request.app.state.spoolman.get_spools()
+        included = _included_sm_ids(db)
 
         spools_per_filament: dict[int, int] = {}
         for s in sm_spools:
             if not s.archived:
                 spools_per_filament[s.filament.id] = spools_per_filament.get(s.filament.id, 0) + 1
 
-        clusters: dict[tuple[str, str, str], list[SpoolmanFilament]] = {}
+        clusters: dict[tuple[str, str], list[SpoolmanFilament]] = {}
         for sm in sm_filaments:
+            if sm.id not in included:
+                continue
             key = sm_variant_cluster_key(sm)
             clusters.setdefault(key, []).append(sm)
 
         sm_groups: list[SMVariantGroupRow] = []
-        for (vendor_norm, material_norm, base_name), members in clusters.items():
+        for (_vendor_norm, _material_norm), members in clusters.items():
             if len(members) < 2:
                 continue
             master = max(members, key=lambda f: (spools_per_filament.get(f.id, 0), -len(f.name)))
@@ -304,8 +334,11 @@ async def wizard_variants(request: Request, db: Session = Depends(get_db)) -> Wi
                     VariantPropConflict(**c) for c in sm_prop_conflicts(master, m)
                 ]
                 member_rows.append(SMVariantMemberRow(ref=_sm_ref(m), is_master=is_master, conflicts=conflicts))
+            display_base = normalize_name(
+                f"{(master.vendor.name + ' ') if master.vendor else ''}{master.material or ''}".strip()
+            )
             sm_groups.append(SMVariantGroupRow(
-                base_name=base_name,
+                base_name=display_base,
                 vendor=master.vendor.name if master.vendor else None,
                 material=master.material,
                 suggested_master=_sm_ref(master),
@@ -358,6 +391,133 @@ def wizard_save_sm_variants(payload: SMVariantsRequest, db: Session = Depends(ge
 
 
 # ---------------------------------------------------------------------------
+# Variances — merged Weights + Variants step (SM direction)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/wizard/variances", response_model=VariancesResponse)
+async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> VariancesResponse:
+    """Combined variant-grouping + tare preview for the SM import direction.
+
+    Returns suggested variant groups, the pool of ungrouped (singleton) included
+    filaments, and per-filament comparable props + tare so the client can edit
+    one tare per group / per standalone filament and recompute conflicts live.
+
+    For the filamentdb import direction, returns an empty response; the frontend
+    uses the legacy GET /wizard/variants and GET /wizard/weights endpoints.
+    """
+    import_direction = get_config_value(db, "import_direction", "spoolman")
+    if import_direction != "spoolman":
+        return VariancesResponse(direction="filamentdb")
+
+    included = _included_sm_ids(db)
+    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    sm_filaments: list[SpoolmanFilament] = await request.app.state.spoolman.get_filaments()
+    sm_spools = await request.app.state.spoolman.get_spools()
+    fdb_filaments: list[FDBFilament] = await request.app.state.filamentdb.get_filaments()
+
+    included_filaments = [f for f in sm_filaments if f.id in included]
+
+    # Spool ids per filament (active only; D4 — skip zero-weight spools when toggle is off)
+    spool_ids_per_filament: dict[int, list[int]] = {}
+    for s in sm_spools:
+        if not s.archived and s.filament:
+            if not include_empty and (s.remaining_weight or 0.0) == 0.0:
+                continue
+            spool_ids_per_filament.setdefault(s.filament.id, []).append(s.id)
+
+    # Count ALL active spools per filament (for master heuristic — unaffected by toggle)
+    spools_per_filament: dict[int, int] = {}
+    for s in sm_spools:
+        if not s.archived and s.filament:
+            spools_per_filament[s.filament.id] = spools_per_filament.get(s.filament.id, 0) + 1
+
+    # D3 — build FDB parent tree: (vendor_norm, material_norm) → FilamentRef for existing parents
+    _parent_ids: set[str] = {f.parentId for f in fdb_filaments if f.parentId}
+    fdb_parent_by_key: dict[tuple[str, str], FilamentRef] = {}
+    for f in fdb_filaments:
+        if f.id in _parent_ids or f.hasVariants:
+            key = (normalize_vendor(f.vendor), normalize_name(f.type or ""))
+            if key not in fdb_parent_by_key:
+                fdb_parent_by_key[key] = FilamentRef(
+                    filamentdb_filament_id=f.id,
+                    name=f.name,
+                    vendor=f.vendor,
+                    material=f.type,
+                )
+
+    # D1 — cluster included filaments by (vendor, material) only
+    clusters: dict[tuple[str, str], list[SpoolmanFilament]] = {}
+    for sm in included_filaments:
+        key = sm_variant_cluster_key(sm)
+        clusters.setdefault(key, []).append(sm)
+
+    grouped_ids: set[int] = set()
+    groups: list[VariancesGroupRow] = []
+
+    for (vendor_norm, material_norm), members in clusters.items():
+        if len(members) < 2:
+            continue
+        master = max(members, key=lambda f: (spools_per_filament.get(f.id, 0), -len(f.name)))
+        grouped_ids.update(m.id for m in members)
+        member_rows: list[VariancesFilament] = []
+        for m in members:
+            is_master = m.id == master.id
+            conflicts: list[VariantPropConflict] = [] if is_master else [
+                VariantPropConflict(**c) for c in sm_prop_conflicts(master, m)
+            ]
+            tare, tare_source = _sm_filament_tare(m)
+            member_rows.append(VariancesFilament(
+                ref=_sm_ref(m),
+                spool_ids=spool_ids_per_filament.get(m.id, []),
+                tare=tare,
+                tare_source=tare_source,
+                is_master=is_master,
+                conflicts=conflicts,
+                suggest_exclude=bool(conflicts) and not is_master,  # D2
+                material=m.material,
+                density=m.density,
+                spool_weight=m.spool_weight,
+                settings_extruder_temp=m.settings_extruder_temp,
+                settings_bed_temp=m.settings_bed_temp,
+            ))
+        display_base = normalize_name(
+            f"{(master.vendor.name + ' ') if master.vendor else ''}{master.material or ''}".strip()
+        )
+        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm))  # D3
+        groups.append(VariancesGroupRow(
+            base_name=display_base,
+            vendor=master.vendor.name if master.vendor else None,
+            material=master.material,
+            suggested_master=_sm_ref(master),
+            members=member_rows,
+            existing_fdb_parent=existing_fdb_parent,
+        ))
+
+    # Ungrouped (singleton) included filaments
+    ungrouped: list[VariancesFilament] = []
+    for sm in included_filaments:
+        if sm.id not in grouped_ids:
+            tare, tare_source = _sm_filament_tare(sm)
+            ungrouped.append(VariancesFilament(
+                ref=_sm_ref(sm),
+                spool_ids=spool_ids_per_filament.get(sm.id, []),
+                tare=tare,
+                tare_source=tare_source,
+                is_master=False,
+                conflicts=[],
+                suggest_exclude=False,
+                material=sm.material,
+                density=sm.density,
+                spool_weight=sm.spool_weight,
+                settings_extruder_temp=sm.settings_extruder_temp,
+                settings_bed_temp=sm.settings_bed_temp,
+            ))
+
+    return VariancesResponse(direction="spoolman", groups=groups, ungrouped=ungrouped)
+
+
+# ---------------------------------------------------------------------------
 # FR-7 — execute initial sync (the bulk write to BOTH upstream systems)
 # ---------------------------------------------------------------------------
 #
@@ -390,6 +550,26 @@ def _build_master_of_sm(sm_variant_decisions: list[dict]) -> dict[int, int]:
             continue
         for variant_id in group.get("variant_spoolman_filament_ids", []):
             result[variant_id] = master_id
+    return result
+
+
+def _build_attach_parent_for_sm(sm_variant_decisions: list[dict]) -> dict[int, str]:
+    """Build {sm_id: existing_fdb_parent_id} for all members of D3 attach groups.
+
+    When existing_fdb_parent_id is set on a decision, ALL members (the master SM
+    filament and all variant SM filaments) should be created with that FDB parentId.
+    No new parent is promoted; the existing FDB parent is never modified.
+    """
+    result: dict[int, str] = {}
+    for group in sm_variant_decisions:
+        existing_parent = group.get("existing_fdb_parent_id")
+        if not existing_parent:
+            continue
+        master_id = group.get("master_spoolman_filament_id")
+        if master_id:
+            result[master_id] = existing_parent
+        for variant_id in group.get("variant_spoolman_filament_ids", []):
+            result[variant_id] = existing_parent
     return result
 
 
@@ -491,8 +671,10 @@ async def _execute_spoolman_to_fdb(
     fdb_filaments: list[FDBFilament],
     decisions_by_sm: dict[int, dict],
     master_of_sm: dict[int, int],
+    attach_parent_for_sm: dict[int, str],
     tare_by_sm_spool: dict[int, float],
     precision: int = 2,
+    include_empty_spools: bool = True,
 ) -> None:
     """Import direction "spoolman": seed Filament DB from Spoolman.
 
@@ -503,6 +685,7 @@ async def _execute_spoolman_to_fdb(
     plan = _plan_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
         decisions_by_sm, master_of_sm, tare_by_sm_spool, precision,
+        include_empty_spools=include_empty_spools,
     )
 
     fdb_field_name = _settings.filamentdb_spoolman_id_field
@@ -518,6 +701,7 @@ async def _execute_spoolman_to_fdb(
     for item in plan.filament_items:
         if item.variant_master_sm_id is not None:
             continue
+        attach_parent = attach_parent_for_sm.get(item.sm_filament.id)
         if item.action == "skip":
             if item.error:
                 res.add(db, "filament", "failed", error=item.error,
@@ -526,11 +710,27 @@ async def _execute_spoolman_to_fdb(
                 res.add(db, "filament", "skipped", detail=item.detail,
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "link":
-            res.add(db, "filament", "updated", detail=item.detail,
-                    sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
+            if attach_parent:
+                # D3 attach: set parentId on the linked filament too
+                try:
+                    await filamentdb.update_filament(item.fdb_id, {"parentId": attach_parent})
+                    res.add(db, "filament", "updated", detail="variant parent set (attach)",
+                            sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
+                except Exception as exc:
+                    logger.error("wizard execute %s: set parentId (attach) on FDB %s failed: %s",
+                                 res.cycle_id, item.fdb_id, exc)
+                    res.add(db, "filament", "failed", error=str(exc),
+                            sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
+                    item.error = str(exc)
+            else:
+                res.add(db, "filament", "updated", detail=item.detail,
+                        sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "create":
+            payload = dict(item.fdb_payload)
+            if attach_parent:
+                payload["parentId"] = attach_parent  # D3: all attach-group members get parentId
             try:
-                created = await filamentdb.create_filament(item.fdb_payload)
+                created = await filamentdb.create_filament(payload)
                 item.fdb_id = created.id
                 fdb_by_id[created.id] = created
                 just_created_fdb_ids.add(created.id)
@@ -543,7 +743,9 @@ async def _execute_spoolman_to_fdb(
                         sm_filament_id=item.sm_filament.id)
                 item.error = str(exc)
         if item.fdb_id and not item.error:
-            master_map[item.sm_filament.id] = item.fdb_id
+            # D3: for attach groups, master_map points to the existing FDB parent (not the created id)
+            # so Pass 2 variants also receive parentId = existing_fdb_parent_id
+            master_map[item.sm_filament.id] = attach_parent if attach_parent else item.fdb_id
 
     # ---- Pass 2: variants (variant_master_sm_id is set) ----
     for item in plan.filament_items:
@@ -882,16 +1084,19 @@ def _compute_variant_groups(plan: _SyncPlan) -> list[VariantGroupPreviewEntry]:
             sm = item.sm_filament
             vendor = sm.vendor.name if sm.vendor else None
             material = sm.material or _DEFAULT_FDB_MATERIAL
-            base = strip_color_and_words(sm.name, sm.color_hex)
-            key = (normalize_vendor(vendor), base, normalize_name(material))
+            key = (normalize_vendor(vendor), normalize_name(material))
             groups.setdefault(key, []).append(item)
     result: list[VariantGroupPreviewEntry] = []
-    for (vendor_key, base_name, material_key), items in groups.items():
+    for (vendor_key, material_key), items in groups.items():
         if len(items) >= 2:
+            first_sm = items[0].sm_filament
+            display_base = normalize_name(
+                f"{(first_sm.vendor.name + ' ') if first_sm.vendor else ''}{first_sm.material or ''}".strip()
+            )
             result.append(VariantGroupPreviewEntry(
-                base_name=base_name,
-                vendor=items[0].sm_filament.vendor.name if items[0].sm_filament.vendor else None,
-                material=items[0].sm_filament.material or _DEFAULT_FDB_MATERIAL,
+                base_name=display_base,
+                vendor=first_sm.vendor.name if first_sm.vendor else None,
+                material=first_sm.material or _DEFAULT_FDB_MATERIAL,
                 sm_filament_ids=[i.sm_filament.id for i in items],
             ))
     return result
@@ -919,8 +1124,11 @@ def _compute_sm_variant_plan(
             member_rows.append(SMVariantMemberRow(
                 ref=_sm_ref(vi.sm_filament), is_master=False, conflicts=conflicts,
             ))
+        variant_base = normalize_name(
+            f"{(master_sm.vendor.name + ' ') if master_sm.vendor else ''}{master_sm.material or ''}".strip()
+        )
         result.append(SMVariantGroupRow(
-            base_name=strip_color_and_words(master_sm.name, master_sm.color_hex),
+            base_name=variant_base,
             vendor=master_sm.vendor.name if master_sm.vendor else None,
             material=master_sm.material,
             suggested_master=_sm_ref(master_sm),
@@ -951,6 +1159,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     decisions_by_sm = {d["spoolman_filament_id"]: d for d in match_decisions}
     sm_variant_decisions = get_config_value(db, "wizard_sm_variant_decisions", []) or []
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
+    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
 
     try:
         sm_filaments = await request.app.state.spoolman.get_filaments()
@@ -975,6 +1184,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         db, sm_filaments, sm_spools, fdb_filaments,
         decisions_by_sm, master_of_sm, {},  # no tare overrides for preview
         precision=precision,
+        include_empty_spools=include_empty,
     )
 
     _action_for_plan: dict[str, str] = {
@@ -1022,6 +1232,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         default_tare=default_tare,
         variant_groups=variant_groups,
         variant_plan=variant_plan,
+        include_empty_spools=include_empty,
     )
 
 
@@ -1053,6 +1264,8 @@ async def wizard_execute(
     # SM-direction variant decisions (keyed on SM ids)
     sm_variant_decisions = get_config_value(db, "wizard_sm_variant_decisions", []) or []
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
+    attach_parent_for_sm = _build_attach_parent_for_sm(sm_variant_decisions)
+    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
 
     # FDB-direction variant decisions (keyed on FDB ids, legacy — unchanged)
     variant_decisions = get_config_value(db, "wizard_variant_decisions", []) or []
@@ -1088,8 +1301,9 @@ async def wizard_execute(
         await _execute_spoolman_to_fdb(
             db, res, spoolman, filamentdb,
             sm_filaments, sm_spools, fdb_filaments,
-            decisions_by_sm, master_of_sm, tare_by_sm_spool,
+            decisions_by_sm, master_of_sm, attach_parent_for_sm, tare_by_sm_spool,
             precision=precision,
+            include_empty_spools=include_empty,
         )
     else:
         await _execute_fdb_to_spoolman(

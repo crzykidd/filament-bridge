@@ -16,9 +16,11 @@ import type {
   SMVariantsRequest,
   SyncLogResponse,
   SyncStatusResponse,
+  VariancesResponse,
   WizardConnectivityResponse,
   WizardDecisionAck,
   WizardDirectionRequest,
+  WizardDirectionResponse,
   WizardExecuteRequest,
   WizardExecuteResponse,
   WizardMatchesRequest,
@@ -150,6 +152,9 @@ export const importBackup = (body: BackupExport) =>
 export const getWizardConnectivity = () =>
   request<WizardConnectivityResponse>('/wizard/connectivity')
 
+export const getWizardDirection = () =>
+  request<WizardDirectionResponse>('/wizard/direction')
+
 export const postWizardDirection = (body: WizardDirectionRequest) =>
   json<WizardDecisionAck>('/wizard/direction', 'POST', body)
 
@@ -164,6 +169,8 @@ export const postWizardVariants = (body: WizardVariantsRequest) =>
   json<WizardDecisionAck>('/wizard/variants', 'POST', body)
 export const postWizardSmVariants = (body: SMVariantsRequest) =>
   json<WizardDecisionAck>('/wizard/variants/sm', 'POST', body)
+
+export const getWizardVariances = () => request<VariancesResponse>('/wizard/variances')
 
 export const getWizardPreview = () => request<WizardPreviewResponse>('/wizard/preview')
 

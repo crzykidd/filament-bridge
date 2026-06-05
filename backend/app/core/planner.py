@@ -13,7 +13,7 @@ from dataclasses import field as dc_field
 from sqlalchemy.orm import Session
 
 from app.config import settings as _settings
-from app.core.color import sm_multicolor_to_fdb, to_fdb_color
+from app.core.color import sm_multicolor_to_fdb
 from app.core.matcher import sm_prop_conflicts
 from app.core.weight import spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
@@ -105,6 +105,7 @@ def _plan_spoolman_to_fdb(
     master_of_sm: dict[int, int],
     tare_by_sm_spool: dict[int, float],
     precision: int = 2,
+    include_empty_spools: bool = True,
 ) -> _SyncPlan:
     """Compute what _execute_spoolman_to_fdb would do — no writes, no upstream I/O.
 
@@ -190,6 +191,8 @@ def _plan_spoolman_to_fdb(
         if not item.resolved:
             continue
         for sm_spool in sm_spools_by_filament.get(item.sm_filament.id, []):
+            if not include_empty_spools and (sm_spool.remaining_weight or 0.0) == 0.0:
+                continue  # D4: skip empty spool records when toggle is off
             xref = decode_extra_value(
                 sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
             )

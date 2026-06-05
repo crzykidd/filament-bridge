@@ -1,10 +1,10 @@
 ---
 name: 2026-06-01-wizard-variances-merge
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-06-01
-model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+model: sonnet
+completed: 2026-06-03
+result: Merged Weights+Variants into Variances step; filtered all downstream wizard steps to link|create decisions; added GET /wizard/variances endpoint; tare expansion per-group to per-spool; live conflict recompute; Step3Matches row divider fix.
 ---
 
 # Task: Wizard — filter downstream steps to chosen items + merge Weights & Variants into one "Variances" step

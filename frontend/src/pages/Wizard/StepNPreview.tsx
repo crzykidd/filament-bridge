@@ -13,6 +13,10 @@ const FLAG_LABELS: Record<FlagKey, string> = {
   variant_group: 'Variant groups',
 }
 
+function emptyActiveLabel(includeEmpty: boolean): string {
+  return includeEmpty ? 'Empty active spools (will be imported)' : 'Empty active spools (skipped by setting)'
+}
+
 export default function StepNPreview({ next, prev }: WizardCtx) {
   const { data, loading, error } = useApi(getWizardPreview)
   const [open, setOpen] = useState<Set<FlagKey>>(new Set())
@@ -125,14 +129,22 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
         </div>
       </FlagSection>
 
-      {/* Empty active */}
+      {/* Empty active — badge color is informational (blue) when toggle=false, amber when toggle=true */}
       <FlagSection
         flagKey="empty_active"
+        label={emptyActiveLabel(data.include_empty_spools)}
         count={data.flag_counts.empty_active}
         open={open.has('empty_active')}
         onToggle={() => toggle('empty_active')}
+        infoOnly={!data.include_empty_spools}
       >
         <div className="divide-y divide-gray-100">
+          {!data.include_empty_spools && (
+            <p className="px-4 py-2 text-xs text-blue-600">
+              These spools are excluded from the import (toggle "Include empty / depleted spools"
+              on the Direction step to import them).
+            </p>
+          )}
           {data.empty_active.map((e, i) => (
             <div key={i} className="px-4 py-2 text-sm flex items-center justify-between gap-3">
               <span className="text-gray-700">{e.name ?? `Spool #${e.spoolman_spool_id}`}</span>
@@ -206,14 +218,20 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
 }
 
 function FlagSection({
-  flagKey, count, open, onToggle, children,
+  flagKey, label, count, open, onToggle, infoOnly, children,
 }: {
   flagKey: FlagKey
+  label?: string
   count: number
   open: boolean
   onToggle: () => void
+  infoOnly?: boolean
   children: React.ReactNode
 }) {
+  const displayLabel = label ?? FLAG_LABELS[flagKey]
+  const badgeClass = count > 0
+    ? (infoOnly ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700')
+    : 'bg-gray-100 text-gray-500'
   return (
     <div className="bg-white rounded-lg border border-gray-200">
       <button
@@ -221,11 +239,9 @@ function FlagSection({
         disabled={count === 0}
         className="w-full flex items-center justify-between px-4 py-3 text-left disabled:opacity-60"
       >
-        <span className="font-medium text-gray-800">{FLAG_LABELS[flagKey]}</span>
+        <span className="font-medium text-gray-800">{displayLabel}</span>
         <span className="flex items-center gap-2">
-          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-            count > 0 ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500'
-          }`}>
+          <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
             {count}
           </span>
           {count > 0 && <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>}

@@ -4,8 +4,7 @@ import type { WizardTareOverride } from '../../api/types'
 import Step1Connectivity from './Step1Connectivity'
 import Step2Direction from './Step2Direction'
 import Step3Matches from './Step3Matches'
-import Step4Weights from './Step4Weights'
-import Step5Variants from './Step5Variants'
+import StepVariances from './StepVariances'
 import StepNPreview from './StepNPreview'
 import Step6Execute from './Step6Execute'
 
@@ -13,8 +12,7 @@ const STEPS = [
   { path: 'connectivity', label: 'Connectivity' },
   { path: 'direction', label: 'Direction' },
   { path: 'matches', label: 'Matches' },
-  { path: 'weights', label: 'Weights' },
-  { path: 'variants', label: 'Variants' },
+  { path: 'variances', label: 'Variances' },
   { path: 'preview', label: 'Preview' },
   { path: 'execute', label: 'Execute' },
 ]
@@ -69,8 +67,7 @@ export function WizardShell() {
         <Route path="connectivity" element={<Step1Connectivity {...ctx} />} />
         <Route path="direction" element={<Step2Direction {...ctx} />} />
         <Route path="matches" element={<Step3Matches {...ctx} />} />
-        <Route path="weights" element={<Step4Weights {...ctx} />} />
-        <Route path="variants" element={<Step5Variants {...ctx} />} />
+        <Route path="variances" element={<StepVariances {...ctx} />} />
         <Route path="preview" element={<StepNPreview {...ctx} />} />
         <Route path="execute" element={<Step6Execute {...ctx} />} />
       </Routes>

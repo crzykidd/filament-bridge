@@ -10,6 +10,7 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
   const [weightSot, setWeightSot] = useState<SOT>('spoolman')
   const [matSot, setMatSot] = useState<SOT>('filamentdb')
   const [newSpoolSot, setNewSpoolSot] = useState<SOT>('spoolman')
+  const [includeEmpty, setIncludeEmpty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -43,6 +44,7 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
         weight_source_of_truth: weightSot,
         material_properties_source_of_truth: matSot,
         new_spool_source_of_truth: newSpoolSot,
+        include_empty_spools: includeEmpty,
       })
       next()
     } catch (e) {
@@ -89,6 +91,25 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
         <SotPicker label="Weight" value={weightSot} onChange={setWeightSot} />
         <SotPicker label="Material properties" value={matSot} onChange={setMatSot} />
         <SotPicker label="New spools" value={newSpoolSot} onChange={setNewSpoolSot} />
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <p className="text-sm font-semibold text-gray-700 mb-3">Spool import options</p>
+        <label className="flex items-start gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={includeEmpty}
+            onChange={e => setIncludeEmpty(e.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+          />
+          <div>
+            <p className="text-sm font-medium text-gray-800">Include empty / depleted spools</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              When off (default), spool records with 0 g remaining are skipped. The filament/color
+              definition is still imported — only the empty inventory record is excluded.
+            </p>
+          </div>
+        </label>
       </div>
 
       {err && <p className="text-sm text-red-600">{err}</p>}

@@ -198,6 +198,12 @@ class WizardDirectionRequest(BaseModel):
     weight_source_of_truth: SourceOfTruth | None = None
     material_properties_source_of_truth: SourceOfTruth | None = None
     new_spool_source_of_truth: SourceOfTruth | None = None
+    include_empty_spools: bool | None = None
+
+
+class WizardDirectionResponse(BaseModel):
+    import_direction: SourceOfTruth | None = None
+    include_empty_spools: bool = False
 
 
 class FilamentRef(BaseModel):
@@ -302,6 +308,7 @@ class SMVariantGroupRow(BaseModel):
 class SMVariantDecision(BaseModel):
     master_spoolman_filament_id: int
     variant_spoolman_filament_ids: list[int]
+    existing_fdb_parent_id: str | None = None
 
 
 class SMVariantsRequest(BaseModel):
@@ -312,6 +319,44 @@ class WizardVariantsResponse(BaseModel):
     direction: str = "filamentdb"  # "spoolman" | "filamentdb"
     sm_groups: list[SMVariantGroupRow] = Field(default_factory=list)
     fdb_groups: list[VariantGroupRow] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Variances endpoint (merged Weights + Variants step)
+# ---------------------------------------------------------------------------
+
+
+class VariancesFilament(BaseModel):
+    """One SM filament in the merged variances view — carries group membership and comparable props."""
+
+    ref: FilamentRef
+    spool_ids: list[int] = Field(default_factory=list)
+    tare: float
+    tare_source: Literal["spoolman", "default"]
+    is_master: bool = False
+    conflicts: list[VariantPropConflict] = Field(default_factory=list)
+    suggest_exclude: bool = False
+    # Comparable props returned so the client can recompute conflicts live
+    material: str | None = None
+    density: float | None = None
+    spool_weight: float | None = None
+    settings_extruder_temp: int | None = None
+    settings_bed_temp: int | None = None
+
+
+class VariancesGroupRow(BaseModel):
+    base_name: str
+    vendor: str | None = None
+    material: str | None = None
+    suggested_master: FilamentRef
+    members: list[VariancesFilament]
+    existing_fdb_parent: FilamentRef | None = None
+
+
+class VariancesResponse(BaseModel):
+    direction: str
+    groups: list[VariancesGroupRow] = Field(default_factory=list)
+    ungrouped: list[VariancesFilament] = Field(default_factory=list)
 
 
 class VariantDecision(BaseModel):
@@ -427,6 +472,7 @@ class WizardPreviewResponse(BaseModel):
     default_tare: list[DefaultTareEntry]
     variant_groups: list[VariantGroupPreviewEntry]
     variant_plan: list[SMVariantGroupRow] = Field(default_factory=list)
+    include_empty_spools: bool = False
 
 
 # ---------------------------------------------------------------------------

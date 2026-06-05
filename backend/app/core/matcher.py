@@ -94,12 +94,17 @@ def strip_color_and_words(name: str, color_hex: str | None) -> str:
     return result or normalize_name(name)
 
 
-def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str, str]:
-    """Return (vendor, material, base_name) for SM variant group clustering."""
+def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str]:
+    """Return (vendor, material) for SM variant group clustering.
+
+    Different colors under the same vendor+material are the variant-group signal —
+    color difference is the indicator, not an obstacle. Q1 simplification: line
+    tokens (PLA Matte / Silk / PLA-CF) are not parsed out here; use the D2
+    suggest_exclude signal (sm_prop_conflicts) to peel off divergent lines.
+    """
     vendor = normalize_vendor(sm.vendor.name if sm.vendor else None)
     material = normalize_name(sm.material or "")
-    base = strip_color_and_words(sm.name, sm.color_hex)
-    return (vendor, material, base)
+    return (vendor, material)
 
 
 def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> list[dict[str, Any]]:

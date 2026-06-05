@@ -186,6 +186,12 @@ export interface WizardDirectionRequest {
   weight_source_of_truth?: SourceOfTruth | null
   material_properties_source_of_truth?: SourceOfTruth | null
   new_spool_source_of_truth?: SourceOfTruth | null
+  include_empty_spools?: boolean | null
+}
+
+export interface WizardDirectionResponse {
+  import_direction: SourceOfTruth | null
+  include_empty_spools: boolean
 }
 
 export interface FilamentRef {
@@ -279,6 +285,7 @@ export interface SMVariantGroupRow {
 export interface SMVariantDecision {
   master_spoolman_filament_id: number
   variant_spoolman_filament_ids: number[]
+  existing_fdb_parent_id?: string | null
 }
 
 export interface SMVariantsRequest {
@@ -289,6 +296,40 @@ export interface WizardVariantsResponse {
   direction: string
   sm_groups: SMVariantGroupRow[]
   fdb_groups: VariantGroupRow[]
+}
+
+// ---------------------------------------------------------------------------
+// Variances endpoint (merged Weights + Variants step)
+// ---------------------------------------------------------------------------
+
+export interface VariancesFilament {
+  ref: FilamentRef
+  spool_ids: number[]
+  tare: number
+  tare_source: 'spoolman' | 'default'
+  is_master: boolean
+  conflicts: VariantPropConflict[]
+  suggest_exclude: boolean
+  material: string | null
+  density: number | null
+  spool_weight: number | null
+  settings_extruder_temp: number | null
+  settings_bed_temp: number | null
+}
+
+export interface VariancesGroupRow {
+  base_name: string
+  vendor: string | null
+  material: string | null
+  suggested_master: FilamentRef
+  members: VariancesFilament[]
+  existing_fdb_parent: FilamentRef | null
+}
+
+export interface VariancesResponse {
+  direction: string
+  groups: VariancesGroupRow[]
+  ungrouped: VariancesFilament[]
 }
 
 export interface VariantDecision {
@@ -381,6 +422,7 @@ export interface WizardPreviewResponse {
   default_tare: DefaultTareEntry[]
   variant_groups: VariantGroupPreviewEntry[]
   variant_plan: SMVariantGroupRow[]
+  include_empty_spools: boolean
 }
 
 // ---------------------------------------------------------------------------
