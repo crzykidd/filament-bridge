@@ -44,6 +44,7 @@ export default function Settings() {
   const [newSpoolSot, setNewSpoolSot] = useState<SOT | null>(null)
   const [threshold, setThreshold] = useState('')
   const [precision, setPrecision] = useState<number | null>(null)
+  const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
 
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -59,6 +60,7 @@ export default function Settings() {
   const nSot = newSpoolSot ?? data.new_spool_source_of_truth
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
   const prec = precision ?? data.weight_precision_decimals
+  const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
 
   async function handleSave() {
     setSaving(true)
@@ -70,6 +72,7 @@ export default function Settings() {
         new_spool_source_of_truth: nSot,
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
         weight_precision_decimals: prec,
+        variant_line_keywords: variantKeywords ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -148,6 +151,20 @@ export default function Settings() {
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
+        </div>
+        <div className="flex flex-col gap-1 py-3 border-b border-gray-100">
+          <span className="text-sm font-medium text-gray-700">Variant line keywords</span>
+          <input
+            type="text"
+            value={vkw}
+            onChange={e => setVariantKeywords(e.target.value)}
+            placeholder="silk, matte, rapid, …"
+            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <span className="text-xs text-gray-400">
+            Words that mark a distinct variant line, e.g. <code>silk, matte, rapid</code>.
+            Filaments whose names contain different keywords won't be grouped together.
+          </span>
         </div>
         <div className="pt-2 flex items-center gap-3">
           <button

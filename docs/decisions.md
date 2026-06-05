@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-04 — variant_line_keywords user setting + Standalone "Move to existing group"
+
+### variant_line_keywords — user-configurable finish/line keyword lexicon
+
+`matcher.py`'s `extract_finish_line` and `sm_variant_cluster_key` now accept an optional
+`keywords: list[str]` parameter. When provided, each keyword is matched whole-word
+case-insensitively (`\bkeyword\b`); the first match becomes the finish token. When `keywords`
+is `None`, the original `_FINISH_PATTERNS` regex lexicon is used (backward-compatible fallback
+for tests and any non-wizard caller).
+
+**Resolution:** env var `VARIANT_LINE_KEYWORDS` (comma-separated) seeds the default with the
+same tokens as `_FINISH_PATTERNS` plus `rapid`. At runtime, `get_config_value(db, "variant_line_keywords", settings.variant_line_keywords)` lets the UI override the env default without a restart. `wizard_variances` and `wizard_variants` both call `_resolve_variant_keywords(db)` and pass the result to every `sm_variant_cluster_key` / `extract_finish_line` call. The matcher functions remain pure (no DB import). `ConfigResponse` / `ConfigUpdateRequest` expose `variant_line_keywords`; `Settings.tsx` adds an editor text field.
+
+### Standalone rows gain "Move to existing group"
+
+The Standalone section in `StepVariances.tsx` previously only offered multi-select "Group as
+variants" (new group only). Each standalone row now also shows a **"Move to…"** dropdown
+(via `movingStandaloneId` state + `moveFromStandalone` / `standaloneTargetOptions` helpers)
+listing all existing non-empty auto/extra groups plus "New group". After a move the row
+disappears from Standalone and joins the target group; `handleSave` is driven by membership
+state so no special handling is needed.
+
 ## 2026-06-04 — Wizard per-member actions + finish-line auto-split (Part A/B)
 
 Extends the 2026-06-04 D1–D4 redesign. Source of truth for D1–D4 remains that entry;

@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # Comma-separated field names to exclude from auto-match
     field_mapping_excludes: str = ""
 
+    # Comma-separated finish/line keywords for SM variant clustering.
+    # Filaments whose names contain different keywords are placed in separate groups.
+    variant_line_keywords: str = (
+        "silk,matte,satin,carbon,cf,glow,wood,marble,metal,metallic,"
+        "high-speed,hs,dual,tri,rainbow,multicolor,rapid"
+    )
+
     # Notifications
     discord_webhook_url: str | None = None
 
@@ -44,6 +51,17 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @property
+    def parsed_variant_line_keywords(self) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for kw in self.variant_line_keywords.split(","):
+            kw = kw.strip().lower()
+            if kw and kw not in seen:
+                seen.add(kw)
+                result.append(kw)
+        return result
 
     @property
     def parsed_field_mappings(self) -> dict[str, str]:

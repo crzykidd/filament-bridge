@@ -160,6 +160,7 @@ export interface ConfigResponse {
   auto_sync_enabled: boolean
   wizard_completed: boolean
   import_direction: SourceOfTruth | null
+  variant_line_keywords: string | null
 }
 
 export interface ConfigUpdateRequest {
@@ -168,6 +169,7 @@ export interface ConfigUpdateRequest {
   new_spool_source_of_truth?: SourceOfTruth | null
   sync_weight_threshold_grams?: number | null
   weight_precision_decimals?: number | null
+  variant_line_keywords?: string | null
 }
 
 // ---------------------------------------------------------------------------

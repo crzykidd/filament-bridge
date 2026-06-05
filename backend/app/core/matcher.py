@@ -128,13 +128,29 @@ _FINISH_PATTERNS: list[tuple[str, list[re.Pattern[str]]]] = [
 ]
 
 
-def extract_finish_line(name: str, material: str | None = None) -> str:
+def extract_finish_line(
+    name: str,
+    material: str | None = None,
+    keywords: list[str] | None = None,
+) -> str:
     """Extract the finish/line token from a filament name (and optional material).
 
-    Returns a normalized token ('silk', 'matte', 'cf', 'glow', …) or '' (standard).
-    Detection is word-boundary-aware, case-insensitive, on name + material concatenated.
+    When `keywords` is provided (even empty), uses whole-word case-insensitive
+    matching against that list; the first matching keyword (lowercased) is returned.
+    An empty keyword list always returns '' (every filament is 'standard').
+
+    When `keywords` is None, falls back to the built-in _FINISH_PATTERNS regex lexicon
+    for backward compatibility.
     """
     text = (name or "") + " " + (material or "")
+    if keywords is not None:
+        for kw in keywords:
+            kw = kw.strip()
+            if not kw:
+                continue
+            if re.search(r'\b' + re.escape(kw) + r'\b', text, re.IGNORECASE):
+                return kw.lower()
+        return ""
     for token, patterns in _FINISH_PATTERNS:
         for pat in patterns:
             if pat.search(text):
@@ -142,7 +158,10 @@ def extract_finish_line(name: str, material: str | None = None) -> str:
     return ""
 
 
-def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str, str]:
+def sm_variant_cluster_key(
+    sm: SpoolmanFilament,
+    keywords: list[str] | None = None,
+) -> tuple[str, str, str]:
     """Return (vendor, material, finish) for SM variant group clustering.
 
     Different colors under the same vendor+material+finish are the variant-group
@@ -150,10 +169,13 @@ def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str, str]:
     filament name so "PLA Silk Red" and plain "PLA Red" cluster into separate
     groups even when Spoolman records the same `material` string for both.
     This resolves Q1 from docs/wizard-redesign.md.
+
+    Pass `keywords` to use user-configured keyword-driven matching; None falls
+    back to the built-in regex lexicon.
     """
     vendor = normalize_vendor(sm.vendor.name if sm.vendor else None)
     material = normalize_name(sm.material or "")
-    finish = extract_finish_line(sm.name or "", sm.material)
+    finish = extract_finish_line(sm.name or "", sm.material, keywords)
     return (vendor, material, finish)
 
 

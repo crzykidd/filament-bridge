@@ -115,6 +115,19 @@ def _included_sm_ids(db: Session) -> set[int]:
     return {d["spoolman_filament_id"] for d in decisions if d.get("action") in ("link", "create")}
 
 
+def _resolve_variant_keywords(db: Session) -> list[str]:
+    """Return the effective variant-line keyword list (BridgeConfig override > env default)."""
+    raw: str = get_config_value(db, "variant_line_keywords", _settings.variant_line_keywords)
+    seen: set[str] = set()
+    result: list[str] = []
+    for kw in raw.split(","):
+        kw = kw.strip().lower()
+        if kw and kw not in seen:
+            seen.add(kw)
+            result.append(kw)
+    return result
+
+
 def _sm_filament_tare(sm: SpoolmanFilament) -> tuple[float, str]:
     """Return (tare_grams, tare_source) for a Spoolman filament (filament-level spool_weight)."""
     if sm.spool_weight is not None:
@@ -331,6 +344,7 @@ async def wizard_variants(request: Request, db: Session = Depends(get_db)) -> Wi
         sm_filaments: list[SpoolmanFilament] = await request.app.state.spoolman.get_filaments()
         sm_spools = await request.app.state.spoolman.get_spools()
         included = _included_sm_ids(db)
+        variant_keywords = _resolve_variant_keywords(db)
 
         spools_per_filament: dict[int, int] = {}
         for s in sm_spools:
@@ -341,7 +355,7 @@ async def wizard_variants(request: Request, db: Session = Depends(get_db)) -> Wi
         for sm in sm_filaments:
             if sm.id not in included:
                 continue
-            key = sm_variant_cluster_key(sm)
+            key = sm_variant_cluster_key(sm, keywords=variant_keywords)
             clusters.setdefault(key, []).append(sm)
 
         sm_groups: list[SMVariantGroupRow] = []
@@ -434,6 +448,7 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
 
     included = _included_sm_ids(db)
     include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    variant_keywords = _resolve_variant_keywords(db)
     sm_filaments: list[SpoolmanFilament] = await request.app.state.spoolman.get_filaments()
     sm_spools = await request.app.state.spoolman.get_spools()
     fdb_filaments: list[FDBFilament] = await request.app.state.filamentdb.get_filaments()
@@ -463,7 +478,7 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
             key = (
                 normalize_vendor(f.vendor),
                 normalize_name(f.type or ""),
-                extract_finish_line(f.name or "", f.type),
+                extract_finish_line(f.name or "", f.type, keywords=variant_keywords),
             )
             if key not in fdb_parent_by_key:
                 fdb_parent_by_key[key] = FilamentRef(
@@ -476,7 +491,7 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
     # D1/B — cluster included filaments by (vendor, material, finish)
     clusters: dict[tuple[str, str, str], list[SpoolmanFilament]] = {}
     for sm in included_filaments:
-        key = sm_variant_cluster_key(sm)
+        key = sm_variant_cluster_key(sm, keywords=variant_keywords)
         clusters.setdefault(key, []).append(sm)
 
     grouped_ids: set[int] = set()

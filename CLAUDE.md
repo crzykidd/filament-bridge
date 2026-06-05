@@ -200,6 +200,7 @@ filament-bridge/
 | `FILAMENTDB_SPOOLMAN_ID_FIELD` | No | `label` | Filament DB spool field to store Spoolman spool ID |
 | `FIELD_MAPPINGS` | No | — | Comma-separated `fdb_field=spoolman_field` pairs |
 | `FIELD_MAPPING_EXCLUDES` | No | — | Comma-separated field names to exclude from auto-match |
+| `VARIANT_LINE_KEYWORDS` | No | (seed list) | Comma-separated words marking distinct variant lines (e.g. `silk,matte,rapid`). Filaments whose names match different keywords won't be grouped together. Overridable at runtime via Settings. |
 | `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |

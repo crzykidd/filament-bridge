@@ -192,6 +192,35 @@ def _sm_fil(id_: int, name: str, vendor: str = "Buddy", material: str = "PLA") -
     )
 
 
+class TestExtractFinishLineKeywords:
+    def test_custom_keyword_rapid(self):
+        keywords = ["rapid", "silk", "matte"]
+        assert extract_finish_line("ELEGOO Rapid PLA Red", keywords=keywords) == "rapid"
+        assert extract_finish_line("ELEGOO PLA Red", keywords=keywords) == ""
+
+    def test_empty_keyword_list_always_standard(self):
+        assert extract_finish_line("ELEGOO PLA Silk Red", keywords=[]) == ""
+        assert extract_finish_line("PLA Matte Black", keywords=[]) == ""
+
+    def test_first_matching_keyword_wins(self):
+        # "silk" before "matte" — silk should win when both appear
+        assert extract_finish_line("PLA Matte Silk", keywords=["silk", "matte"]) == "silk"
+        assert extract_finish_line("PLA Matte Silk", keywords=["matte", "silk"]) == "matte"
+
+    def test_keyword_word_boundary_enforced(self):
+        # "matt" must not match "matte"; "matte" must match
+        assert extract_finish_line("PLA Matte Black", keywords=["matt"]) == ""
+        assert extract_finish_line("PLA Matte Black", keywords=["matte"]) == "matte"
+
+    def test_keyword_case_insensitive(self):
+        assert extract_finish_line("PLA SILK Red", keywords=["silk"]) == "silk"
+
+    def test_no_keywords_falls_back_to_default_patterns(self):
+        # keywords=None → _FINISH_PATTERNS; existing behavior preserved
+        assert extract_finish_line("Buddy PLA Silk Red") == "silk"
+        assert extract_finish_line("ELEGOO PLA Green") == ""
+
+
 class TestSmVariantClusterKey:
     def test_silk_and_standard_split(self):
         silk_red = _sm_fil(1, "PLA Silk Red")
@@ -220,3 +249,31 @@ class TestSmVariantClusterKey:
         sm = _sm_fil(7, "PLA Red")
         key = sm_variant_cluster_key(sm)
         assert len(key) == 3  # (vendor, material, finish)
+
+
+class TestSmVariantClusterKeyKeywords:
+    def test_rapid_keyword_splits_cluster(self):
+        rapid_red = _sm_fil(1, "ELEGOO Rapid PLA Red", vendor="ELEGOO", material="PLA")
+        standard_red = _sm_fil(2, "ELEGOO PLA Red", vendor="ELEGOO", material="PLA")
+        keywords = ["rapid", "silk"]
+
+        key_rapid = sm_variant_cluster_key(rapid_red, keywords=keywords)
+        key_std = sm_variant_cluster_key(standard_red, keywords=keywords)
+
+        assert key_rapid != key_std
+        assert key_rapid[2] == "rapid"
+        assert key_std[2] == ""
+
+    def test_empty_keywords_all_standard(self):
+        silk = _sm_fil(1, "PLA Silk Red")
+        standard = _sm_fil(2, "PLA Red")
+        # Empty keyword list → both get "" finish → same cluster
+        assert sm_variant_cluster_key(silk, keywords=[])[2] == ""
+        assert sm_variant_cluster_key(standard, keywords=[])[2] == ""
+
+    def test_none_keywords_uses_default_behavior(self):
+        silk = _sm_fil(1, "PLA Silk Red")
+        standard = _sm_fil(2, "PLA Red")
+        # keywords=None → _FINISH_PATTERNS fallback
+        assert sm_variant_cluster_key(silk)[2] == "silk"
+        assert sm_variant_cluster_key(standard)[2] == ""

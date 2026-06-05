@@ -20,6 +20,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
+from app.config import settings as _settings
 from app.db import get_db
 from app.models.config import BridgeConfig
 from app.schemas.api import ConfigResponse, ConfigUpdateRequest
@@ -72,6 +73,7 @@ def _config_response(db: Session) -> ConfigResponse:
         auto_sync_enabled=bool(cfg.get("auto_sync_enabled", False)),
         wizard_completed=bool(cfg.get("wizard_completed", False)),
         import_direction=cfg.get("import_direction"),
+        variant_line_keywords=cfg.get("variant_line_keywords", _settings.variant_line_keywords),
     )
 
 

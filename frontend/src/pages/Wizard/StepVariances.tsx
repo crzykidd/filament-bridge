@@ -107,6 +107,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   const [ignoredIds, setIgnoredIds] = useState<Set<number>>(new Set())
   // Which member row is showing its "Move to" dropdown
   const [movingMember, setMovingMember] = useState<{ fromGroupType: 'auto' | 'extra'; fromIdx: number; smId: number } | null>(null)
+  // Which standalone row is showing its "Move to" dropdown
+  const [movingStandaloneId, setMovingStandaloneId] = useState<number | null>(null)
   // Which filament is currently being ignored (loading state)
   const [ignoringId, setIgnoringId] = useState<number | null>(null)
   const [ignoreErr, setIgnoreErr] = useState<string | null>(null)
@@ -353,6 +355,46 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
     })
     options.push({ value: 'new', label: 'New group' })
     return options
+  }
+
+  // Target options for standalone rows — all existing groups (no "from" exclusion)
+  function standaloneTargetOptions(): { value: string; label: string }[] {
+    const options: { value: string; label: string }[] = []
+    data.groups.forEach((g, gi) => {
+      if (groupMembership[gi].size > 0) {
+        options.push({ value: `auto-${gi}`, label: g.base_name || `Group ${gi + 1}` })
+      }
+    })
+    Object.entries(extraGroupMemberships).forEach(([idxStr, m]) => {
+      const ei = parseInt(idxStr)
+      if (m.size > 0) options.push({ value: `extra-${ei}`, label: `Manual group ${ei + 1}` })
+    })
+    options.push({ value: 'new', label: 'New group' })
+    return options
+  }
+
+  // Move a standalone filament into an existing group (or create a new one)
+  function moveFromStandalone(smId: number, target: string) {
+    if (target === 'new') {
+      const newIdx = Object.keys(extraGroupMemberships).length
+      setExtraGroupMemberships(prev => ({ ...prev, [newIdx]: new Set([smId]) }))
+      setExtraMasters(prev => ({ ...prev, [newIdx]: smId }))
+    } else {
+      const [tType, tIdxStr] = target.split('-')
+      const tIdx = parseInt(tIdxStr)
+      if (tType === 'auto') {
+        setGroupMembership(prev => {
+          const s = new Set(prev[tIdx]); s.add(smId)
+          return { ...prev, [tIdx]: s }
+        })
+      } else if (tType === 'extra') {
+        setExtraGroupMemberships(prev => {
+          const s = new Set(prev[tIdx]); s.add(smId)
+          return { ...prev, [tIdx]: s }
+        })
+      }
+    }
+    setMovingStandaloneId(null)
   }
 
   if (data.groups.length === 0 && effectiveUngrouped.length === 0) {
@@ -615,6 +657,25 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">default</span>
                     )}
                   </label>
+                  {movingStandaloneId === smId ? (
+                    <>
+                      <select
+                        className="text-xs border border-gray-200 rounded px-2 py-1 shrink-0"
+                        defaultValue=""
+                        onChange={e => { if (e.target.value) moveFromStandalone(smId, e.target.value) }}
+                        autoFocus
+                      >
+                        <option value="" disabled>Move to…</option>
+                        {standaloneTargetOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                      <button onClick={() => setMovingStandaloneId(null)} className="text-xs text-gray-400 hover:text-gray-600 px-1 shrink-0">✕</button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => setMovingStandaloneId(smId)}
+                      className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100 shrink-0"
+                    >Move to…</button>
+                  )}
                   <button
                     disabled={isIgnoring}
                     onClick={() => ignoreFilament(smId)}
