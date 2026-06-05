@@ -1,22 +1,65 @@
 # Decision record
 
+## 2026-06-04 — Wizard per-member actions + finish-line auto-split (Part A/B)
+
+Extends the 2026-06-04 D1–D4 redesign. Source of truth for D1–D4 remains that entry;
+this section records the Part A (per-member actions) and Part B (finish-line split) additions.
+
+### Part A — Per-member labeled actions replace the checkbox
+
+`StepVariances.tsx` grouped-filament rows now show three labeled buttons per member instead of
+a bare always-checked disabled checkbox:
+
+- **Move to…** — dropdown listing all other auto/extra groups and "New group"; removes from source,
+  adds to target (with master promotion if the moving member was master).
+- **Standalone** — removes from group; member appears in the standalone list with its own tare.
+- **Ignore** — calls `POST /wizard/matches/{sm_filament_id}/skip`, which sets `action: "skip"` in
+  `wizard_match_decisions`, then removes from the group. Uses `_included_sm_ids()` as the single gate,
+  so the change flows to variances/weights/preview/execute for free. No second exclusion set.
+
+The `Ignore` button is also present on standalone filament rows and extra-group (manually grouped) rows.
+Master radio button is unchanged. Groups dissolved to 0 members are hidden (no empty card).
+
+`ignoreErr` is surfaced as a red text line above the Save/Back row.
+
+### Part B — Finish-line auto-split extends D1 grouping key to 3-tuple
+
+**Q1 resolved.** `sm_variant_cluster_key` in `matcher.py` now returns a 3-tuple
+`(normalize_vendor, normalize_name(material), finish)` where `finish` is the output of
+`extract_finish_line(name, material)`.
+
+`extract_finish_line` uses a word-boundary-aware regex lexicon (ordered most-specific first):
+`glow-in-the-dark / GITD`, `carbon fiber / CF`, `rainbow / multicolor`, `high-speed / HS`,
+`metallic`, `marble`, `wood`, `matte`, `satin`, `silk`. Returns `""` for standard/unrecognized.
+
+Effect: `ELEGOO PLA Red` and `ELEGOO PLA Silk Red` now get different cluster keys (`""` vs `"silk"`),
+so they land in separate variant groups — preventing Silk from inheriting PLA print settings via the
+parent. D2's `suggest_exclude` signal survives as a second-line safeguard for finish tokens not in the
+lexicon. The lexicon is a closed set; user-driven move/standalone actions are the escape hatch.
+
+FDB parent map keying in `wizard_variances` updated to 3-tuple `(vendor_norm, material_norm, finish_norm)`
+so existing Silk FDB parents match Silk SM groups (not standard PLA parents).
+
+`VariancesGroupRow` gains `finish: str | None` (shown in the group header as a violet pill).
+Frontend `VariancesGroupRow` interface updated to match.
+
 ## 2026-06-04 — Wizard variant-resolution redesign: D1 grouping key, D2 suggest-exclude, D3 FDB-parent attach, D4 empty-spool toggle
 
 Implements `docs/wizard-redesign.md` decisions D1–D4 in full. Source of truth is that spec;
-this entry records the settled contract and the Q1 simplification.
+this entry records the settled contract. See the "Part A/B" entry above for the Q1 resolution
+(finish-line split) and per-member action redesign that followed.
 
-### D1 — Grouping key is `(vendor, material)` — drop base_name
+### D1 — Grouping key is `(vendor, material)` — drop base_name (initial pass)
 
-`sm_variant_cluster_key` in `matcher.py` now returns a 2-tuple `(normalize_vendor, normalize_name(material))`.
+`sm_variant_cluster_key` in `matcher.py` returned a 2-tuple `(normalize_vendor, normalize_name(material))`.
 The old 3-tuple included `base_name = strip_color_and_words(name, color_hex)`, which caused filaments
 whose name IS a color word (e.g. "Brown", "Beige") to produce different base_names and never cluster.
 
-All callers (`wizard_variants`, `wizard_variances`, `_compute_variant_groups`) updated to unpack 2-tuples.
+All callers updated to unpack 2-tuples; extended to 3-tuples by Part B above.
 Group display `base_name` is now `normalize_name("{vendor} {material}")` — consistent across all paths.
 
-**Q1 simplification (deliberate):** finish/line tokens (PLA Matte / Silk / PLA-CF) are NOT parsed out in
-this pass. If two filaments share vendor+material but belong to different lines, D2's `suggest_exclude`
-signal (driven by `sm_prop_conflicts`: density, temps) surfaces the divergence. No regex line-parsing.
+**Q1 simplification (initial pass, since superseded):** finish/line tokens (PLA Matte / Silk / PLA-CF)
+were NOT parsed out in this pass. Q1 is now resolved by the Part B finish-line split above.
 
 ### D2 — Per-member exclude, pre-flagged by `sm_prop_conflicts`
 

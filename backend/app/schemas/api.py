@@ -348,6 +348,7 @@ class VariancesGroupRow(BaseModel):
     base_name: str
     vendor: str | None = None
     material: str | None = None
+    finish: str | None = None  # Part B: finish/line token ('silk', 'matte', 'cf', …) or None (standard)
     suggested_master: FilamentRef
     members: list[VariancesFilament]
     existing_fdb_parent: FilamentRef | None = None

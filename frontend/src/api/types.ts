@@ -321,6 +321,7 @@ export interface VariancesGroupRow {
   base_name: string
   vendor: string | null
   material: string | null
+  finish?: string | null
   suggested_master: FilamentRef
   members: VariancesFilament[]
   existing_fdb_parent: FilamentRef | null

@@ -486,6 +486,55 @@ def test_wizard_save_matches_persists(db):
     assert resp.json()["persisted"] == 2
 
 
+def test_wizard_skip_match_updates_existing_decision(db):
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 42, "action": "create"},
+        {"spoolman_filament_id": 99, "action": "link", "filamentdb_id": "fdb-1"},
+    ])
+    db.commit()
+
+    client = _client(db)
+    resp = client.post("/api/wizard/matches/42/skip")
+    assert resp.status_code == 200
+    assert resp.json()["persisted"] == 1
+
+    decisions = get_config_value(db, "wizard_match_decisions", [])
+    d42 = next(d for d in decisions if d["spoolman_filament_id"] == 42)
+    d99 = next(d for d in decisions if d["spoolman_filament_id"] == 99)
+    assert d42["action"] == "skip"
+    assert d99["action"] == "link"  # unchanged
+
+
+def test_wizard_skip_match_appends_if_missing(db):
+    set_config_value(db, "wizard_match_decisions", [])
+    db.commit()
+
+    client = _client(db)
+    resp = client.post("/api/wizard/matches/77/skip")
+    assert resp.status_code == 200
+
+    decisions = get_config_value(db, "wizard_match_decisions", [])
+    assert len(decisions) == 1
+    assert decisions[0] == {"spoolman_filament_id": 77, "action": "skip"}
+
+
+def test_wizard_skip_removes_from_included_sm_ids(db):
+    from app.api.wizard import _included_sm_ids
+
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 42, "action": "create"},
+    ])
+    db.commit()
+    assert 42 in _included_sm_ids(db)
+
+    client = _client(db)
+    client.post("/api/wizard/matches/42/skip")
+
+    # Session sees the committed change
+    db.expire_all()
+    assert 42 not in _included_sm_ids(db)
+
+
 def test_wizard_weights_spoolman_direction(db):
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",
@@ -1995,7 +2044,7 @@ def test_wizard_variances_brown_beige_cluster_into_one_group(db):
 
 
 def test_sm_variant_cluster_key_groups_by_vendor_material(db):
-    """D1: sm_variant_cluster_key returns (vendor, material) 2-tuple; color words are irrelevant."""
+    """D1: sm_variant_cluster_key returns (vendor, material, finish) 3-tuple; color words are irrelevant."""
     from app.core.matcher import sm_variant_cluster_key
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
     brown = SpoolmanFilament(id=5, name="Brown", vendor=elegoo, material="PLA")
@@ -2003,7 +2052,7 @@ def test_sm_variant_cluster_key_groups_by_vendor_material(db):
     petg = SpoolmanFilament(id=7, name="Brown", vendor=elegoo, material="PETG")
     assert sm_variant_cluster_key(brown) == sm_variant_cluster_key(beige)
     assert sm_variant_cluster_key(brown) != sm_variant_cluster_key(petg)
-    assert len(sm_variant_cluster_key(brown)) == 2  # 2-tuple, not 3
+    assert len(sm_variant_cluster_key(brown)) == 3  # (vendor, material, finish) 3-tuple
 
 
 # ---------------------------------------------------------------------------
@@ -2022,7 +2071,8 @@ def test_wizard_variances_suggest_exclude_on_conflicting_member(db):
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
     sm_filaments = [
         SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA", density=1.24),
-        SpoolmanFilament(id=11, name="PLA Glow", vendor=elegoo, material="PLA", density=1.35),
+        # "PLA Dense" has no finish token — stays in same cluster as "PLA" but with conflicting density
+        SpoolmanFilament(id=11, name="PLA Dense", vendor=elegoo, material="PLA", density=1.35),
     ]
     client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
 

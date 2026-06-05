@@ -26,6 +26,7 @@ from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
 from app.core.matcher import (
+    extract_finish_line,
     match_filaments,
     normalize_name,
     normalize_vendor,
@@ -231,6 +232,27 @@ def wizard_save_matches(payload: WizardMatchesRequest, db: Session = Depends(get
     return WizardDecisionAck(persisted=len(payload.decisions))
 
 
+@router.post("/wizard/matches/{sm_filament_id}/skip", response_model=WizardDecisionAck)
+def wizard_skip_match(sm_filament_id: int, db: Session = Depends(get_db)) -> WizardDecisionAck:
+    """Set a single SM filament's match decision to 'skip' (Variances → Ignore action).
+
+    Reads the existing decision list, updates or appends the skip entry, and saves.
+    This is the single path that updates _included_sm_ids, so the change flows to
+    variances / weights / preview / execute for free.
+    """
+    decisions: list[dict] = list(get_config_value(db, "wizard_match_decisions", []) or [])
+    for d in decisions:
+        if d.get("spoolman_filament_id") == sm_filament_id:
+            d["action"] = "skip"
+            set_config_value(db, "wizard_match_decisions", decisions)
+            db.commit()
+            return WizardDecisionAck(persisted=1)
+    decisions.append({"spoolman_filament_id": sm_filament_id, "action": "skip"})
+    set_config_value(db, "wizard_match_decisions", decisions)
+    db.commit()
+    return WizardDecisionAck(persisted=1)
+
+
 # ---------------------------------------------------------------------------
 # FR-5 — weight conversion preview
 # ---------------------------------------------------------------------------
@@ -315,7 +337,7 @@ async def wizard_variants(request: Request, db: Session = Depends(get_db)) -> Wi
             if not s.archived:
                 spools_per_filament[s.filament.id] = spools_per_filament.get(s.filament.id, 0) + 1
 
-        clusters: dict[tuple[str, str], list[SpoolmanFilament]] = {}
+        clusters: dict[tuple[str, str, str], list[SpoolmanFilament]] = {}
         for sm in sm_filaments:
             if sm.id not in included:
                 continue
@@ -323,7 +345,7 @@ async def wizard_variants(request: Request, db: Session = Depends(get_db)) -> Wi
             clusters.setdefault(key, []).append(sm)
 
         sm_groups: list[SMVariantGroupRow] = []
-        for (_vendor_norm, _material_norm), members in clusters.items():
+        for (_vendor_norm, _material_norm, _finish_norm), members in clusters.items():
             if len(members) < 2:
                 continue
             master = max(members, key=lambda f: (spools_per_filament.get(f.id, 0), -len(f.name)))
@@ -432,12 +454,17 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
         if not s.archived and s.filament:
             spools_per_filament[s.filament.id] = spools_per_filament.get(s.filament.id, 0) + 1
 
-    # D3 — build FDB parent tree: (vendor_norm, material_norm) → FilamentRef for existing parents
+    # D3 — build FDB parent tree: (vendor_norm, material_norm, finish_norm) → FilamentRef
+    # Finish is extracted from the FDB filament name so Silk parents match Silk SM groups.
     _parent_ids: set[str] = {f.parentId for f in fdb_filaments if f.parentId}
-    fdb_parent_by_key: dict[tuple[str, str], FilamentRef] = {}
+    fdb_parent_by_key: dict[tuple[str, str, str], FilamentRef] = {}
     for f in fdb_filaments:
         if f.id in _parent_ids or f.hasVariants:
-            key = (normalize_vendor(f.vendor), normalize_name(f.type or ""))
+            key = (
+                normalize_vendor(f.vendor),
+                normalize_name(f.type or ""),
+                extract_finish_line(f.name or "", f.type),
+            )
             if key not in fdb_parent_by_key:
                 fdb_parent_by_key[key] = FilamentRef(
                     filamentdb_filament_id=f.id,
@@ -446,8 +473,8 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
                     material=f.type,
                 )
 
-    # D1 — cluster included filaments by (vendor, material) only
-    clusters: dict[tuple[str, str], list[SpoolmanFilament]] = {}
+    # D1/B — cluster included filaments by (vendor, material, finish)
+    clusters: dict[tuple[str, str, str], list[SpoolmanFilament]] = {}
     for sm in included_filaments:
         key = sm_variant_cluster_key(sm)
         clusters.setdefault(key, []).append(sm)
@@ -455,7 +482,7 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
     grouped_ids: set[int] = set()
     groups: list[VariancesGroupRow] = []
 
-    for (vendor_norm, material_norm), members in clusters.items():
+    for (vendor_norm, material_norm, finish_norm), members in clusters.items():
         if len(members) < 2:
             continue
         master = max(members, key=lambda f: (spools_per_filament.get(f.id, 0), -len(f.name)))
@@ -484,11 +511,12 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
         display_base = normalize_name(
             f"{(master.vendor.name + ' ') if master.vendor else ''}{master.material or ''}".strip()
         )
-        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm))  # D3
+        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm, finish_norm))  # D3
         groups.append(VariancesGroupRow(
             base_name=display_base,
             vendor=master.vendor.name if master.vendor else None,
             material=master.material,
+            finish=finish_norm or None,  # Part B: shown in group header
             suggested_master=_sm_ref(master),
             members=member_rows,
             existing_fdb_parent=existing_fdb_parent,

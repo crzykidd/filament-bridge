@@ -161,6 +161,8 @@ export const postWizardDirection = (body: WizardDirectionRequest) =>
 export const getWizardMatches = () => request<WizardMatchesResponse>('/wizard/matches')
 export const postWizardMatches = (body: WizardMatchesRequest) =>
   json<WizardDecisionAck>('/wizard/matches', 'POST', body)
+export const postWizardMatchSkip = (smFilamentId: number) =>
+  request<WizardDecisionAck>(`/wizard/matches/${smFilamentId}/skip`, { method: 'POST' })
 
 export const getWizardWeights = () => request<WizardWeightsResponse>('/wizard/weights')
 

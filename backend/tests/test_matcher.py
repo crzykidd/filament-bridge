@@ -1,6 +1,13 @@
 """Tests for core/matcher.py — fuzzy filament matching."""
 
-from app.core.matcher import match_filaments, normalize_color, normalize_name, normalize_vendor
+from app.core.matcher import (
+    extract_finish_line,
+    match_filaments,
+    normalize_color,
+    normalize_name,
+    normalize_vendor,
+    sm_variant_cluster_key,
+)
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor
 
@@ -115,3 +122,101 @@ class TestMatchFilaments:
         assert not result.matched
         assert not result.unmatched_spoolman
         assert not result.unmatched_fdb
+
+
+# ---------------------------------------------------------------------------
+# extract_finish_line
+# ---------------------------------------------------------------------------
+
+
+class TestExtractFinishLine:
+    def test_silk(self):
+        assert extract_finish_line("Buddy PLA Silk Red") == "silk"
+
+    def test_matte(self):
+        assert extract_finish_line("ELEGOO PLA Matte Black", "PLA") == "matte"
+
+    def test_satin(self):
+        assert extract_finish_line("Satin PLA Blue") == "satin"
+
+    def test_cf_word_boundary(self):
+        assert extract_finish_line("Bambu PLA-CF") == "cf"
+        assert extract_finish_line("ELEGOO PLA CF Grey") == "cf"
+
+    def test_cf_carbon_fiber(self):
+        assert extract_finish_line("PLA Carbon Fiber") == "cf"
+
+    def test_glow(self):
+        assert extract_finish_line("PLA Glow in the Dark") == "glow"
+        assert extract_finish_line("GITD PLA Green") == "glow"
+        assert extract_finish_line("Glow Blue PLA") == "glow"
+
+    def test_hs(self):
+        assert extract_finish_line("High Speed PLA White") == "hs"
+        assert extract_finish_line("PLA HS Red") == "hs"
+
+    def test_marble(self):
+        assert extract_finish_line("PLA Marble White") == "marble"
+
+    def test_wood(self):
+        assert extract_finish_line("PLA Wood Brown") == "wood"
+
+    def test_multicolor(self):
+        assert extract_finish_line("PLA Multicolor Rainbow") == "multicolor"
+        assert extract_finish_line("PLA Rainbow") == "multicolor"
+
+    def test_standard_empty(self):
+        assert extract_finish_line("ELEGOO PLA Green") == ""
+        assert extract_finish_line("PLA Red") == ""
+        assert extract_finish_line("ABS White") == ""
+
+    def test_material_field_contributes(self):
+        assert extract_finish_line("SILK Blue", "Silk PLA") == "silk"
+
+    def test_cf_not_false_positive_in_scaffold(self):
+        # "Scaff" contains no finish token
+        assert extract_finish_line("PLA Scaffolding") == ""
+
+
+# ---------------------------------------------------------------------------
+# sm_variant_cluster_key — finish splits clusters (Part B)
+# ---------------------------------------------------------------------------
+
+
+def _sm_fil(id_: int, name: str, vendor: str = "Buddy", material: str = "PLA") -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=id_,
+        name=name,
+        vendor=SpoolmanVendor(id=1, name=vendor),
+        material=material,
+    )
+
+
+class TestSmVariantClusterKey:
+    def test_silk_and_standard_split(self):
+        silk_red = _sm_fil(1, "PLA Silk Red")
+        silk_blue = _sm_fil(2, "PLA Silk Blue")
+        standard = _sm_fil(3, "PLA Green")
+
+        key_silk = sm_variant_cluster_key(silk_red)
+        key_silk2 = sm_variant_cluster_key(silk_blue)
+        key_std = sm_variant_cluster_key(standard)
+
+        assert key_silk == key_silk2, "Silk Red and Silk Blue should share a cluster key"
+        assert key_silk != key_std, "Silk and standard should be in different clusters"
+        assert key_silk[2] == "silk"
+        assert key_std[2] == ""
+
+    def test_same_vendor_material_different_finish(self):
+        matte = _sm_fil(4, "Buddy PLA Matte Red")
+        silk = _sm_fil(5, "Buddy PLA Silk Red")
+        standard = _sm_fil(6, "Buddy PLA Red")
+
+        assert sm_variant_cluster_key(matte) != sm_variant_cluster_key(silk)
+        assert sm_variant_cluster_key(matte) != sm_variant_cluster_key(standard)
+        assert sm_variant_cluster_key(silk) != sm_variant_cluster_key(standard)
+
+    def test_key_is_3_tuple(self):
+        sm = _sm_fil(7, "PLA Red")
+        key = sm_variant_cluster_key(sm)
+        assert len(key) == 3  # (vendor, material, finish)

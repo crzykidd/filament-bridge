@@ -94,17 +94,67 @@ def strip_color_and_words(name: str, color_hex: str | None) -> str:
     return result or normalize_name(name)
 
 
-def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str]:
-    """Return (vendor, material) for SM variant group clustering.
+# ---------------------------------------------------------------------------
+# Finish-line extractor (Part B — Q1 resolution)
+# ---------------------------------------------------------------------------
 
-    Different colors under the same vendor+material are the variant-group signal —
-    color difference is the indicator, not an obstacle. Q1 simplification: line
-    tokens (PLA Matte / Silk / PLA-CF) are not parsed out here; use the D2
-    suggest_exclude signal (sm_prop_conflicts) to peel off divergent lines.
+# Ordered by specificity — longer/more-specific patterns first within a token.
+_FINISH_PATTERNS: list[tuple[str, list[re.Pattern[str]]]] = [
+    ("glow", [
+        re.compile(r"glow[\s\-]in[\s\-]the[\s\-]dark", re.IGNORECASE),
+        re.compile(r"\bgitd\b", re.IGNORECASE),
+        re.compile(r"\bglow\b", re.IGNORECASE),
+    ]),
+    ("cf", [
+        re.compile(r"carbon[\s\-]?fib(?:er|re)", re.IGNORECASE),
+        re.compile(r"\bcf\b", re.IGNORECASE),
+    ]),
+    ("multicolor", [
+        re.compile(r"multi[\s\-]?color", re.IGNORECASE),
+        re.compile(r"tri[\s\-]?color", re.IGNORECASE),
+        re.compile(r"\brainbow\b", re.IGNORECASE),
+        re.compile(r"dual[\s\-]?color", re.IGNORECASE),
+    ]),
+    ("hs", [
+        re.compile(r"high[\s\-]speed", re.IGNORECASE),
+        re.compile(r"\bhs\b", re.IGNORECASE),
+    ]),
+    ("metallic", [re.compile(r"\bmetallic\b", re.IGNORECASE)]),
+    ("marble",   [re.compile(r"\bmarble\b",   re.IGNORECASE)]),
+    ("wood",     [re.compile(r"\bwood\b",     re.IGNORECASE)]),
+    ("matte",    [re.compile(r"\bmatte\b",    re.IGNORECASE)]),
+    ("satin",    [re.compile(r"\bsatin\b",    re.IGNORECASE)]),
+    ("silk",     [re.compile(r"\bsilk\b",     re.IGNORECASE)]),
+]
+
+
+def extract_finish_line(name: str, material: str | None = None) -> str:
+    """Extract the finish/line token from a filament name (and optional material).
+
+    Returns a normalized token ('silk', 'matte', 'cf', 'glow', …) or '' (standard).
+    Detection is word-boundary-aware, case-insensitive, on name + material concatenated.
+    """
+    text = (name or "") + " " + (material or "")
+    for token, patterns in _FINISH_PATTERNS:
+        for pat in patterns:
+            if pat.search(text):
+                return token
+    return ""
+
+
+def sm_variant_cluster_key(sm: SpoolmanFilament) -> tuple[str, str, str]:
+    """Return (vendor, material, finish) for SM variant group clustering.
+
+    Different colors under the same vendor+material+finish are the variant-group
+    signal. The finish token (e.g. 'silk', 'matte', 'cf') is parsed from the
+    filament name so "PLA Silk Red" and plain "PLA Red" cluster into separate
+    groups even when Spoolman records the same `material` string for both.
+    This resolves Q1 from docs/wizard-redesign.md.
     """
     vendor = normalize_vendor(sm.vendor.name if sm.vendor else None)
     material = normalize_name(sm.material or "")
-    return (vendor, material)
+    finish = extract_finish_line(sm.name or "", sm.material)
+    return (vendor, material, finish)
 
 
 def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> list[dict[str, Any]]:

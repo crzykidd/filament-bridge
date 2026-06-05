@@ -118,12 +118,14 @@ spools" number). Placement (Direction step vs a small pre-filter) is Q3.
 
 ---
 
-## Open questions to lock next session
+## Open questions
 
-- **Q1 — Line separation within a vendor+material.** How do we keep PLA / PLA Matte / PLA
-  Silk / PLA-CF apart when `material` is the same string and the line lives in the name?
-  Options: parse a finish/line token out of the name; treat the conflict-flagged members
-  (D2) as the safety net; or add a per-group "split this line" control.
+- **Q1 — Line separation within a vendor+material.** ✅ **Resolved (2026-06-04).**
+  `extract_finish_line()` in `matcher.py` parses a finish/line token (silk, matte, satin, cf,
+  glow, hs, marble, wood, metallic, multicolor/rainbow) from the filament name using word-boundary
+  regexes. `sm_variant_cluster_key` extended to 3-tuple `(vendor, material, finish)`. FDB parent
+  map keying updated to match. Groups show a violet finish badge. D2 `suggest_exclude` survives
+  as a second-line guard for unlexiconed finishes. See `docs/decisions.md` "Part A/B" entry.
 - **Q2 — Where attachment is decided.** Does "attach to existing FDB parent" (D3) surface
   on Matches, on Variances, or a merged resolution view? Leaning: Matches = color identity,
   Variances = parent/grouping incl. existing-parent attach targets.

@@ -3,6 +3,7 @@ import {
   getWizardVariances,
   getWizardVariants,
   getWizardWeights,
+  postWizardMatchSkip,
   postWizardSmVariants,
   postWizardVariants,
 } from '../../api/client'
@@ -91,7 +92,6 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   })
 
   // D3: attachDecision[groupIdx] = 'attach' | 'create_new'
-  // Default to 'attach' when an existing FDB parent is present
   const [attachDecision, setAttachDecision] = useState<Record<number, 'attach' | 'create_new'>>(() => {
     const init: Record<number, 'attach' | 'create_new'> = {}
     data.groups.forEach((g, i) => { init[i] = g.existing_fdb_parent ? 'attach' : 'create_new' })
@@ -102,6 +102,14 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   const [extraGroupMemberships, setExtraGroupMemberships] = useState<Record<number, Set<number>>>({})
   const [extraMasters, setExtraMasters] = useState<Record<number, number>>({})
   const [selectedForGrouping, setSelectedForGrouping] = useState<Set<number>>(new Set())
+
+  // Part A: ignored filament ids (Ignore action → match skip posted to backend)
+  const [ignoredIds, setIgnoredIds] = useState<Set<number>>(new Set())
+  // Which member row is showing its "Move to" dropdown
+  const [movingMember, setMovingMember] = useState<{ fromGroupType: 'auto' | 'extra'; fromIdx: number; smId: number } | null>(null)
+  // Which filament is currently being ignored (loading state)
+  const [ignoringId, setIgnoringId] = useState<number | null>(null)
+  const [ignoreErr, setIgnoreErr] = useState<string | null>(null)
 
   // tare per SM filament id (string for input binding)
   const [tareBySMId, setTareBySMId] = useState<Record<number, string>>(() => {
@@ -129,7 +137,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
     return map
   }, [data])
 
-  // Effective ungrouped pool: all filaments NOT currently in any group (including extra groups)
+  // Effective ungrouped pool: all filaments NOT in any group AND not ignored
   const effectiveUngrouped = useMemo<VariancesFilament[]>(() => {
     const inAnyGroup = new Set<number>()
     for (const membership of Object.values(groupMembership)) {
@@ -139,35 +147,91 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       for (const id of membership) inAnyGroup.add(id)
     }
     return Array.from(allFilamentData.values()).filter(
-      f => !inAnyGroup.has(f.ref.spoolman_filament_id!)
+      f => !inAnyGroup.has(f.ref.spoolman_filament_id!) && !ignoredIds.has(f.ref.spoolman_filament_id!)
     )
-  }, [allFilamentData, groupMembership, extraGroupMemberships])
+  }, [allFilamentData, groupMembership, extraGroupMemberships, ignoredIds])
 
   function pickMaster(groupIdx: number, smId: number) {
     setMasters(prev => ({ ...prev, [groupIdx]: smId }))
   }
 
-  function toggleMember(groupIdx: number, smId: number) {
-    const masterId = masters[groupIdx]
-    if (smId === masterId) return
-    setGroupMembership(prev => {
-      const next = { ...prev }
-      const s = new Set(prev[groupIdx])
-      if (s.has(smId)) s.delete(smId); else s.add(smId)
-      next[groupIdx] = s
-      return next
-    })
-  }
-
   function addMember(groupIdx: number, smId: number) {
     setGroupMembership(prev => {
-      const next = { ...prev }
-      const s = new Set(prev[groupIdx])
-      s.add(smId)
-      next[groupIdx] = s
-      return next
+      const s = new Set(prev[groupIdx]); s.add(smId)
+      return { ...prev, [groupIdx]: s }
     })
     setAddingTo(null)
+  }
+
+  // Remove smId from auto group at groupIdx, promoting master if needed
+  function makeStandaloneFromAutoGroup(groupIdx: number, smId: number) {
+    const masterId = masters[groupIdx]
+    const currentSet = groupMembership[groupIdx]
+    setGroupMembership(prev => {
+      const s = new Set(prev[groupIdx]); s.delete(smId)
+      return { ...prev, [groupIdx]: s }
+    })
+    if (smId === masterId) {
+      const remaining = Array.from(currentSet).filter(id => id !== smId)
+      if (remaining.length > 0) setMasters(prev => ({ ...prev, [groupIdx]: remaining[0] }))
+    }
+  }
+
+  // Remove smId from extra group at extraIdx, promoting master if needed
+  function makeStandaloneFromExtraGroup(extraIdx: number, smId: number) {
+    const masterId = extraMasters[extraIdx]
+    const currentSet = extraGroupMemberships[extraIdx]
+    setExtraGroupMemberships(prev => {
+      const s = new Set(prev[extraIdx]); s.delete(smId)
+      return { ...prev, [extraIdx]: s }
+    })
+    if (smId === masterId) {
+      const remaining = Array.from(currentSet).filter(id => id !== smId)
+      if (remaining.length > 0) setExtraMasters(prev => ({ ...prev, [extraIdx]: remaining[0] }))
+    }
+  }
+
+  // Move smId from its source group to a target (auto-N, extra-N, or 'new')
+  function moveMember(fromGroupType: 'auto' | 'extra', fromIdx: number, smId: number, target: string) {
+    if (fromGroupType === 'auto') makeStandaloneFromAutoGroup(fromIdx, smId)
+    else makeStandaloneFromExtraGroup(fromIdx, smId)
+
+    if (target === 'new') {
+      const newIdx = Object.keys(extraGroupMemberships).length
+      setExtraGroupMemberships(prev => ({ ...prev, [newIdx]: new Set([smId]) }))
+      setExtraMasters(prev => ({ ...prev, [newIdx]: smId }))
+    } else {
+      const [tType, tIdxStr] = target.split('-')
+      const tIdx = parseInt(tIdxStr)
+      if (tType === 'auto') {
+        setGroupMembership(prev => {
+          const s = new Set(prev[tIdx]); s.add(smId)
+          return { ...prev, [tIdx]: s }
+        })
+      } else if (tType === 'extra') {
+        setExtraGroupMemberships(prev => {
+          const s = new Set(prev[tIdx]); s.add(smId)
+          return { ...prev, [tIdx]: s }
+        })
+      }
+    }
+    setMovingMember(null)
+  }
+
+  // Ignore: POST skip decision to backend, then remove from local state
+  async function ignoreFilament(smId: number, fromGroupType?: 'auto' | 'extra', fromIdx?: number) {
+    setIgnoringId(smId)
+    setIgnoreErr(null)
+    try {
+      await postWizardMatchSkip(smId)
+      if (fromGroupType === 'auto' && fromIdx !== undefined) makeStandaloneFromAutoGroup(fromIdx, smId)
+      else if (fromGroupType === 'extra' && fromIdx !== undefined) makeStandaloneFromExtraGroup(fromIdx, smId)
+      setIgnoredIds(prev => new Set([...prev, smId]))
+    } catch (e) {
+      setIgnoreErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setIgnoringId(null)
+    }
   }
 
   function getLiveConflicts(groupIdx: number, memberSmId: number): VariantPropConflict[] {
@@ -273,6 +337,24 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
     }
   }
 
+  // Build the "Move to" option list for a member in group (fromGroupType, fromIdx)
+  function moveTargetOptions(fromGroupType: 'auto' | 'extra', fromIdx: number) {
+    const options: { value: string; label: string }[] = []
+    data.groups.forEach((g, gi) => {
+      if (fromGroupType === 'auto' && gi === fromIdx) return
+      if (groupMembership[gi].size > 0) {
+        options.push({ value: `auto-${gi}`, label: g.base_name || `Group ${gi + 1}` })
+      }
+    })
+    Object.entries(extraGroupMemberships).forEach(([idxStr, m]) => {
+      const ei = parseInt(idxStr)
+      if (fromGroupType === 'extra' && ei === fromIdx) return
+      if (m.size > 0) options.push({ value: `extra-${ei}`, label: `Manual group ${ei + 1}` })
+    })
+    options.push({ value: 'new', label: 'New group' })
+    return options
+  }
+
   if (data.groups.length === 0 && effectiveUngrouped.length === 0) {
     return (
       <div className="space-y-5">
@@ -304,10 +386,12 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
           {data.groups.map((group: VariancesGroupRow, groupIdx: number) => {
             const masterId = masters[groupIdx]
             const membership = groupMembership[groupIdx]
+            if (membership.size === 0) return null  // group dissolved — all members moved/ignored
             const masterTareVal = tareBySMId[masterId] ?? '200'
             const masterData = allFilamentData.get(masterId)
             const tareIsDefault = masterData?.tare_source === 'default'
             const addCandidates = effectiveUngrouped.filter(f => !membership.has(f.ref.spoolman_filament_id!))
+            const moveTargets = moveTargetOptions('auto', groupIdx)
 
             return (
               <div key={groupIdx} className="bg-white rounded-lg border border-gray-200 p-5">
@@ -328,20 +412,23 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                               : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-50'
                           }`}
                         >
-                          {opt === 'attach'
-                            ? `Attach to «${group.existing_fdb_parent.name}»`
-                            : 'Create new parent'}
+                          {opt === 'attach' ? `Attach to «${group.existing_fdb_parent.name}»` : 'Create new parent'}
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
+
+                {/* Group header: name + finish pill + tare */}
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="font-medium text-gray-800">{group.base_name}</p>
-                    <div className="flex gap-3 text-xs text-gray-500 mt-0.5">
+                    <div className="flex flex-wrap gap-2 text-xs text-gray-500 mt-0.5">
                       {group.vendor && <span>{group.vendor}</span>}
                       {group.material && <span>{group.material}</span>}
+                      {group.finish && (
+                        <span className="bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded capitalize">{group.finish}</span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -363,41 +450,32 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                   Filament DB stores one tare per filament.
                 </div>
 
-                <div className="space-y-2">
-                  {Array.from(membership).map(smId => {
+                {/* Per-member rows with labeled action buttons */}
+                <div className="space-y-1">
+                  {Array.from(membership).filter(id => !ignoredIds.has(id)).map(smId => {
                     const filData = allFilamentData.get(smId)
                     if (!filData) return null
                     const isMaster = smId === masterId
                     const conflicts = getLiveConflicts(groupIdx, smId)
+                    const isMoving = movingMember?.smId === smId && movingMember.fromGroupType === 'auto' && movingMember.fromIdx === groupIdx
+                    const isIgnoring = ignoringId === smId
                     return (
-                      <div key={smId} className="flex items-start gap-3 p-2 rounded hover:bg-gray-50">
+                      <div key={smId} className="flex items-start gap-2 p-2 rounded hover:bg-gray-50">
                         <input
                           type="radio"
                           name={`master-${groupIdx}`}
                           checked={isMaster}
                           onChange={() => pickMaster(groupIdx, smId)}
-                          className="mt-1 accent-indigo-600"
+                          className="mt-1 accent-indigo-600 shrink-0"
                           title="Set as master (parent)"
-                        />
-                        <input
-                          type="checkbox"
-                          checked
-                          disabled={isMaster}
-                          onChange={() => toggleMember(groupIdx, smId)}
-                          className="mt-1 accent-indigo-600"
-                          title={isMaster ? 'Master cannot be removed' : 'Remove from group (leaves flat)'}
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className={`text-sm ${isMaster ? 'font-semibold text-indigo-700' : 'text-gray-700'}`}>
                               {filData.ref.name}
                             </span>
-                            {isMaster && (
-                              <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>
-                            )}
-                            {filData.ref.color && (
-                              <span className="text-xs text-gray-400 font-mono">{filData.ref.color}</span>
-                            )}
+                            {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
+                            {filData.ref.color && <span className="text-xs text-gray-400 font-mono">{filData.ref.color}</span>}
                             <DeepLinks spoolmanFilamentId={filData.ref.spoolman_filament_id} />
                           </div>
                           {conflicts.length > 0 && (
@@ -410,6 +488,39 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                 </span>
                               ))}
                             </div>
+                          )}
+                        </div>
+                        {/* Per-member actions */}
+                        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                          {isMoving ? (
+                            <>
+                              <select
+                                className="text-xs border border-gray-200 rounded px-2 py-1"
+                                defaultValue=""
+                                onChange={e => { if (e.target.value) moveMember('auto', groupIdx, smId, e.target.value) }}
+                                autoFocus
+                              >
+                                <option value="" disabled>Move to…</option>
+                                {moveTargets.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              </select>
+                              <button onClick={() => setMovingMember(null)} className="text-xs text-gray-400 hover:text-gray-600 px-1">✕</button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => setMovingMember({ fromGroupType: 'auto', fromIdx: groupIdx, smId })}
+                                className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                              >Move to…</button>
+                              <button
+                                onClick={() => makeStandaloneFromAutoGroup(groupIdx, smId)}
+                                className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                              >Standalone</button>
+                              <button
+                                disabled={isIgnoring}
+                                onClick={() => ignoreFilament(smId, 'auto', groupIdx)}
+                                className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                              >{isIgnoring ? '…' : 'Ignore'}</button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -470,9 +581,10 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
           <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
             {effectiveUngrouped.map(f => {
               const smId = f.ref.spoolman_filament_id!
+              const isIgnoring = ignoringId === smId
               return (
                 <div key={smId} className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-gray-50">
-                  {/* D2 manual grouping checkbox */}
+                  {/* Manual grouping checkbox */}
                   <input
                     type="checkbox"
                     checked={selectedForGrouping.has(smId)}
@@ -486,9 +598,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       {f.ref.vendor && <span className="text-xs text-gray-400">{f.ref.vendor}</span>}
                       {f.ref.color && <span className="text-xs font-mono text-gray-400">{f.ref.color}</span>}
                       {f.suggest_exclude && (
-                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
-                          suggested standalone (prop conflict)
-                        </span>
+                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">suggested standalone (prop conflict)</span>
                       )}
                       <DeepLinks spoolmanFilamentId={smId} />
                     </div>
@@ -505,6 +615,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">default</span>
                     )}
                   </label>
+                  <button
+                    disabled={isIgnoring}
+                    onClick={() => ignoreFilament(smId)}
+                    className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50 shrink-0"
+                  >{isIgnoring ? '…' : 'Ignore'}</button>
                 </div>
               )
             })}
@@ -512,43 +627,79 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
         </div>
       )}
 
-      {/* D2 extra groups from manual selection */}
+      {/* Extra groups from manual selection */}
       {Object.keys(extraGroupMemberships).length > 0 && (
         <div className="space-y-4">
           <h3 className="text-sm font-medium text-gray-700">Manually grouped</h3>
           {Object.entries(extraGroupMemberships).map(([idxStr, membership]) => {
             const extraIdx = parseInt(idxStr)
+            if (membership.size === 0) return null
             const masterId = extraMasters[extraIdx]
             const masterTareVal = tareBySMId[masterId] ?? '200'
+            const moveTargetsExtra = moveTargetOptions('extra', extraIdx)
             return (
               <div key={extraIdx} className="bg-white rounded-lg border border-indigo-200 p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium text-gray-700">Manual group {extraIdx + 1}</p>
                   <button
                     onClick={() => {
-                      setExtraGroupMemberships(prev => { const n = {...prev}; delete n[extraIdx]; return n })
-                      setExtraMasters(prev => { const n = {...prev}; delete n[extraIdx]; return n })
+                      setExtraGroupMemberships(prev => { const n = { ...prev }; delete n[extraIdx]; return n })
+                      setExtraMasters(prev => { const n = { ...prev }; delete n[extraIdx]; return n })
                     }}
                     className="text-xs text-gray-400 hover:text-red-500"
                   >
                     Disband
                   </button>
                 </div>
-                {Array.from(membership).map(smId => {
+                {Array.from(membership).filter(id => !ignoredIds.has(id)).map(smId => {
                   const filData = allFilamentData.get(smId)
                   if (!filData) return null
                   const isMaster = smId === masterId
+                  const isMoving = movingMember?.smId === smId && movingMember.fromGroupType === 'extra' && movingMember.fromIdx === extraIdx
+                  const isIgnoring = ignoringId === smId
                   return (
-                    <div key={smId} className="flex items-center gap-3">
+                    <div key={smId} className="flex items-center gap-2">
                       <input type="radio" name={`extra-master-${extraIdx}`}
                         checked={isMaster}
                         onChange={() => setExtraMasters(prev => ({ ...prev, [extraIdx]: smId }))}
-                        className="accent-indigo-600"
+                        className="accent-indigo-600 shrink-0"
                         title="Set as master" />
-                      <span className={`text-sm ${isMaster ? 'font-semibold text-indigo-700' : 'text-gray-700'}`}>
+                      <span className={`text-sm flex-1 min-w-0 ${isMaster ? 'font-semibold text-indigo-700' : 'text-gray-700'}`}>
                         {filData.ref.name}
                       </span>
                       {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {isMoving ? (
+                          <>
+                            <select
+                              className="text-xs border border-gray-200 rounded px-2 py-1"
+                              defaultValue=""
+                              onChange={e => { if (e.target.value) moveMember('extra', extraIdx, smId, e.target.value) }}
+                              autoFocus
+                            >
+                              <option value="" disabled>Move to…</option>
+                              {moveTargetsExtra.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                            <button onClick={() => setMovingMember(null)} className="text-xs text-gray-400 hover:text-gray-600 px-1">✕</button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setMovingMember({ fromGroupType: 'extra', fromIdx: extraIdx, smId })}
+                              className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                            >Move to…</button>
+                            <button
+                              onClick={() => makeStandaloneFromExtraGroup(extraIdx, smId)}
+                              className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                            >Standalone</button>
+                            <button
+                              disabled={isIgnoring}
+                              onClick={() => ignoreFilament(smId, 'extra', extraIdx)}
+                              className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                            >{isIgnoring ? '…' : 'Ignore'}</button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -565,6 +716,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
         </div>
       )}
 
+      {ignoreErr && <p className="text-sm text-red-600">Ignore failed: {ignoreErr}</p>}
       {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
 
       <div className="flex justify-between">
