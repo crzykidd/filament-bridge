@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-06 — FDB create_spool returns the filament doc; extract spool _id by label match
+
+`POST /api/filaments/:id/spools` returns the **filament document** (with its embedded
+`spools[]` array), not the new spool subdocument. The bridge was reading `raw["_id"]`
+directly, which is the **filament** id — so every `SpoolMapping.filamentdb_spool_id`
+was set to the filament id instead of the spool id. This caused every per-spool lookup
+(deletion detection, weight sync, field sync) to fail with "Record deleted upstream"
+because the filament id was never found in `fdb_spool_index` (keyed by real spool ids).
+
+**Fix:** `extract_created_spool_id(resp, *, label_field, label_value)` in
+`backend/app/services/filamentdb.py` finds the just-created spool inside `resp["spools"]`
+by matching `label_field` (the `FILAMENTDB_SPOOLMAN_ID_FIELD`, default `"label"`) against
+`label_value` (the Spoolman spool id stored on create). Falls back to the last entry in
+`spools[]` if no label match; handles a bare-spool response defensively. Applied at both
+call sites: `wizard.py` (`_execute_spoolman_to_fdb`) and `engine.py`
+(`_handle_new_sm_spool`).
+
+**Pre-fix mappings are corrupt** — every `spool_mappings` row written before this fix has
+`filamentdb_spool_id == filamentdb_filament_id`. The user should clear these rows and
+re-run the wizard import to produce correct mappings. Any open `__record_deleted__`
+deletion conflicts for those spools are stale artifacts and can be dismissed.
+
 ## 2026-06-06 — Stale cross-ref no longer skips spool creation; spoolWeight from resolved tare
 
 ### Bug A: stale filamentdb_spool_id cross-ref blocked spool creation

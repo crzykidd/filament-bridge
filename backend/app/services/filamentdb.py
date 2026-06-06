@@ -18,6 +18,39 @@ from app.schemas.filamentdb import FDBFilament, FDBFilamentDetail, FDBSpoolDetai
 
 logger = logging.getLogger(__name__)
 
+
+def extract_created_spool_id(resp: dict, *, label_field: str, label_value: str) -> str:
+    """Return the ``_id`` of the spool that was just created via POST /api/filaments/:id/spools.
+
+    The FDB endpoint returns the *filament* document (with a ``spools`` array), so
+    ``resp["_id"]`` is the filament id — NOT the spool id.  This helper finds the
+    newly-created spool by matching ``label_field`` against ``label_value`` inside
+    ``resp["spools"]``.
+
+    Fall-back order:
+    1. Label-match: find the spool whose ``{label_field}`` equals ``label_value``.
+    2. Last-spool: if no label match, use the last entry in ``spools`` (most recently added).
+    3. Bare spool: if there is no ``spools`` key at all, treat ``resp`` itself as the spool
+       (defensive handling for any future FDB variant that returns the spool directly).
+    4. Returns ``""`` when the id cannot be determined.
+    """
+    spools = resp.get("spools")
+    if isinstance(spools, list) and spools:
+        for sp in spools:
+            if str(sp.get(label_field, "")) == str(label_value):
+                sid = sp.get("_id") or sp.get("id")
+                if sid:
+                    return str(sid)
+        # Fallback: newest-added spool (last in array).
+        last = spools[-1]
+        sid = last.get("_id") or last.get("id")
+        if sid:
+            return str(sid)
+    # Response is a bare spool subdocument (defensive / future-proofing).
+    sid = resp.get("_id") or resp.get("id")
+    return str(sid) if sid else ""
+
+
 # Computed/Mongoose fields that must be stripped before any PUT to avoid
 # overriding variant inheritance or triggering server-side validation errors.
 _STRIP_BEFORE_PUT: frozenset[str] = frozenset({

@@ -84,6 +84,7 @@ from app.schemas.api import (
 )
 from app.schemas.filamentdb import FDBFilament, FDBSpool
 from app.schemas.spoolman import SpoolmanFilament, encode_extra_value
+from app.services.filamentdb import extract_created_spool_id
 
 logger = logging.getLogger(__name__)
 
@@ -1089,7 +1090,11 @@ async def _execute_spoolman_to_fdb(
                     spool_payload["locationId"] = _fdb_loc_cache[sm_location]
                 # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
                 raw = await filamentdb.create_spool(fdb_id, spool_payload)
-                new_fdb_spool_id = raw.get("_id") or raw.get("id") or ""
+                new_fdb_spool_id = extract_created_spool_id(
+                    raw,
+                    label_field=fdb_field_name,
+                    label_value=str(spool_item.sm_spool.id),
+                )
                 await spoolman.update_spool(
                     spool_item.sm_spool.id,
                     {"extra": _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_fdb_id)}

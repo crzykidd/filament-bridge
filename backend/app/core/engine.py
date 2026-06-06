@@ -44,7 +44,7 @@ from app.models.snapshot import Snapshot
 from app.models.sync_log import SyncLog
 from app.schemas.spoolman import SpoolmanSpool, decode_extra_value, encode_extra_value
 from app.schemas.filamentdb import FDBFilament, FDBSpool
-from app.services.filamentdb import FilamentDBClient
+from app.services.filamentdb import FilamentDBClient, extract_created_spool_id
 from app.services.spoolman import SpoolmanClient
 
 logger = logging.getLogger(__name__)
@@ -1170,7 +1170,11 @@ async def _handle_new_sm_spool(
             fdb_field_name: str(sm_spool.id),
         }
         raw = await filamentdb.create_spool(fdb_filament.id, spool_payload)
-        new_fdb_spool_id = raw.get("_id") or raw.get("id", "")
+        new_fdb_spool_id = extract_created_spool_id(
+            raw,
+            label_field=fdb_field_name,
+            label_value=str(sm_spool.id),
+        )
 
         # Write cross-ref IDs back to Spoolman spool
         await spoolman.update_spool(sm_spool.id, {
