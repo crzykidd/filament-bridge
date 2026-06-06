@@ -105,6 +105,12 @@ export interface ConflictResponse {
   resolved_at: string | null
   resolution: string | null
   resolved_value: unknown
+  // Identity fields sourced from the Spoolman snapshot (read-only enrichment).
+  label: string | null
+  vendor: string | null
+  name: string | null
+  color_hex: string | null
+  material: string | null
 }
 
 export interface ConflictResolveRequest {

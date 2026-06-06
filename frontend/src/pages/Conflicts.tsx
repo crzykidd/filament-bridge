@@ -6,6 +6,60 @@ import type { ConflictResponse } from '../api/types'
 
 type Resolution = 'spoolman' | 'filamentdb' | 'manual'
 
+// ---------------------------------------------------------------------------
+// Color swatch (ported from StepVariances.tsx)
+// ---------------------------------------------------------------------------
+
+function ColorSwatch({ hex }: { hex: string | null | undefined }) {
+  if (!hex) return null
+  return (
+    <span
+      className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0"
+      style={{ backgroundColor: hex.startsWith('#') ? hex : `#${hex}` }}
+      title={hex}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Identity header — shown at the top of every conflict card
+// ---------------------------------------------------------------------------
+
+function ConflictIdentityHeader({ conflict }: { conflict: ConflictResponse }) {
+  const { label, vendor: _vendor, color_hex, material, spoolman_id, filamentdb_filament_id, filamentdb_spool_id } = conflict
+  return (
+    <div className="flex items-center gap-2 flex-wrap pb-2 border-b border-gray-100 mb-2">
+      <ColorSwatch hex={color_hex} />
+      <span className="font-semibold text-gray-800 text-sm">{label ?? `SM #${spoolman_id}`}</span>
+      {material && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
+          {material}
+        </span>
+      )}
+      {color_hex && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-500">
+          {color_hex.startsWith('#') ? color_hex : `#${color_hex}`}
+        </span>
+      )}
+      {spoolman_id != null && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-emerald-50 text-emerald-700">
+          SM #{spoolman_id}
+        </span>
+      )}
+      {filamentdb_filament_id && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-blue-50 text-blue-700">
+          FDB fil {filamentdb_filament_id}
+        </span>
+      )}
+      {filamentdb_spool_id && (
+        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-blue-50 text-blue-600">
+          FDB spool {filamentdb_spool_id}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function ValueDisplay({ value }: { value: unknown }) {
   if (value == null) return <span className="text-gray-400">—</span>
   const s = typeof value === 'object' ? JSON.stringify(value) : String(value)
@@ -73,6 +127,7 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
+      <ConflictIdentityHeader conflict={conflict} />
       <div className="flex items-start justify-between gap-4">
         <div>
           <span className="text-xs text-gray-500 uppercase tracking-wide">{conflict.entity_type}</span>
@@ -291,7 +346,8 @@ export default function Conflicts() {
               {tab === 'open'
                 ? <ResolveRow conflict={c} onResolved={reload} />
                 : (
-                  <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
+                    <ConflictIdentityHeader conflict={c} />
                     <div className="flex items-center justify-between">
                       <div>
                         <span className="text-xs text-gray-500 uppercase">{c.entity_type}</span>

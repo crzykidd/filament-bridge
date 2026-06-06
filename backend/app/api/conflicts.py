@@ -63,7 +63,77 @@ def _decode(raw: str | None):
         return raw
 
 
-def _to_response(c: Conflict) -> ConflictResponse:
+def _conflict_identity(db: Session, c: Conflict) -> dict:
+    """Load identifying fields from the Spoolman snapshot for a conflict.
+
+    For spool conflicts: reads the spool snapshot whose nested filament carries
+    name/vendor/color_hex/material.
+    For filament conflicts: reads the filament snapshot directly.
+
+    Returns a dict with label/vendor/name/color_hex/material.
+    Tolerates a missing snapshot: returns an id-based label with null fields.
+    """
+    if c.spoolman_id is None:
+        return {"label": None, "vendor": None, "name": None, "color_hex": None, "material": None}
+
+    if c.entity_type == "spool":
+        snap_row = (
+            db.query(Snapshot)
+            .filter_by(source="spoolman", entity_type="spool", entity_id=str(c.spoolman_id))
+            .first()
+        )
+        if snap_row is None:
+            return {
+                "label": f"SM #{c.spoolman_id}",
+                "vendor": None,
+                "name": None,
+                "color_hex": None,
+                "material": None,
+            }
+        snap = json.loads(snap_row.data)
+        filament = snap.get("filament") or {}
+        vendor_obj = filament.get("vendor") if isinstance(filament.get("vendor"), dict) else {}
+        vendor_name = (vendor_obj or {}).get("name")
+        name = filament.get("name")
+        color_hex = filament.get("color_hex")
+        material = filament.get("material")
+    else:
+        # entity_type == "filament"
+        snap_row = (
+            db.query(Snapshot)
+            .filter_by(source="spoolman", entity_type="filament", entity_id=str(c.spoolman_id))
+            .first()
+        )
+        if snap_row is None:
+            return {
+                "label": f"SM #{c.spoolman_id}",
+                "vendor": None,
+                "name": None,
+                "color_hex": None,
+                "material": None,
+            }
+        snap = json.loads(snap_row.data)
+        vendor_obj = snap.get("vendor") if isinstance(snap.get("vendor"), dict) else {}
+        vendor_name = (vendor_obj or {}).get("name")
+        name = snap.get("name")
+        color_hex = snap.get("color_hex")
+        material = snap.get("material")
+
+    parts = [p for p in (vendor_name, name) if p]
+    label = " ".join(parts).strip() or f"SM #{c.spoolman_id}"
+    return {
+        "label": label,
+        "vendor": vendor_name,
+        "name": name,
+        "color_hex": color_hex,
+        "material": material,
+    }
+
+
+def _to_response(c: Conflict, db: Session | None = None) -> ConflictResponse:
+    identity = _conflict_identity(db, c) if db is not None else {
+        "label": None, "vendor": None, "name": None, "color_hex": None, "material": None,
+    }
     return ConflictResponse(
         id=c.id,
         status="resolved" if c.resolved_at is not None else "open",
@@ -78,6 +148,7 @@ def _to_response(c: Conflict) -> ConflictResponse:
         resolved_at=c.resolved_at,
         resolution=c.resolution,
         resolved_value=_decode(c.resolved_value),
+        **identity,
     )
 
 
@@ -101,7 +172,7 @@ def list_conflicts(
     else:
         q = q.filter(Conflict.resolved_at.isnot(None))
     rows = q.order_by(Conflict.detected_at.desc(), Conflict.id.desc()).all()
-    return [_to_response(c) for c in rows]
+    return [_to_response(c, db) for c in rows]
 
 
 @router.post("/conflicts/{conflict_id}/resolve", response_model=ConflictResponse)
@@ -125,7 +196,7 @@ def resolve_conflict(
         _cleanup_orphaned_mapping(db, c)
     db.commit()
     db.refresh(c)
-    return _to_response(c)
+    return _to_response(c, db)
 
 
 @router.post("/conflicts/bulk-resolve", response_model=BulkResolveResponse)

@@ -116,6 +116,12 @@ class ConflictResponse(BaseModel):
     resolved_at: datetime.datetime | None = None
     resolution: str | None = None
     resolved_value: Any = None
+    # Identity fields sourced from the Spoolman snapshot (read-only enrichment).
+    label: str | None = None
+    vendor: str | None = None
+    name: str | None = None
+    color_hex: str | None = None
+    material: str | None = None
 
 
 class ConflictResolveRequest(BaseModel):

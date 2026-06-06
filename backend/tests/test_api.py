@@ -346,6 +346,75 @@ def test_bulk_resolve_deletion_conflict_removes_mapping(db):
     assert db.query(SpoolMapping).count() == 0
 
 
+def test_conflict_identity_populated_from_spool_snapshot(db):
+    """GET /api/conflicts returns label/vendor/name/color_hex/material from the Spoolman spool snapshot."""
+    spool_snap = {
+        "id": 7,
+        "remaining_weight": 500.0,
+        "filament": {
+            "id": 3,
+            "name": "PLA Matte",
+            "color_hex": "FF5733",
+            "material": "PLA",
+            "vendor": {"id": 1, "name": "ELEGOO"},
+        },
+    }
+    db.add(Snapshot(
+        source="spoolman",
+        entity_type="spool",
+        entity_id="7",
+        data=json.dumps(spool_snap),
+    ))
+    db.add(Conflict(
+        entity_type="spool",
+        spoolman_id=7,
+        filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1",
+        field_name="weight",
+        spoolman_value=json.dumps(500.0),
+        filamentdb_value=json.dumps(700.0),
+    ))
+    db.commit()
+    client = _client(db)
+
+    resp = client.get("/api/conflicts?status=open")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    c = body[0]
+    assert c["label"] == "ELEGOO PLA Matte"
+    assert c["vendor"] == "ELEGOO"
+    assert c["name"] == "PLA Matte"
+    assert c["color_hex"] == "FF5733"
+    assert c["material"] == "PLA"
+
+
+def test_conflict_identity_graceful_when_no_snapshot(db):
+    """GET /api/conflicts returns an id-based label and null identity fields when no snapshot exists."""
+    db.add(Conflict(
+        entity_type="spool",
+        spoolman_id=42,
+        filamentdb_filament_id="fil-2",
+        filamentdb_spool_id="spool-2",
+        field_name="weight",
+        spoolman_value=json.dumps(100.0),
+        filamentdb_value=json.dumps(200.0),
+    ))
+    db.commit()
+    client = _client(db)
+
+    resp = client.get("/api/conflicts?status=open")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    c = body[0]
+    assert c["label"] == "SM #42"
+    assert c["vendor"] is None
+    assert c["name"] is None
+    assert c["color_hex"] is None
+    assert c["material"] is None
+
+
 # ---------------------------------------------------------------------------
 # Auto-sync guard (FR-8)
 # ---------------------------------------------------------------------------

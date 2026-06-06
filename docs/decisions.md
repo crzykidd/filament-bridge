@@ -1,5 +1,25 @@
 # Decision record
 
+## 2026-06-06 — Conflict cards carry snapshot-derived identity
+
+Each conflict card now shows a compact identity header (color swatch, label,
+material chip, hex chip, SM spool id, FDB filament id, FDB spool id) so the
+user can identify the record at a glance without following deep-link icons.
+
+**Where the data comes from:** `_conflict_identity(db, c)` in
+`backend/app/api/conflicts.py` loads the Spoolman snapshot for the conflicting
+entity — the **spool** snapshot (`source="spoolman", entity_type="spool"`) for
+spool conflicts, the **filament** snapshot for filament conflicts — and extracts
+`filament.name`, `filament.vendor.name`, `filament.color_hex`, `filament.material`
+(spool path) or the top-level equivalents (filament path). The composed label is
+`"{vendor} {name}".strip()` falling back to `"SM #{spoolman_id}"` when the
+snapshot is absent.
+
+**Read-only enrichment only:** the `_conflict_identity` helper performs no writes
+and does not participate in conflict detection or resolution logic. The five new
+fields (`label`, `vendor`, `name`, `color_hex`, `material`) are nullable on
+`ConflictResponse` — existing consumers that don't need them are unaffected.
+
 ## 2026-06-06 — FDB create_spool returns the filament doc; extract spool _id by label match
 
 `POST /api/filaments/:id/spools` returns the **filament document** (with its embedded
