@@ -183,6 +183,7 @@ filament-bridge/
 │   └── vite.config.ts
 ├── docs/
 │   ├── prd.md                              — full product requirements (READ THIS)
+│   ├── spoolman-writes.md                  — every field the bridge writes to Spoolman, and when
 │   └── migration-spoolman-to-filamentdb.md — standalone migration guide
 └── private_data/                           — gitignored, user-specific test data
 ```
