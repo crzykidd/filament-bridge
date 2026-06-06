@@ -16,7 +16,7 @@ from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb
 from app.core.fields import resolve_effective_cost
 from app.core.matcher import sm_prop_conflicts
-from app.core.weight import spoolman_to_fdb_gross
+from app.core.weight import DEFAULT_TARE_GRAMS, spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, decode_extra_value
@@ -24,6 +24,40 @@ from app.schemas.spoolman import SpoolmanFilament, decode_extra_value
 logger = logging.getLogger(__name__)
 
 _DEFAULT_FDB_MATERIAL = "Unknown"
+
+
+def _resolve_filament_tare(
+    sm_filament: SpoolmanFilament,
+    fil_spools: list,
+    tare_by_sm_spool: dict[int, float],
+) -> float:
+    """Resolve the wizard-canonical tare for a Spoolman filament.
+
+    Resolution order (mirrors Phase-C spool tare logic, lifted to the filament level):
+    1. User override from tare_by_sm_spool for any spool of this filament (first spool
+       by id, same deterministic tie-break used elsewhere).
+    2. Spoolman spool-level spool_weight (first spool by id with a non-null value).
+    3. Spoolman filament-level spool_weight.
+    4. DEFAULT_TARE_GRAMS (200 g).
+
+    This is the same tare the Phase-C gross-weight computation uses, so the value
+    written to FDB spoolWeight always matches what drove the spool totalWeight.
+    """
+    # Sort spools by id for deterministic selection (mirrors resolve_effective_cost).
+    sorted_spools = sorted(fil_spools, key=lambda s: s.id)
+    # 1. Per-spool user override from the wizard tare_by_sm_spool map.
+    for s in sorted_spools:
+        if s.id in tare_by_sm_spool:
+            return tare_by_sm_spool[s.id]
+    # 2. Spool-level spool_weight.
+    for s in sorted_spools:
+        if getattr(s, "spool_weight", None) is not None:
+            return s.spool_weight
+    # 3. Filament-level spool_weight.
+    if sm_filament.spool_weight is not None:
+        return sm_filament.spool_weight
+    # 4. Default.
+    return DEFAULT_TARE_GRAMS
 
 
 @dataclass
@@ -66,6 +100,7 @@ def _fdb_filament_payload_from_sm(
     *,
     effective_cost: float | None = None,
     spools: list | None = None,
+    resolved_tare: float | None = None,
 ) -> dict:
     """Map a Spoolman filament onto the FDB create-filament body (core fields only).
 
@@ -77,6 +112,11 @@ def _fdb_filament_payload_from_sm(
 
     spools: non-archived spools for this filament; used to resolve netFilamentWeight
     when sm.weight is None (mirrors resolve_effective_cost selection style).
+
+    resolved_tare: the wizard-resolved tare used for gross-weight computation (user
+    override → spool spool_weight → filament spool_weight → DEFAULT_TARE_GRAMS).
+    When provided, sets spoolWeight from this resolved value instead of raw
+    sm.spool_weight (which is often NULL for Spoolman filaments).
     """
     material = sm.material
     if not material:
@@ -86,6 +126,7 @@ def _fdb_filament_payload_from_sm(
         )
         material = _DEFAULT_FDB_MATERIAL
     mc = sm_multicolor_to_fdb(sm.color_hex, sm.multi_color_hexes, sm.multi_color_direction)
+    spool_weight = resolved_tare if resolved_tare is not None else sm.spool_weight
     payload: dict = {
         "name": sm.name,
         "vendor": sm.vendor.name if sm.vendor else None,
@@ -93,7 +134,7 @@ def _fdb_filament_payload_from_sm(
         "color": mc["color"],
         "density": sm.density,
         "diameter": sm.diameter,
-        "spoolWeight": sm.spool_weight,
+        "spoolWeight": spool_weight,
     }
     if effective_cost is not None:
         payload["cost"] = effective_cost
@@ -132,6 +173,7 @@ def _plan_spoolman_to_fdb(
     tare_by_sm_spool: dict[int, float],
     precision: int = 2,
     include_empty_spools: bool = True,
+    existing_fdb_spool_ids: set[str] | None = None,
 ) -> _SyncPlan:
     """Compute what _execute_spoolman_to_fdb would do — no writes, no upstream I/O.
 
@@ -190,8 +232,9 @@ def _plan_spoolman_to_fdb(
         elif action == "create":
             fil_spools = sm_spools_by_filament.get(sm_fil.id, [])
             cost = resolve_effective_cost(sm_fil.price, fil_spools)
+            tare = _resolve_filament_tare(sm_fil, fil_spools, tare_by_sm_spool)
             payload = _fdb_filament_payload_from_sm(
-                sm_fil, effective_cost=cost, spools=fil_spools
+                sm_fil, effective_cost=cost, spools=fil_spools, resolved_tare=tare,
             )
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="create",
@@ -216,6 +259,12 @@ def _plan_spoolman_to_fdb(
             if master_sm_fil is not None and not item.error:
                 item.prop_conflicts = sm_prop_conflicts(master_sm_fil, item.sm_filament)
 
+    # Build set of all current FDB spool ids for stale-xref validation.
+    # A cross-ref only causes a skip when the referenced spool actually exists.
+    _fdb_spool_ids: set[str] = existing_fdb_spool_ids if existing_fdb_spool_ids is not None else {
+        spool.id for f in fdb_filaments for spool in f.spools
+    }
+
     # ---- Phase C: plan spool creates for each resolved filament ----
     for item in plan.filament_items:
         if not item.resolved:
@@ -226,7 +275,13 @@ def _plan_spoolman_to_fdb(
             xref = decode_extra_value(
                 sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
             )
-            if sm_spool.id in mapped_sm_spool_ids or xref:
+            # A live SpoolMapping always causes a skip (the spool is already paired).
+            # A cross-ref (filamentdb_spool_id extra) only causes a skip when the
+            # referenced FDB spool still exists — a stale xref (pointing at a deleted
+            # spool) is treated as a create so the import proceeds normally and the
+            # write-back overwrites the stale id automatically.
+            xref_is_live = bool(xref) and xref in _fdb_spool_ids
+            if sm_spool.id in mapped_sm_spool_ids or xref_is_live:
                 plan.spool_items.append(_SpoolPlanItem(
                     sm_spool=sm_spool, fil_item=item, action="skip",
                     skip_fdb_spool_id=xref or None,

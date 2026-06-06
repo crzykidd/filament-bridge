@@ -68,7 +68,16 @@ targets the filament price only). The bridge never deletes Spoolman records.
 
 - **Weight is always net-converted** on the way in (`fdb_to_spoolman_net`), since FDB
   stores gross (filament + reel tare) and Spoolman stores net (filament only).
+- **`spoolWeight` on FDB filament creates uses the wizard-resolved tare**, not raw
+  `sm.spool_weight` (which is often NULL). The resolved tare follows the same chain
+  used to compute the spool gross weight: user tare override → spool `spool_weight` →
+  filament `spool_weight` → 200 g default. This ensures `spoolWeight` matches the tare
+  actually used for `totalWeight`, so Filament DB's % bar is accurate from first import.
 - The Variances reconcile write-back is the only place the bridge *corrects existing*
   Spoolman filament data; all ongoing-sync writes are change-driven.
 - Cross-reference extras are always JSON-encoded via `encode_extra_value` / decoded via
   `decode_extra_value` — never written raw.
+- **Stale cross-refs do not block spool creation.** A `filamentdb_spool_id` extra on a
+  Spoolman spool only skips spool creation if that FDB spool id actually exists in the
+  current FDB dataset. If the referenced spool is gone (DB wipe, deletion), the spool
+  is treated as a new create and the stale cross-ref is overwritten on success.

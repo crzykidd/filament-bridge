@@ -1755,8 +1755,8 @@ async def run_sync_cycle(
                 continue
             fdb_spool_id_raw = sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
             fdb_spool_id = decode_extra_value(fdb_spool_id_raw)
-            if fdb_spool_id:
-                continue  # has cross-ref but no SpoolMapping row — orphan, skip
+            if fdb_spool_id and fdb_spool_id in fdb_spool_index:
+                continue  # has live cross-ref but no SpoolMapping row — orphan, skip
             await _handle_new_sm_spool(
                 db, cycle_id, result, dry_run,
                 sm_spool, filament_mappings_by_sm, fdb_filaments,

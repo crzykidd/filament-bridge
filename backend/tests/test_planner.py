@@ -1,9 +1,12 @@
 """Tests for core/planner.py — FDB filament create-payload builder.
 
-Focused on the netFilamentWeight field added so that Filament DB can render the
-spool fill % bar for imported filaments (Spoolman → FDB wizard import).
+Covers:
+- netFilamentWeight field on FDB create payloads (Spoolman → FDB wizard import).
+- Bug A: stale filamentdb_spool_id cross-ref → spool is planned as create, not skip.
+- Bug B: resolved tare is written to spoolWeight, not raw sm.spool_weight.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,9 +18,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import wizard
 from app.api.config import set_config_value
-from app.core.planner import _fdb_filament_payload_from_sm
+from app.core.planner import _fdb_filament_payload_from_sm, _plan_spoolman_to_fdb
+from app.core.weight import DEFAULT_TARE_GRAMS
 from app.db import Base, get_db
 from app.models.config import BridgeConfig, seed_defaults
+from app.schemas.filamentdb import FDBFilament, FDBSpool
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
 
@@ -233,3 +238,267 @@ def test_wizard_preview_omits_net_filament_weight_when_not_available():
     assert "netFilamentWeight" not in all_field_names, (
         f"netFilamentWeight should be absent; found in: {all_field_names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Bug A — stale filamentdb_spool_id cross-ref must not skip spool creation
+# ---------------------------------------------------------------------------
+
+
+def _make_fdb_filament(fid: str, spool_ids: list[str]) -> FDBFilament:
+    """Build a minimal FDBFilament with the given spool subdocument ids."""
+    return FDBFilament.model_validate({
+        "_id": fid,
+        "name": "Some Filament",
+        "spools": [{"_id": sid, "totalWeight": 250.0, "retired": False} for sid in spool_ids],
+    })
+
+
+def _make_sm_spool_with_xref(
+    spool_id: int,
+    filament: SpoolmanFilament,
+    xref_fdb_spool_id: str | None,
+    remaining: float = 200.0,
+) -> SpoolmanSpool:
+    """Build a SpoolmanSpool with an optional filamentdb_spool_id cross-ref extra."""
+    extra: dict = {}
+    if xref_fdb_spool_id is not None:
+        extra["filamentdb_spool_id"] = json.dumps(xref_fdb_spool_id)
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=filament,
+        remaining_weight=remaining,
+        archived=False,
+        extra=extra,
+    )
+
+
+def _run_planner(db, sm_filaments, sm_spools, fdb_filaments, decisions):
+    """Run _plan_spoolman_to_fdb with minimal required args."""
+    decisions_by_sm = {d["spoolman_filament_id"]: d for d in decisions}
+    return _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=sm_filaments,
+        sm_spools=sm_spools,
+        fdb_filaments=fdb_filaments,
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+    )
+
+
+def test_planner_stale_xref_planned_as_create(db):
+    """A SM spool whose filamentdb_spool_id xref points to a non-existent FDB spool
+    must be planned as action='create', not 'skip'."""
+    sm_fil = _sm_filament(fid=1, name="Beige PLA", weight=1000.0)
+    # Xref points to 'old-spool-id' which does NOT exist in current FDB data.
+    sm_sp = _make_sm_spool_with_xref(101, sm_fil, xref_fdb_spool_id="old-spool-id")
+    # Current FDB has a different spool id (simulates DB wipe/recreate).
+    fdb_fil = _make_fdb_filament("fdb-fil-1", ["new-spool-aaa"])
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 1, "action": "create"}],
+    )
+
+    spool_items = plan.spool_items
+    assert len(spool_items) == 1, f"Expected 1 spool item, got {len(spool_items)}"
+    assert spool_items[0].action == "create", (
+        f"Expected 'create' but got '{spool_items[0].action}' — stale xref should not skip"
+    )
+
+
+def test_planner_live_xref_planned_as_skip(db):
+    """A SM spool whose filamentdb_spool_id xref points to a spool that DOES exist
+    in current FDB data must be planned as action='skip'."""
+    sm_fil = _sm_filament(fid=2, name="Orange PLA", weight=1000.0)
+    # Xref points to 'live-spool-id' which EXISTS in FDB.
+    sm_sp = _make_sm_spool_with_xref(102, sm_fil, xref_fdb_spool_id="live-spool-id")
+    fdb_fil = _make_fdb_filament("fdb-fil-2", ["live-spool-id"])
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 2, "action": "create"}],
+    )
+
+    spool_items = plan.spool_items
+    assert len(spool_items) == 1, f"Expected 1 spool item, got {len(spool_items)}"
+    assert spool_items[0].action == "skip", (
+        f"Expected 'skip' but got '{spool_items[0].action}' — live xref should skip"
+    )
+
+
+def test_planner_live_mapping_skips_regardless_of_xref(db):
+    """A SM spool that is in mapped_sm_spool_ids (live SpoolMapping) must always skip,
+    even when there is no xref."""
+    from app.models.mapping import SpoolMapping
+
+    sm_fil = _sm_filament(fid=3, name="Black PLA", weight=1000.0)
+    sm_sp = _make_sm_spool_with_xref(103, sm_fil, xref_fdb_spool_id=None)
+    fdb_fil = _make_fdb_filament("fdb-fil-3", ["spool-b"])
+
+    # Add a live SpoolMapping row for this SM spool.
+    db.add(SpoolMapping(
+        spoolman_spool_id=103,
+        filamentdb_filament_id="fdb-fil-3",
+        filamentdb_spool_id="spool-b",
+    ))
+    db.flush()
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 3, "action": "create"}],
+    )
+
+    spool_items = plan.spool_items
+    assert len(spool_items) == 1
+    assert spool_items[0].action == "skip"
+
+
+def test_planner_standalone_stale_xref_yields_create(db):
+    """A standalone filament (one spool, stale xref) must yield a spool create."""
+    sm_fil = _sm_filament(fid=4, name="Silk Gold", weight=1000.0)
+    sm_sp = _make_sm_spool_with_xref(104, sm_fil, xref_fdb_spool_id="stale-spool-xyz")
+    # FDB has NO spool matching 'stale-spool-xyz'.
+    fdb_fil = _make_fdb_filament("fdb-fil-4", ["current-spool-111"])
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 4, "action": "create"}],
+    )
+
+    assert len(plan.spool_items) == 1
+    assert plan.spool_items[0].action == "create"
+
+
+# ---------------------------------------------------------------------------
+# Bug B — spoolWeight on FDB payload must come from the resolved tare
+# ---------------------------------------------------------------------------
+
+
+def test_spool_weight_uses_resolved_tare_when_sm_spool_weight_is_none():
+    """When sm.spool_weight is None, spoolWeight on the FDB payload must equal
+    the resolved_tare passed in (not None, not omitted)."""
+    sm = _sm_filament(fid=10, name="PLA Orange", weight=1000.0, spool_weight=None)
+    # Wizard resolved tare = 180g (user override).
+    payload = _fdb_filament_payload_from_sm(sm, resolved_tare=180.0)
+    assert payload.get("spoolWeight") == 180.0, (
+        f"Expected spoolWeight=180.0, got {payload.get('spoolWeight')}"
+    )
+
+
+def test_spool_weight_uses_resolved_tare_over_sm_spool_weight():
+    """When sm.spool_weight is set but resolved_tare differs, resolved_tare wins."""
+    sm = _sm_filament(fid=11, name="PLA Matte Black", weight=1000.0, spool_weight=220.0)
+    # Wizard resolved tare = 185g.
+    payload = _fdb_filament_payload_from_sm(sm, resolved_tare=185.0)
+    assert payload.get("spoolWeight") == 185.0
+
+
+def test_spool_weight_default_when_sm_spool_weight_none_and_no_resolved_tare():
+    """Without a resolved_tare and with sm.spool_weight=None, spoolWeight is absent
+    (the None filter in the payload dict removes it — consistent with prior behavior)."""
+    sm = _sm_filament(fid=12, name="PLA White", weight=1000.0, spool_weight=None)
+    payload = _fdb_filament_payload_from_sm(sm)
+    # spool_weight=None → not in payload (filtered by {k: v for k, v if v is not None})
+    assert "spoolWeight" not in payload
+
+
+def test_planner_phase_a_sets_spool_weight_from_resolved_tare(db):
+    """Phase A of _plan_spoolman_to_fdb must set spoolWeight on the filament payload
+    from the wizard-resolved tare, not the raw sm.spool_weight."""
+    # SM filament has no spool_weight.
+    sm_fil = _sm_filament(fid=20, name="PLA Beige", weight=1000.0, spool_weight=None)
+    sm_sp = SpoolmanSpool(
+        id=201, filament=sm_fil, remaining_weight=800.0, archived=False, extra={},
+    )
+    fdb_filaments: list = []  # no existing FDB data
+
+    # User set a tare override of 195g for this spool.
+    decisions_by_sm = {20: {"spoolman_filament_id": 20, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=fdb_filaments,
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={201: 195.0},
+    )
+
+    assert len(plan.filament_items) == 1
+    item = plan.filament_items[0]
+    assert item.action == "create"
+    assert item.fdb_payload is not None
+    assert item.fdb_payload.get("spoolWeight") == 195.0, (
+        f"Expected spoolWeight=195.0, got {item.fdb_payload.get('spoolWeight')}"
+    )
+
+
+def test_planner_phase_a_uses_default_tare_when_no_override_and_no_sm_spool_weight(db):
+    """When no user tare override and sm.spool_weight is None, spoolWeight on the
+    filament payload must equal DEFAULT_TARE_GRAMS (200g)."""
+    sm_fil = _sm_filament(fid=21, name="PLA Green", weight=1000.0, spool_weight=None)
+    sm_sp = SpoolmanSpool(
+        id=211, filament=sm_fil, remaining_weight=600.0, archived=False, extra={},
+    )
+
+    decisions_by_sm = {21: {"spoolman_filament_id": 21, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},  # no override
+    )
+
+    item = plan.filament_items[0]
+    assert item.action == "create"
+    assert item.fdb_payload.get("spoolWeight") == DEFAULT_TARE_GRAMS, (
+        f"Expected spoolWeight={DEFAULT_TARE_GRAMS}, got {item.fdb_payload.get('spoolWeight')}"
+    )
+
+
+def test_planner_spool_gross_matches_filament_spool_weight(db):
+    """The gross totalWeight planned for the spool must equal spool net + spoolWeight
+    written to the filament payload (they must be driven by the same resolved tare)."""
+    sm_fil = _sm_filament(fid=22, name="ABS Red", weight=1000.0, spool_weight=None)
+    sm_sp = SpoolmanSpool(
+        id=221, filament=sm_fil, remaining_weight=750.0, archived=False, extra={},
+    )
+    tare_override = 170.0
+
+    decisions_by_sm = {22: {"spoolman_filament_id": 22, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={221: tare_override},
+    )
+
+    fil_item = plan.filament_items[0]
+    spool_item = plan.spool_items[0]
+
+    written_spool_weight = fil_item.fdb_payload.get("spoolWeight")
+    planned_gross = spool_item.planned_gross
+
+    assert written_spool_weight == tare_override
+    # gross = net + tare
+    assert planned_gross == pytest.approx(750.0 + tare_override, abs=0.01)

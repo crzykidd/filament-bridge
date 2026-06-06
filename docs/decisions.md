@@ -1,5 +1,39 @@
 # Decision record
 
+## 2026-06-06 — Stale cross-ref no longer skips spool creation; spoolWeight from resolved tare
+
+### Bug A: stale filamentdb_spool_id cross-ref blocked spool creation
+
+When Filament DB is wiped or a spool is deleted, Spoolman spools still carry the old
+`filamentdb_spool_id` extra pointing at a now-deleted FDB spool. Previously, the planner
+(`_plan_spoolman_to_fdb` Phase C) and the ongoing engine new-spool detection both treated
+any non-empty cross-ref as "already linked" and skipped creating the FDB spool — leaving
+filaments with no spools after re-import.
+
+**Fix:** a cross-ref only causes a skip when the referenced FDB spool id actually exists
+in the current FDB dataset (`existing_fdb_spool_ids` in the planner; `fdb_spool_index` in
+the engine). A stale xref falls through to create, and the write-back overwrites the stale
+id automatically. A live SpoolMapping row still always skips (unchanged).
+
+The `plan_dry_run` step-4 filter is updated to also remove engine-generated `new_spool`
+conflicts for cross-ref orphans (previously they were not cleaned up in the stale-xref path
+because the stale-xref check in the engine used to skip before reaching
+`_handle_new_sm_spool`).
+
+### Bug B: FDB filament spoolWeight was written from raw sm.spool_weight (often NULL)
+
+The wizard computes a resolved tare per filament (user override → spool spool_weight →
+filament spool_weight → 200 g default) and uses it to compute spool `totalWeight`. But
+`_fdb_filament_payload_from_sm` wrote `spoolWeight` from raw `sm.spool_weight`, which is
+NULL for many Spoolman filaments. Result: FDB got the correct `totalWeight` but
+`spoolWeight=null`, so the % bar math was wrong (gross - 0 = full rather than gross - tare).
+
+**Fix:** thread the resolved tare into `_fdb_filament_payload_from_sm` via a new
+`resolved_tare` parameter. Phase A of `_plan_spoolman_to_fdb` computes
+`_resolve_filament_tare(sm_fil, fil_spools, tare_by_sm_spool)` (same resolution chain as
+the Phase C gross computation) and passes it through. `spoolWeight` is now always set to
+the resolved tare (guaranteed ≥ 200 g), not the raw Spoolman field.
+
 ## 2026-06-06 — Import now sets FDB netFilamentWeight from Spoolman filament weight
 
 When the wizard imports a Spoolman filament into Filament DB, `_fdb_filament_payload_from_sm`

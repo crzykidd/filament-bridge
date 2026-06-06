@@ -1185,3 +1185,109 @@ async def test_dry_run_multiple_pairs_matched_and_changed(db):
     # The changed pair must not appear as matched
     matched_sm_ids = {e["spoolman_id"] for e in matched}
     assert 4 not in matched_sm_ids, "changed pair (sm_id=4) must not appear as matched"
+
+
+# ---------------------------------------------------------------------------
+# Bug A — engine: stale filamentdb_spool_id xref in new-spool detection
+# ---------------------------------------------------------------------------
+
+
+import json as _json
+
+
+def _sm_spool_with_extra(spool_id: int, filament_id: int, extra: dict | None = None) -> SpoolmanSpool:
+    """SM spool for a given filament id, with optional extra fields."""
+    fil = SpoolmanFilament(id=filament_id, name="PLA", vendor=SpoolmanVendor(id=1, name="ACME"))
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=fil,
+        remaining_weight=500.0,
+        archived=False,
+        extra=extra or {},
+    )
+
+
+def _fdb_filament_with_spool(fid: str, spool_id: str) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": fid,
+        "name": "PLA",
+        "spoolWeight": 200.0,
+        "spools": [{"_id": spool_id, "totalWeight": 700.0, "retired": False}],
+    })
+
+
+def _add_fil_mapping(db, sm_fil_id: int, fdb_fil_id: str):
+    db.add(FilamentMapping(spoolman_filament_id=sm_fil_id, filamentdb_id=fdb_fil_id))
+    db.flush()
+
+
+@pytest.mark.asyncio
+async def test_engine_new_spool_stale_xref_triggers_create(db):
+    """Ongoing new-spool detection: a SM spool with a stale filamentdb_spool_id xref
+    (pointing at an id not in fdb_spool_index) must trigger FDB spool creation."""
+    # SM spool has xref to 'old-fdb-spool' which is NOT in current FDB data.
+    stale_xref = _json.dumps("old-fdb-spool")
+    sm_sp = _sm_spool_with_extra(
+        501, filament_id=50,
+        extra={"filamentdb_spool_id": stale_xref},
+    )
+    # Current FDB filament has a different spool id.
+    fdb_fil = _fdb_filament_with_spool("fdb-fil-50", "current-spool-aaa")
+    _add_fil_mapping(db, sm_fil_id=50, fdb_fil_id="fdb-fil-50")
+
+    spoolman = _fake_spoolman(spools=[sm_sp])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    # create_spool must return a dict with _id
+    fdb_client.create_spool = AsyncMock(return_value={"_id": "newly-created-spool"})
+
+    with patch("app.core.engine._settings") as mock_settings:
+        mock_settings.filamentdb_spoolman_id_field = "label"
+        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+        mock_settings.parsed_field_mappings = {}
+        mock_settings.parsed_field_mapping_excludes = set()
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # FDB spool creation must have been attempted.
+    fdb_client.create_spool.assert_called_once()
+    assert result.created >= 1, f"Expected at least 1 created, got {result.created}"
+    assert result.errors == 0, f"Expected no errors, got {result.errors}"
+
+
+@pytest.mark.asyncio
+async def test_engine_new_spool_live_xref_skips(db):
+    """Ongoing new-spool detection (SM→FDB path): a SM spool with a live
+    filamentdb_spool_id xref (pointing at an id that IS in fdb_spool_index) must be
+    skipped — the SM→FDB path must NOT call filamentdb.create_spool for it.
+
+    Note: the FDB→SM path still runs under two_way default and may create a SM spool
+    from the FDB spool; we only assert that FDB spool creation was NOT triggered by the
+    SM→FDB path (live xref = already-linked orphan).
+    """
+    # SM spool has xref to 'live-spool-bbb' which IS in current FDB data.
+    live_xref = _json.dumps("live-spool-bbb")
+    sm_sp = _sm_spool_with_extra(
+        502, filament_id=51,
+        extra={"filamentdb_spool_id": live_xref},
+    )
+    fdb_fil = _fdb_filament_with_spool("fdb-fil-51", "live-spool-bbb")
+    _add_fil_mapping(db, sm_fil_id=51, fdb_fil_id="fdb-fil-51")
+
+    spoolman = _fake_spoolman(spools=[sm_sp])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    # Track FDB spool creates; there should be zero (live xref → SM→FDB path is skipped).
+    fdb_client.create_spool = AsyncMock(return_value={"_id": "should-not-be-called"})
+
+    with patch("app.core.engine._settings") as mock_settings:
+        mock_settings.filamentdb_spoolman_id_field = "label"
+        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+        mock_settings.parsed_field_mappings = {}
+        mock_settings.parsed_field_mapping_excludes = set()
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # The SM→FDB path must not create a FDB spool — live xref means the SM spool is
+    # already linked or orphaned with a live reference, so it is skipped.
+    fdb_client.create_spool.assert_not_called()
