@@ -193,6 +193,51 @@ class FilamentDBClient:
         resp.raise_for_status()
         return FDBFilamentDetail.model_validate(resp.json())
 
+    async def get_openprinttag(self) -> list[dict]:
+        """GET /api/openprinttag — FDB denormalised OpenPrintTag dataset.
+
+        Returns a list of OPTMaterial dicts.  Raises httpx.HTTPStatusError on
+        non-2xx responses so callers can gate on 404 (FDB version too old).
+        """
+        resp = await self._http.get("/api/openprinttag")
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
+    # FDB settings-bag merge (scoped exception)
+    # ------------------------------------------------------------------
+
+    async def merge_filament_settings(
+        self, filament_id: str, keys: dict[str, str]
+    ) -> None:
+        """Merge specific keys into a FDB filament's ``settings{}`` bag.
+
+        APPROVED SCOPED EXCEPTION: CLAUDE.md forbids touching the settings bag.
+        This method is the only permitted path — it ONLY merges the two OpenTag
+        identity keys (``openprinttag_slug`` / ``openprinttag_uuid``) and
+        preserves all other settings keys unchanged.  The caller (engine +
+        wizard) is responsible for ensuring only those two keys are passed.
+
+        Implementation: fetch the current filament (detail view) → read its
+        ``settings`` bag (empty dict if absent) → merge ``keys`` in → write
+        back via PUT using the same ``_strip_computed`` stripping that
+        ``update_filament`` uses, but re-attaching the merged ``settings`` bag
+        AFTER stripping (settings is not a computed field — it is slicer
+        passthrough, but we deliberately add only the two identity keys).
+        """
+        detail_resp = await self._http.get(f"/api/filaments/{filament_id}")
+        detail_resp.raise_for_status()
+        raw = detail_resp.json()
+        current_settings: dict = raw.get("settings") or {}
+        # Check if already equal — idempotent (no rewrite if nothing changed).
+        if all(current_settings.get(k) == v for k, v in keys.items()):
+            return
+        merged = {**current_settings, **keys}
+        payload = _strip_computed(raw)
+        payload["settings"] = merged
+        put_resp = await self._http.put(f"/api/filaments/{filament_id}", json=payload)
+        put_resp.raise_for_status()
+
     # ------------------------------------------------------------------
     # Health / connectivity
     # ------------------------------------------------------------------

@@ -190,6 +190,16 @@ class SpoolmanClient:
                 "name": "Filament DB Material Tags",
                 "field_type": "text",
             },
+            {
+                "key": _settings.spoolman_field_openprinttag_slug,
+                "name": "OpenPrintTag Slug",
+                "field_type": "text",
+            },
+            {
+                "key": _settings.spoolman_field_openprinttag_uuid,
+                "name": "OpenPrintTag UUID",
+                "field_type": "text",
+            },
         ]
 
         for field_def in runtime_filament_fields:

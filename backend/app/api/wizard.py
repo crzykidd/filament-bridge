@@ -1049,6 +1049,45 @@ async def _execute_spoolman_to_fdb(
                 # Non-fatal: the SM extra field is for structural tracking; FDB optTags are
                 # the authoritative finish representation.
 
+    # ---- Pass 2.7: Push OpenTag identity into FDB settings bag (Phase 5 scoped exception) ----
+    # For each newly-created FDB filament whose matching SM filament has openprinttag_slug
+    # and/or openprinttag_uuid extra fields set, merge those two keys into the FDB settings{}
+    # bag so a bridge-cleaned filament looks identical to an OpenTag import.
+    # APPROVED SCOPED EXCEPTION — see CLAUDE.md and docs/decisions.md.
+    _opt_slug_field = _settings.spoolman_field_openprinttag_slug
+    _opt_uuid_field = _settings.spoolman_field_openprinttag_uuid
+    sm_by_id_opt: dict[int, object] = {f.id: f for f in sm_filaments}
+    for item in plan.filament_items:
+        if item.fdb_id is None or item.error:
+            continue
+        sm_fil_opt = sm_by_id_opt.get(item.sm_filament.id)
+        if sm_fil_opt is None:
+            continue
+        slug_raw = (getattr(sm_fil_opt, "extra", {}) or {}).get(_opt_slug_field)
+        uuid_raw = (getattr(sm_fil_opt, "extra", {}) or {}).get(_opt_uuid_field)
+        from app.schemas.spoolman import decode_extra_value as _dv
+        slug = _dv(slug_raw)
+        uuid_val = _dv(uuid_raw)
+        keys_to_merge: dict[str, str] = {}
+        if slug and isinstance(slug, str):
+            keys_to_merge["openprinttag_slug"] = slug
+        if uuid_val and isinstance(uuid_val, str):
+            keys_to_merge["openprinttag_uuid"] = uuid_val
+        if not keys_to_merge:
+            continue
+        try:
+            await filamentdb.merge_filament_settings(item.fdb_id, keys_to_merge)
+            logger.info(
+                "wizard execute %s: merged OpenTag identity into FDB filament %s: %s",
+                res.cycle_id, item.fdb_id, list(keys_to_merge.keys()),
+            )
+        except Exception as exc:
+            logger.warning(
+                "wizard execute %s: OpenTag identity merge to FDB filament %s failed: %s",
+                res.cycle_id, item.fdb_id, exc,
+            )
+            # Non-fatal
+
     # ---- Pass 3: FilamentMappings + spool seeding ----
     spool_items_by_fil: dict[int, list[_SpoolPlanItem]] = {}
     for si in plan.spool_items:

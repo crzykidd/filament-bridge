@@ -2063,6 +2063,19 @@ async def run_sync_cycle(
                     precision=precision,
                 )
 
+    # ---- OpenTag identity push (scoped exception: merge slug/uuid into FDB settings bag) ----
+    # For each FilamentMapping whose Spoolman filament has openprinttag_slug/uuid extra fields set,
+    # ensure the same two keys appear in the FDB filament's settings{} bag.  Idempotent: the
+    # merge helper skips the write when FDB already has the same values.  Non-fatal per-pair.
+    # Dry-run aware: no writes in dry-run mode.
+    if not dry_run:
+        await _sync_opentag_identity(
+            db, cycle_id, result,
+            filament_mappings=filament_mappings,
+            sm_filaments=sm_filaments,
+            filamentdb=filamentdb,
+        )
+
     if not dry_run:
         db.commit()
 
@@ -2072,3 +2085,60 @@ async def run_sync_cycle(
         result.created, result.updated, result.conflicts, result.skipped, result.errors,
     )
     return result
+
+
+async def _sync_opentag_identity(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    *,
+    filament_mappings: list[FilamentMapping],
+    sm_filaments: dict[int, Any],
+    filamentdb: FilamentDBClient,
+) -> None:
+    """Phase 5 (scoped exception): push openprinttag_slug/uuid from SM extras into FDB settings bag.
+
+    APPROVED SCOPED EXCEPTION — only merges the two OpenTag identity keys into
+    FDB's settings{} bag.  Never modifies or removes any other settings key.
+    See CLAUDE.md and docs/decisions.md for the approved exception record.
+
+    Logic per pair:
+    - Read openprinttag_slug and openprinttag_uuid from Spoolman filament extra fields.
+    - If both are absent/empty: skip (nothing to push).
+    - Call filamentdb.merge_filament_settings() which:
+        * fetches current FDB filament,
+        * checks if the values are already equal (idempotent — no HTTP write if equal),
+        * merges only those two keys, preserving all other settings keys.
+    - Non-fatal per-pair: log and continue on error.
+    """
+    slug_field = _settings.spoolman_field_openprinttag_slug
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+
+    for m in filament_mappings:
+        sm_fil = sm_filaments.get(m.spoolman_filament_id)
+        if sm_fil is None:
+            continue
+
+        slug_raw = sm_fil.extra.get(slug_field) if hasattr(sm_fil, "extra") else None
+        uuid_raw = sm_fil.extra.get(uuid_field) if hasattr(sm_fil, "extra") else None
+
+        slug = decode_extra_value(slug_raw)
+        uuid_val = decode_extra_value(uuid_raw)
+
+        # Only push when at least one key is non-empty
+        keys_to_merge: dict[str, str] = {}
+        if slug and isinstance(slug, str):
+            keys_to_merge["openprinttag_slug"] = slug
+        if uuid_val and isinstance(uuid_val, str):
+            keys_to_merge["openprinttag_uuid"] = uuid_val
+
+        if not keys_to_merge:
+            continue
+
+        try:
+            await filamentdb.merge_filament_settings(m.filamentdb_id, keys_to_merge)
+        except Exception as exc:
+            logger.warning(
+                "Cycle %s: opentag identity push to FDB filament %s failed: %s",
+                cycle_id, m.filamentdb_id, exc,
+            )

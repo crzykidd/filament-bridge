@@ -1,5 +1,56 @@
 # Decision record
 
+## 2026-06-06 — OpenTag cleanup tool + scoped FDB settings-bag exception
+
+### OpenTag cleanup tool
+
+New standalone tool (`/opentag-cleanup` page, `GET /api/opentag/matches`,
+`POST /api/opentag/refresh`, `POST /api/opentag/apply`) that:
+
+1. Fetches the OpenPrintTag dataset from FDB's `GET /api/openprinttag`, caches it
+   locally in `DATA_DIR/opentag_cache.json` with a configurable 24-hour staleness
+   threshold (`OPENTAG_CACHE_MAX_AGE_HOURS`).
+2. Scores each Spoolman filament against the cached OPTMaterial list using a
+   weighted scoring function (type/material 40%, vendor/brand 30%, color proximity
+   20%, finish-tag overlap 10%).
+3. Shows a per-field review UI with Spoolman value vs OpenTag value (default OpenTag,
+   editable, per-field "keep mine"). "Ignore match" dismisses a whole filament.
+4. Shows a full confirm screen listing every write before any action is taken.
+5. On Apply, PATCHes each Spoolman filament with only the non-keep_mine fields
+   (including `openprinttag_slug` + `openprinttag_uuid` as extra fields), then calls
+   `merge_filament_settings()` on the linked FDB filament to carry the two identity
+   keys into FDB's `settings{}` bag.
+
+Reuses `#1`'s finish-tag map (`filamentdb_material_tags`) and `material_tags.py`.
+Does not change any existing sync or wizard behavior.
+
+### Scoped FDB settings{} bag exception (Phase 5)
+
+**Rule relaxed:** CLAUDE.md prohibits touching FDB's `settings{}` bag (slicer passthrough).
+
+**Exception granted (2026-06-06):** `FilamentDBClient.merge_filament_settings()` in
+`backend/app/services/filamentdb.py` is the only approved path. It ONLY merges the
+two keys `openprinttag_slug` and `openprinttag_uuid` — never reads, removes, or
+modifies any other key.
+
+**Implementation:** read-modify-write — fetch current filament detail, read existing
+`settings` bag (default empty dict), check if both keys are already equal (idempotent,
+no HTTP PUT if equal), merge only those two keys, write back. The `_STRIP_BEFORE_PUT`
+stripping is bypassed for this path because `settings` is in that strip set — the
+merged `settings` bag is re-attached to the PUT payload after stripping.
+
+**Wire points:**
+- `backend/app/api/opentag.py` → `POST /api/opentag/apply` calls it after writing
+  each SM filament when `fdb_filament_id` is provided.
+- `backend/app/core/engine.py` → `_sync_opentag_identity()` is called once per live
+  sync cycle (not dry-run) to ensure any SM filament with slug/uuid extras has them
+  mirrored into FDB. Non-fatal per pair.
+- `backend/app/api/wizard.py` → Pass 2.7 in `_execute_spoolman_to_fdb` pushes slug/uuid
+  from newly-created FDB filaments' SM counterparts on wizard execute.
+
+**Not wired for FDB→SM direction** (FDB's settings bag is not read by the bridge for
+other purposes; the SM side is the authoritative source for these identity keys).
+
 ## 2026-06-06 — Name-collision detection is vendor-aware
 
 `_compute_name_collisions` in `backend/app/api/wizard.py` now keys both the

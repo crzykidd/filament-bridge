@@ -527,6 +527,78 @@ export interface SyncLogResponse {
 }
 
 // ---------------------------------------------------------------------------
+// OpenTag cleanup tool
+// ---------------------------------------------------------------------------
+
+export interface OpenTagDatasetMeta {
+  fetched_at: string | null
+  count: number
+  stale: boolean
+}
+
+export interface OpenTagFieldRow {
+  field: string
+  spoolman_value: unknown
+  opentag_value: unknown
+  suggested_value: unknown
+}
+
+export interface OpenTagFilamentMatch {
+  spoolman_filament_id: number
+  spoolman_name: string
+  spoolman_vendor: string | null
+  spoolman_material: string | null
+  spoolman_color_hex: string | null
+  opt_uuid: string | null
+  opt_slug: string | null
+  opt_brand: string | null
+  opt_name: string | null
+  confidence: number
+  fields: OpenTagFieldRow[]
+  alternates: Record<string, unknown>[]
+  ignored?: boolean
+}
+
+export interface OpenTagMatchesResponse {
+  dataset: OpenTagDatasetMeta
+  matches: OpenTagFilamentMatch[]
+}
+
+export interface OpenTagFieldDecision {
+  field: string
+  value: unknown
+  keep_mine: boolean
+}
+
+export interface OpenTagFilamentDecision {
+  spoolman_filament_id: number
+  ignored: boolean
+  fields: OpenTagFieldDecision[]
+  fdb_filament_id?: string | null
+  openprinttag_slug?: string | null
+  openprinttag_uuid?: string | null
+}
+
+export interface OpenTagApplyRequest {
+  decisions: OpenTagFilamentDecision[]
+}
+
+export interface OpenTagApplyFilamentResult {
+  spoolman_filament_id: number
+  status: 'ok' | 'ignored' | 'error'
+  error: string | null
+  fields_written: string[]
+  fdb_settings_updated: boolean
+}
+
+export interface OpenTagApplyResponse {
+  applied: number
+  ignored: number
+  errors: number
+  results: OpenTagApplyFilamentResult[]
+}
+
+// ---------------------------------------------------------------------------
 // Error envelope (from api/errors.py)
 // ---------------------------------------------------------------------------
 

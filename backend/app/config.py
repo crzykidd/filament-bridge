@@ -47,6 +47,13 @@ class Settings(BaseSettings):
         "high-speed,hs,dual,tri,rainbow,multicolor,rapid"
     )
 
+    # OpenTag extra fields on Spoolman filament entity
+    spoolman_field_openprinttag_slug: str = "openprinttag_slug"
+    spoolman_field_openprinttag_uuid: str = "openprinttag_uuid"
+
+    # Local OpenTag cache staleness threshold (hours)
+    opentag_cache_max_age_hours: int = 24
+
     # Notifications
     discord_webhook_url: str | None = None
 

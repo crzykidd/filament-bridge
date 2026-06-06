@@ -19,11 +19,14 @@ Created once at startup (`ensure_extra_fields()`). Key names are overridable via
 | `filamentdb_spool_id` | text | FDB spool subdocument ID |
 
 **Filament-level extras** (`SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS` env var, default
-`filamentdb_material_tags`):
+`filamentdb_material_tags`; OpenTag identity fields `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG`
+/ `SPOOLMAN_FIELD_OPENPRINTTAG_UUID`, defaults `openprinttag_slug` / `openprinttag_uuid`):
 
 | Field key | Type | Purpose |
 |---|---|---|
 | `filamentdb_material_tags` | text | JSON list of OpenPrintTag finish IDs (e.g. `[17]` for silk) |
+| `openprinttag_slug` | text | OpenPrintTag material slug (e.g. `buddy3d-pla-silk-bronze`) — written by the OpenTag cleanup tool Apply action |
+| `openprinttag_uuid` | text | OpenPrintTag material UUID — written by the OpenTag cleanup tool Apply action |
 
 All extras are stored JSON-encoded (`encode_extra_value`). Everything below writes native
 Spoolman fields or these extras.
@@ -67,6 +70,21 @@ New-spool creation during a cycle (gated by `new_spool_sync_direction`):
 | Spool | update | 3 cross-ref extras | After creating the FDB spool — links it back |
 | Filament | update | `extra.filamentdb_material_tags` | Pass 2.6 — writes parsed finish-tag IDs (from SM name/material text) back so SM's extra field matches FDB's `optTags` |
 | Filament | update | `material`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `spool_weight` | Variances **reconcile write-back** — only fields the user corrected, and only where the value differs from current Spoolman |
+
+## OpenTag cleanup tool writes (on-demand, on Apply)
+
+`POST /api/opentag/apply` — the explicit user action that authorises these writes.
+Only the fields the user confirmed (not marked "keep mine") are written.
+
+| Entity | Op | Field(s) | Trigger |
+|---|---|---|---|
+| Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes` (any subset) | User confirmed in the review/confirm UI |
+| Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
+| Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |
+
+After each SM write the apply endpoint also calls `FilamentDBClient.merge_filament_settings()`
+to push `openprinttag_slug`/`openprinttag_uuid` into the linked FDB filament's `settings{}`
+bag (scoped exception — see `docs/decisions.md`).
 
 ## What the bridge never writes to Spoolman
 

@@ -250,7 +250,7 @@ Spoolman `remaining_weight` is net filament. Filament DB `totalWeight` is gross 
 - No spool label lookup endpoint — to find a spool by label, fetch all filaments or use the CSV export and filter client-side.
 - Variant deletion is blocked (400) if the parent still has variants — must remove/reassign variants first.
 - `DELETE /api/filaments/:id` is a soft-delete (sets `_deletedAt`), not permanent. Returns 400 if filament has variants.
-- The `settings{}` bag on filaments is a passthrough for slicer-specific keys — unknown keys round-trip without modification. Don't touch this in sync.
+- The `settings{}` bag on filaments is a passthrough for slicer-specific keys — unknown keys round-trip without modification. Don't touch this in sync, except via the scoped `merge_filament_settings()` path for the two OpenTag identity keys (see "What NOT to do" below).
 - The `spoolWeight` and `netFilamentWeight` fields are on the FILAMENT, not individual spools. All spools of the same filament share the same tare weight.
 - Spool subdocument `_id` values are stable across filament updates (Mongoose doesn't regenerate them on parent save).
 
@@ -306,4 +306,9 @@ cd backend && alembic upgrade head
 - Don't overwrite Filament DB spool weights directly — always use the usage endpoint to preserve audit trail
 - Don't assume Spoolman extra fields exist — check on startup
 - Don't store upstream API data in SQLite beyond what's needed for diffing — the bridge stores snapshots and mappings, not a full copy of both databases
-- Don't touch the `settings{}` bag on Filament DB filaments — it's slicer passthrough data
+- Don't touch the `settings{}` bag on Filament DB filaments — it's slicer passthrough data.
+  **SCOPED EXCEPTION (approved 2026-06-06):** `FilamentDBClient.merge_filament_settings()` is the
+  single permitted path, and it MAY only merge the two OpenTag identity keys
+  (`openprinttag_slug` / `openprinttag_uuid`) into the bag (read-modify-write, preserving ALL other
+  keys, idempotent). Called by the OpenTag cleanup apply endpoint and the sync engine's
+  `_sync_opentag_identity` pass. No other code may write to `settings{}`. See `docs/decisions.md`.

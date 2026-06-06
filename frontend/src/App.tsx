@@ -6,6 +6,7 @@ import SyncedRecords from './pages/SyncedRecords'
 import Conflicts from './pages/Conflicts'
 import SyncLog from './pages/SyncLog'
 import Settings from './pages/Settings'
+import OpenTagCleanup from './pages/OpenTagCleanup'
 import { WizardShell } from './pages/Wizard'
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
             <Route path="conflicts" element={<Conflicts />} />
             <Route path="sync-log" element={<SyncLog />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
             <Route path="wizard/*" element={<WizardShell />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
