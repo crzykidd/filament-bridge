@@ -1,5 +1,26 @@
 # Decision record
 
+## 2026-06-06 — Dry-run preview lists in-sync pairs as "matched — no updates"
+
+Spool pairs that are already in sync produced no preview entry, making the dry-run
+invisible for synced data. Each such pair now emits a `{"action": "matched", "reason":
+"in sync — no updates", ...}` entry in the dry-run preview — spool-pair scoped (weight
+and field-mapping passes only; filament-level multicolor/cost passes emit their own
+separate rows and are unaffected).
+
+**Dry-run only.** The `_preview_len_before_pair` sentinel tracks whether any preview
+entry was appended during the weight + field passes for the pair iteration. If the
+preview length is unchanged at the end of the pair block and `dry_run=True`, a single
+"matched" entry is appended. Real (non-dry-run) cycles never emit it.
+
+**First-baseline pairs are excluded.** Pairs without prior snapshots fall into the
+existing `skip` (baseline) path and `continue` before reaching the matched block —
+correct behavior preserved.
+
+**Frontend:** `SyncPreviewEntry.action` gains `"matched"`. The Dashboard dry-run
+summary includes a muted "Matched — no updates (N)" section with a "Show/Hide" toggle
+(default shown), and the counts bar shows a "Matched: N" figure when N > 0.
+
 ## 2026-06-06 — New-spool direction enforced; wizard writes new keys; old source-of-truth removed
 
 ### New-spool creation is now a real enforced direction (default two_way)

@@ -1491,6 +1491,10 @@ async def run_sync_cycle(
             result.skipped += 1
             continue
 
+        # Track preview length before weight + field passes so we can detect
+        # whether this pair emitted anything (dry-run only).
+        _preview_len_before_pair = len(result.preview)
+
         # ---- Diff ----
         cs = diff_spool_pair(
             sm_spool=sm_spool,
@@ -1688,6 +1692,26 @@ async def run_sync_cycle(
                     matprop_direction=matprop_direction,
                     matprop_policy=matprop_policy,
                 )
+
+        # ---- Matched / in-sync entry (dry-run only) ----
+        # If no preview entry was appended for this pair during the weight and
+        # field passes, the pair is in sync.  Emit a single "matched" entry so
+        # the dry-run preview is a complete inventory of all paired records, not
+        # only a diff.  Suppressed in real (non-dry-run) cycles entirely.
+        if dry_run and len(result.preview) == _preview_len_before_pair:
+            result.preview.append({
+                "action": "matched",
+                "entity_type": "spool",
+                "direction": None,
+                "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                "field": None,
+                "old": None,
+                "new": None,
+                "reason": "in sync — no updates",
+                "spoolman_id": sm_spool.id,
+                "fdb_filament_id": fdb_filament_id,
+                "fdb_spool_id": fdb_spool.id,
+            })
 
     # ---- Structured multicolor sync (bidirectional, FDB >= 1.33.0) ----
     await _sync_multicolor(

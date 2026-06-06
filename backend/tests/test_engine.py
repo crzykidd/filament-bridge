@@ -1076,3 +1076,112 @@ async def test_weight_newest_wins_picks_newer_side(db):
     assert result.updated == 1
     assert result.conflicts == 0
     fdb_client.log_usage.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Dry-run "matched — in sync" preview entries
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_matched_entry_for_in_sync_pair(db):
+    """An in-sync spool pair (prior snapshots, no weight/field changes) yields exactly
+    one action='matched' preview entry in dry_run=True, and ZERO such entries in a real
+    (non-dry-run) cycle."""
+    # Build a pair whose weights are identical to the snapshot — no changes at all.
+    sm_spool = _sm_spool(1, 800.0)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    # Snapshot reflects the current state exactly → no weight delta.
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    # --- dry run ---
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        dry_result = await run_sync_cycle(
+            db, spoolman, fdb_client, dry_run=True, cycle_id=CYCLE_ID
+        )
+
+    matched_entries = [e for e in dry_result.preview if e["action"] == "matched"]
+    assert len(matched_entries) == 1, f"expected 1 matched entry, got {dry_result.preview}"
+    assert matched_entries[0]["entity_type"] == "spool"
+    assert matched_entries[0]["spoolman_id"] == 1
+    assert matched_entries[0]["fdb_spool_id"] == "spool-1"
+    assert matched_entries[0]["reason"] == "in sync — no updates"
+
+    # --- real cycle must NOT emit any matched entries ---
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        live_result = await run_sync_cycle(
+            db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID + "-live"
+        )
+
+    live_matched = [e for e in live_result.preview if e.get("action") == "matched"]
+    assert live_matched == [], f"live cycle must not emit matched entries, got {live_result.preview}"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_changed_pair_emits_update_not_matched(db):
+    """A pair with a real weight change yields its update entry (not a matched entry)
+    in dry_run=True."""
+    sm_spool = _sm_spool(1, 790.0)  # weight changed: was 800, now 790
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    # spoolman_to_filamentdb: lone SM change → update
+    _seed_weight_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=True, cycle_id=CYCLE_ID)
+
+    update_entries = [e for e in result.preview if e["action"] == "update"]
+    matched_entries = [e for e in result.preview if e["action"] == "matched"]
+    assert len(update_entries) >= 1, "expected at least one update entry for changed pair"
+    assert matched_entries == [], f"changed pair must not emit matched entry; got {result.preview}"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_multiple_pairs_matched_and_changed(db):
+    """3 in-sync pairs + 1 changed pair → 3 matched entries + 1 update, zero matched for changed."""
+    # Three in-sync pairs
+    sm_spools = [_sm_spool(i, 800.0) for i in range(1, 4)]
+    fdb_fils = [_fdb_filament(f"fil-{i}", f"spool-{i}", 1000.0) for i in range(1, 4)]
+    for i in range(1, 4):
+        _add_spool_mapping(db, i, f"fil-{i}", f"spool-{i}")
+        _store_snapshot(db, "spoolman", "spool", str(i), {"remaining_weight": 800.0})
+        _store_snapshot(db, "filamentdb", "spool", f"spool-{i}", {"totalWeight": 1000.0})
+
+    # One changed pair (spool id=4, weight dropped)
+    sm_changed = _sm_spool(4, 750.0)
+    fdb_changed = _fdb_filament("fil-4", "spool-4", 1000.0)
+    _add_spool_mapping(db, 4, "fil-4", "spool-4")
+    _store_snapshot(db, "spoolman", "spool", "4", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-4", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    all_sm_spools = sm_spools + [sm_changed]
+    all_fdb_fils = fdb_fils + [fdb_changed]
+
+    spoolman = _fake_spoolman(spools=all_sm_spools)
+    fdb_client = _fake_filamentdb(filaments=all_fdb_fils)
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=True, cycle_id=CYCLE_ID)
+
+    matched = [e for e in result.preview if e["action"] == "matched"]
+    updates = [e for e in result.preview if e["action"] == "update"]
+    assert len(matched) == 3, f"expected 3 matched rows, got {len(matched)}: {result.preview}"
+    assert len(updates) >= 1, f"expected at least 1 update row, got {updates}"
+    # The changed pair must not appear as matched
+    matched_sm_ids = {e["spoolman_id"] for e in matched}
+    assert 4 not in matched_sm_ids, "changed pair (sm_id=4) must not appear as matched"

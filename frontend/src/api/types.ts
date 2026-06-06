@@ -44,7 +44,7 @@ export interface SystemStatus {
 // ---------------------------------------------------------------------------
 
 export interface SyncPreviewEntry {
-  action: 'create' | 'update' | 'conflict' | 'skip'
+  action: 'create' | 'update' | 'conflict' | 'skip' | 'matched'
   entity_type: 'spool' | 'filament' | null
   direction: SyncDirection | null
   label: string

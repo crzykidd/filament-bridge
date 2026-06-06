@@ -4,11 +4,52 @@ import { getSyncStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/c
 import { usePoll } from '../api/hooks'
 import { SystemStatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
-import type { CycleResultResponse } from '../api/types'
+import type { CycleResultResponse, SyncPreviewEntry } from '../api/types'
 
 function fmt(ts: string | null) {
   if (!ts) return '—'
   return new Date(ts).toLocaleString()
+}
+
+function PreviewRow({ entry, muted = false }: { entry: SyncPreviewEntry; muted?: boolean }) {
+  return (
+    <li className={`px-3 py-1.5 flex items-start gap-2 text-xs ${muted ? 'text-gray-400' : 'text-gray-600'}`}>
+      <span className="shrink-0 mt-0.5">
+        <DeepLinks
+          filamentdbFilamentId={entry.fdb_filament_id}
+          spoolmanSpoolId={entry.spoolman_id}
+        />
+      </span>
+      <span className="grow min-w-0">
+        {muted ? (
+          <>
+            <span className="font-medium text-gray-400">{entry.label}</span>
+            <span className="ml-1.5 text-gray-300 italic">Matched — no updates</span>
+          </>
+        ) : (
+          <>
+            <span className="font-medium">{entry.label}</span>
+            {entry.direction && (
+              <span className="ml-1.5 text-gray-400">
+                {entry.direction === 'spoolman_to_filamentdb' ? 'SM→FDB' : 'FDB→SM'}
+              </span>
+            )}
+            {entry.field && (
+              <span className="ml-1.5 text-indigo-600">{entry.field}</span>
+            )}
+            {entry.old != null && entry.new != null && (
+              <span className="ml-1.5 text-gray-500">
+                {String(entry.old)} → {String(entry.new)}
+              </span>
+            )}
+            {entry.reason && (
+              <span className="ml-1.5 text-gray-400 italic">{entry.reason}</span>
+            )}
+          </>
+        )}
+      </span>
+    </li>
+  )
 }
 
 export default function Dashboard() {
@@ -17,6 +58,7 @@ export default function Dashboard() {
   const [syncResult, setSyncResult] = useState<CycleResultResponse | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [togglingAuto, setTogglingAuto] = useState(false)
+  const [showMatched, setShowMatched] = useState(true)
   const navigate = useNavigate()
 
   async function handleManualSync() {
@@ -160,6 +202,10 @@ export default function Dashboard() {
               <span>Updated: {syncResult.updated}</span>
               <span>Conflicts: {syncResult.conflicts}</span>
               <span>Skipped: {syncResult.skipped}</span>
+              {syncResult.dry_run && (() => {
+                const matchedCount = syncResult.preview.filter(p => p.action === 'matched').length
+                return matchedCount > 0 ? <span className="text-gray-400">Matched: {matchedCount}</span> : null
+              })()}
               {syncResult.errors > 0 && <span className="text-red-600">Errors: {syncResult.errors}</span>}
             </div>
             {syncResult.dry_run && syncResult.preview.some(p => p.action === 'create' || p.action === 'update') && (
@@ -184,38 +230,38 @@ export default function Dashboard() {
                       </summary>
                       <ul className="divide-y divide-gray-100">
                         {entries.map((entry, i) => (
-                          <li key={i} className="px-3 py-1.5 flex items-start gap-2 text-xs text-gray-600">
-                            <span className="shrink-0 mt-0.5">
-                              <DeepLinks
-                                filamentdbFilamentId={entry.fdb_filament_id}
-                                spoolmanSpoolId={entry.spoolman_id}
-                              />
-                            </span>
-                            <span className="grow min-w-0">
-                              <span className="font-medium">{entry.label}</span>
-                              {entry.direction && (
-                                <span className="ml-1.5 text-gray-400">
-                                  {entry.direction === 'spoolman_to_filamentdb' ? 'SM→FDB' : 'FDB→SM'}
-                                </span>
-                              )}
-                              {entry.field && (
-                                <span className="ml-1.5 text-indigo-600">{entry.field}</span>
-                              )}
-                              {entry.old != null && entry.new != null && (
-                                <span className="ml-1.5 text-gray-500">
-                                  {String(entry.old)} → {String(entry.new)}
-                                </span>
-                              )}
-                              {entry.reason && (
-                                <span className="ml-1.5 text-gray-400 italic">{entry.reason}</span>
-                              )}
-                            </span>
-                          </li>
+                          <PreviewRow key={i} entry={entry} />
                         ))}
                       </ul>
                     </details>
                   )
                 })}
+                {(() => {
+                  const matchedEntries = syncResult.preview.filter(p => p.action === 'matched')
+                  if (matchedEntries.length === 0) return null
+                  return (
+                    <div className="rounded border border-gray-200 bg-white">
+                      <div className="px-3 py-1.5 flex items-center justify-between">
+                        <span className="text-xs font-medium text-gray-500">
+                          Matched — no updates ({matchedEntries.length})
+                        </span>
+                        <button
+                          onClick={() => setShowMatched(v => !v)}
+                          className="text-xs text-gray-400 hover:text-gray-600 underline"
+                        >
+                          {showMatched ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+                      {showMatched && (
+                        <ul className="divide-y divide-gray-100">
+                          {matchedEntries.map((entry, i) => (
+                            <PreviewRow key={i} entry={entry} muted />
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
           </div>

@@ -51,7 +51,7 @@ class SystemStatus(BaseModel):
 
 
 class SyncPreviewEntry(BaseModel):
-    action: Literal["create", "update", "conflict", "skip"]
+    action: Literal["create", "update", "conflict", "skip", "matched"]
     entity_type: Literal["spool", "filament"] | None = None
     direction: Literal["spoolman_to_filamentdb", "filamentdb_to_spoolman", "conflict"] | None = None
     label: str
