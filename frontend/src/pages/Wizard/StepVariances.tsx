@@ -587,6 +587,10 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                             <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
                               {filData.diameter != null ? `${filData.diameter} mm` : '⌀ —'}
                             </span>
+                            {/* Density chip — always shown, dash when null */}
+                            <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                              {filData.density != null ? `${filData.density} g/cm³` : 'ρ —'}
+                            </span>
                             {/* Temps — editable inputs for master, read-only chip for non-master */}
                             {isMaster ? (
                               <span className="inline-flex items-center gap-1 text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
@@ -900,6 +904,10 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       {/* Diameter chip — always shown, dash when null */}
                       <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
                         {f.diameter != null ? `${f.diameter} mm` : '⌀ —'}
+                      </span>
+                      {/* Density chip — always shown, dash when null */}
+                      <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                        {f.density != null ? `${f.density} g/cm³` : 'ρ —'}
                       </span>
                       {/* Temps chip — shown when at least one temp is set */}
                       {(f.settings_extruder_temp != null || f.settings_bed_temp != null) && (
