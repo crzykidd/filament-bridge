@@ -14,6 +14,31 @@ function ValueDisplay({ value }: { value: unknown }) {
 
 const DELETION_FIELD = '__record_deleted__'
 
+// ---------------------------------------------------------------------------
+// Conflict type classification
+// ---------------------------------------------------------------------------
+
+type ConflictType = 'deleted' | 'new_spool_sm' | 'new_spool_fdb' | 'weight' | 'multicolor' | 'property'
+
+const TYPE_LABELS: Record<ConflictType, string> = {
+  deleted: 'Deleted record',
+  new_spool_sm: 'New spool (Spoolman)',
+  new_spool_fdb: 'New spool (Filament DB)',
+  weight: 'Weight',
+  multicolor: 'Multicolor',
+  property: 'Property',
+}
+
+const TYPE_ORDER: ConflictType[] = ['deleted', 'new_spool_sm', 'new_spool_fdb', 'weight', 'multicolor', 'property']
+
+function classifyConflict(c: ConflictResponse): ConflictType {
+  if (c.field_name === DELETION_FIELD) return 'deleted'
+  if (c.field_name === 'new_spool') return c.spoolman_id != null ? 'new_spool_sm' : 'new_spool_fdb'
+  if (c.field_name === 'weight' || c.field_name === 'remaining_weight') return 'weight'
+  if (c.field_name === 'multicolor') return 'multicolor'
+  return 'property'
+}
+
 function deletedSideLabel(conflict: ConflictResponse): string {
   const descriptor = (conflict.spoolman_value ?? conflict.filamentdb_value) as { deleted_side?: string } | null
   if (descriptor?.deleted_side === 'filamentdb') return 'Filament DB'
@@ -135,8 +160,23 @@ export default function Conflicts() {
   const [selected, setSelected] = useState<number[]>([])
   const [bulkRes, setBulkRes] = useState<Resolution>('spoolman')
   const [bulking, setBulking] = useState(false)
+  const [typeFilter, setTypeFilter] = useState<ConflictType | 'all'>('all')
 
-  const rows: ConflictResponse[] = data ?? []
+  const allRows: ConflictResponse[] = data ?? []
+
+  // Counts per type — only types present in the current tab's data
+  const typeCounts: { type: ConflictType; label: string; count: number }[] = TYPE_ORDER
+    .map(t => ({ type: t, label: TYPE_LABELS[t], count: allRows.filter(c => classifyConflict(c) === t).length }))
+    .filter(entry => entry.count > 0)
+
+  // If the active filter has no rows (e.g. after resolving the last of a type), fall back to 'all'
+  const activeFilter: ConflictType | 'all' =
+    typeFilter !== 'all' && !typeCounts.find(e => e.type === typeFilter)
+      ? 'all'
+      : typeFilter
+
+  const rows: ConflictResponse[] =
+    activeFilter === 'all' ? allRows : allRows.filter(c => classifyConflict(c) === activeFilter)
 
   async function handleBulk() {
     if (selected.length === 0) return
@@ -178,6 +218,34 @@ export default function Conflicts() {
       {loading && <p className="text-gray-500">Loading…</p>}
       {error && <p className="text-red-600">{error}</p>}
 
+      {!loading && !error && allRows.length > 0 && typeCounts.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => { setTypeFilter('all'); setSelected([]) }}
+            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+              activeFilter === 'all'
+                ? 'bg-gray-800 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            All ({allRows.length})
+          </button>
+          {typeCounts.map(({ type, label, count }) => (
+            <button
+              key={type}
+              onClick={() => { setTypeFilter(type); setSelected([]) }}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                activeFilter === type
+                  ? 'bg-gray-800 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {label} ({count})
+            </button>
+          ))}
+        </div>
+      )}
+
       {tab === 'open' && selected.length > 0 && (
         <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded p-3">
           <span className="text-sm text-indigo-700">{selected.length} selected</span>
@@ -201,7 +269,11 @@ export default function Conflicts() {
       )}
 
       {!loading && !error && rows.length === 0 && (
-        <p className="text-gray-500">No {tab} conflicts.</p>
+        <p className="text-gray-500">
+          {activeFilter === 'all'
+            ? `No ${tab} conflicts.`
+            : `No ${tab} ${TYPE_LABELS[activeFilter].toLowerCase()} conflicts.`}
+        </p>
       )}
 
       <div className="space-y-3">

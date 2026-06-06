@@ -1,5 +1,13 @@
 # Decision record
 
+## 2026-06-05 — Conflicts page: client-side type filter
+
+`classifyConflict` derives a `ConflictType` bucket purely from `field_name` and `spoolman_id`
+fields already present on `ConflictResponse` — no API or schema changes. `new_spool` direction
+is disambiguated by `spoolman_id != null` (Spoolman-only spool) vs null (FDB-only spool), per
+the engine's existing behavior. The filter bar appears only when two or more types are present,
+so a single-type list is never cluttered with an unnecessary UI element.
+
 ## 2026-06-05 — Upstream deletion detection → conflict queue
 
 ### Design
