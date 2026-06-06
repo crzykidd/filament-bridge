@@ -167,9 +167,6 @@ class MappingUpdateRequest(BaseModel):
 
 
 class ConfigResponse(BaseModel):
-    weight_source_of_truth: SourceOfTruth
-    material_properties_source_of_truth: SourceOfTruth
-    new_spool_source_of_truth: SourceOfTruth
     sync_weight_threshold_grams: float
     weight_precision_decimals: int
     auto_sync_enabled: bool
@@ -181,12 +178,10 @@ class ConfigResponse(BaseModel):
     weight_conflict_policy: ConflictPolicy = "manual"
     material_properties_sync_direction: SyncDirection2 = "filamentdb_to_spoolman"
     material_properties_conflict_policy: ConflictPolicy = "manual"
+    new_spool_sync_direction: SyncDirection2 = "two_way"
 
 
 class ConfigUpdateRequest(BaseModel):
-    weight_source_of_truth: SourceOfTruth | None = None
-    material_properties_source_of_truth: SourceOfTruth | None = None
-    new_spool_source_of_truth: SourceOfTruth | None = None
     sync_weight_threshold_grams: float | None = Field(default=None, gt=0)
     weight_precision_decimals: int | None = Field(default=None, ge=0, le=4)
     variant_line_keywords: str | None = None
@@ -195,6 +190,7 @@ class ConfigUpdateRequest(BaseModel):
     weight_conflict_policy: ConflictPolicy | None = None
     material_properties_sync_direction: SyncDirection2 | None = None
     material_properties_conflict_policy: ConflictPolicy | None = None
+    new_spool_sync_direction: SyncDirection2 | None = None
 
 
 # ---------------------------------------------------------------------------

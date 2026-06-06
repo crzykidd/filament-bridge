@@ -1,5 +1,51 @@
 # Decision record
 
+## 2026-06-06 — New-spool direction enforced; wizard writes new keys; old source-of-truth removed
+
+### New-spool creation is now a real enforced direction (default two_way)
+
+`new_spool_sync_direction` replaces the dead `new_spool_source_of_truth` config key.
+The old key was read from the DB but never checked — all new-spool detection paths
+always ran bidirectionally. The new key is enforced in `core/engine.py`'s new-spool
+detection block:
+
+- `two_way` (default) → both `_handle_new_sm_spool` (SM→FDB) and `_handle_new_fdb_spool`
+  (FDB→SM) run — identical to pre-deploy behavior.
+- `spoolman_to_filamentdb` → only SM→FDB creation runs (new SM spools get an FDB spool;
+  new FDB spools are NOT created in Spoolman).
+- `filamentdb_to_spoolman` → only FDB→SM creation runs.
+
+The startup migration (`_migrate_sync_config`) sets `two_way` if the key is absent,
+preserving current behavior for existing deployments.
+
+### Wizard direction step now configures ongoing sync
+
+The `POST /api/wizard/direction` handler previously wrote old `*_source_of_truth` keys
+which the engine no longer read — so onboarding configuration had no effect on
+ongoing sync. The handler now translates the wizard's binary per-category choice
+(`spoolman` / `filamentdb`) into the new direction + conflict policy keys:
+
+- `weight_source_of_truth=spoolman` → `weight_sync_direction=spoolman_to_filamentdb` +
+  `weight_conflict_policy=manual`
+- `weight_source_of_truth=filamentdb` → `weight_sync_direction=filamentdb_to_spoolman` +
+  `weight_conflict_policy=manual`
+- Same mapping for `material_properties_*` and `new_spool_*` categories.
+
+The wizard's frontend payload (`WizardDirectionRequest`) is unchanged — the UI still
+presents the binary per-category choice. A richer wizard UI with full
+direction+policy selection is a later nicety.
+
+### Old source-of-truth fields removed from the config surface
+
+`weight_source_of_truth`, `material_properties_source_of_truth`, and
+`new_spool_source_of_truth` are no longer present in `ConfigResponse`,
+`ConfigUpdateRequest`, or the frontend `types.ts` / `Settings.tsx`. The keys remain
+readable in `_DEFAULTS` and `_migrate_sync_config` for backward-compatible migration
+reads only.
+
+The Settings UI "New spools" row is replaced with a `DirectionSelect` (Two-way /
+Spoolman → Filament DB / Filament DB → Spoolman) bound to `new_spool_sync_direction`.
+
 ## 2026-06-06 — Per-category sync direction + conflict policy (two-axis model)
 
 ### Replaced "source of truth" with two independent per-category axes

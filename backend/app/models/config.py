@@ -7,7 +7,6 @@ from app.db import Base
 _DEFAULTS = {
     "weight_source_of_truth": '"spoolman"',
     "material_properties_source_of_truth": '"filamentdb"',
-    "new_spool_source_of_truth": '"spoolman"',
     "auto_sync_enabled": "false",
     "sync_weight_threshold_grams": "2.0",
     "weight_precision_decimals": "2",
@@ -19,6 +18,8 @@ _DEFAULTS = {
     "weight_conflict_policy": '"manual"',
     "material_properties_sync_direction": '"filamentdb_to_spoolman"',
     "material_properties_conflict_policy": '"manual"',
+    # New spool creation direction: two_way = bidirectional (= today's behavior).
+    "new_spool_sync_direction": '"two_way"',
 }
 
 

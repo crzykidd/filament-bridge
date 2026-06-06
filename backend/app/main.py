@@ -110,6 +110,11 @@ def _migrate_sync_config(db) -> None:
     if get_config_value(db, "material_properties_conflict_policy") is None:
         set_config_value(db, "material_properties_conflict_policy", "manual")
 
+    # New spool creation direction — old new_spool_source_of_truth was unenforced
+    # (bidirectional in practice), so two_way preserves current behavior exactly.
+    if get_config_value(db, "new_spool_sync_direction") is None:
+        set_config_value(db, "new_spool_sync_direction", "two_way")
+
     db.commit()
 
 

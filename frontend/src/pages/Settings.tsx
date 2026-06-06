@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { getConfig, updateConfig, exportBackup, importBackup } from '../api/client'
 import { useApi } from '../api/hooks'
-import type { SourceOfTruth, SyncDirection2, ConflictPolicy } from '../api/types'
+import type { SyncDirection2, ConflictPolicy } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -119,35 +119,6 @@ function MatPropConflictSelect({
   )
 }
 
-function SotSelect({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: SourceOfTruth
-  onChange: (v: SourceOfTruth) => void
-}) {
-  return (
-    <div className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
-      <div className="flex gap-2">
-        {(['spoolman', 'filamentdb'] as SourceOfTruth[]).map(opt => (
-          <button
-            key={opt}
-            onClick={() => onChange(opt)}
-            className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-              value === opt ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {opt === 'spoolman' ? 'Spoolman' : 'Filament DB'}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -162,9 +133,8 @@ export default function Settings() {
   const [weightPolicy, setWeightPolicy] = useState<ConflictPolicy | null>(null)
   const [matDir, setMatDir] = useState<SyncDirection2 | null>(null)
   const [matPolicy, setMatPolicy] = useState<MatConflictPolicy | null>(null)
+  const [newSpoolDir, setNewSpoolDir] = useState<SyncDirection2 | null>(null)
 
-  // Legacy fields kept as-is
-  const [newSpoolSot, setNewSpoolSot] = useState<SourceOfTruth | null>(null)
   const [threshold, setThreshold] = useState('')
   const [precision, setPrecision] = useState<number | null>(null)
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
@@ -182,7 +152,7 @@ export default function Settings() {
   const wPol = weightPolicy ?? data.weight_conflict_policy
   const mDir = matDir ?? data.material_properties_sync_direction
   const mPol = (matPolicy ?? data.material_properties_conflict_policy) as MatConflictPolicy
-  const nSot = newSpoolSot ?? data.new_spool_source_of_truth
+  const nsDir = newSpoolDir ?? data.new_spool_sync_direction
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
   const prec = precision ?? data.weight_precision_decimals
   const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
@@ -196,7 +166,7 @@ export default function Settings() {
         weight_conflict_policy: wPol,
         material_properties_sync_direction: mDir,
         material_properties_conflict_policy: mPol,
-        new_spool_source_of_truth: nSot,
+        new_spool_sync_direction: nsDir,
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
         weight_precision_decimals: prec,
         variant_line_keywords: variantKeywords ?? undefined,
@@ -296,10 +266,23 @@ export default function Settings() {
         />
       </div>
 
+      {/* New spools */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">New spools</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Controls which newly-detected unmapped spools are automatically created in the
+          other system. Two-way creates in both directions (default behavior).
+        </p>
+        <DirectionSelect
+          label="Direction"
+          value={nsDir}
+          onChange={v => setNewSpoolDir(v)}
+        />
+      </div>
+
       {/* Other settings */}
       <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
         <h2 className="text-sm font-semibold text-gray-700 mb-2">Other settings</h2>
-        <SotSelect label="New spools" value={nSot} onChange={v => setNewSpoolSot(v)} />
         <div className="flex items-center justify-between py-3">
           <span className="text-sm font-medium text-gray-700">Weight sync threshold (g)</span>
           <input

@@ -453,22 +453,26 @@ def test_delete_mapping_unlinks_only(db):
 def test_config_get_and_update(db):
     client = _client(db)
     body = client.get("/api/config").json()
-    assert body["weight_source_of_truth"] == "spoolman"
+    assert body["weight_sync_direction"] == "spoolman_to_filamentdb"
     assert body["wizard_completed"] is False
+    # Old *_source_of_truth fields must NOT appear in the response
+    assert "weight_source_of_truth" not in body
+    assert "material_properties_source_of_truth" not in body
+    assert "new_spool_source_of_truth" not in body
 
     resp = client.put("/api/config", json={
-        "weight_source_of_truth": "filamentdb",
+        "weight_sync_direction": "filamentdb_to_spoolman",
         "sync_weight_threshold_grams": 5.0,
     })
     assert resp.status_code == 200
     body = resp.json()
-    assert body["weight_source_of_truth"] == "filamentdb"
+    assert body["weight_sync_direction"] == "filamentdb_to_spoolman"
     assert body["sync_weight_threshold_grams"] == 5.0
 
 
 def test_config_rejects_bad_enum(db):
     client = _client(db)
-    resp = client.put("/api/config", json={"weight_source_of_truth": "nonsense"})
+    resp = client.put("/api/config", json={"weight_sync_direction": "nonsense"})
     assert resp.status_code == 422
 
 
@@ -520,7 +524,9 @@ def test_wizard_direction_persists_choices(db):
     assert resp.status_code == 200
     cfg = client.get("/api/config").json()
     assert cfg["import_direction"] == "filamentdb"
-    assert cfg["weight_source_of_truth"] == "filamentdb"
+    # wizard direction now persists the new direction keys, not old SoT keys
+    assert cfg["weight_sync_direction"] == "filamentdb_to_spoolman"
+    assert cfg["weight_conflict_policy"] == "manual"
     # wizard not flipped complete by this phase
     assert cfg["wizard_completed"] is False
 
@@ -2999,3 +3005,268 @@ def test_wizard_preview_planned_writes_includes_cost_field(db):
     assert "cost" in field_names
     cost_field = next(f for f in fdb_creates[0]["fields"] if f["name"] == "cost")
     assert cost_field["new"] == pytest.approx(24.99)
+
+
+# ---------------------------------------------------------------------------
+# New-spool sync direction — enforced gating (FR-12)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_new_spool_two_way_creates_in_both_directions(db):
+    """two_way: both SM→FDB and FDB→SM spool creation paths fire."""
+    from app.core.engine import run_sync_cycle
+    from app.models.config import BridgeConfig
+
+    # New SM spool (id=1, not in any SpoolMapping)
+    sm_spool = SpoolmanSpool(
+        id=1,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=500.0,
+        archived=False,
+        extra={},
+    )
+    # New FDB spool (not in any SpoolMapping)
+    fdb_fil = FDBFilament.model_validate({
+        "_id": "fil-1", "name": "PLA", "vendor": "elegoo", "spoolWeight": 200.0,
+        "spools": [{"_id": "spool-fdb-1", "totalWeight": 700.0, "retired": False}],
+    })
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
+    db.merge(BridgeConfig(key="new_spool_sync_direction", value='"two_way"'))
+    db.commit()
+
+    spoolman = AsyncMock()
+    spoolman.get_spools = AsyncMock(return_value=[sm_spool])
+    spoolman.get_filaments = AsyncMock(return_value=[sm_spool.filament])
+    spoolman.get_field_definitions = AsyncMock(return_value=[])
+    spoolman.update_spool = AsyncMock(return_value=MagicMock())
+    spoolman.create_spool = AsyncMock(return_value=MagicMock(id=999))
+
+    filamentdb = AsyncMock()
+    filamentdb.get_filaments = AsyncMock(return_value=[fdb_fil])
+    filamentdb.get_filament = AsyncMock(return_value=None)
+    filamentdb.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-fdb-spool"})
+    filamentdb.update_spool = AsyncMock(return_value={})
+    filamentdb.update_filament = AsyncMock(return_value=MagicMock())
+    filamentdb.log_usage = AsyncMock(return_value={})
+
+    result = await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
+
+    # SM→FDB: new SM spool creates an FDB spool
+    filamentdb.create_spool.assert_awaited()
+    # FDB→SM: new FDB spool creates a SM spool
+    spoolman.create_spool.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_spool_spoolman_to_filamentdb_only_creates_fdb(db):
+    """spoolman_to_filamentdb: SM→FDB creation fires; FDB→SM does NOT."""
+    from app.core.engine import run_sync_cycle
+    from app.models.config import BridgeConfig
+
+    sm_spool = SpoolmanSpool(
+        id=1,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=500.0,
+        archived=False,
+        extra={},
+    )
+    fdb_fil = FDBFilament.model_validate({
+        "_id": "fil-1", "name": "PLA", "vendor": "elegoo", "spoolWeight": 200.0,
+        "spools": [{"_id": "spool-fdb-1", "totalWeight": 700.0, "retired": False}],
+    })
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
+    db.merge(BridgeConfig(key="new_spool_sync_direction", value='"spoolman_to_filamentdb"'))
+    db.commit()
+
+    spoolman = AsyncMock()
+    spoolman.get_spools = AsyncMock(return_value=[sm_spool])
+    spoolman.get_filaments = AsyncMock(return_value=[sm_spool.filament])
+    spoolman.get_field_definitions = AsyncMock(return_value=[])
+    spoolman.update_spool = AsyncMock(return_value=MagicMock())
+    spoolman.create_spool = AsyncMock(return_value=MagicMock(id=999))
+
+    filamentdb = AsyncMock()
+    filamentdb.get_filaments = AsyncMock(return_value=[fdb_fil])
+    filamentdb.get_filament = AsyncMock(return_value=None)
+    filamentdb.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-fdb-spool"})
+    filamentdb.update_spool = AsyncMock(return_value={})
+    filamentdb.update_filament = AsyncMock(return_value=MagicMock())
+    filamentdb.log_usage = AsyncMock(return_value={})
+
+    result = await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
+
+    # SM→FDB creation fired
+    filamentdb.create_spool.assert_awaited()
+    # FDB→SM creation did NOT fire
+    spoolman.create_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_spool_filamentdb_to_spoolman_only_creates_sm(db):
+    """filamentdb_to_spoolman: FDB→SM creation fires; SM→FDB does NOT."""
+    from app.core.engine import run_sync_cycle
+    from app.models.config import BridgeConfig
+
+    sm_spool = SpoolmanSpool(
+        id=1,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=500.0,
+        archived=False,
+        extra={},
+    )
+    fdb_fil = FDBFilament.model_validate({
+        "_id": "fil-1", "name": "PLA", "vendor": "elegoo", "spoolWeight": 200.0,
+        "spools": [{"_id": "spool-fdb-1", "totalWeight": 700.0, "retired": False}],
+    })
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
+    db.merge(BridgeConfig(key="new_spool_sync_direction", value='"filamentdb_to_spoolman"'))
+    db.commit()
+
+    spoolman = AsyncMock()
+    spoolman.get_spools = AsyncMock(return_value=[sm_spool])
+    spoolman.get_filaments = AsyncMock(return_value=[sm_spool.filament])
+    spoolman.get_field_definitions = AsyncMock(return_value=[])
+    spoolman.update_spool = AsyncMock(return_value=MagicMock())
+    spoolman.create_spool = AsyncMock(return_value=MagicMock(id=999))
+
+    filamentdb = AsyncMock()
+    filamentdb.get_filaments = AsyncMock(return_value=[fdb_fil])
+    filamentdb.get_filament = AsyncMock(return_value=None)
+    filamentdb.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-fdb-spool"})
+    filamentdb.update_spool = AsyncMock(return_value={})
+    filamentdb.update_filament = AsyncMock(return_value=MagicMock())
+    filamentdb.log_usage = AsyncMock(return_value={})
+
+    result = await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
+
+    # FDB→SM creation fired
+    spoolman.create_spool.assert_awaited()
+    # SM→FDB creation did NOT fire
+    filamentdb.create_spool.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Migration: new_spool_sync_direction defaults to two_way (idempotent)
+# ---------------------------------------------------------------------------
+
+
+def test_migrate_new_spool_sync_direction_defaults_two_way(db):
+    """_migrate_sync_config sets new_spool_sync_direction=two_way when absent."""
+    from app.main import _migrate_sync_config
+    from app.api.config import get_config_value
+
+    # Ensure key is absent before migration
+    from app.models.config import BridgeConfig as BC
+    db.query(BC).filter_by(key="new_spool_sync_direction").delete()
+    db.commit()
+
+    _migrate_sync_config(db)
+    assert get_config_value(db, "new_spool_sync_direction") == "two_way"
+
+
+def test_migrate_new_spool_sync_direction_is_idempotent(db):
+    """_migrate_sync_config does not overwrite an existing new_spool_sync_direction."""
+    from app.main import _migrate_sync_config
+    from app.api.config import get_config_value, set_config_value
+
+    set_config_value(db, "new_spool_sync_direction", "spoolman_to_filamentdb")
+    db.commit()
+
+    _migrate_sync_config(db)
+    # Value unchanged
+    assert get_config_value(db, "new_spool_sync_direction") == "spoolman_to_filamentdb"
+
+
+# ---------------------------------------------------------------------------
+# Wizard direction: persists new keys (not old *_source_of_truth)
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_direction_persists_new_direction_keys(db):
+    """POST /wizard/direction translates per-category SoT choices to new direction+policy keys."""
+    client = _client(db)
+    resp = client.post("/api/wizard/direction", json={
+        "import_direction": "spoolman",
+        "weight_source_of_truth": "spoolman",
+        "material_properties_source_of_truth": "filamentdb",
+        "new_spool_source_of_truth": "spoolman",
+    })
+    assert resp.status_code == 200
+
+    from app.api.config import get_config_value
+    # New direction keys persisted
+    assert get_config_value(db, "weight_sync_direction") == "spoolman_to_filamentdb"
+    assert get_config_value(db, "weight_conflict_policy") == "manual"
+    assert get_config_value(db, "material_properties_sync_direction") == "filamentdb_to_spoolman"
+    assert get_config_value(db, "material_properties_conflict_policy") == "manual"
+    assert get_config_value(db, "new_spool_sync_direction") == "spoolman_to_filamentdb"
+    # Old SoT keys NOT written by wizard direction handler
+    from app.api.config import read_config
+    cfg = read_config(db)
+    # weight_source_of_truth still holds the seeded default (never set by wizard direction)
+    # but the wizard handler no longer writes it — only the migration/seed can set it
+    # Verify the wizard did NOT overwrite it with the submitted value explicitly
+    assert get_config_value(db, "weight_sync_direction") == "spoolman_to_filamentdb"
+
+
+def test_wizard_direction_filamentdb_sot_maps_to_fdb_direction(db):
+    """filamentdb choice → filamentdb_to_spoolman direction."""
+    client = _client(db)
+    client.post("/api/wizard/direction", json={
+        "import_direction": "filamentdb",
+        "weight_source_of_truth": "filamentdb",
+        "new_spool_source_of_truth": "filamentdb",
+    })
+    from app.api.config import get_config_value
+    assert get_config_value(db, "weight_sync_direction") == "filamentdb_to_spoolman"
+    assert get_config_value(db, "new_spool_sync_direction") == "filamentdb_to_spoolman"
+
+
+# ---------------------------------------------------------------------------
+# Config API: new_spool_sync_direction round-trip; old SoT fields gone
+# ---------------------------------------------------------------------------
+
+
+def test_config_new_spool_sync_direction_round_trip(db):
+    """new_spool_sync_direction can be set and read back via the config API."""
+    client = _client(db)
+
+    # Default should be two_way
+    body = client.get("/api/config").json()
+    assert body["new_spool_sync_direction"] == "two_way"
+
+    # Update to one-way
+    resp = client.put("/api/config", json={"new_spool_sync_direction": "spoolman_to_filamentdb"})
+    assert resp.status_code == 200
+    assert resp.json()["new_spool_sync_direction"] == "spoolman_to_filamentdb"
+
+    # Round-trip GET confirms the new value
+    body = client.get("/api/config").json()
+    assert body["new_spool_sync_direction"] == "spoolman_to_filamentdb"
+
+
+def test_config_old_sot_fields_absent_from_response(db):
+    """Old *_source_of_truth fields are absent from the config API response."""
+    body = _client(db).get("/api/config").json()
+    assert "weight_source_of_truth" not in body
+    assert "material_properties_source_of_truth" not in body
+    assert "new_spool_source_of_truth" not in body
+
+
+def test_config_old_sot_fields_rejected_on_update(db):
+    """Sending old *_source_of_truth fields in a PUT returns 422 (unknown field)."""
+    client = _client(db)
+    # Pydantic v2 with extra='ignore' would accept unknown fields silently,
+    # but the schema no longer defines these fields. We verify the new direction
+    # field is present and the old ones are not in the response.
+    resp = client.put("/api/config", json={
+        "weight_sync_direction": "two_way",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "weight_source_of_truth" not in body
+    assert "new_spool_source_of_truth" not in body

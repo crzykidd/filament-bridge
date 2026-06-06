@@ -184,20 +184,38 @@ def wizard_get_direction(db: Session = Depends(get_db)) -> WizardDirectionRespon
     return WizardDirectionResponse(import_direction=direction, include_empty_spools=include_empty)
 
 
+def _sot_to_direction(sot: str) -> str:
+    """Translate a legacy SourceOfTruth value to a SyncDirection2 value.
+
+    Wizard UI still submits binary per-category 'spoolman'/'filamentdb' choices;
+    we translate to the new one-way direction keys before persisting.
+    """
+    return "spoolman_to_filamentdb" if sot == "spoolman" else "filamentdb_to_spoolman"
+
+
 @router.post("/wizard/direction", response_model=WizardDecisionAck)
 def wizard_direction(payload: WizardDirectionRequest, db: Session = Depends(get_db)) -> WizardDecisionAck:
     persisted = 0
     set_config_value(db, "import_direction", payload.import_direction)
     persisted += 1
-    for key in (
-        "weight_source_of_truth",
-        "material_properties_source_of_truth",
-        "new_spool_source_of_truth",
-    ):
-        value = getattr(payload, key)
-        if value is not None:
-            set_config_value(db, key, value)
-            persisted += 1
+
+    # Translate per-category wizard selections into the new direction+policy keys.
+    # The wizard's binary choice (spoolman/filamentdb) maps to a one-way direction.
+    # A richer wizard UI with full direction+policy is a later nicety.
+    if payload.weight_source_of_truth is not None:
+        set_config_value(db, "weight_sync_direction", _sot_to_direction(payload.weight_source_of_truth))
+        set_config_value(db, "weight_conflict_policy", "manual")
+        persisted += 2
+
+    if payload.material_properties_source_of_truth is not None:
+        set_config_value(db, "material_properties_sync_direction", _sot_to_direction(payload.material_properties_source_of_truth))
+        set_config_value(db, "material_properties_conflict_policy", "manual")
+        persisted += 2
+
+    if payload.new_spool_source_of_truth is not None:
+        set_config_value(db, "new_spool_sync_direction", _sot_to_direction(payload.new_spool_source_of_truth))
+        persisted += 1
+
     if payload.include_empty_spools is not None:
         set_config_value(db, "wizard_include_empty_spools", payload.include_empty_spools)
         persisted += 1

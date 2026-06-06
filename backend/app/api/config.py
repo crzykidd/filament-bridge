@@ -65,9 +65,6 @@ def set_config_value(db: Session, key: str, value: Any) -> None:
 def _config_response(db: Session) -> ConfigResponse:
     cfg = read_config(db)
     return ConfigResponse(
-        weight_source_of_truth=cfg.get("weight_source_of_truth", "spoolman"),
-        material_properties_source_of_truth=cfg.get("material_properties_source_of_truth", "filamentdb"),
-        new_spool_source_of_truth=cfg.get("new_spool_source_of_truth", "spoolman"),
         sync_weight_threshold_grams=float(cfg.get("sync_weight_threshold_grams", 2.0)),
         weight_precision_decimals=int(cfg.get("weight_precision_decimals", 2)),
         auto_sync_enabled=bool(cfg.get("auto_sync_enabled", False)),
@@ -78,6 +75,7 @@ def _config_response(db: Session) -> ConfigResponse:
         weight_conflict_policy=cfg.get("weight_conflict_policy", "manual"),
         material_properties_sync_direction=cfg.get("material_properties_sync_direction", "filamentdb_to_spoolman"),
         material_properties_conflict_policy=cfg.get("material_properties_conflict_policy", "manual"),
+        new_spool_sync_direction=cfg.get("new_spool_sync_direction", "two_way"),
     )
 
 

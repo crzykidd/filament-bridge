@@ -1335,6 +1335,7 @@ async def run_sync_cycle(
     weight_policy: str = config.get("weight_conflict_policy", "manual")
     matprop_direction: str = config.get("material_properties_sync_direction", "filamentdb_to_spoolman")
     matprop_policy: str = config.get("material_properties_conflict_policy", "manual")
+    new_spool_direction: str = config.get("new_spool_sync_direction", "two_way")
 
     threshold: float = float(config.get("sync_weight_threshold_grams", 2.0))
     precision: int = int(config.get("weight_precision_decimals", 2))
@@ -1720,33 +1721,39 @@ async def run_sync_cycle(
     )
 
     # ---- New spool detection (FR-12) ----
-    for sm_spool in sm_spools.values():
-        if sm_spool.id in mapped_sm_spool_ids:
-            continue
-        fdb_spool_id_raw = sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
-        fdb_spool_id = decode_extra_value(fdb_spool_id_raw)
-        if fdb_spool_id:
-            continue  # has cross-ref but no SpoolMapping row — orphan, skip
-        await _handle_new_sm_spool(
-            db, cycle_id, result, dry_run,
-            sm_spool, filament_mappings_by_sm, fdb_filaments,
-            filamentdb, spoolman, fdb_field_name,
-            precision=precision,
-        )
-
-    for fdb_f in fdb_filaments_all:
-        for fdb_spool in fdb_f.spools:
-            if fdb_spool.id in mapped_fdb_spool_ids:
+    # new_spool_direction gates which creation paths are active:
+    #   two_way                → both SM→FDB and FDB→SM creation
+    #   spoolman_to_filamentdb → only SM→FDB creation (new SM spools create in FDB)
+    #   filamentdb_to_spoolman → only FDB→SM creation (new FDB spools create in SM)
+    if new_spool_direction in ("two_way", "spoolman_to_filamentdb"):
+        for sm_spool in sm_spools.values():
+            if sm_spool.id in mapped_sm_spool_ids:
                 continue
-            label_val = getattr(fdb_spool, fdb_field_name, None) if fdb_field_name == "label" else None
-            if label_val:
-                continue  # has SM ID in label — orphan without SpoolMapping, skip
-            await _handle_new_fdb_spool(
+            fdb_spool_id_raw = sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
+            fdb_spool_id = decode_extra_value(fdb_spool_id_raw)
+            if fdb_spool_id:
+                continue  # has cross-ref but no SpoolMapping row — orphan, skip
+            await _handle_new_sm_spool(
                 db, cycle_id, result, dry_run,
-                fdb_f, fdb_spool, filament_mappings_by_fdb,
-                spoolman, filamentdb, fdb_field_name,
+                sm_spool, filament_mappings_by_sm, fdb_filaments,
+                filamentdb, spoolman, fdb_field_name,
                 precision=precision,
             )
+
+    if new_spool_direction in ("two_way", "filamentdb_to_spoolman"):
+        for fdb_f in fdb_filaments_all:
+            for fdb_spool in fdb_f.spools:
+                if fdb_spool.id in mapped_fdb_spool_ids:
+                    continue
+                label_val = getattr(fdb_spool, fdb_field_name, None) if fdb_field_name == "label" else None
+                if label_val:
+                    continue  # has SM ID in label — orphan without SpoolMapping, skip
+                await _handle_new_fdb_spool(
+                    db, cycle_id, result, dry_run,
+                    fdb_f, fdb_spool, filament_mappings_by_fdb,
+                    spoolman, filamentdb, fdb_field_name,
+                    precision=precision,
+                )
 
     if not dry_run:
         db.commit()

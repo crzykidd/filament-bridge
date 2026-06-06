@@ -154,9 +154,6 @@ export interface MappingUpdateRequest {
 // ---------------------------------------------------------------------------
 
 export interface ConfigResponse {
-  weight_source_of_truth: SourceOfTruth
-  material_properties_source_of_truth: SourceOfTruth
-  new_spool_source_of_truth: SourceOfTruth
   sync_weight_threshold_grams: number
   weight_precision_decimals: number
   auto_sync_enabled: boolean
@@ -167,12 +164,10 @@ export interface ConfigResponse {
   weight_conflict_policy: ConflictPolicy
   material_properties_sync_direction: SyncDirection2
   material_properties_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
+  new_spool_sync_direction: SyncDirection2
 }
 
 export interface ConfigUpdateRequest {
-  weight_source_of_truth?: SourceOfTruth | null
-  material_properties_source_of_truth?: SourceOfTruth | null
-  new_spool_source_of_truth?: SourceOfTruth | null
   sync_weight_threshold_grams?: number | null
   weight_precision_decimals?: number | null
   variant_line_keywords?: string | null
@@ -180,6 +175,7 @@ export interface ConfigUpdateRequest {
   weight_conflict_policy?: ConflictPolicy | null
   material_properties_sync_direction?: SyncDirection2 | null
   material_properties_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
+  new_spool_sync_direction?: SyncDirection2 | null
 }
 
 // ---------------------------------------------------------------------------
