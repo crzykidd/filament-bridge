@@ -183,13 +183,16 @@ def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> lis
     """Compare shared filament properties; return [{field, master_value, member_value}] for each mismatch.
 
     Both-None is not a conflict. One-None vs non-None is a conflict.
+
+    Note: spool_weight (empty-reel tare) is intentionally excluded. Tare is unified per
+    variant group — all members use the master's tare — so a tare-only difference must not
+    flag a member for suggest_exclude or prevent auto-grouping.
     """
     conflicts: list[dict[str, Any]] = []
     checks = [
         ("material", master.material, member.material),
         ("density", master.density, member.density),
         ("diameter", master.diameter, member.diameter),
-        ("spool_weight", master.spool_weight, member.spool_weight),
         ("settings_extruder_temp", master.settings_extruder_temp, member.settings_extruder_temp),
         ("settings_bed_temp", master.settings_bed_temp, member.settings_bed_temp),
     ]

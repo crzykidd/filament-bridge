@@ -1378,6 +1378,29 @@ def test_sm_prop_conflicts_both_none_not_conflict():
     assert sm_prop_conflicts(a, b) == []
 
 
+def test_sm_prop_conflicts_tare_only_diff_returns_empty():
+    """spool_weight (tare) is excluded from the conflict check — tare-only diff is never a conflict."""
+    from app.core.matcher import sm_prop_conflicts
+    a = SpoolmanFilament(id=1, name="PLA Beige", material="PLA", density=1.24,
+                         spool_weight=160.0, settings_extruder_temp=210, settings_bed_temp=60)
+    b = SpoolmanFilament(id=2, name="PLA Black", material="PLA", density=1.24,
+                         spool_weight=154.0, settings_extruder_temp=210, settings_bed_temp=60)
+    assert sm_prop_conflicts(a, b) == [], "tare-only difference must not produce a conflict"
+
+
+def test_sm_prop_conflicts_real_diff_still_detected():
+    """A non-tare difference (diameter or temp) is still reported after the tare exclusion."""
+    from app.core.matcher import sm_prop_conflicts
+    a = SpoolmanFilament(id=1, name="PLA Red", material="PLA", diameter=1.75,
+                         spool_weight=160.0, settings_extruder_temp=210)
+    b = SpoolmanFilament(id=2, name="PLA Blue", material="PLA", diameter=2.85,
+                         spool_weight=154.0, settings_extruder_temp=210)
+    c = sm_prop_conflicts(a, b)
+    fields = [x["field"] for x in c]
+    assert "diameter" in fields
+    assert "spool_weight" not in fields, "tare must not appear even when it also differs"
+
+
 def test_strip_color_and_words_removes_hex_and_words():
     from app.core.matcher import strip_color_and_words
     assert strip_color_and_words("ELEGOO PLA Red", None) == "elegoo pla"
@@ -2159,6 +2182,47 @@ def test_wizard_variances_suggest_exclude_on_conflicting_member(db):
     non_master = next(m for m in body["groups"][0]["members"] if m["ref"]["spoolman_filament_id"] != master_id)
     assert master_m["suggest_exclude"] is False
     assert non_master["suggest_exclude"] is True
+
+
+def test_wizard_variances_tare_only_diff_does_not_suggest_exclude(db):
+    """Tare-only difference must NOT set suggest_exclude — both members form one group without
+    the non-master being pushed to ungrouped/standalone.
+
+    Regression guard: before the fix, spool_weight was included in sm_prop_conflicts, so
+    ELEGOO PLA Beige (tare 160) + Black (tare 154) would yield conflicts → suggest_exclude=True
+    on the non-master, even though tare is unified per group and is not a variant-distinguishing
+    property.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Beige", vendor=elegoo, material="PLA",
+                         density=1.24, spool_weight=160.0,
+                         settings_extruder_temp=210, settings_bed_temp=60),
+        SpoolmanFilament(id=11, name="PLA Black", vendor=elegoo, material="PLA",
+                         density=1.24, spool_weight=154.0,
+                         settings_extruder_temp=210, settings_bed_temp=60),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/variances").json()
+    # Must form ONE group with both members
+    assert len(body["groups"]) == 1, "tare-only diff must not split the group"
+    member_ids = {m["ref"]["spoolman_filament_id"] for m in body["groups"][0]["members"]}
+    assert member_ids == {10, 11}
+    # Neither member should be suggested for exclusion
+    for m in body["groups"][0]["members"]:
+        assert m["suggest_exclude"] is False, (
+            f"member {m['ref']['spoolman_filament_id']} must not have suggest_exclude=True "
+            "when the only difference is tare"
+        )
+    # Nothing pushed to ungrouped
+    assert body["ungrouped"] == []
 
 
 # ---------------------------------------------------------------------------

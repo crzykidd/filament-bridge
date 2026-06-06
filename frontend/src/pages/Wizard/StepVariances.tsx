@@ -34,7 +34,15 @@ const CONFLICT_FIELD_TO_CANONICAL: Record<string, string> = {
   diameter: 'diameter',
   settings_extruder_temp: 'nozzle_temp',
   settings_bed_temp: 'bed_temp',
-  spool_weight: 'spool_weight',
+}
+
+// Human-readable labels for conflicting field names (used in badges and conflict boxes)
+const CONFLICT_FIELD_LABELS: Record<string, string> = {
+  material: 'material/type',
+  density: 'density',
+  diameter: 'diameter',
+  settings_extruder_temp: 'nozzle temp',
+  settings_bed_temp: 'bed temp',
 }
 
 // ---------------------------------------------------------------------------
@@ -42,11 +50,11 @@ const CONFLICT_FIELD_TO_CANONICAL: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 function computeConflicts(master: VariancesFilament, member: VariancesFilament): VariantPropConflict[] {
+  // mirrors backend sm_prop_conflicts — spool_weight (tare) intentionally excluded
   const checks: Array<[string, unknown, unknown]> = [
     ['material', master.material ?? null, member.material ?? null],
     ['density', master.density ?? null, member.density ?? null],
     ['diameter', master.diameter ?? null, member.diameter ?? null],
-    ['spool_weight', master.spool_weight ?? null, member.spool_weight ?? null],
     ['settings_extruder_temp', master.settings_extruder_temp ?? null, member.settings_extruder_temp ?? null],
     ['settings_bed_temp', master.settings_bed_temp ?? null, member.settings_bed_temp ?? null],
   ]
@@ -670,7 +678,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                               Conflicts with master:
                               {conflicts.map(c => (
                                 <span key={c.field} className="ml-1">
-                                  <span className="font-medium">{c.field}</span>
+                                  <span className="font-medium">{CONFLICT_FIELD_LABELS[c.field] ?? c.field}</span>
                                   {' '}({String(c.member_value)} vs {String(c.master_value)})
                                 </span>
                               ))}
@@ -900,7 +908,14 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         </span>
                       )}
                       {f.suggest_exclude && (
-                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">suggested standalone (prop conflict)</span>
+                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                          {f.conflicts && f.conflicts.length > 0
+                            ? (() => {
+                                const labels = [...new Set(f.conflicts.map(c => CONFLICT_FIELD_LABELS[c.field] ?? c.field))]
+                                return `suggested standalone — ${labels.join(', ')} differ`
+                              })()
+                            : 'suggested standalone'}
+                        </span>
                       )}
                       <DeepLinks spoolmanFilamentId={smId} />
                     </div>

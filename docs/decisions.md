@@ -1,5 +1,44 @@
 # Decision record
 
+## 2026-06-05 — Tare excluded from variant-prop conflicts; conflict badges name specific fields
+
+### Tare (`spool_weight`) excluded from `sm_prop_conflicts`
+
+`sm_prop_conflicts` in `backend/app/core/matcher.py` no longer checks `spool_weight`.
+Previously, two filaments that were identical in every material property but had different
+empty-reel tare values (e.g. ELEGOO PLA Beige tare 160 g vs Black tare 154 g) would yield
+a non-empty conflict list, which set `suggest_exclude=True` on the non-master member and
+pushed it to the ungrouped/standalone section — preventing auto-grouping.
+
+This was self-contradictory: the wizard already unifies tare per variant group (the banner
+"All variants in this group will use the master's empty-reel tare" makes this explicit) and
+tare is a physical/estimated reel weight, not a property that distinguishes a product line.
+Removing `spool_weight` from the check means a tare-only difference no longer flags a member
+for exclusion or standalone suggestion.
+
+The fix propagates to all three call sites automatically (both `wizard.py` at ~375 and ~535,
+and `planner.py` at ~188). The `CONFLICT_FIELD_TO_CANONICAL` map and `computeConflicts`
+mirror function in `StepVariances.tsx` were updated in parallel. Regression tests added:
+`test_sm_prop_conflicts_tare_only_diff_returns_empty`, `test_sm_prop_conflicts_real_diff_still_detected`,
+and `test_wizard_variances_tare_only_diff_does_not_suggest_exclude`.
+
+### Conflict badges name specific differing fields
+
+The standalone badge in `StepVariances.tsx` previously read "suggested standalone (prop conflict)"
+for any filament with `suggest_exclude=True`. It now reads:
+
+> suggested standalone — {field labels} differ
+
+where the field labels are derived from a `CONFLICT_FIELD_LABELS` map that translates raw SM
+field names to friendly display names (e.g. `settings_extruder_temp` → "nozzle temp",
+`material` → "material/type"). Labels are deduped and joined with ", ". Example:
+"suggested standalone — diameter, nozzle temp differ". If `conflicts` is empty but
+`suggest_exclude` is true (shouldn't occur post-fix, but as a fallback), it reads
+"suggested standalone".
+
+The same `CONFLICT_FIELD_LABELS` map is used in the in-group "Conflicts with master:" box
+so field names read consistently across both locations.
+
 ## 2026-06-05 — Reconcile canonical-key contract + editable master temps
 
 ### Canonical-key contract between frontend and backend
