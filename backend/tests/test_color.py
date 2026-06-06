@@ -3,6 +3,7 @@
 from app.core.color import (
     TAG_COEXTRUDED,
     TAG_GRADIENT,
+    apply_finish_tags,
     fdb_multicolor_to_sm,
     multicolor_signature,
     sm_multicolor_signature,
@@ -195,3 +196,72 @@ class TestMulticolorSignature:
         coax = multicolor_signature(None, ["#aabbcc"], [TAG_COEXTRUDED])
         grad = multicolor_signature("#aabbcc", [], [TAG_GRADIENT])
         assert coax != grad
+
+
+# ---------------------------------------------------------------------------
+# apply_finish_tags — merges finish IDs without touching arrangement or unknown tags
+# ---------------------------------------------------------------------------
+
+
+class TestApplyFinishTags:
+    def test_adds_silk_tag(self):
+        result = apply_finish_tags([], {17})
+        assert result == [17]
+
+    def test_adds_multiple_tags_sorted(self):
+        result = apply_finish_tags([], {17, 16})
+        assert result == [16, 17]
+
+    def test_preserves_arrangement_tag_gradient(self):
+        # TAG_GRADIENT (28) must survive — it's in ARRANGEMENT_TAGS, not MANAGED_FINISH_IDS
+        result = apply_finish_tags([TAG_GRADIENT], {17})
+        assert TAG_GRADIENT in result
+        assert 17 in result
+
+    def test_preserves_arrangement_tag_coextruded(self):
+        result = apply_finish_tags([TAG_COEXTRUDED], {17})
+        assert TAG_COEXTRUDED in result
+        assert 17 in result
+
+    def test_preserves_unknown_tag(self):
+        # Unknown tag (e.g. 999) must pass through unmodified
+        result = apply_finish_tags([999], {17})
+        assert 999 in result
+        assert 17 in result
+
+    def test_replaces_stale_managed_finish_ids(self):
+        # If 17 (silk) was previously set and we now pass {16} (matte), 17 is cleared
+        result = apply_finish_tags([17], {16})
+        assert 17 not in result
+        assert 16 in result
+
+    def test_clears_all_managed_finish_ids_when_empty(self):
+        # Passing an empty set clears all managed finish IDs
+        result = apply_finish_tags([17, 16, TAG_GRADIENT], set())
+        assert 17 not in result
+        assert 16 not in result
+        assert TAG_GRADIENT in result  # arrangement tag preserved
+
+    def test_none_existing_treated_as_empty(self):
+        result = apply_finish_tags(None, {17})
+        assert result == [17]
+
+    def test_arrangement_and_finish_coexist(self):
+        # Full real-world scenario: coextruded + silk
+        result = apply_finish_tags([TAG_COEXTRUDED, TAG_GRADIENT], {17})
+        assert TAG_COEXTRUDED in result
+        assert TAG_GRADIENT in result
+        assert 17 in result
+
+    def test_deterministic_output_order(self):
+        # Multiple calls with same args should return the same list
+        a = apply_finish_tags([TAG_COEXTRUDED], {17, 16})
+        b = apply_finish_tags([TAG_COEXTRUDED], {17, 16})
+        assert a == b
+
+    def test_malformed_tags_skipped(self):
+        # Non-integer tags should be skipped gracefully
+        result = apply_finish_tags(["bad", None, 17], {16})
+        assert 17 not in result  # 17 is a managed ID → replaced
+        assert 16 in result
+

@@ -1337,3 +1337,68 @@ spool creates, and Spoolman write-back PATCHes. It calls the exact same sub-func
 execute, so `preview ≡ execute` by construction. `WizardPreviewResponse` gained `planned_writes`.
 The frontend `StepNPreview.tsx` shows the section only for SM direction when the list is
 non-empty, with All / Filament DB / Spoolman filter chips.
+
+## 2026-06-06 — OpenPrintTag finish-tag model adopted; `filamentdb_material_tags` Spoolman extra field
+
+### FDB finish model: base type + numeric tag IDs in optTags
+
+Filament DB (≥ 1.33.0) models material finishes as numeric OpenPrintTag IDs in the
+`optTags` array rather than as part of the material name string. For example, "PLA Silk"
+in Spoolman maps to FDB `type="PLA"` + `optTags=[17]` (silk tag ID). This is the same
+`optTags` field used by the multicolor path, but finishes use different IDs.
+
+### New config-overridable keyword↔ID seed map
+
+`DEFAULT_MATERIAL_TAG_IDS` in `backend/app/core/material_tags.py` seeds the full mapping:
+`silk=17, matte=16, glitter=23, sparkle=23, glow=24, carbon=31, cf=31, glass=34, wood=41,
+metal=46, metallic=46, translucent=19, transparent=20, high-speed=71, hs=71, rapid=71,
+recycled=60`. Override or extend via the `MATERIAL_TAG_IDS` env var as
+`keyword=id,keyword=id,...` pairs; an override replaces the entire seed (no merge).
+
+`MANAGED_FINISH_IDS = frozenset({16,17,19,20,23,24,31,34,41,46,60,71})` defines the IDs
+the bridge owns. IDs outside this set (including arrangement tags 28/29) pass through
+`apply_finish_tags` untouched.
+
+### New Spoolman filament-level extra field: `filamentdb_material_tags`
+
+`ensure_extra_fields()` now also registers a filament-level extra field
+(key `filamentdb_material_tags`, overridable via `SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS`).
+This stores the finish-tag IDs structurally as a JSON list of ints (e.g. `[17]`), allowing
+round-trip sync without re-parsing text names each cycle.
+
+Resolution order in `_sm_finish_ids_from_filament`: read the extra field first (structural,
+trusted if set); fall back to `finish_ids_from_text(name, material)` for Spoolman filaments
+that have not yet had the extra field populated.
+
+### Flap-safety: finish-stripped type comparison in the differ
+
+`differ.py` strips finish keywords from the Spoolman `material` value before comparing it
+with the FDB `type` field. This prevents "PLA Silk" (SM) ↔ "PLA" (FDB) from appearing as
+a perpetual type mismatch and flip-flopping each cycle. `strip_finish_words("PLA Silk")`
+returns `"PLA"`. The generic field-mapping diff is unchanged; only the
+`material` → `type` pair gets the stripped comparison.
+
+### Arrangement tags (28/29) never touched by finish-tag code
+
+`apply_finish_tags` and `_fdb_finish_ids` both respect `ARRANGEMENT_TAGS = {28, 29}`:
+arrangement tags pass through untouched. Finish-tag code never reads or writes them.
+The multicolor path retains exclusive ownership of tags 28/29.
+
+### `_finish_sig` coexists with `_mc_sig` and `_cost` via `_merge_snapshot`
+
+Ongoing sync stores the finish-tag state as `_finish_sig` (sorted comma-joined IDs string)
+in the shared filament snapshot row. Like `_mc_sig` and `_cost`, it uses `_merge_snapshot`
+(reads existing dict, updates one key, writes back), so all three keys coexist and no pass
+clobbers another.
+
+### Version gate: Filament DB ≥ 1.33.0 required (same as multicolor)
+
+`_sync_finish_tags` is gated on `finish_tags_supported` (reuses `multicolor_supported`),
+since `optTags` shipped in FDB 1.33.0. On older FDB versions the pass is a no-op.
+
+### Wizard import: Pass 2.6 writes finish-tag extra field back to Spoolman
+
+During SM→FDB import, `_fdb_filament_payload_from_sm` writes the parsed finish IDs as the
+sentinel key `_sm_finish_ids` in the payload dict. After FDB filament creation (passes 1 and
+2), a new **Pass 2.6** iterates the collected `_finish_ids_by_sm` dict and PATCHes each SM
+filament's `extra.filamentdb_material_tags` so the extra field is populated from first import.

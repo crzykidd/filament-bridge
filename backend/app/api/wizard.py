@@ -869,6 +869,10 @@ async def _execute_spoolman_to_fdb(
     # Phase 3: build reconcile lookup (master sm_id → reconcile field dicts)
     _reconcile_by_master: dict[int, list[dict]] = reconcile_by_master or {}
 
+    # Finish-tag write-back: sm_filament_id → sorted list of OpenPrintTag finish IDs.
+    # Populated from the _sm_finish_ids sentinel in fdb_payload (stripped before FDB POST).
+    _finish_ids_by_sm: dict[int, list[int]] = {}
+
     # ---- Pass 1: masters + ungrouped (variant_master_sm_id is None) ----
     for item in plan.filament_items:
         if item.variant_master_sm_id is not None:
@@ -899,6 +903,10 @@ async def _execute_spoolman_to_fdb(
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "create":
             payload = dict(item.fdb_payload)
+            # Strip the internal sentinel before sending to FDB; stash finish IDs for SM write-back.
+            sm_finish_ids = payload.pop("_sm_finish_ids", None)
+            if sm_finish_ids:
+                _finish_ids_by_sm[item.sm_filament.id] = sm_finish_ids
             if attach_parent:
                 payload["parentId"] = attach_parent  # D3: all attach-group members get parentId
             # Phase 3: overlay reconciled canonical values on the master/ungrouped payload (masters only —
@@ -954,6 +962,10 @@ async def _execute_spoolman_to_fdb(
                 item.error = str(exc)
         elif item.action == "create":
             payload = dict(item.fdb_payload)
+            # Strip the internal sentinel before sending to FDB; stash finish IDs for SM write-back.
+            sm_finish_ids = payload.pop("_sm_finish_ids", None)
+            if sm_finish_ids:
+                _finish_ids_by_sm[item.sm_filament.id] = sm_finish_ids
             payload["parentId"] = master_fdb_id
             try:
                 created = await filamentdb.create_filament(payload)
@@ -1015,6 +1027,27 @@ async def _execute_spoolman_to_fdb(
                     spoolman_id=item.sm_filament.id,
                     error_message=f"Spoolman reconcile write-back failed: {exc}",
                 )
+
+    # ---- Pass 2.6: Spoolman finish-tag write-back (OpenPrintTag material-tags field) ----
+    # For each newly-created FDB filament that had finish IDs, write the structured
+    # list back to the SM filament's extra field so the SM side is structural.
+    if _finish_ids_by_sm:
+        mt_field = _settings.spoolman_field_filamentdb_material_tags
+        for sm_fil_id, finish_ids in _finish_ids_by_sm.items():
+            encoded = encode_extra_value(finish_ids)
+            try:
+                await spoolman.update_filament(sm_fil_id, {"extra": {mt_field: encoded}})
+                logger.info(
+                    "wizard execute %s: wrote finish tags %s to SM filament %s",
+                    res.cycle_id, finish_ids, sm_fil_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "wizard execute %s: finish-tag write-back to SM filament %s failed: %s",
+                    res.cycle_id, sm_fil_id, exc,
+                )
+                # Non-fatal: the SM extra field is for structural tracking; FDB optTags are
+                # the authoritative finish representation.
 
     # ---- Pass 3: FilamentMappings + spool seeding ----
     spool_items_by_fil: dict[int, list[_SpoolPlanItem]] = {}

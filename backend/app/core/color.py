@@ -13,6 +13,8 @@ changed between cycles.
 
 from __future__ import annotations
 
+from app.core.material_tags import MANAGED_FINISH_IDS
+
 # OpenPrintTag arrangement tag IDs surfaced by Filament DB in ``optTags``.
 # coextruded (29) takes precedence over gradient (28) when both are present.
 TAG_GRADIENT = 28
@@ -187,6 +189,33 @@ def multicolor_signature(
     norm_color = (to_sm_color(color) or "").lower()
     norm_sec = ",".join((to_sm_color(c) or "").lower() for c in (secondary_colors or []))
     return f"{arrangement}|{norm_color}|{norm_sec}"
+
+
+def apply_finish_tags(
+    existing_opt_tags: list | None,
+    finish_ids: set[int],
+) -> list[int]:
+    """Merge finish tag IDs into ``optTags`` without touching arrangement or unknown tags.
+
+    Algorithm:
+    1. Coerce all existing tags to int (skip malformed).
+    2. Remove every tag in ``MANAGED_FINISH_IDS`` (the full managed set, not just the
+       incoming ones — this clears stale finish tags from the previous cycle).
+    3. Append all IDs in ``finish_ids`` (sorted for deterministic output).
+    4. Arrangement tags (28/29) and any other unknown tags pass through untouched.
+
+    Returns a new list; the input is not mutated.
+    """
+    base: list[int] = []
+    for t in existing_opt_tags or []:
+        try:
+            ti = int(t)
+        except (TypeError, ValueError):
+            continue
+        if ti not in MANAGED_FINISH_IDS:
+            base.append(ti)
+    base.extend(sorted(finish_ids))
+    return base
 
 
 def sm_multicolor_signature(

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.core.matcher import normalize_color
+from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, strip_finish_words
 from app.core.weight import weight_changed
 
 if TYPE_CHECKING:
@@ -105,6 +106,14 @@ def diff_spool_pair(
                 sm_then = normalize_color(sm_then)
                 fdb_now = normalize_color(fdb_now)
                 fdb_then = normalize_color(fdb_then)
+
+            # Finish-stripped type comparison: when the SM field is ``material`` (which
+            # maps to FDB ``type``), strip finish keywords from the SM side before
+            # comparing so "PLA Silk" (SM) vs "PLA" (FDB) doesn't look like a change.
+            # The finish tag round-trip is handled separately by ``_sync_finish_tags``.
+            if fm.sm_key == "material" and fm.fdb_path == "type":
+                sm_now = strip_finish_words(sm_now) if isinstance(sm_now, str) else sm_now
+                sm_then = strip_finish_words(sm_then) if isinstance(sm_then, str) else sm_then
 
             sm_fc = sm_then != sm_now
             fdb_fc = fdb_then != fdb_now

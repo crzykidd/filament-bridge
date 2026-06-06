@@ -13,13 +13,14 @@ from dataclasses import field as dc_field
 from sqlalchemy.orm import Session
 
 from app.config import settings as _settings
-from app.core.color import sm_multicolor_to_fdb
+from app.core.color import apply_finish_tags, sm_multicolor_to_fdb
 from app.core.fields import resolve_effective_cost
+from app.core.material_tags import finish_ids_from_text, strip_finish_words
 from app.core.matcher import sm_prop_conflicts
 from app.core.weight import DEFAULT_TARE_GRAMS, spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
-from app.schemas.spoolman import SpoolmanFilament, decode_extra_value
+from app.schemas.spoolman import SpoolmanFilament, decode_extra_value, encode_extra_value
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,11 @@ def _fdb_filament_payload_from_sm(
     override → spool spool_weight → filament spool_weight → DEFAULT_TARE_GRAMS).
     When provided, sets spoolWeight from this resolved value instead of raw
     sm.spool_weight (which is often NULL for Spoolman filaments).
+
+    OpenPrintTag finish model: ``type`` = finish-STRIPPED base material (e.g. "PLA"
+    not "PLA Silk"); finish IDs go into ``optTags`` via ``apply_finish_tags``.
+    The multicolor arrangement tags (28/29) in ``mc["optTags"]`` are preserved
+    alongside the finish tags — both are merged into the final ``optTags`` list.
     """
     material = sm.material
     if not material:
@@ -125,12 +131,27 @@ def _fdb_filament_payload_from_sm(
             sm.id, sm.name, _DEFAULT_FDB_MATERIAL,
         )
         material = _DEFAULT_FDB_MATERIAL
+
+    # ---- OpenPrintTag finish model ----
+    tag_map = _settings.parsed_material_tag_ids
+    # Compute finish tag IDs from the name+material text.
+    finish_ids = finish_ids_from_text(sm.name, material, tag_map)
+    # Strip finish keywords to get the base material type for FDB's ``type`` field.
+    base_type = strip_finish_words(material, tag_map)
+    if not base_type:
+        base_type = _DEFAULT_FDB_MATERIAL
+
     mc = sm_multicolor_to_fdb(sm.color_hex, sm.multi_color_hexes, sm.multi_color_direction)
+    # Merge finish tags into the arrangement-aware optTags from the multicolor helper.
+    # apply_finish_tags preserves arrangement tags (28/29) and unknown tags, then
+    # replaces the managed finish-ID set with the newly computed finish_ids.
+    opt_tags = apply_finish_tags(mc["optTags"], finish_ids)
+
     spool_weight = resolved_tare if resolved_tare is not None else sm.spool_weight
     payload: dict = {
         "name": sm.name,
         "vendor": sm.vendor.name if sm.vendor else None,
-        "type": material,
+        "type": base_type,
         "color": mc["color"],
         "density": sm.density,
         "diameter": sm.diameter,
@@ -151,8 +172,8 @@ def _fdb_filament_payload_from_sm(
         payload["netFilamentWeight"] = net_filament_weight
     if mc["secondaryColors"]:
         payload["secondaryColors"] = mc["secondaryColors"]
-    if mc["optTags"]:
-        payload["optTags"] = mc["optTags"]
+    if opt_tags:
+        payload["optTags"] = opt_tags
     temps: dict = {}
     if sm.settings_extruder_temp is not None:
         temps["nozzle"] = sm.settings_extruder_temp
@@ -160,6 +181,14 @@ def _fdb_filament_payload_from_sm(
         temps["bed"] = sm.settings_bed_temp
     if temps:
         payload["temperatures"] = temps
+
+    # Stage the finish IDs for the SM filament extra field write-back.
+    # The planner stores this in the payload under a sentinel key that the execute
+    # path picks up to PATCH the SM filament extra field after FDB create.
+    # The key is stripped from the FDB payload before the POST.
+    if finish_ids:
+        payload["_sm_finish_ids"] = sorted(finish_ids)
+
     return {k: v for k, v in payload.items() if v is not None}
 
 

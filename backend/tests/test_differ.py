@@ -179,3 +179,83 @@ class TestColorNormalizationInDiffer:
         assert not cs.sm_field_changes
         assert not cs.fdb_field_changes
         assert not cs.field_conflicts
+
+
+def _type_material_fm() -> FieldMapping:
+    """FieldMapping for FDB 'type' ↔ Spoolman 'material'."""
+    return FieldMapping(fdb_path="type", sm_key="material", direction="sm_to_fdb")
+
+
+def _snaps_with_material(sm_material: str, fdb_type: str) -> tuple[dict, dict]:
+    sm_snap = {"remaining_weight": 800.0, "_extra_decoded": {"material": sm_material}}
+    fdb_snap = {"totalWeight": 1000.0, "_field_values": {"type": fdb_type}}
+    return sm_snap, fdb_snap
+
+
+class TestFinishStrippedTypeDiffer:
+    """SM 'material' ↔ FDB 'type' comparison must strip finish keywords from SM side
+    so 'PLA Silk' ↔ 'PLA' is treated as no-change (flap-safe)."""
+
+    def test_pla_silk_vs_pla_no_flap(self):
+        """'PLA Silk' (SM) vs 'PLA' (FDB) should not be detected as a change."""
+        sm_snap, fdb_snap = _snaps_with_material("PLA Silk", "PLA")
+        cs = diff_spool_pair(
+            _sm_spool(1, 800.0), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot=sm_snap, fdb_snapshot=fdb_snap, threshold=THRESHOLD,
+            field_maps=[_type_material_fm()],
+            sm_extra_decoded={"material": "PLA Silk"},
+            fdb_field_values={"type": "PLA"},
+        )
+        assert not cs.sm_field_changes, "PLA Silk vs PLA should not appear as SM change"
+        assert not cs.fdb_field_changes
+        assert not cs.field_conflicts
+
+    def test_pla_matte_vs_pla_no_flap(self):
+        sm_snap, fdb_snap = _snaps_with_material("PLA Matte", "PLA")
+        cs = diff_spool_pair(
+            _sm_spool(1, 800.0), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot=sm_snap, fdb_snapshot=fdb_snap, threshold=THRESHOLD,
+            field_maps=[_type_material_fm()],
+            sm_extra_decoded={"material": "PLA Matte"},
+            fdb_field_values={"type": "PLA"},
+        )
+        assert not cs.sm_field_changes
+        assert not cs.field_conflicts
+
+    def test_petg_silk_vs_petg_no_flap(self):
+        sm_snap, fdb_snap = _snaps_with_material("PETG Silk", "PETG")
+        cs = diff_spool_pair(
+            _sm_spool(1, 800.0), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot=sm_snap, fdb_snapshot=fdb_snap, threshold=THRESHOLD,
+            field_maps=[_type_material_fm()],
+            sm_extra_decoded={"material": "PETG Silk"},
+            fdb_field_values={"type": "PETG"},
+        )
+        assert not cs.sm_field_changes
+
+    def test_pla_vs_petg_still_detected_as_real_change(self):
+        """A genuine material change (PLA → PETG) must still be detected."""
+        sm_snap, fdb_snap = _snaps_with_material("PLA", "PLA")
+        cs = diff_spool_pair(
+            _sm_spool(1, 800.0), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot=sm_snap, fdb_snapshot=fdb_snap, threshold=THRESHOLD,
+            field_maps=[_type_material_fm()],
+            sm_extra_decoded={"material": "PETG"},  # SM changed to PETG
+            fdb_field_values={"type": "PLA"},       # FDB still PLA
+        )
+        assert len(cs.sm_field_changes) == 1
+        assert cs.sm_field_changes[0].field_name == "type"
+
+    def test_snapshot_pla_silk_vs_current_pla_silk_and_fdb_pla_no_flap(self):
+        """Round-trip: snapshot has 'PLA Silk' on SM and 'PLA' on FDB; same on current → NOOP."""
+        sm_snap, fdb_snap = _snaps_with_material("PLA Silk", "PLA")
+        cs = diff_spool_pair(
+            _sm_spool(1, 800.0), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot=sm_snap, fdb_snapshot=fdb_snap, threshold=THRESHOLD,
+            field_maps=[_type_material_fm()],
+            sm_extra_decoded={"material": "PLA Silk"},
+            fdb_field_values={"type": "PLA"},
+        )
+        assert not cs.sm_field_changes
+        assert not cs.fdb_field_changes
+        assert not cs.field_conflicts

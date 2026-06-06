@@ -23,6 +23,8 @@ from sqlalchemy.sql import func
 
 from app.config import settings as _settings
 from app.core.color import (
+    ARRANGEMENT_TAGS,
+    apply_finish_tags,
     arrangement_from_tags,
     fdb_multicolor_to_sm,
     multicolor_signature,
@@ -33,6 +35,7 @@ from app.core.color import (
 )
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
+from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text
 from app.core.matcher import match_filaments
 from app.core.sync_policy import SyncAction, resolve_sync_action
 from app.core.version import MULTICOLOR_MIN_FDB, version_gte
@@ -1088,6 +1091,269 @@ async def _sync_cost(
 
 
 # ---------------------------------------------------------------------------
+# Finish-tag sync (OpenPrintTag model, bidirectional)
+# ---------------------------------------------------------------------------
+
+
+def _fdb_finish_ids(opt_tags: list | None) -> frozenset[int]:
+    """Extract the managed finish-tag IDs from a Filament DB ``optTags`` list.
+
+    Only returns IDs in ``MANAGED_FINISH_IDS`` — arrangement tags (28/29) and
+    unknown tags are excluded.
+    """
+    result: set[int] = set()
+    for t in opt_tags or []:
+        try:
+            ti = int(t)
+        except (TypeError, ValueError):
+            continue
+        if ti in MANAGED_FINISH_IDS:
+            result.add(ti)
+    return frozenset(result)
+
+
+def _sm_finish_ids_from_filament(sm_fil: Any, tag_map: dict) -> frozenset[int]:
+    """Compute finish IDs for a Spoolman filament.
+
+    Resolution order:
+    1. Read the ``filamentdb_material_tags`` extra field (structural — if set, trust it).
+    2. Fall back to parsing ``name`` + ``material`` via ``finish_ids_from_text``.
+    """
+    mt_field = _settings.spoolman_field_filamentdb_material_tags
+    raw = sm_fil.extra.get(mt_field) if hasattr(sm_fil, "extra") else None
+    if raw is not None:
+        decoded = decode_extra_value(raw)
+        if isinstance(decoded, list):
+            ids = set()
+            for v in decoded:
+                try:
+                    ids.add(int(v))
+                except (TypeError, ValueError):
+                    pass
+            return frozenset(ids & MANAGED_FINISH_IDS)
+    # Fallback: parse from text
+    return frozenset(finish_ids_from_text(getattr(sm_fil, "name", None), getattr(sm_fil, "material", None), tag_map))
+
+
+async def _sync_finish_tags(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    dry_run: bool,
+    *,
+    filament_mappings: list[FilamentMapping],
+    sm_filaments: dict[int, Any],
+    fdb_filaments: dict[str, FDBFilament],
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+    finish_tags_supported: bool = True,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
+) -> None:
+    """Bidirectional finish-tag sync, one operation per filament pair.
+
+    Finish tags are the managed subset of FDB ``optTags`` (MANAGED_FINISH_IDS) and
+    the Spoolman filament extra field ``filamentdb_material_tags``.  Arrangement tags
+    (28/29) are never touched here.
+
+    Governed by ``material_properties`` direction + policy (same as cost/multicolor).
+    Snapshot key ``_finish_sig`` coexists with ``_mc_sig`` and ``_cost`` via
+    ``_merge_snapshot``.  Baseline-on-first-sight, no write.
+
+    Gated on ``finish_tags_supported`` (FDB >= 1.33.0): ``optTags`` shipped with that
+    release, so finish tags cannot be written to older instances.
+    """
+    if not finish_tags_supported:
+        return  # Silently skip — same pattern as multicolor when FDB is too old.
+    tag_map = _settings.parsed_material_tag_ids
+    mt_field = _settings.spoolman_field_filamentdb_material_tags
+
+    for m in filament_mappings:
+        sm_fil = sm_filaments.get(m.spoolman_filament_id)
+        fdb_list = fdb_filaments.get(m.filamentdb_id)
+        if sm_fil is None or fdb_list is None:
+            continue
+
+        # Fetch FDB detail for live optTags (variant inheritance resolves here).
+        try:
+            fdb_detail = await filamentdb.get_filament(m.filamentdb_id)
+            if fdb_detail is None:
+                logger.warning("Cycle %s: finish-tag detail fetch returned None for %s — skipping", cycle_id, m.filamentdb_id)
+                result.skipped += 1
+                continue
+        except Exception as exc:
+            logger.error("Cycle %s: finish-tag detail fetch failed %s: %s", cycle_id, m.filamentdb_id, exc)
+            result.errors += 1
+            continue
+
+        sm_ids_now = _sm_finish_ids_from_filament(sm_fil, tag_map)
+        fdb_ids_now = _fdb_finish_ids(fdb_detail.optTags)
+
+        # Canonical signature: sorted tuple as a stable string.
+        def _sig(ids: frozenset[int]) -> str:
+            return ",".join(str(i) for i in sorted(ids))
+
+        sm_sig_now = _sig(sm_ids_now)
+        fdb_sig_now = _sig(fdb_ids_now)
+
+        sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
+        fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
+        sm_sig_then = sm_snap.get("_finish_sig") if sm_snap else None
+        fdb_sig_then = fdb_snap.get("_finish_sig") if fdb_snap else None
+
+        def _store(sm_sig: str, fdb_sig: str) -> None:
+            _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_finish_sig": sm_sig})
+            _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {"_finish_sig": fdb_sig})
+
+        # First sight — both sides have no _finish_sig baseline yet.
+        if sm_sig_then is None or fdb_sig_then is None:
+            if not dry_run:
+                _store(sm_sig_now, fdb_sig_now)
+            else:
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "filament",
+                    "direction": None,
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "material_tags",
+                    "old": None, "new": None,
+                    "reason": "first sync of this pair — baseline stored, no diff yet",
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.skipped += 1
+            continue
+
+        sm_changed = sm_sig_then != sm_sig_now
+        fdb_changed = fdb_sig_then != fdb_sig_now
+
+        # Nothing changed.
+        if not sm_changed and not fdb_changed:
+            continue
+
+        # Both sides changed into agreement → refresh baseline.
+        if sm_changed and fdb_changed and sm_sig_now == fdb_sig_now:
+            if not dry_run:
+                _store(sm_sig_now, fdb_sig_now)
+            continue
+
+        action = resolve_sync_action(
+            sm_changed=sm_changed,
+            fdb_changed=fdb_changed,
+            direction=matprop_direction,
+            policy=matprop_policy,
+        )
+
+        if action == SyncAction.NOOP:
+            continue
+
+        if action == SyncAction.QUEUE_CONFLICT:
+            if not dry_run:
+                if not _has_open_conflict(
+                    db, "filament", "material_tags",
+                    spoolman_id=m.spoolman_filament_id,
+                    fdb_filament_id=m.filamentdb_id,
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "filament", "material_tags",
+                        spoolman_id=m.spoolman_filament_id,
+                        fdb_filament_id=m.filamentdb_id,
+                        spoolman_value=sm_sig_now,
+                        filamentdb_value=fdb_sig_now,
+                    )
+                    result.conflicts += 1
+            else:
+                result.preview.append({
+                    "action": "conflict",
+                    "entity_type": "filament",
+                    "direction": None,
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "material_tags",
+                    "old": sm_sig_now, "new": fdb_sig_now,
+                    "reason": "both sides changed finish tags",
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.conflicts += 1
+            continue
+
+        if action == SyncAction.PUSH_SM_TO_FDB:
+            # SM → FDB: write finish IDs into FDB optTags (preserve arrangement + unknown).
+            new_opt_tags = apply_finish_tags(fdb_detail.optTags, sm_ids_now)
+            if not dry_run:
+                try:
+                    await filamentdb.update_filament(m.filamentdb_id, {"optTags": new_opt_tags})
+                    _store(sm_sig_now, sm_sig_now)
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="material_tags", old_value=fdb_sig_now, new_value=sm_sig_now,
+                    )
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: finish-tag SM→FDB failed %s: %s", cycle_id, m.filamentdb_id, exc)
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="material_tags", error_message=str(exc),
+                    )
+                    result.errors += 1
+            else:
+                result.preview.append({
+                    "action": "update",
+                    "entity_type": "filament",
+                    "direction": "spoolman_to_filamentdb",
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "material_tags",
+                    "old": fdb_sig_now, "new": sm_sig_now,
+                    "reason": None,
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.updated += 1
+            continue
+
+        if action == SyncAction.PUSH_FDB_TO_SM:
+            # FDB → SM: write finish IDs into SM filament extra field.
+            encoded = encode_extra_value(sorted(fdb_ids_now))
+            if not dry_run:
+                try:
+                    await spoolman.update_filament(m.spoolman_filament_id, {"extra": {mt_field: encoded}})
+                    _store(fdb_sig_now, fdb_sig_now)
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="material_tags", old_value=sm_sig_now, new_value=fdb_sig_now,
+                    )
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: finish-tag FDB→SM failed %s: %s", cycle_id, m.spoolman_filament_id, exc)
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="material_tags", error_message=str(exc),
+                    )
+                    result.errors += 1
+            else:
+                result.preview.append({
+                    "action": "update",
+                    "entity_type": "filament",
+                    "direction": "filamentdb_to_spoolman",
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "material_tags",
+                    "old": sm_sig_now, "new": fdb_sig_now,
+                    "reason": None,
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.updated += 1
+
+
+# ---------------------------------------------------------------------------
 # New-spool detection (FR-12)
 # ---------------------------------------------------------------------------
 
@@ -1744,6 +2010,20 @@ async def run_sync_cycle(
         fdb_filaments=fdb_filaments,
         spoolman=spoolman,
         filamentdb=filamentdb,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
+    )
+
+    # ---- Finish-tag sync (OpenPrintTag material-tags, bidirectional) ----
+    # Gated on FDB >= 1.33.0: optTags (the FDB finish-tag carrier) shipped with that release.
+    await _sync_finish_tags(
+        db, cycle_id, result, dry_run,
+        filament_mappings=filament_mappings,
+        sm_filaments=sm_filaments,
+        fdb_filaments=fdb_filaments,
+        spoolman=spoolman,
+        filamentdb=filamentdb,
+        finish_tags_supported=multicolor_supported,
         matprop_direction=matprop_direction,
         matprop_policy=matprop_policy,
     )

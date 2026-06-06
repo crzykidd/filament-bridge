@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     spoolman_field_filamentdb_id: str = "filamentdb_id"
     spoolman_field_filamentdb_parent_id: str = "filamentdb_parent_id"
     spoolman_field_filamentdb_spool_id: str = "filamentdb_spool_id"
+    # Spoolman FILAMENT-level extra field storing finish tag IDs (JSON list of ints)
+    spoolman_field_filamentdb_material_tags: str = "filamentdb_material_tags"
+
+    # Config-overridable keyword→OpenPrintTag-ID map for finish detection.
+    # Format: "keyword=id,keyword2=id2" (same as field_mappings).
+    # Empty string = use the seed defaults from core/material_tags.py.
+    material_tag_ids: str = ""
 
     # Filament DB spool field that stores the Spoolman spool ID
     filamentdb_spoolman_id_field: str = "label"
@@ -80,6 +87,19 @@ class Settings(BaseSettings):
         if not self.field_mapping_excludes:
             return set()
         return {f.strip() for f in self.field_mapping_excludes.split(",") if f.strip()}
+
+    @property
+    def parsed_material_tag_ids(self) -> dict[str, int]:
+        """Return the effective keyword→OpenPrintTag-ID map.
+
+        If ``material_tag_ids`` is empty, returns the seed defaults from
+        ``core.material_tags.DEFAULT_MATERIAL_TAG_IDS``.
+        Otherwise parses the CSV override and returns that map exclusively.
+        """
+        from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, parse_material_tag_ids_config
+        if not self.material_tag_ids.strip():
+            return dict(DEFAULT_MATERIAL_TAG_IDS)
+        return parse_material_tag_ids_config(self.material_tag_ids)
 
 
 try:

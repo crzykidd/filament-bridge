@@ -831,11 +831,14 @@ async def test_cost_and_multicolor_snapshots_coexist(db):
     assert "_mc_sig" in mc_sm_data, "_mc_sig key missing after cycle"
 
     # Now run a second cycle where BOTH filaments have all keys — test merge:
-    # Inject both keys into the cost filament snapshot to simulate the merged state.
-    # Use _upsert_snapshot (not _store_snapshot) since the row already exists.
+    # Inject all three snapshot keys (_cost, _mc_sig, _finish_sig) into the cost
+    # filament snapshot to simulate the fully-merged state from prior cycles.
+    # Using _upsert_snapshot (not _store_snapshot) since the row already exists.
+    # Including _finish_sig prevents the finish-tag pass from triggering a first-sight
+    # write that could observe a stale identity-map entry for the same row.
     from app.core.engine import _upsert_snapshot as _upsert
-    _upsert(db, "spoolman", "filament", str(cost_sm_id), {"_cost": 20.0, "_mc_sig": "irrelevant"})
-    _upsert(db, "filamentdb", "filament", cost_fdb_id, {"_cost": 20.0, "_mc_sig": "irrelevant"})
+    _upsert(db, "spoolman", "filament", str(cost_sm_id), {"_cost": 20.0, "_mc_sig": "irrelevant", "_finish_sig": ""})
+    _upsert(db, "filamentdb", "filament", cost_fdb_id, {"_cost": 20.0, "_mc_sig": "irrelevant", "_finish_sig": ""})
 
     await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID + "-2")
 
@@ -843,9 +846,10 @@ async def test_cost_and_multicolor_snapshots_coexist(db):
         source="spoolman", entity_type="filament", entity_id=str(cost_sm_id)
     ).first()
     cost_sm_data2 = json.loads(cost_sm_snap2.data)
-    # Both keys must coexist after the cycle
+    # All three keys must coexist after the cycle — none of the passes may clobber others.
     assert "_cost" in cost_sm_data2, "_cost key lost after second cycle"
     assert "_mc_sig" in cost_sm_data2, "_mc_sig key lost after second cycle"
+    assert "_finish_sig" in cost_sm_data2, "_finish_sig key lost after second cycle"
 
 
 @pytest.mark.asyncio
@@ -1291,3 +1295,323 @@ async def test_engine_new_spool_live_xref_skips(db):
     # The SM→FDB path must not create a FDB spool — live xref means the SM spool is
     # already linked or orphaned with a live reference, so it is skipped.
     fdb_client.create_spool.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Finish-tag sync (_sync_finish_tags) — OpenPrintTag material-tags round-trip
+# ---------------------------------------------------------------------------
+
+# IDs used in finish-tag tests
+FINISH_SM_FIL_ID = 80
+FINISH_FDB_FIL_ID = "fil-finish"
+
+_json = json  # alias to avoid shadowing in closures
+
+
+def _sm_fil_finish(
+    *,
+    name: str = "PLA Silk",
+    material: str = "PLA Silk",
+    extra: dict | None = None,
+) -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=FINISH_SM_FIL_ID,
+        name=name,
+        material=material,
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        extra=extra or {},
+    )
+
+
+def _fdb_list_finish(opt_tags: list | None = None) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": FINISH_FDB_FIL_ID,
+        "name": "PLA Silk",
+        "optTags": opt_tags or [],
+        "spools": [],
+    })
+
+
+def _fdb_detail_finish(opt_tags: list | None = None):
+    from app.schemas.filamentdb import FDBFilamentDetail
+    return FDBFilamentDetail.model_validate({
+        "_id": FINISH_FDB_FIL_ID,
+        "name": "PLA Silk",
+        "optTags": opt_tags or [],
+        "_inherited": [],
+        "spools": [],
+    })
+
+
+def _add_finish_filament_mapping(db):
+    db.add(FilamentMapping(spoolman_filament_id=FINISH_SM_FIL_ID, filamentdb_id=FINISH_FDB_FIL_ID))
+    db.flush()
+
+
+def _finish_settings(mock_settings):
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.spoolman_field_filamentdb_material_tags = "filamentdb_material_tags"
+    mock_settings.parsed_material_tag_ids = dict(DEFAULT_MATERIAL_TAG_IDS)
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+@pytest.mark.asyncio
+async def test_finish_tags_sm_to_fdb_writes_opt_tags(db):
+    """SM 'PLA Silk' with silk tag in extra → FDB optTags updated with tag 17 (silk)."""
+    _add_finish_filament_mapping(db)
+    _seed_matprop_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    # SM extra field stores [17] (silk); FDB currently has no finish tags
+    silk_encoded = json.dumps([17])
+    sm_fil = _sm_fil_finish(extra={"filamentdb_material_tags": silk_encoded})
+    fdb_list = _fdb_list_finish(opt_tags=[])
+    fdb_detail = _fdb_detail_finish(opt_tags=[])
+
+    # Baseline: SM had tag 17, FDB had none → SM changed, FDB unchanged
+    _store_snapshot(db, "spoolman", "filament", str(FINISH_SM_FIL_ID), {"_finish_sig": ""})
+    _store_snapshot(db, "filamentdb", "filament", FINISH_FDB_FIL_ID, {"_finish_sig": ""})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _finish_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_called_once()
+    _fid, payload = fdb_client.update_filament.call_args.args
+    assert _fid == FINISH_FDB_FIL_ID
+    assert "optTags" in payload
+    assert 17 in payload["optTags"]
+    assert result.updated >= 1
+
+
+@pytest.mark.asyncio
+async def test_finish_tags_fdb_to_sm_writes_extra_field(db):
+    """FDB gains optTag 17 (silk); SM name is plain 'PLA' so text-parse yields no finish → FDB→SM write."""
+    _add_finish_filament_mapping(db)
+    _seed_matprop_config(db, direction="filamentdb_to_spoolman", policy="manual")
+
+    # SM name/material have no finish keywords → sm_ids_now = {}; no extra field set
+    sm_fil = _sm_fil_finish(name="PLA Red", material="PLA", extra={})
+    fdb_list = _fdb_list_finish(opt_tags=[17])
+    fdb_detail = _fdb_detail_finish(opt_tags=[17])
+
+    # Baseline: both had no finish tags (empty sig); FDB now has 17 → fdb_changed, sm unchanged
+    _store_snapshot(db, "spoolman", "filament", str(FINISH_SM_FIL_ID), {"_finish_sig": ""})
+    _store_snapshot(db, "filamentdb", "filament", FINISH_FDB_FIL_ID, {"_finish_sig": ""})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _finish_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    spoolman.update_filament.assert_called_once()
+    sm_fil_id, sm_payload = spoolman.update_filament.call_args.args
+    assert sm_fil_id == FINISH_SM_FIL_ID
+    assert "extra" in sm_payload
+    assert "filamentdb_material_tags" in sm_payload["extra"]
+    # Decoded value should contain tag 17
+    from app.schemas.spoolman import decode_extra_value
+    decoded = decode_extra_value(sm_payload["extra"]["filamentdb_material_tags"])
+    assert 17 in decoded
+    assert result.updated >= 1
+
+
+@pytest.mark.asyncio
+async def test_finish_tags_both_changed_queues_conflict(db):
+    """Both SM and FDB finish tags changed differently with two_way+manual → conflict."""
+    _add_finish_filament_mapping(db)
+    _seed_matprop_config(db, direction="two_way", policy="manual")
+
+    # SM: tag 17 (silk); FDB: tag 16 (matte) — they disagree
+    silk_encoded = json.dumps([17])
+    sm_fil = _sm_fil_finish(extra={"filamentdb_material_tags": silk_encoded})
+    fdb_list = _fdb_list_finish(opt_tags=[16])
+    fdb_detail = _fdb_detail_finish(opt_tags=[16])
+
+    # Baseline: both had no finish tags (empty sig)
+    _store_snapshot(db, "spoolman", "filament", str(FINISH_SM_FIL_ID), {"_finish_sig": ""})
+    _store_snapshot(db, "filamentdb", "filament", FINISH_FDB_FIL_ID, {"_finish_sig": ""})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _finish_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts >= 1
+    conflict = db.query(Conflict).filter_by(field_name="material_tags").first()
+    assert conflict is not None
+    assert conflict.spoolman_id == FINISH_SM_FIL_ID
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_filament.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_finish_tags_first_sight_stores_baseline_no_write(db):
+    """No prior _finish_sig snapshot → baseline stored, no upstream writes."""
+    _add_finish_filament_mapping(db)
+
+    sm_fil = _sm_fil_finish()
+    fdb_list = _fdb_list_finish(opt_tags=[17])
+    fdb_detail = _fdb_detail_finish(opt_tags=[17])
+    # No snapshots stored — first sight
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _finish_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_filament.assert_not_called()
+    # _finish_sig must be stored in the filament snapshot
+    sm_snap = db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="filament", entity_id=str(FINISH_SM_FIL_ID)
+    ).first()
+    assert sm_snap is not None
+    assert "_finish_sig" in json.loads(sm_snap.data)
+
+
+@pytest.mark.asyncio
+async def test_finish_tags_snapshot_coexists_with_mc_sig_and_cost(db):
+    """_finish_sig coexists with _mc_sig and _cost in the shared filament snapshot row."""
+    _add_finish_filament_mapping(db)
+    _seed_matprop_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    # SM extra field stores [17]; FDB has [17] — both agree — after first-sight no write
+    silk_encoded = json.dumps([17])
+    sm_fil = _sm_fil_finish(extra={"filamentdb_material_tags": silk_encoded})
+    fdb_list = _fdb_list_finish(opt_tags=[17])
+    fdb_detail = _fdb_detail_finish(opt_tags=[17])
+
+    # Seed both _mc_sig and _cost into existing snapshots; finish_sig is absent
+    _store_snapshot(db, "spoolman", "filament", str(FINISH_SM_FIL_ID),
+                    {"_mc_sig": "solid|93be2f|", "_cost": 20.0})
+    _store_snapshot(db, "filamentdb", "filament", FINISH_FDB_FIL_ID,
+                    {"_mc_sig": "solid|93be2f|", "_cost": 20.0})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _finish_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    sm_snap = db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="filament", entity_id=str(FINISH_SM_FIL_ID)
+    ).first()
+    assert sm_snap is not None
+    data = json.loads(sm_snap.data)
+    assert "_finish_sig" in data, "_finish_sig must be stored"
+    assert "_mc_sig" in data, "_mc_sig must not be clobbered by finish-tag pass"
+    assert "_cost" in data, "_cost must not be clobbered by finish-tag pass"
+
+
+@pytest.mark.asyncio
+async def test_finish_tags_preserves_arrangement_tags_in_opt_tags(db):
+    """When pushing finish tags SM→FDB, arrangement tags (28/29) must survive in optTags."""
+    _add_finish_filament_mapping(db)
+    _seed_matprop_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    # SM has tag 17 (silk) as finish; FDB currently has [29] (coextruded, arrangement)
+    silk_encoded = json.dumps([17])
+    sm_fil = _sm_fil_finish(extra={"filamentdb_material_tags": silk_encoded})
+    fdb_list = _fdb_list_finish(opt_tags=[29])
+    fdb_detail = _fdb_detail_finish(opt_tags=[29])  # FDB has coextruded arrangement tag
+
+    # Baseline: SM had [17], FDB had none (empty sig) → SM changed
+    _store_snapshot(db, "spoolman", "filament", str(FINISH_SM_FIL_ID), {"_finish_sig": ""})
+    _store_snapshot(db, "filamentdb", "filament", FINISH_FDB_FIL_ID, {"_finish_sig": ""})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _finish_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_called_once()
+    _fid, payload = fdb_client.update_filament.call_args.args
+    # Both arrangement tag (29) and finish tag (17) must be in the written optTags
+    assert 29 in payload["optTags"], "arrangement tag 29 must be preserved"
+    assert 17 in payload["optTags"], "finish tag 17 must be written"
+
+
+# ---------------------------------------------------------------------------
+# ensure_extra_fields registers the filament-level material-tags extra field
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_registers_filament_material_tags_field():
+    """ensure_extra_fields must POST /api/v1/field/filament/{key} for filamentdb_material_tags."""
+    from app.services.spoolman import SpoolmanClient
+    from app.schemas.spoolman import SpoolmanFieldDef
+
+    client = SpoolmanClient.__new__(SpoolmanClient)
+
+    # Pre-existing spool fields (the three cross-ref ones already exist)
+    spool_field_defs = [
+        SpoolmanFieldDef(key="filamentdb_id", name="FDB ID", field_type="text", entity_type="spool"),
+        SpoolmanFieldDef(key="filamentdb_parent_id", name="FDB Parent ID", field_type="text", entity_type="spool"),
+        SpoolmanFieldDef(key="filamentdb_spool_id", name="FDB Spool ID", field_type="text", entity_type="spool"),
+    ]
+    # No filament extra fields yet
+    filament_field_defs: list[SpoolmanFieldDef] = []
+
+    posted_filament_keys: list[str] = []
+
+    async def fake_get_field_definitions(entity_type: str):
+        if entity_type == "spool":
+            return spool_field_defs
+        return filament_field_defs
+
+    import httpx
+    posted_bodies: list[dict] = []
+
+    async def fake_post(path: str, *, json: dict) -> MagicMock:
+        if "/field/filament/" in path:
+            key = path.split("/field/filament/")[-1]
+            posted_filament_keys.append(key)
+            posted_bodies.append(json)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client.get_field_definitions = fake_get_field_definitions
+
+    with patch("app.config.settings") as mock_settings_global, \
+         patch("app.services.spoolman._settings", create=True) as _:
+        pass  # just need the with block to set up patching scope
+
+    # Directly patch the _http client and the global settings used inside ensure_extra_fields
+    from unittest.mock import patch as _patch, AsyncMock as _AsyncMock
+    with _patch("app.config.settings") as settings_mock:
+        settings_mock.spoolman_field_filamentdb_material_tags = "filamentdb_material_tags"
+        client.get_field_definitions = _AsyncMock(side_effect=fake_get_field_definitions)
+        mock_http = MagicMock()
+        mock_http.post = _AsyncMock(side_effect=fake_post)
+        client._client = mock_http
+
+        await client.ensure_extra_fields()
+
+    assert "filamentdb_material_tags" in posted_filament_keys, (
+        "ensure_extra_fields must POST /api/v1/field/filament/filamentdb_material_tags"
+    )

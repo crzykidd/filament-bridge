@@ -30,6 +30,17 @@ _REQUIRED_SPOOL_FIELDS = [
     {"key": "filamentdb_spool_id", "name": "Filament DB Spool ID", "field_type": "text"},
 ]
 
+# Extra fields the bridge requires on the Spoolman FILAMENT entity.
+# Key names are config-overridable; defaults are used here for startup registration
+# (the runtime path reads the key from settings at write time).
+_REQUIRED_FILAMENT_FIELDS = [
+    {
+        "key": "filamentdb_material_tags",
+        "name": "Filament DB Material Tags",
+        "field_type": "text",
+    },
+]
+
 
 class SpoolmanClient:
     def __init__(self, base_url: str) -> None:
@@ -136,17 +147,21 @@ class SpoolmanClient:
         return SpoolmanVendor.model_validate(resp.json())
 
     async def ensure_extra_fields(self) -> None:
-        """Create the three bridge cross-ref extra fields on spool if they don't exist.
+        """Create the bridge's required extra fields on spool and filament if they don't exist.
 
         Called once on startup. Spoolman stores extra fields JSON-double-quoted;
         default_value for a text field is the JSON encoding of an empty string: '""'.
+
+        Spool fields: filamentdb_id, filamentdb_parent_id, filamentdb_spool_id
+        Filament fields: filamentdb_material_tags (finish OpenPrintTag IDs)
         """
-        existing = await self.get_field_definitions("spool")
-        existing_keys = {f.key for f in existing}
+        # ---- Spool fields ----
+        existing_spool = await self.get_field_definitions("spool")
+        existing_spool_keys = {f.key for f in existing_spool}
 
         for field_def in _REQUIRED_SPOOL_FIELDS:
             key = field_def["key"]
-            if key in existing_keys:
+            if key in existing_spool_keys:
                 continue
             payload = {
                 "name": field_def["name"],
@@ -160,6 +175,39 @@ class SpoolmanClient:
             except httpx.HTTPStatusError as exc:
                 logger.warning(
                     "Could not create Spoolman extra field spool.%s: %s %s",
+                    key, exc.response.status_code, exc.response.text,
+                )
+
+        # ---- Filament fields ----
+        from app.config import settings as _settings
+        existing_filament = await self.get_field_definitions("filament")
+        existing_filament_keys = {f.key for f in existing_filament}
+
+        # Build the runtime field list, substituting the config-overridable key.
+        runtime_filament_fields = [
+            {
+                "key": _settings.spoolman_field_filamentdb_material_tags,
+                "name": "Filament DB Material Tags",
+                "field_type": "text",
+            },
+        ]
+
+        for field_def in runtime_filament_fields:
+            key = field_def["key"]
+            if key in existing_filament_keys:
+                continue
+            payload = {
+                "name": field_def["name"],
+                "field_type": field_def["field_type"],
+                "default_value": encode_extra_value(""),  # '""'
+            }
+            try:
+                resp = await self._http.post(f"/api/v1/field/filament/{key}", json=payload)
+                resp.raise_for_status()
+                logger.info("Created Spoolman extra field: filament.%s", key)
+            except httpx.HTTPStatusError as exc:
+                logger.warning(
+                    "Could not create Spoolman extra field filament.%s: %s %s",
                     key, exc.response.status_code, exc.response.text,
                 )
 
