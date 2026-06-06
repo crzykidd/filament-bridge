@@ -12,6 +12,13 @@ _DEFAULTS = {
     "sync_weight_threshold_grams": "2.0",
     "weight_precision_decimals": "2",
     "wizard_completed": "false",
+    # New two-axis sync direction + conflict policy keys.
+    # Values here are migration-safe defaults: both categories start one-way
+    # (mirrors old SoT defaults) with manual conflict policy.
+    "weight_sync_direction": '"spoolman_to_filamentdb"',
+    "weight_conflict_policy": '"manual"',
+    "material_properties_sync_direction": '"filamentdb_to_spoolman"',
+    "material_properties_conflict_policy": '"manual"',
 }
 
 

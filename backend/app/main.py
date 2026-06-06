@@ -36,6 +36,7 @@ from app.api import wizard as wizard_router
 from app.config import settings
 from app.core.engine import run_sync_cycle
 from app.db import SessionLocal
+from app.api.config import get_config_value, set_config_value
 from app.models.config import BridgeConfig, seed_defaults
 from app.services.filamentdb import FilamentDBClient
 from app.services.spoolman import SpoolmanClient
@@ -86,6 +87,32 @@ def _run_migrations() -> None:
     alembic_command.upgrade(cfg, "head")
 
 
+def _migrate_sync_config(db) -> None:
+    """One-time idempotent migration: derive new two-axis keys from old SoT keys.
+
+    Maps old source-of-truth → one-way direction with manual conflict policy,
+    preserving today's effective behavior post-deploy. Skips keys already present.
+    Called once at startup after seed_defaults().
+    """
+    # Weight
+    if get_config_value(db, "weight_sync_direction") is None:
+        old_sot = get_config_value(db, "weight_source_of_truth", "spoolman")
+        direction = "spoolman_to_filamentdb" if old_sot == "spoolman" else "filamentdb_to_spoolman"
+        set_config_value(db, "weight_sync_direction", direction)
+    if get_config_value(db, "weight_conflict_policy") is None:
+        set_config_value(db, "weight_conflict_policy", "manual")
+
+    # Material properties
+    if get_config_value(db, "material_properties_sync_direction") is None:
+        old_sot = get_config_value(db, "material_properties_source_of_truth", "filamentdb")
+        direction = "spoolman_to_filamentdb" if old_sot == "spoolman" else "filamentdb_to_spoolman"
+        set_config_value(db, "material_properties_sync_direction", direction)
+    if get_config_value(db, "material_properties_conflict_policy") is None:
+        set_config_value(db, "material_properties_conflict_policy", "manual")
+
+    db.commit()
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     _configure_logging()
@@ -98,7 +125,8 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     db = SessionLocal()
     try:
         seed_defaults(db)
-        logger.info("BridgeConfig defaults seeded")
+        _migrate_sync_config(db)
+        logger.info("BridgeConfig defaults seeded and sync config migrated")
     finally:
         db.close()
 

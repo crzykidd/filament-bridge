@@ -23,6 +23,10 @@ SourceOfTruth = Literal["spoolman", "filamentdb"]
 SyncDirection = Literal["spoolman_to_filamentdb", "filamentdb_to_spoolman"]
 MappingStatus = Literal["in_sync", "pending", "conflict", "unlinked"]
 
+# New two-axis sync model
+SyncDirection2 = Literal["two_way", "spoolman_to_filamentdb", "filamentdb_to_spoolman"]
+ConflictPolicy = Literal["manual", "spoolman_wins", "filamentdb_wins", "newest_wins"]
+
 # Backup envelope schema version — bump when the export shape changes.
 BACKUP_SCHEMA_VERSION = 1
 
@@ -172,6 +176,11 @@ class ConfigResponse(BaseModel):
     wizard_completed: bool
     import_direction: SourceOfTruth | None = None
     variant_line_keywords: str | None = None
+    # Two-axis sync direction + conflict policy (new model)
+    weight_sync_direction: SyncDirection2 = "spoolman_to_filamentdb"
+    weight_conflict_policy: ConflictPolicy = "manual"
+    material_properties_sync_direction: SyncDirection2 = "filamentdb_to_spoolman"
+    material_properties_conflict_policy: ConflictPolicy = "manual"
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -181,6 +190,11 @@ class ConfigUpdateRequest(BaseModel):
     sync_weight_threshold_grams: float | None = Field(default=None, gt=0)
     weight_precision_decimals: int | None = Field(default=None, ge=0, le=4)
     variant_line_keywords: str | None = None
+    # Two-axis sync direction + conflict policy (new model)
+    weight_sync_direction: SyncDirection2 | None = None
+    weight_conflict_policy: ConflictPolicy | None = None
+    material_properties_sync_direction: SyncDirection2 | None = None
+    material_properties_conflict_policy: ConflictPolicy | None = None
 
 
 # ---------------------------------------------------------------------------

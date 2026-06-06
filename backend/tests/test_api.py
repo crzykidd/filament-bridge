@@ -143,6 +143,10 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
     db.add(SpoolMapping(spoolman_spool_id=3, filamentdb_filament_id="fil-3", filamentdb_spool_id="spool-3"))
     _snap(db, "spoolman", "3", {"remaining_weight": 900.0})
     _snap(db, "filamentdb", "spool-3", {"totalWeight": 1200.0})
+
+    # two_way + manual weight config so pair 4 (both-changed) still queues a conflict
+    set_config_value(db, "weight_sync_direction", "two_way")
+    set_config_value(db, "weight_conflict_policy", "manual")
     db.commit()
 
     archived = SpoolmanSpool(
@@ -466,6 +470,40 @@ def test_config_rejects_bad_enum(db):
     client = _client(db)
     resp = client.put("/api/config", json={"weight_source_of_truth": "nonsense"})
     assert resp.status_code == 422
+
+
+def test_config_rejects_newest_wins_for_material_properties(db):
+    """material_properties_conflict_policy=newest_wins must be rejected with HTTP 422."""
+    client = _client(db)
+    resp = client.put("/api/config", json={"material_properties_conflict_policy": "newest_wins"})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["code"] == "invalid_conflict_policy"
+
+
+def test_config_allows_newest_wins_for_weight(db):
+    """weight_conflict_policy=newest_wins is valid and must be accepted."""
+    client = _client(db)
+    resp = client.put("/api/config", json={"weight_conflict_policy": "newest_wins"})
+    assert resp.status_code == 200
+    assert resp.json()["weight_conflict_policy"] == "newest_wins"
+
+
+def test_config_sync_direction_fields_round_trip(db):
+    """New four-axis fields read back correctly after update."""
+    client = _client(db)
+    resp = client.put("/api/config", json={
+        "weight_sync_direction": "two_way",
+        "weight_conflict_policy": "spoolman_wins",
+        "material_properties_sync_direction": "spoolman_to_filamentdb",
+        "material_properties_conflict_policy": "filamentdb_wins",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["weight_sync_direction"] == "two_way"
+    assert body["weight_conflict_policy"] == "spoolman_wins"
+    assert body["material_properties_sync_direction"] == "spoolman_to_filamentdb"
+    assert body["material_properties_conflict_policy"] == "filamentdb_wins"
 
 
 # ---------------------------------------------------------------------------

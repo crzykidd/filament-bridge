@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -74,6 +74,10 @@ def _config_response(db: Session) -> ConfigResponse:
         wizard_completed=bool(cfg.get("wizard_completed", False)),
         import_direction=cfg.get("import_direction"),
         variant_line_keywords=cfg.get("variant_line_keywords", _settings.variant_line_keywords),
+        weight_sync_direction=cfg.get("weight_sync_direction", "spoolman_to_filamentdb"),
+        weight_conflict_policy=cfg.get("weight_conflict_policy", "manual"),
+        material_properties_sync_direction=cfg.get("material_properties_sync_direction", "filamentdb_to_spoolman"),
+        material_properties_conflict_policy=cfg.get("material_properties_conflict_policy", "manual"),
     )
 
 
@@ -86,6 +90,20 @@ def get_config(db: Session = Depends(get_db)) -> ConfigResponse:
 def update_config(payload: ConfigUpdateRequest, db: Session = Depends(get_db)) -> ConfigResponse:
     # Pydantic Literal/gt validators already rejected bad enum values / non-positive
     # thresholds with a 422 before we get here.
+    #
+    # Additional semantic constraint: newest_wins is weight-only (Spoolman has no
+    # per-filament mtime, so it cannot be honest at the filament level).
+    if payload.material_properties_conflict_policy == "newest_wins":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_conflict_policy",
+                "message": (
+                    "newest_wins is not supported for material_properties — "
+                    "Spoolman exposes no per-filament modification timestamp."
+                ),
+            },
+        )
     for key, value in payload.model_dump(exclude_unset=True).items():
         if value is not None:
             set_config_value(db, key, value)

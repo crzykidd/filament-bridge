@@ -93,6 +93,22 @@ def _add_spool_mapping(db, sm_id: int, fdb_fil: str, fdb_spool: str):
     db.flush()
 
 
+def _seed_weight_config(db, direction: str = "two_way", policy: str = "manual"):
+    """Set weight sync direction and conflict policy in BridgeConfig."""
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="weight_sync_direction", value=json.dumps(direction)))
+    db.merge(BridgeConfig(key="weight_conflict_policy", value=json.dumps(policy)))
+    db.commit()
+
+
+def _seed_matprop_config(db, direction: str = "filamentdb_to_spoolman", policy: str = "manual"):
+    """Set material_properties sync direction and conflict policy in BridgeConfig."""
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="material_properties_sync_direction", value=json.dumps(direction)))
+    db.merge(BridgeConfig(key="material_properties_conflict_policy", value=json.dumps(policy)))
+    db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -159,12 +175,14 @@ async def test_weight_decrease_logs_usage(db):
 
 @pytest.mark.asyncio
 async def test_both_sides_changed_creates_conflict_no_writes(db):
-    """Weight changed on both sides → Conflict row, zero API writes (FR-13 hard rule)."""
+    """Weight changed on both sides with two_way+manual → Conflict row, zero API writes."""
     sm_spool = _sm_spool(1, 790.0)  # SM changed
     fdb_fil = _fdb_filament("fil-1", "spool-1", 1050.0)  # FDB also changed
     _add_spool_mapping(db, 1, "fil-1", "spool-1")
     _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
     _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    # two_way + manual → both-changed must queue a conflict
+    _seed_weight_config(db, direction="two_way", policy="manual")
 
     spoolman = _fake_spoolman(spools=[sm_spool])
     fdb_client = _fake_filamentdb(filaments=[fdb_fil])
@@ -313,6 +331,8 @@ async def test_multicolor_sm_to_fdb_write(db):
     _add_filament_mapping(db)
     _store_snapshot(db, "spoolman", "filament", str(SM_FIL_ID), {"_mc_sig": "solid|93be2f|"})
     _store_snapshot(db, "filamentdb", "filament", FDB_FIL_ID, {"_mc_sig": "solid|93be2f|"})
+    # SM-only change must propagate → spoolman_to_filamentdb direction
+    _seed_matprop_config(db, direction="spoolman_to_filamentdb", policy="manual")
 
     spoolman = _fake_spoolman(filaments=[sm_fil])
     fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
@@ -387,7 +407,7 @@ async def test_multicolor_fdb_to_sm_write(db):
 
 @pytest.mark.asyncio
 async def test_multicolor_both_changed_conflict(db):
-    """Both sides changed multicolor differently → Conflict row, no writes."""
+    """Both sides changed multicolor differently with two_way+manual → Conflict row, no writes."""
     sm_fil = _sm_fil(color_hex="93be2f", multi_hexes="cdde1b,68cc16", direction="coaxial")
     fdb_list = _fdb_list_fil(color="#aa0000", secondary=["#00bb00"], opt_tags=[28])
     fdb_detail = _fdb_detail_fil(color="#aa0000", secondary=["#00bb00"], opt_tags=[28])
@@ -395,6 +415,8 @@ async def test_multicolor_both_changed_conflict(db):
     # Both snapshots reflect an older, shared solid state — both sides have since diverged
     _store_snapshot(db, "spoolman", "filament", str(SM_FIL_ID), {"_mc_sig": "solid|93be2f|"})
     _store_snapshot(db, "filamentdb", "filament", FDB_FIL_ID, {"_mc_sig": "solid|93be2f|"})
+    # two_way + manual → both-changed must queue a conflict
+    _seed_matprop_config(db, direction="two_way", policy="manual")
 
     spoolman = _fake_spoolman(filaments=[sm_fil])
     fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
@@ -633,9 +655,9 @@ def _seed_cost_config(db, matprop_sot="spoolman"):
 
 @pytest.mark.asyncio
 async def test_cost_sm_to_fdb_when_matprop_sot_spoolman(db):
-    """SM filament price changed → FDB cost updated when matprop_sot=spoolman."""
+    """SM filament price changed → FDB cost updated when direction=spoolman_to_filamentdb."""
     _add_filament_mapping_cost(db)
-    _seed_cost_config(db, matprop_sot="spoolman")
+    _seed_matprop_config(db, direction="spoolman_to_filamentdb", policy="manual")
     sm_fil = _sm_fil_with_cost(price=24.99)
     fdb_list = _fdb_list_fil_cost(cost=20.0)  # FDB unchanged at 20.0
     # Baseline: SM had price 20.0, FDB had cost 20.0; only SM changed
@@ -681,9 +703,9 @@ async def test_cost_fdb_to_sm_when_matprop_sot_filamentdb(db):
 
 @pytest.mark.asyncio
 async def test_cost_both_changed_creates_conflict(db):
-    """Both SM and FDB cost changed and disagree → Conflict row, no writes."""
+    """Both SM and FDB cost changed with two_way+manual → Conflict row, no writes."""
     _add_filament_mapping_cost(db)
-    _seed_cost_config(db, matprop_sot="spoolman")
+    _seed_matprop_config(db, direction="two_way", policy="manual")
     sm_fil = _sm_fil_with_cost(price=24.99)
     fdb_list = _fdb_list_fil_cost(cost=35.00)
     # Baseline: both had 20.0 — both changed
@@ -830,7 +852,7 @@ async def test_cost_and_multicolor_snapshots_coexist(db):
 async def test_cost_spool_price_wins_over_filament_price(db):
     """Spool-level price takes precedence over filament-level price in the cost pass."""
     _add_filament_mapping_cost(db)
-    _seed_cost_config(db, matprop_sot="spoolman")
+    _seed_matprop_config(db, direction="spoolman_to_filamentdb", policy="manual")
     # SM filament price = 20 but spool price = 30 (spool wins)
     sm_fil = _sm_fil_with_cost(price=20.0)
     sm_spool_with_p = _sm_spool_with_price(spool_id=99, price=30.0)
@@ -850,3 +872,207 @@ async def test_cost_spool_price_wins_over_filament_price(db):
     # Spool price (30) should be used, not filament price (20) — SM changed → FDB updated
     fdb_client.update_filament.assert_called_once_with(COST_FDB_FIL_ID, {"cost": 30.0})
     assert result.updated == 1
+
+
+# ---------------------------------------------------------------------------
+# Verification tests: per-category resolver behaviors (new two-axis model)
+# ---------------------------------------------------------------------------
+
+def _weight_settings(mock_settings):
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+@pytest.mark.asyncio
+async def test_two_way_lone_sm_weight_change_propagates_to_fdb(db):
+    """two_way direction: only SM weight changed → FDB usage logged (SM→FDB propagation)."""
+    sm_spool = _sm_spool(1, 790.0)  # SM dropped 10g (was 800)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.updated == 1
+    assert result.conflicts == 0
+    fdb_client.log_usage.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_two_way_lone_fdb_weight_change_propagates_to_sm(db):
+    """two_way direction: only FDB weight changed → SM updated (FDB→SM propagation, NEW behavior)."""
+    from app.schemas.filamentdb import FDBFilamentDetail
+    # FDB spool gained filament (e.g. user refilled): gross=1200, was 1000 (tare=200 so net was 800, now 1000)
+    sm_spool = _sm_spool(1, 800.0)  # SM unchanged
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1200.0, tare=200.0)  # FDB increased
+    fdb_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-1",
+        "name": "PLA",
+        "spoolWeight": 200.0,
+        "_inherited": [],
+        "spools": [{"_id": "spool-1", "totalWeight": 1200.0, "retired": False, "usageHistory": []}],
+    })
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})  # FDB changed
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.updated == 1
+    assert result.conflicts == 0
+    # SM should receive an update (remaining_weight) — FDB drove the change
+    spoolman.update_spool.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_two_way_both_changed_spoolman_wins(db):
+    """two_way + spoolman_wins: both sides changed → SM wins, no conflict."""
+    sm_spool = _sm_spool(1, 790.0)   # SM changed
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1050.0)  # FDB also changed
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="spoolman_wins")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 0
+    assert result.updated == 1
+    fdb_client.log_usage.assert_called_once()  # SM→FDB write (SM wins)
+    spoolman.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_two_way_both_changed_conflict_dedup_no_requeue(db):
+    """two_way + manual: second cycle with same both-changed pair must NOT re-queue conflict."""
+    sm_spool = _sm_spool(1, 790.0)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1050.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        # First cycle: should queue exactly 1 conflict
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert r1.conflicts == 1
+    assert db.query(Conflict).count() == 1
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        # Second cycle with same unchanged state: must NOT add another conflict row
+        r2 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID + "-2")
+
+    assert r2.conflicts == 0
+    assert db.query(Conflict).count() == 1  # still only one
+
+
+@pytest.mark.asyncio
+async def test_one_way_sm_to_fdb_ignores_lone_fdb_drift(db):
+    """spoolman_to_filamentdb direction: lone FDB weight change is NOOP (no conflict, no write)."""
+    sm_spool = _sm_spool(1, 800.0)   # SM unchanged
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1100.0)  # FDB changed (locked destination)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    # Default behavior post-migration: spoolman_to_filamentdb + manual
+    _seed_weight_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.updated == 0
+    assert result.conflicts == 0
+    fdb_client.log_usage.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_weight_newest_wins_picks_newer_side(db):
+    """newest_wins: SM timestamp is after captured_at and newer → SM wins."""
+    import datetime
+    from app.models.snapshot import Snapshot as SnapModel
+
+    # Plant a snapshot with captured_at in the past
+    old_cap = datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    sm_snap = SnapModel(
+        source="spoolman", entity_type="spool", entity_id="1",
+        data=json.dumps({"remaining_weight": 800.0}),
+        captured_at=old_cap,
+    )
+    fdb_snap = SnapModel(
+        source="filamentdb", entity_type="spool", entity_id="spool-1",
+        data=json.dumps({"totalWeight": 1000.0}),
+        captured_at=old_cap,
+    )
+    db.add(sm_snap)
+    db.add(fdb_snap)
+    db.flush()
+
+    # Both sides changed
+    sm_spool = _sm_spool(1, 790.0)   # SM weight changed (was 800)
+    # SM last_used AFTER captured_at → SM wins
+    sm_spool = SpoolmanSpool(
+        id=1,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=790.0,
+        archived=False,
+        extra={},
+        last_used="2025-01-01T12:00:00+00:00",  # after old_cap (midnight)
+    )
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1050.0)  # FDB also changed
+    # FDB updatedAt set to a time BEFORE SM last_used but also after captured_at
+    fdb_fil_with_ts = FDBFilament.model_validate({
+        "_id": "fil-1",
+        "name": "PLA",
+        "vendor": "elegoo",
+        "spoolWeight": 200.0,
+        "updatedAt": "2025-01-01T06:00:00+00:00",  # earlier than SM last_used
+        "spools": [{"_id": "spool-1", "totalWeight": 1050.0, "retired": False}],
+    })
+
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _seed_weight_config(db, direction="two_way", policy="newest_wins")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil_with_ts])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _weight_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # SM was newer → SM wins → FDB usage logged
+    assert result.updated == 1
+    assert result.conflicts == 0
+    fdb_client.log_usage.assert_called_once()

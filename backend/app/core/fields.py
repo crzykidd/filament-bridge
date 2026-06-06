@@ -41,7 +41,7 @@ class FieldMapping:
 def resolve_field_map(
     settings: "Settings",
     spoolman_extra_keys: set[str],
-    material_props_sot: str,
+    material_props_sot: str = "filamentdb",
 ) -> list[FieldMapping]:
     """Build the effective FDB↔Spoolman field mapping list.
 
@@ -49,6 +49,10 @@ def resolve_field_map(
       1. Explicit pairs from settings.parsed_field_mappings
       2. Auto-matched: Spoolman extra key name == FDB field name exactly
     Excludes (from settings.parsed_field_mapping_excludes) filter both layers.
+
+    The ``material_props_sot`` parameter is accepted for backward compatibility
+    but the direction on each mapping is no longer consulted by the engine —
+    direction decisions are routed through ``resolve_sync_action`` instead.
     """
     direction = "fdb_to_sm" if material_props_sot == "filamentdb" else "sm_to_fdb"
     excludes = settings.parsed_field_mapping_excludes

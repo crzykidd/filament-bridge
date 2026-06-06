@@ -1,9 +1,123 @@
 import { useState, useRef } from 'react'
 import { getConfig, updateConfig, exportBackup, importBackup } from '../api/client'
 import { useApi } from '../api/hooks'
-import type { SourceOfTruth } from '../api/types'
+import type { SourceOfTruth, SyncDirection2, ConflictPolicy } from '../api/types'
 
-type SOT = SourceOfTruth
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+type MatConflictPolicy = Exclude<ConflictPolicy, 'newest_wins'>
+
+function DirectionSelect({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: SyncDirection2
+  onChange: (v: SyncDirection2) => void
+}) {
+  const options: { value: SyncDirection2; label: string }[] = [
+    { value: 'two_way', label: 'Two-way' },
+    { value: 'spoolman_to_filamentdb', label: 'Spoolman → Filament DB' },
+    { value: 'filamentdb_to_spoolman', label: 'Filament DB → Spoolman' },
+  ]
+  return (
+    <div className="flex items-center justify-between py-2">
+      <span className="text-sm font-medium text-gray-700">{label}</span>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value as SyncDirection2)}
+        className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
+function WeightConflictSelect({
+  value,
+  direction,
+  onChange,
+}: {
+  value: ConflictPolicy
+  direction: SyncDirection2
+  onChange: (v: ConflictPolicy) => void
+}) {
+  const options: { value: ConflictPolicy; label: string }[] = [
+    { value: 'manual', label: 'Manual review' },
+    { value: 'spoolman_wins', label: 'Spoolman wins' },
+    { value: 'filamentdb_wins', label: 'Filament DB wins' },
+    { value: 'newest_wins', label: 'Newest wins (timestamp)' },
+  ]
+  const disabled = direction !== 'two_way'
+  return (
+    <div className={`flex flex-col gap-1 py-2 ${disabled ? 'opacity-40' : ''}`}>
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-700">On conflict</span>
+        <select
+          value={value}
+          disabled={disabled}
+          onChange={e => onChange(e.target.value as ConflictPolicy)}
+          className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed"
+        >
+          {options.map(o => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </div>
+      {(value === 'spoolman_wins' || value === 'filamentdb_wins' || value === 'newest_wins') &&
+       direction === 'two_way' && (
+        <p className="text-xs text-amber-600">
+          Warning: auto-resolving weight conflicts can silently discard real consumption
+          history. Use manual review when in doubt.
+        </p>
+      )}
+      {value === 'newest_wins' && direction === 'two_way' && (
+        <p className="text-xs text-gray-400">
+          Newest wins compares timestamps across two separate servers — clock skew can
+          produce incorrect results. Frequent syncing minimises this risk.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function MatPropConflictSelect({
+  value,
+  direction,
+  onChange,
+}: {
+  value: MatConflictPolicy
+  direction: SyncDirection2
+  onChange: (v: MatConflictPolicy) => void
+}) {
+  const options: { value: MatConflictPolicy; label: string }[] = [
+    { value: 'manual', label: 'Manual review' },
+    { value: 'spoolman_wins', label: 'Spoolman wins' },
+    { value: 'filamentdb_wins', label: 'Filament DB wins' },
+  ]
+  const disabled = direction !== 'two_way'
+  return (
+    <div className={`flex items-center justify-between py-2 ${disabled ? 'opacity-40' : ''}`}>
+      <span className="text-sm font-medium text-gray-700">On conflict</span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={e => onChange(e.target.value as MatConflictPolicy)}
+        className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed"
+      >
+        {options.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
 
 function SotSelect({
   label,
@@ -11,14 +125,14 @@ function SotSelect({
   onChange,
 }: {
   label: string
-  value: SOT
-  onChange: (v: SOT) => void
+  value: SourceOfTruth
+  onChange: (v: SourceOfTruth) => void
 }) {
   return (
     <div className="flex items-center justify-between py-3 border-b border-gray-100 last:border-0">
       <span className="text-sm font-medium text-gray-700">{label}</span>
       <div className="flex gap-2">
-        {(['spoolman', 'filamentdb'] as SOT[]).map(opt => (
+        {(['spoolman', 'filamentdb'] as SourceOfTruth[]).map(opt => (
           <button
             key={opt}
             onClick={() => onChange(opt)}
@@ -34,14 +148,23 @@ function SotSelect({
   )
 }
 
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
+
 export default function Settings() {
   const { data, loading, error, reload } = useApi(getConfig)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
 
-  const [weightSot, setWeightSot] = useState<SOT | null>(null)
-  const [matSot, setMatSot] = useState<SOT | null>(null)
-  const [newSpoolSot, setNewSpoolSot] = useState<SOT | null>(null)
+  // Two-axis state per category
+  const [weightDir, setWeightDir] = useState<SyncDirection2 | null>(null)
+  const [weightPolicy, setWeightPolicy] = useState<ConflictPolicy | null>(null)
+  const [matDir, setMatDir] = useState<SyncDirection2 | null>(null)
+  const [matPolicy, setMatPolicy] = useState<MatConflictPolicy | null>(null)
+
+  // Legacy fields kept as-is
+  const [newSpoolSot, setNewSpoolSot] = useState<SourceOfTruth | null>(null)
   const [threshold, setThreshold] = useState('')
   const [precision, setPrecision] = useState<number | null>(null)
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
@@ -55,8 +178,10 @@ export default function Settings() {
   if (error) return <div className="p-8 text-red-600">{error}</div>
   if (!data) return null
 
-  const wSot = weightSot ?? data.weight_source_of_truth
-  const mSot = matSot ?? data.material_properties_source_of_truth
+  const wDir = weightDir ?? data.weight_sync_direction
+  const wPol = weightPolicy ?? data.weight_conflict_policy
+  const mDir = matDir ?? data.material_properties_sync_direction
+  const mPol = (matPolicy ?? data.material_properties_conflict_policy) as MatConflictPolicy
   const nSot = newSpoolSot ?? data.new_spool_source_of_truth
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
   const prec = precision ?? data.weight_precision_decimals
@@ -67,8 +192,10 @@ export default function Settings() {
     setSaveMsg('')
     try {
       await updateConfig({
-        weight_source_of_truth: wSot,
-        material_properties_source_of_truth: mSot,
+        weight_sync_direction: wDir,
+        weight_conflict_policy: wPol,
+        material_properties_sync_direction: mDir,
+        material_properties_conflict_policy: mPol,
         new_spool_source_of_truth: nSot,
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
         weight_precision_decimals: prec,
@@ -124,10 +251,54 @@ export default function Settings() {
     <div className="p-8 space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
 
+      {/* Weight sync */}
       <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Source of truth</h2>
-        <SotSelect label="Weight" value={wSot} onChange={v => setWeightSot(v)} />
-        <SotSelect label="Material properties" value={mSot} onChange={v => setMatSot(v)} />
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">Weight sync</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Controls which direction weight changes flow and what happens when both
+          sides change between syncs.
+        </p>
+        <DirectionSelect
+          label="Direction"
+          value={wDir}
+          onChange={v => {
+            setWeightDir(v)
+            // Reset policy to manual when leaving two_way (policy is irrelevant in one-way)
+            if (v !== 'two_way') setWeightPolicy('manual')
+          }}
+        />
+        <WeightConflictSelect
+          value={wPol}
+          direction={wDir}
+          onChange={v => setWeightPolicy(v)}
+        />
+      </div>
+
+      {/* Material properties sync */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">Material properties sync</h2>
+        <p className="text-xs text-gray-400 mb-3">
+          Controls direction for field sync, multicolor/color, density, diameter,
+          temperatures, and cost.
+        </p>
+        <DirectionSelect
+          label="Direction"
+          value={mDir}
+          onChange={v => {
+            setMatDir(v)
+            if (v !== 'two_way') setMatPolicy('manual')
+          }}
+        />
+        <MatPropConflictSelect
+          value={mPol}
+          direction={mDir}
+          onChange={v => setMatPolicy(v)}
+        />
+      </div>
+
+      {/* Other settings */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
+        <h2 className="text-sm font-semibold text-gray-700 mb-2">Other settings</h2>
         <SotSelect label="New spools" value={nSot} onChange={v => setNewSpoolSot(v)} />
         <div className="flex items-center justify-between py-3">
           <span className="text-sm font-medium text-gray-700">Weight sync threshold (g)</span>

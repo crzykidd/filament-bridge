@@ -3,6 +3,8 @@
 
 export type SourceOfTruth = 'spoolman' | 'filamentdb'
 export type SyncDirection = 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'
+export type SyncDirection2 = 'two_way' | 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'
+export type ConflictPolicy = 'manual' | 'spoolman_wins' | 'filamentdb_wins' | 'newest_wins'
 export type MappingStatus = 'in_sync' | 'pending' | 'conflict' | 'unlinked'
 
 // ---------------------------------------------------------------------------
@@ -161,6 +163,10 @@ export interface ConfigResponse {
   wizard_completed: boolean
   import_direction: SourceOfTruth | null
   variant_line_keywords: string | null
+  weight_sync_direction: SyncDirection2
+  weight_conflict_policy: ConflictPolicy
+  material_properties_sync_direction: SyncDirection2
+  material_properties_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
 }
 
 export interface ConfigUpdateRequest {
@@ -170,6 +176,10 @@ export interface ConfigUpdateRequest {
   sync_weight_threshold_grams?: number | null
   weight_precision_decimals?: number | null
   variant_line_keywords?: string | null
+  weight_sync_direction?: SyncDirection2 | null
+  weight_conflict_policy?: ConflictPolicy | null
+  material_properties_sync_direction?: SyncDirection2 | null
+  material_properties_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
 }
 
 // ---------------------------------------------------------------------------

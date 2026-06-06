@@ -34,6 +34,7 @@ from app.core.color import (
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
 from app.core.matcher import match_filaments
+from app.core.sync_policy import SyncAction, resolve_sync_action
 from app.core.version import MULTICOLOR_MIN_FDB, version_gte
 from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross, weight_changed
 from app.models.config import BridgeConfig
@@ -71,6 +72,19 @@ def _read_config(db: Session) -> dict[str, Any]:
     return {r.key: json.loads(r.value) for r in rows}
 
 
+def _parse_iso(ts_str: Any) -> datetime.datetime | None:
+    """Parse an ISO-8601 timestamp string to a timezone-aware datetime, or None."""
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
 def _get_snapshot(db: Session, source: str, entity_type: str, entity_id: str) -> dict | None:
     row = (
         db.query(Snapshot)
@@ -78,6 +92,25 @@ def _get_snapshot(db: Session, source: str, entity_type: str, entity_id: str) ->
         .first()
     )
     return json.loads(row.data) if row else None
+
+
+def _get_snapshot_captured_at(db: Session, source: str, entity_type: str, entity_id: str) -> datetime.datetime | None:
+    """Return the captured_at of an existing snapshot, or None if absent."""
+    row = (
+        db.query(Snapshot)
+        .filter_by(source=source, entity_type=entity_type, entity_id=entity_id)
+        .first()
+    )
+    if row is None or row.captured_at is None:
+        return None
+    ca = row.captured_at
+    if isinstance(ca, str):
+        return _parse_iso(ca)
+    if isinstance(ca, datetime.datetime):
+        if ca.tzinfo is None:
+            return ca.replace(tzinfo=datetime.timezone.utc)
+        return ca
+    return None
 
 
 def _upsert_snapshot(db: Session, source: str, entity_type: str, entity_id: str, data: dict) -> None:
@@ -217,6 +250,63 @@ def _queue_deletion_conflict(
 
 
 # ---------------------------------------------------------------------------
+# Conflict dedup helper
+# ---------------------------------------------------------------------------
+
+
+def _has_open_conflict(
+    db: Session,
+    entity_type: str,
+    field_name: str,
+    *,
+    spoolman_id: int | None = None,
+    fdb_filament_id: str | None = None,
+    fdb_spool_id: str | None = None,
+) -> bool:
+    """Return True if there is already an open (unresolved) conflict for this combination.
+
+    Used by all passes to prevent re-queuing the same conflict every sync cycle
+    when a both-changed pair cannot be auto-resolved (policy=manual or newest_wins
+    fallback).  Mirrors the existing deletion-conflict dedup in
+    ``_queue_deletion_conflict``.
+    """
+    q = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.entity_type == entity_type,
+            Conflict.field_name == field_name,
+        )
+    )
+    if spoolman_id is not None:
+        q = q.filter(Conflict.spoolman_id == spoolman_id)
+    if fdb_filament_id is not None:
+        q = q.filter(Conflict.filamentdb_filament_id == fdb_filament_id)
+    if fdb_spool_id is not None:
+        q = q.filter(Conflict.filamentdb_spool_id == fdb_spool_id)
+    return q.first() is not None
+
+
+# ---------------------------------------------------------------------------
+# Timestamp helpers for newest_wins
+# ---------------------------------------------------------------------------
+
+
+def _ts_after_captured_at(ts: datetime.datetime | None, captured_at: datetime.datetime | None) -> datetime.datetime | None:
+    """Return ts only if it is strictly after captured_at; otherwise None.
+
+    This anchors newest_wins to the bridge's last-sync time so a stale timestamp
+    on one side cannot win against a fresh change on the other.  If captured_at
+    is unknown (None), any timestamp is considered valid (first sync).
+    """
+    if ts is None:
+        return None
+    if captured_at is None:
+        return ts
+    return ts if ts > captured_at else None
+
+
+# ---------------------------------------------------------------------------
 # Dry-run preview helpers
 # ---------------------------------------------------------------------------
 
@@ -294,8 +384,16 @@ async def _apply_field_changes(
     filamentdb: FilamentDBClient,
     sm_snapshot: dict,
     fdb_snapshot: dict,
+    *,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
 ) -> None:
-    """Evaluate and apply field-mapping changes for one spool pair (FR-11)."""
+    """Evaluate and apply field-mapping changes for one spool pair (FR-11).
+
+    Routes each field through ``resolve_sync_action`` using the material_properties
+    direction and conflict policy.  Per-field conflict dedup prevents re-queuing
+    on every cycle.
+    """
     # Fetch FDB detail (needed for _inherited[] and full field surface)
     try:
         fdb_detail = await filamentdb.get_filament(fdb_filament_id)
@@ -346,140 +444,190 @@ async def _apply_field_changes(
         cs.sm_field_changes = [fc for fc in cs.sm_field_changes if fc.field_name != "color"]
         cs.fdb_field_changes = [fc for fc in cs.fdb_field_changes if fc.field_name != "color"]
 
-    # Conflict fields — never auto-resolve
-    for fdb_path in cs.field_conflicts:
-        sm_val = sm_extra_decoded.get(next(fm.sm_key for fm in field_maps if fm.fdb_path == fdb_path))
-        fdb_val = fdb_field_values.get(fdb_path)
-        if not dry_run:
-            _queue_conflict(
-                db, cycle_id, "filament", fdb_path,
-                spoolman_id=sm_spool.id,
-                fdb_filament_id=fdb_filament_id,
-                spoolman_value=sm_val,
-                filamentdb_value=fdb_val,
-            )
-        else:
-            result.preview.append({
-                "action": "conflict",
-                "entity_type": "filament",
-                "direction": None,
-                "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
-                "field": fdb_path,
-                "old": sm_val, "new": fdb_val,
-                "reason": "both sides changed",
-                "spoolman_id": sm_spool.id,
-                "fdb_filament_id": fdb_filament_id,
-                "fdb_spool_id": fdb_spool_id,
-            })
-        result.conflicts += 1
+    # Build a quick lookup: fdb_path → sm_key
+    _fm_by_fdb: dict[str, FieldMapping] = {fm.fdb_path: fm for fm in field_maps}
 
-    # FDB → SM changes
-    for fc in cs.fdb_field_changes:
-        fm = next((m for m in field_maps if m.fdb_path == fc.field_name), None)
+    # Unified per-field processing via the resolver.
+    # For each field we determine sm_changed/fdb_changed from the differ output,
+    # then call resolve_sync_action with the material_properties category settings.
+
+    # Collect all field names referenced by any change or conflict
+    all_field_names: set[str] = (
+        set(cs.field_conflicts)
+        | {fc.field_name for fc in cs.sm_field_changes}
+        | {fc.field_name for fc in cs.fdb_field_changes}
+    )
+
+    # Build maps for quick lookup
+    sm_changes_by_field = {fc.field_name: fc for fc in cs.sm_field_changes}
+    fdb_changes_by_field = {fc.field_name: fc for fc in cs.fdb_field_changes}
+
+    # Collect SM→FDB writes to batch into a single PUT
+    fdb_put_payload: dict = {}
+    fdb_put_field_changes: list = []
+    sm_skipped_fields: set[str] = set()
+
+    for fdb_path in all_field_names:
+        fm = _fm_by_fdb.get(fdb_path)
         if fm is None:
             continue
-        if should_skip_inherited(fdb_detail, fc.field_name):
-            logger.info(
-                "Cycle %s: skipping inherited field %s on FDB filament %s",
-                cycle_id, fc.field_name, fdb_filament_id,
-            )
-            if dry_run:
+
+        sm_fc = sm_changes_by_field.get(fdb_path)
+        fdb_fc = fdb_changes_by_field.get(fdb_path)
+        sm_changed_field = fdb_path in cs.field_conflicts or sm_fc is not None
+        fdb_changed_field = fdb_path in cs.field_conflicts or fdb_fc is not None
+
+        action = resolve_sync_action(
+            sm_changed=sm_changed_field,
+            fdb_changed=fdb_changed_field,
+            direction=matprop_direction,
+            policy=matprop_policy,
+        )
+
+        if action == SyncAction.NOOP:
+            continue
+
+        if action == SyncAction.QUEUE_CONFLICT:
+            sm_val = sm_extra_decoded.get(fm.sm_key)
+            fdb_val = fdb_field_values.get(fdb_path)
+            if not dry_run:
+                if not _has_open_conflict(
+                    db, "filament", fdb_path,
+                    spoolman_id=sm_spool.id,
+                    fdb_filament_id=fdb_filament_id,
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "filament", fdb_path,
+                        spoolman_id=sm_spool.id,
+                        fdb_filament_id=fdb_filament_id,
+                        spoolman_value=sm_val,
+                        filamentdb_value=fdb_val,
+                    )
+                    result.conflicts += 1
+                # If already open — dedup, skip
+            else:
                 result.preview.append({
-                    "action": "skip",
+                    "action": "conflict",
+                    "entity_type": "filament",
+                    "direction": None,
+                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                    "field": fdb_path,
+                    "old": sm_val, "new": fdb_val,
+                    "reason": "both sides changed",
+                    "spoolman_id": sm_spool.id,
+                    "fdb_filament_id": fdb_filament_id,
+                    "fdb_spool_id": fdb_spool_id,
+                })
+                result.conflicts += 1
+            continue
+
+        if action == SyncAction.PUSH_FDB_TO_SM:
+            fc = fdb_fc
+            if fc is None:
+                # Conflict resolved as FDB-wins but fdb_fc not in fdb_field_changes —
+                # shouldn't happen, but guard defensively.
+                continue
+            if should_skip_inherited(fdb_detail, fdb_path):
+                logger.info(
+                    "Cycle %s: skipping inherited field %s on FDB filament %s",
+                    cycle_id, fdb_path, fdb_filament_id,
+                )
+                if dry_run:
+                    result.preview.append({
+                        "action": "skip",
+                        "entity_type": "filament",
+                        "direction": "filamentdb_to_spoolman",
+                        "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                        "field": fdb_path,
+                        "old": None, "new": None,
+                        "reason": "inherited from parent",
+                        "spoolman_id": sm_spool.id,
+                        "fdb_filament_id": fdb_filament_id,
+                        "fdb_spool_id": fdb_spool_id,
+                    })
+                result.skipped += 1
+                continue
+            if not dry_run:
+                try:
+                    write_value = to_sm_color(fc.new_value) if fdb_path == "color" else fc.new_value
+                    encoded = encode_extra_value(write_value)
+                    await spoolman.update_spool(
+                        sm_spool.id, {"extra": {fm.sm_key: encoded}}
+                    )
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                        spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                        field_name=fdb_path, old_value=fc.old_value, new_value=fc.new_value,
+                    )
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: field sync FDB→SM failed (%s): %s", cycle_id, fdb_path, exc)
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                        spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                        field_name=fdb_path, error_message=str(exc),
+                    )
+                    result.errors += 1
+            else:
+                result.preview.append({
+                    "action": "update",
                     "entity_type": "filament",
                     "direction": "filamentdb_to_spoolman",
                     "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
-                    "field": fc.field_name,
-                    "old": None, "new": None,
-                    "reason": "inherited from parent",
+                    "field": fdb_path,
+                    "old": fc.old_value, "new": fc.new_value,
+                    "reason": None,
                     "spoolman_id": sm_spool.id,
                     "fdb_filament_id": fdb_filament_id,
                     "fdb_spool_id": fdb_spool_id,
                 })
-            result.skipped += 1
-            continue
-        if not dry_run:
-            try:
-                write_value = to_sm_color(fc.new_value) if fc.field_name == "color" else fc.new_value
-                encoded = encode_extra_value(write_value)
-                await spoolman.update_spool(
-                    sm_spool.id, {"extra": {fm.sm_key: encoded}}
-                )
-                _log(
-                    db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
-                    spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
-                    field_name=fc.field_name, old_value=fc.old_value, new_value=fc.new_value,
-                )
                 result.updated += 1
-            except Exception as exc:
-                logger.error("Cycle %s: field sync FDB→SM failed (%s): %s", cycle_id, fc.field_name, exc)
-                _log(
-                    db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
-                    spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
-                    field_name=fc.field_name, error_message=str(exc),
-                )
-                result.errors += 1
-        else:
-            result.preview.append({
-                "action": "update",
-                "entity_type": "filament",
-                "direction": "filamentdb_to_spoolman",
-                "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
-                "field": fc.field_name,
-                "old": fc.old_value, "new": fc.new_value,
-                "reason": None,
-                "spoolman_id": sm_spool.id,
-                "fdb_filament_id": fdb_filament_id,
-                "fdb_spool_id": fdb_spool_id,
-            })
-            result.updated += 1
+            continue
 
-    # SM → FDB changes
-    fdb_put_payload: dict = {}
-    sm_skipped_fields: set[str] = set()
-    for fc in cs.sm_field_changes:
-        fm = next((m for m in field_maps if m.fdb_path == fc.field_name), None)
-        if fm is None:
-            continue
-        if should_skip_inherited(fdb_detail, fc.field_name):
-            logger.info(
-                "Cycle %s: skipping inherited field %s on FDB filament %s",
-                cycle_id, fc.field_name, fdb_filament_id,
-            )
-            if dry_run:
-                result.preview.append({
-                    "action": "skip",
-                    "entity_type": "filament",
-                    "direction": "spoolman_to_filamentdb",
-                    "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
-                    "field": fc.field_name,
-                    "old": None, "new": None,
-                    "reason": "inherited from parent",
-                    "spoolman_id": sm_spool.id,
-                    "fdb_filament_id": fdb_filament_id,
-                    "fdb_spool_id": fdb_spool_id,
-                })
-                sm_skipped_fields.add(fc.field_name)
-            result.skipped += 1
-            continue
-        # Collect into a single PUT
-        parts = fc.field_name.split(".", 1)
-        if len(parts) == 1:
-            write_value = to_fdb_color(fc.new_value) if fc.field_name == "color" else fc.new_value
-            fdb_put_payload[fc.field_name] = write_value
-        else:
-            fdb_put_payload.setdefault(parts[0], {})[parts[1]] = fc.new_value
+        if action == SyncAction.PUSH_SM_TO_FDB:
+            fc = sm_fc
+            if fc is None:
+                continue
+            if should_skip_inherited(fdb_detail, fdb_path):
+                logger.info(
+                    "Cycle %s: skipping inherited field %s on FDB filament %s",
+                    cycle_id, fdb_path, fdb_filament_id,
+                )
+                if dry_run:
+                    result.preview.append({
+                        "action": "skip",
+                        "entity_type": "filament",
+                        "direction": "spoolman_to_filamentdb",
+                        "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_detail),
+                        "field": fdb_path,
+                        "old": None, "new": None,
+                        "reason": "inherited from parent",
+                        "spoolman_id": sm_spool.id,
+                        "fdb_filament_id": fdb_filament_id,
+                        "fdb_spool_id": fdb_spool_id,
+                    })
+                    sm_skipped_fields.add(fdb_path)
+                result.skipped += 1
+                continue
+            # Collect into a single PUT
+            parts = fdb_path.split(".", 1)
+            if len(parts) == 1:
+                write_value = to_fdb_color(fc.new_value) if fdb_path == "color" else fc.new_value
+                fdb_put_payload[fdb_path] = write_value
+            else:
+                fdb_put_payload.setdefault(parts[0], {})[parts[1]] = fc.new_value
+            fdb_put_field_changes.append(fc)
 
     if fdb_put_payload and not dry_run:
         try:
             await filamentdb.update_filament(fdb_filament_id, fdb_put_payload)
-            for fc in cs.sm_field_changes:
+            for fc in fdb_put_field_changes:
                 _log(
                     db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
                     spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
                     field_name=fc.field_name, old_value=fc.old_value, new_value=fc.new_value,
                 )
-            result.updated += len(cs.sm_field_changes)
+            result.updated += len(fdb_put_field_changes)
         except Exception as exc:
             logger.error("Cycle %s: field sync SM→FDB failed: %s", cycle_id, exc)
             _log(
@@ -489,7 +637,7 @@ async def _apply_field_changes(
             )
             result.errors += 1
     elif fdb_put_payload and dry_run:
-        for fc in cs.sm_field_changes:
+        for fc in fdb_put_field_changes:
             if fc.field_name in sm_skipped_fields:
                 continue
             result.preview.append({
@@ -504,7 +652,7 @@ async def _apply_field_changes(
                 "fdb_filament_id": fdb_filament_id,
                 "fdb_spool_id": fdb_spool_id,
             })
-        result.updated += len(cs.sm_field_changes) - len(sm_skipped_fields)
+        result.updated += len(fdb_put_field_changes) - len(sm_skipped_fields)
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +679,8 @@ async def _sync_multicolor(
     spoolman: SpoolmanClient,
     filamentdb: FilamentDBClient,
     multicolor_supported: bool,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
 ) -> None:
     """Bidirectional structured multicolor sync, one operation per filament pair.
 
@@ -538,8 +688,8 @@ async def _sync_multicolor(
     ↔ Spoolman ``color_hex``/``multi_color_hexes``/``multi_color_direction``), so this
     runs over filament mappings rather than spool pairs.  A system-agnostic signature is
     stored per filament; the next cycle compares it to detect which side changed —
-    mirroring ``diff_spool_pair`` semantics (both changed → conflict, one changed →
-    directional write).  Requires Filament DB >= 1.33.0.
+    routed through ``resolve_sync_action`` with the material_properties category settings.
+    Requires Filament DB >= 1.33.0.
     """
     for m in filament_mappings:
         sm_fil = sm_filaments.get(m.spoolman_filament_id)
@@ -607,22 +757,37 @@ async def _sync_multicolor(
         sm_changed = sm_sig_then != sm_sig_now
         fdb_changed = fdb_sig_then != fdb_sig_now
 
-        # Nothing changed, or both sides changed into agreement → just refresh baseline.
-        if (not sm_changed and not fdb_changed) or (sm_sig_now == fdb_sig_now):
-            if not dry_run and (sm_changed or fdb_changed):
+        # Both sides changed into agreement → refresh baseline silently.
+        if sm_sig_now == fdb_sig_now and (sm_changed or fdb_changed):
+            if not dry_run:
                 _store(sm_sig_now, fdb_sig_now)
             continue
 
-        # Both sides changed and disagree — conflict, never auto-resolve (FR-13).
-        if sm_changed and fdb_changed:
+        action = resolve_sync_action(
+            sm_changed=sm_changed,
+            fdb_changed=fdb_changed,
+            direction=matprop_direction,
+            policy=matprop_policy,
+        )
+
+        if action == SyncAction.NOOP:
+            continue
+
+        if action == SyncAction.QUEUE_CONFLICT:
             if not dry_run:
-                _queue_conflict(
-                    db, cycle_id, "filament", "multicolor",
+                if not _has_open_conflict(
+                    db, "filament", "multicolor",
                     spoolman_id=m.spoolman_filament_id,
                     fdb_filament_id=m.filamentdb_id,
-                    spoolman_value=sm_sig_now,
-                    filamentdb_value=fdb_sig_now,
-                )
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "filament", "multicolor",
+                        spoolman_id=m.spoolman_filament_id,
+                        fdb_filament_id=m.filamentdb_id,
+                        spoolman_value=sm_sig_now,
+                        filamentdb_value=fdb_sig_now,
+                    )
+                    result.conflicts += 1
             else:
                 result.preview.append({
                     "action": "conflict",
@@ -636,11 +801,10 @@ async def _sync_multicolor(
                     "fdb_filament_id": m.filamentdb_id,
                     "fdb_spool_id": None,
                 })
-            result.conflicts += 1
+                result.conflicts += 1
             continue
 
-        # Spoolman → Filament DB
-        if sm_changed and not fdb_changed:
+        if action == SyncAction.PUSH_SM_TO_FDB:
             mc = sm_multicolor_to_fdb(
                 sm_fil.color_hex, sm_fil.multi_color_hexes, sm_fil.multi_color_direction,
                 existing_opt_tags=fdb_detail.optTags,
@@ -684,44 +848,44 @@ async def _sync_multicolor(
                 result.updated += 1
             continue
 
-        # Filament DB → Spoolman  (fdb_changed and not sm_changed)
-        sm = fdb_multicolor_to_sm(fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags)
-        if not dry_run:
-            try:
-                await spoolman.update_filament(m.spoolman_filament_id, {
-                    "color_hex": sm["color_hex"],
-                    "multi_color_hexes": sm["multi_color_hexes"],
-                    "multi_color_direction": sm["multi_color_direction"],
+        if action == SyncAction.PUSH_FDB_TO_SM:
+            sm = fdb_multicolor_to_sm(fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags)
+            if not dry_run:
+                try:
+                    await spoolman.update_filament(m.spoolman_filament_id, {
+                        "color_hex": sm["color_hex"],
+                        "multi_color_hexes": sm["multi_color_hexes"],
+                        "multi_color_direction": sm["multi_color_direction"],
+                    })
+                    _store(fdb_sig_now, fdb_sig_now)  # SM now matches FDB
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="multicolor", old_value=sm_sig_now, new_value=fdb_sig_now,
+                    )
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: multicolor FDB→SM failed %s: %s", cycle_id, m.spoolman_filament_id, exc)
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="multicolor", error_message=str(exc),
+                    )
+                    result.errors += 1
+            else:
+                result.preview.append({
+                    "action": "update",
+                    "entity_type": "filament",
+                    "direction": "filamentdb_to_spoolman",
+                    "label": _mc_label(sm_fil, fdb_list),
+                    "field": "multicolor",
+                    "old": sm_sig_now, "new": fdb_sig_now,
+                    "reason": None,
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
                 })
-                _store(fdb_sig_now, fdb_sig_now)  # SM now matches FDB
-                _log(
-                    db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
-                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
-                    field_name="multicolor", old_value=sm_sig_now, new_value=fdb_sig_now,
-                )
                 result.updated += 1
-            except Exception as exc:
-                logger.error("Cycle %s: multicolor FDB→SM failed %s: %s", cycle_id, m.spoolman_filament_id, exc)
-                _log(
-                    db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
-                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
-                    field_name="multicolor", error_message=str(exc),
-                )
-                result.errors += 1
-        else:
-            result.preview.append({
-                "action": "update",
-                "entity_type": "filament",
-                "direction": "filamentdb_to_spoolman",
-                "label": _mc_label(sm_fil, fdb_list),
-                "field": "multicolor",
-                "old": sm_sig_now, "new": fdb_sig_now,
-                "reason": None,
-                "spoolman_id": m.spoolman_filament_id,
-                "fdb_filament_id": m.filamentdb_id,
-                "fdb_spool_id": None,
-            })
-            result.updated += 1
 
 
 # ---------------------------------------------------------------------------
@@ -741,17 +905,16 @@ async def _sync_cost(
     fdb_filaments: dict[str, Any],
     spoolman: SpoolmanClient,
     filamentdb: FilamentDBClient,
-    matprop_sot: str,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
 ) -> None:
     """Bidirectional filament-level cost sync, one operation per filament pair.
 
-    Cost is governed by material_properties_source_of_truth (same as density/temps).
+    Cost follows material_properties direction + policy (same as density/temps).
     Effective SM cost = spool price first (first spool by id with a non-null price),
     falling back to the filament price.  FDB cost is filament-level.
 
-    One-sided change: apply in the direction permitted by matprop_sot.
-    Both sides changed and disagree: queue a conflict (never auto-resolve).
-
+    Routed through resolve_sync_action.  Conflict dedup prevents re-queuing.
     Snapshots store _cost per side; writes merge so _mc_sig survives.
     """
     for m in filament_mappings:
@@ -812,16 +975,31 @@ async def _sync_cost(
                 _store_cost(sm_cost_now, fdb_cost_now)
             continue
 
-        # Both sides changed and disagree — conflict, never auto-resolve.
-        if sm_changed and fdb_changed:
+        action = resolve_sync_action(
+            sm_changed=sm_changed,
+            fdb_changed=fdb_changed,
+            direction=matprop_direction,
+            policy=matprop_policy,
+        )
+
+        if action == SyncAction.NOOP:
+            continue
+
+        if action == SyncAction.QUEUE_CONFLICT:
             if not dry_run:
-                _queue_conflict(
-                    db, cycle_id, "filament", "cost",
+                if not _has_open_conflict(
+                    db, "filament", "cost",
                     spoolman_id=m.spoolman_filament_id,
                     fdb_filament_id=m.filamentdb_id,
-                    spoolman_value=sm_cost_now,
-                    filamentdb_value=fdb_cost_now,
-                )
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "filament", "cost",
+                        spoolman_id=m.spoolman_filament_id,
+                        fdb_filament_id=m.filamentdb_id,
+                        spoolman_value=sm_cost_now,
+                        filamentdb_value=fdb_cost_now,
+                    )
+                    result.conflicts += 1
             else:
                 result.preview.append({
                     "action": "conflict",
@@ -835,14 +1013,10 @@ async def _sync_cost(
                     "fdb_filament_id": m.filamentdb_id,
                     "fdb_spool_id": None,
                 })
-            result.conflicts += 1
+                result.conflicts += 1
             continue
 
-        # One-sided change — apply in the direction permitted by matprop_sot.
-        # SM changed, FDB unchanged → SM→FDB when matprop_sot favours spoolman.
-        if sm_changed and not fdb_changed:
-            if matprop_sot != "spoolman":
-                continue  # wrong SoT direction — skip
+        if action == SyncAction.PUSH_SM_TO_FDB:
             if not dry_run:
                 try:
                     await filamentdb.update_filament(m.filamentdb_id, {"cost": sm_cost_now})
@@ -877,11 +1051,8 @@ async def _sync_cost(
                 result.updated += 1
             continue
 
-        # FDB changed, SM unchanged → FDB→SM when matprop_sot favours filamentdb.
-        # FDB→SM writes the Spoolman FILAMENT price (never per-spool prices).
-        if fdb_changed and not sm_changed:
-            if matprop_sot != "filamentdb":
-                continue  # wrong SoT direction — skip
+        if action == SyncAction.PUSH_FDB_TO_SM:
+            # FDB→SM writes the Spoolman FILAMENT price (never per-spool prices).
             if not dry_run:
                 try:
                     await spoolman.update_filament(m.spoolman_filament_id, {"price": fdb_cost_now})
@@ -1159,8 +1330,12 @@ async def run_sync_cycle(
     result = CycleResult(cycle_id=cycle_id, dry_run=dry_run)
     config = _read_config(db)
 
-    weight_sot: str = config.get("weight_source_of_truth", "spoolman")
-    matprop_sot: str = config.get("material_properties_source_of_truth", "filamentdb")
+    # New two-axis model — read per-category direction and conflict policy.
+    weight_direction: str = config.get("weight_sync_direction", "spoolman_to_filamentdb")
+    weight_policy: str = config.get("weight_conflict_policy", "manual")
+    matprop_direction: str = config.get("material_properties_sync_direction", "filamentdb_to_spoolman")
+    matprop_policy: str = config.get("material_properties_conflict_policy", "manual")
+
     threshold: float = float(config.get("sync_weight_threshold_grams", 2.0))
     precision: int = int(config.get("weight_precision_decimals", 2))
     fdb_field_name: str = _settings.filamentdb_spoolman_id_field  # default "label"
@@ -1214,7 +1389,7 @@ async def run_sync_cycle(
             sm_extra_keys = {fd.key for fd in sm_field_defs}
         except Exception:
             sm_extra_keys = set()
-        field_maps = resolve_field_map(_settings, sm_extra_keys, matprop_sot)
+        field_maps = resolve_field_map(_settings, sm_extra_keys)
 
     # ---- Process mapped spool pairs ----
     for mapping in spool_mappings:
@@ -1328,17 +1503,55 @@ async def run_sync_cycle(
         # ---- Weight sync ----
         today_iso = datetime.date.today().isoformat()
 
-        if cs.weight_conflict:
-            # Both sides changed — never auto-resolve (FR-13 hard rule)
+        # Determine weight change flags for the resolver.
+        weight_sm_changed = cs.sm_weight_change is not None or cs.weight_conflict
+        weight_fdb_changed = cs.fdb_weight_change is not None or cs.weight_conflict
+
+        # For newest_wins: parse and anchor timestamps to captured_at.
+        weight_sm_ts: datetime.datetime | None = None
+        weight_fdb_ts: datetime.datetime | None = None
+        if weight_policy == "newest_wins" and weight_direction == "two_way":
+            sm_captured_at = _get_snapshot_captured_at(db, "spoolman", "spool", str(sm_spool.id))
+            fdb_captured_at = _get_snapshot_captured_at(db, "filamentdb", "spool", fdb_spool.id)
+            # Use the earlier of the two as the "last-sync time" anchor.
+            captured_at_anchor: datetime.datetime | None = None
+            if sm_captured_at and fdb_captured_at:
+                captured_at_anchor = min(sm_captured_at, fdb_captured_at)
+            elif sm_captured_at or fdb_captured_at:
+                captured_at_anchor = sm_captured_at or fdb_captured_at
+            # SM: last_used fallback registered — parse and anchor.
+            raw_sm_ts = getattr(sm_spool, "last_used", None) or getattr(sm_spool, "registered", None)
+            weight_sm_ts = _ts_after_captured_at(_parse_iso(raw_sm_ts), captured_at_anchor)
+            # FDB: updatedAt on the filament (extra="allow" in the schema).
+            fdb_filament_for_ts = fdb_filaments.get(fdb_filament_id)
+            raw_fdb_ts = getattr(fdb_filament_for_ts, "updatedAt", None) if fdb_filament_for_ts else None
+            weight_fdb_ts = _ts_after_captured_at(_parse_iso(raw_fdb_ts), captured_at_anchor)
+
+        weight_action = resolve_sync_action(
+            sm_changed=weight_sm_changed,
+            fdb_changed=weight_fdb_changed,
+            direction=weight_direction,
+            policy=weight_policy,
+            sm_ts=weight_sm_ts,
+            fdb_ts=weight_fdb_ts,
+        )
+
+        if weight_action == SyncAction.QUEUE_CONFLICT:
             if not dry_run:
-                _queue_conflict(
-                    db, cycle_id, "spool", "weight",
+                if not _has_open_conflict(
+                    db, "spool", "weight",
                     spoolman_id=sm_spool.id,
-                    fdb_filament_id=fdb_filament_id,
                     fdb_spool_id=fdb_spool.id,
-                    spoolman_value=sm_spool.remaining_weight,
-                    filamentdb_value=fdb_spool.totalWeight,
-                )
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "spool", "weight",
+                        spoolman_id=sm_spool.id,
+                        fdb_filament_id=fdb_filament_id,
+                        fdb_spool_id=fdb_spool.id,
+                        spoolman_value=sm_spool.remaining_weight,
+                        filamentdb_value=fdb_spool.totalWeight,
+                    )
+                    result.conflicts += 1
             else:
                 result.preview.append({
                     "action": "conflict",
@@ -1353,12 +1566,12 @@ async def run_sync_cycle(
                     "fdb_filament_id": fdb_filament_id,
                     "fdb_spool_id": fdb_spool.id,
                 })
-            result.conflicts += 1
+                result.conflicts += 1
 
-        elif cs.sm_weight_change and weight_sot == "spoolman":
+        elif weight_action == SyncAction.PUSH_SM_TO_FDB:
             # SM → FDB weight sync (FR-9)
-            old_w = cs.sm_weight_change.old_value
-            new_w = cs.sm_weight_change.new_value
+            old_w = cs.sm_weight_change.old_value if cs.sm_weight_change else (sm_snap or {}).get("remaining_weight")
+            new_w = cs.sm_weight_change.new_value if cs.sm_weight_change else sm_spool.remaining_weight
             delta = (old_w or 0.0) - (new_w or 0.0)
             fdb_filament = fdb_filaments.get(fdb_filament_id)
             tare = fdb_filament.spoolWeight if fdb_filament else None
@@ -1410,7 +1623,7 @@ async def run_sync_cycle(
                     )
                 result.errors += 1
 
-        elif cs.fdb_weight_change and weight_sot == "filamentdb":
+        elif weight_action == SyncAction.PUSH_FDB_TO_SM:
             # FDB → SM weight sync (FR-10) — need detail for usage sum
             fdb_filament = fdb_filaments.get(fdb_filament_id)
             tare = fdb_filament.spoolWeight if fdb_filament else None
@@ -1420,8 +1633,8 @@ async def run_sync_cycle(
                 if detail_spool is None:
                     raise ValueError(f"FDB spool {fdb_spool.id} absent in detail view")
                 usage_sum = sum(u.grams for u in detail_spool.usageHistory if u.grams > 0)
-                new_w = cs.fdb_weight_change.new_value or 0.0
-                net, used_default = fdb_to_spoolman_net(new_w, tare, usage_sum, precision=precision)
+                new_w = cs.fdb_weight_change.new_value if cs.fdb_weight_change else fdb_spool.totalWeight or 0.0
+                net, used_default = fdb_to_spoolman_net(new_w or 0.0, tare, usage_sum, precision=precision)
                 if used_default:
                     logger.warning("Cycle %s: using default tare for SM spool %s", cycle_id, sm_spool.id)
                 if not dry_run:
@@ -1458,7 +1671,7 @@ async def run_sync_cycle(
                 result.errors += 1
 
         else:
-            # No weight change — refresh snapshots so they stay current
+            # NOOP — refresh snapshots so they stay current
             if not dry_run:
                 _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
                 _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
@@ -1471,6 +1684,8 @@ async def run_sync_cycle(
                     db, cycle_id, result, dry_run,
                     sm_spool, fdb_filament_id, fdb_spool.id,
                     field_maps, spoolman, filamentdb, sm_snap, fdb_snap,
+                    matprop_direction=matprop_direction,
+                    matprop_policy=matprop_policy,
                 )
 
     # ---- Structured multicolor sync (bidirectional, FDB >= 1.33.0) ----
@@ -1482,9 +1697,11 @@ async def run_sync_cycle(
         spoolman=spoolman,
         filamentdb=filamentdb,
         multicolor_supported=multicolor_supported,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
     )
 
-    # ---- Filament-level cost sync (bidirectional, follows matprop_sot) ----
+    # ---- Filament-level cost sync (bidirectional, follows matprop direction) ----
     # Build spool-by-filament lookup for cost resolution (active spools only).
     sm_spools_by_filament_for_cost: dict[int, list[Any]] = {}
     for s in sm_spools_all:
@@ -1498,7 +1715,8 @@ async def run_sync_cycle(
         fdb_filaments=fdb_filaments,
         spoolman=spoolman,
         filamentdb=filamentdb,
-        matprop_sot=matprop_sot,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
     )
 
     # ---- New spool detection (FR-12) ----

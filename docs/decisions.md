@@ -1,5 +1,64 @@
 # Decision record
 
+## 2026-06-06 — Per-category sync direction + conflict policy (two-axis model)
+
+### Replaced "source of truth" with two independent per-category axes
+
+Each data category (`weight`, `material_properties`) now has two settings:
+
+- **Write direction**: `two_way` | `spoolman_to_filamentdb` | `filamentdb_to_spoolman`
+- **Conflict policy**: `manual` | `spoolman_wins` | `filamentdb_wins` | `newest_wins`
+  (weight only for `newest_wins`; material_properties rejects it with HTTP 422)
+
+### Two-way: lone change always propagates
+
+In `two_way` mode, a lone change on either side always propagates to the other — no SoT
+gating. The conflict policy is consulted ONLY when both sides changed since the last
+snapshot. This enables true bidirectional sync without forcing a manual conflict review for
+every single change.
+
+### One-way modes never queue conflicts
+
+In `spoolman_to_filamentdb` or `filamentdb_to_spoolman` mode, the locked destination's
+drift is a NOOP — never queued as a conflict. The source side wins on the next cycle that
+sources a change. This preserves backward-compatible behavior for users who relied on the
+old SoT (one-way) semantics.
+
+### newest_wins is weight-only
+
+Spoolman exposes no per-filament modification timestamp (only `last_used`/`registered` at
+the spool level). It cannot be used honestly for material_properties conflicts. The API
+rejects `material_properties_conflict_policy=newest_wins` with HTTP 422. For weight,
+`newest_wins` is anchored to the snapshot's `captured_at` (bridge last-sync time) — a
+side's timestamp is only counted if it is strictly after that anchor, preventing stale
+clocks from winning. When both timestamps are missing, equal, or indeterminate, the policy
+falls back to `QUEUE_CONFLICT`. This is best-effort and clock-skew-prone; frequent syncing
+is the reliable mitigation.
+
+### Multicolor now follows material_properties direction
+
+Before this change, multicolor/color sync was hardcoded two-way. After this change it
+follows `material_properties_sync_direction`. The migration default is
+`filamentdb_to_spoolman` (mirroring the old `material_properties_source_of_truth=filamentdb`
+default). This is a deliberate, documented behavior change: multicolor changes that
+previously propagated from Spoolman automatically will be NOOP under the default one-way
+config until the user opts into two-way.
+
+### Conflict dedup added
+
+Without a dedup check, a both-changed pair would re-queue a new conflict row every sync
+cycle (because the snapshot is not advanced on conflict). A new `_has_open_conflict` helper
+checks for an existing OPEN conflict with the same `(entity_type, field_name, spoolman_id,
+fdb_spool_id)` tuple before queuing. If one exists, the new conflict is skipped.
+
+### Migration preserves pre-deploy behavior
+
+`_migrate_sync_config(db)` in `app/main.py` runs once at startup after `seed_defaults`.
+It reads the old `weight_source_of_truth` and `material_properties_source_of_truth` keys
+and maps them to one-way direction + manual policy (behavior-identical). The function is
+idempotent — if the new keys already exist it skips them. Fresh installs get the same
+defaults as today's.
+
 ## 2026-06-06 — Filament cost sync: spool-price-first, filament fallback; matprop SoT; snapshot merge
 
 ### Effective Spoolman cost resolved spool-first
