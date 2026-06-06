@@ -2350,3 +2350,377 @@ def test_wizard_execute_per_group_tare_override_applied_to_all_spools(db):
         # The override tare of 250 replaces any default
         assert payload["totalWeight"] == pytest.approx(500.0 + 250.0, abs=1) or \
                payload["totalWeight"] == pytest.approx(400.0 + 250.0, abs=1)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — variances endpoint returns enriched fields
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_variances_returns_material_type_diameter_color_hex(db):
+    """Phase 1: variances endpoint populates material_type, diameter, color_hex on VariancesFilament."""
+    set_config_value(db, "import_direction", "spoolman")
+    # SM filament 10 has a link decision to FDB filament "fdb-1" which has type="PLA+"
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fdb-1"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA",
+                         diameter=1.75, color_hex="#ff0000"),
+        SpoolmanFilament(id=11, name="PLA Blue", vendor=elegoo, material="PLA",
+                         diameter=1.75, color_hex="#0000ff"),
+    ]
+    # FDB filament that sm 10 is linked to
+    fdb_pla_plus = FDBFilament.model_validate({
+        "_id": "fdb-1", "name": "PLA+ Red", "vendor": "ELEGOO", "type": "PLA+",
+    })
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb(filaments=[fdb_pla_plus])
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.get("/api/wizard/variances").json()
+    assert body["direction"] == "spoolman"
+    assert len(body["groups"]) == 1
+    # Find the member for SM filament 10 (linked → material_type from FDB)
+    members = body["groups"][0]["members"]
+    m10 = next(m for m in members if m["ref"]["spoolman_filament_id"] == 10)
+    m11 = next(m for m in members if m["ref"]["spoolman_filament_id"] == 11)
+    # material_type comes from the linked FDB filament's `type`
+    assert m10["material_type"] == "PLA+"
+    # SM filament 11 has no link decision → material_type is None
+    assert m11["material_type"] is None
+    # diameter and color_hex always come from SM
+    assert m10["diameter"] == 1.75
+    assert m10["color_hex"] == "#ff0000"
+    assert m11["diameter"] == 1.75
+    assert m11["color_hex"] == "#0000ff"
+
+
+def test_wizard_variances_ungrouped_returns_diameter_color_hex(db):
+    """Phase 1: ungrouped VariancesFilament entries also carry diameter and color_hex."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 20, "action": "create"}])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=20, name="PETG Black", vendor=elegoo, material="PETG",
+                         diameter=2.85, color_hex="#111111"),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/variances").json()
+    assert len(body["ungrouped"]) == 1
+    f = body["ungrouped"][0]
+    assert f["diameter"] == 2.85
+    assert f["color_hex"] == "#111111"
+    assert f["material_type"] is None  # no link decision
+
+
+def test_wizard_variances_conflicts_include_diameter(db):
+    """Phase 1 + matcher: diameter differences are surfaced as conflicts in variances groups."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 30, "action": "create"},
+        {"spoolman_filament_id": 31, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=30, name="PLA Red", vendor=elegoo, material="PLA", diameter=1.75),
+        SpoolmanFilament(id=31, name="PLA Blue", vendor=elegoo, material="PLA", diameter=2.85),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/variances").json()
+    assert len(body["groups"]) == 1
+    master_id = body["groups"][0]["suggested_master"]["spoolman_filament_id"]
+    non_master = next(m for m in body["groups"][0]["members"]
+                      if m["ref"]["spoolman_filament_id"] != master_id)
+    conflict_fields = [c["field"] for c in non_master["conflicts"]]
+    assert "diameter" in conflict_fields
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — reconcile decisions persist and reload from BridgeConfig
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_save_sm_variants_reconcile_persists(db):
+    """Phase 2: POST /wizard/variants/sm with reconcile list persists to wizard_variances_reconcile."""
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+    client = _client(db)
+    resp = client.post("/api/wizard/variants/sm", json={
+        "groups": [
+            {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+        ],
+        "reconcile": [
+            {
+                "master_spoolman_filament_id": 10,
+                "fields": [
+                    {"field": "density", "value": 1.25, "source": "spoolman_filament",
+                     "source_spoolman_filament_id": 10},
+                    {"field": "type", "value": "PLA", "source": "manual",
+                     "source_spoolman_filament_id": None},
+                ],
+            }
+        ],
+    })
+    assert resp.status_code == 200
+    assert resp.json()["persisted"] == 1  # 1 group persisted
+
+    # Verify both keys are stored
+    stored_groups = get_config_value(db, "wizard_sm_variant_decisions", [])
+    assert len(stored_groups) == 1
+    assert stored_groups[0]["master_spoolman_filament_id"] == 10
+
+    stored_reconcile = get_config_value(db, "wizard_variances_reconcile", [])
+    assert len(stored_reconcile) == 1
+    rec = stored_reconcile[0]
+    assert rec["master_spoolman_filament_id"] == 10
+    assert len(rec["fields"]) == 2
+    density_field = next(f for f in rec["fields"] if f["field"] == "density")
+    assert density_field["value"] == 1.25
+    assert density_field["source"] == "spoolman_filament"
+    type_field = next(f for f in rec["fields"] if f["field"] == "type")
+    assert type_field["value"] == "PLA"
+    assert type_field["source"] == "manual"
+
+
+def test_wizard_save_sm_variants_empty_reconcile_does_not_overwrite(db):
+    """Phase 2: if reconcile is empty/absent, wizard_variances_reconcile is untouched."""
+    # Pre-seed a reconcile decision
+    set_config_value(db, "wizard_variances_reconcile", [
+        {"master_spoolman_filament_id": 5, "fields": [
+            {"field": "density", "value": 1.24, "source": "manual", "source_spoolman_filament_id": None}
+        ]},
+    ])
+    db.commit()
+    client = _client(db)
+    # POST without reconcile key
+    client.post("/api/wizard/variants/sm", json={
+        "groups": [
+            {"master_spoolman_filament_id": 5, "variant_spoolman_filament_ids": []},
+        ],
+    })
+    # Should still be there
+    stored_reconcile = get_config_value(db, "wizard_variances_reconcile", [])
+    assert len(stored_reconcile) == 1
+    assert stored_reconcile[0]["master_spoolman_filament_id"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — execute overlays reconcile on FDB payload + SM write-back PATCH
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_execute_reconcile_overlays_fdb_create_payload(db):
+    """Phase 3: reconcile decisions are overlaid on FDB create payload at execute time."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    set_config_value(db, "wizard_variances_reconcile", [
+        {
+            "master_spoolman_filament_id": 10,
+            "fields": [
+                {"field": "density", "value": 1.28, "source": "manual",
+                 "source_spoolman_filament_id": None},
+            ],
+        }
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb()
+    create_calls = []
+
+    async def _create(payload):
+        create_calls.append(payload)
+        return MagicMock(id="new-fdb-fil")
+
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+    assert len(create_calls) == 1
+    # The reconciled density value (1.28) must override the SM value (1.24) in the FDB payload
+    assert create_calls[0]["density"] == pytest.approx(1.28)
+
+
+def test_wizard_execute_reconcile_sm_writeback_patches_differing_fields(db):
+    """Phase 3: Spoolman write-back PATCH is called for fields that differ from canonical value."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    set_config_value(db, "wizard_variances_reconcile", [
+        {
+            "master_spoolman_filament_id": 10,
+            "fields": [
+                {"field": "density", "value": 1.26, "source": "manual",
+                 "source_spoolman_filament_id": None},
+            ],
+        }
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+        SpoolmanFilament(id=11, name="PLA Blue", vendor=elegoo, material="PLA", density=1.27),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fdb-fil"))
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    # spoolman.update_filament should be called for both SM filaments since both differ from 1.26
+    update_calls = spoolman.update_filament.call_args_list
+    patched_ids = {c.args[0] for c in update_calls}
+    assert 10 in patched_ids  # density 1.24 != 1.26
+    assert 11 in patched_ids  # density 1.27 != 1.26
+    # Verify the patch payload contains the correct canonical density
+    for call in update_calls:
+        if call.args[0] in (10, 11):
+            assert call.args[1].get("density") == pytest.approx(1.26)
+
+
+def test_wizard_execute_reconcile_no_patch_when_values_already_match(db):
+    """Phase 3: Spoolman write-back is NOT called when canonical value already matches SM value."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    set_config_value(db, "wizard_variances_reconcile", [
+        {
+            "master_spoolman_filament_id": 10,
+            "fields": [
+                # density canonical = 1.24 = SM value → no diff → no PATCH
+                {"field": "density", "value": 1.24, "source": "spoolman_filament",
+                 "source_spoolman_filament_id": 10},
+            ],
+        }
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fdb-fil"))
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+
+    # No PATCH should be issued since density already matches
+    spoolman.update_filament.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — preview emits PlannedWrite matching what execute does
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_preview_planned_writes_fdb_filament_create(db):
+    """Phase 4: preview planned_writes includes FDB filament create entries."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/preview").json()
+    assert "planned_writes" in body
+    fdb_creates = [w for w in body["planned_writes"]
+                   if w["system"] == "filamentdb" and w["action"] == "create"
+                   and w["entity_type"] == "filament"]
+    assert len(fdb_creates) == 1
+    assert "SM #10" in fdb_creates[0]["target_label"]
+    # fields list should contain density
+    field_names = [f["name"] for f in fdb_creates[0]["fields"]]
+    assert "density" in field_names
+
+
+def test_wizard_preview_planned_writes_sm_writeback_matches_execute(db):
+    """Phase 4: preview planned_writes SM write-back entries match what execute actually PATCHes."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    set_config_value(db, "wizard_variances_reconcile", [
+        {
+            "master_spoolman_filament_id": 10,
+            "fields": [
+                {"field": "density", "value": 1.30, "source": "manual",
+                 "source_spoolman_filament_id": None},
+            ],
+        }
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fdb-fil"))
+    client = _client(db, spoolman, filamentdb)
+
+    # First check preview
+    preview_body = client.get("/api/wizard/preview").json()
+    sm_writes = [w for w in preview_body["planned_writes"]
+                 if w["system"] == "spoolman" and w["action"] == "update"]
+    assert len(sm_writes) == 1
+    sm_write = sm_writes[0]
+    assert "SM #10" in sm_write["target_label"]
+    sm_write_field = next(f for f in sm_write["fields"] if f["name"] == "density")
+    assert sm_write_field["old"] == pytest.approx(1.24)
+    assert sm_write_field["new"] == pytest.approx(1.30)
+
+    # Now execute and verify the actual Spoolman PATCH matches the preview
+    client.post("/api/wizard/execute")
+    update_calls = [c for c in spoolman.update_filament.call_args_list if c.args[0] == 10]
+    assert len(update_calls) == 1
+    assert update_calls[0].args[1].get("density") == pytest.approx(1.30)
+
+
+def test_wizard_preview_planned_writes_no_sm_writeback_when_no_reconcile(db):
+    """Phase 4: no Spoolman write-back entries in planned_writes when no reconcile decisions exist."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", density=1.24),
+    ]
+    client = _client(db, _fake_spoolman(filaments=sm_filaments, spools=[]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/preview").json()
+    sm_writes = [w for w in body["planned_writes"] if w["system"] == "spoolman"]
+    assert sm_writes == []

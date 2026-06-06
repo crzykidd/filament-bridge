@@ -51,13 +51,18 @@ from app.schemas.api import (
     MatchDecision,
     MatchPairRow,
     NameCollisionEntry,
+    PlannedWrite,
+    PlannedWriteField,
     PreviewFlagCounts,
+    ReconciledField,
     SMVariantGroupRow,
     SMVariantMemberRow,
+    SMVariancesDecisionsRequest,
     SMVariantsRequest,
     SystemStatus,
     VariancesFilament,
     VariancesGroupRow,
+    VariancesGroupReconcile,
     VariancesResponse,
     VariantGroupPreviewEntry,
     VariantGroupRow,
@@ -412,7 +417,14 @@ def wizard_save_variants(payload: WizardVariantsRequest, db: Session = Depends(g
 
 
 @router.post("/wizard/variants/sm", response_model=WizardDecisionAck)
-def wizard_save_sm_variants(payload: SMVariantsRequest, db: Session = Depends(get_db)) -> WizardDecisionAck:
+def wizard_save_sm_variants(payload: SMVariancesDecisionsRequest, db: Session = Depends(get_db)) -> WizardDecisionAck:
+    """Persist SM variant grouping decisions AND per-group reconcile decisions.
+
+    Extends the original SMVariantsRequest to also accept an optional `reconcile`
+    list (list[VariancesGroupReconcile]). Both are persisted via BridgeConfig:
+      - wizard_sm_variant_decisions (unchanged key)
+      - wizard_variances_reconcile (new key for Phase 2 reconcile decisions)
+    """
     match_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     skip_sm_ids = {d["spoolman_filament_id"] for d in match_decisions if d.get("action") == "skip"}
     for group in payload.groups:
@@ -422,8 +434,11 @@ def wizard_save_sm_variants(payload: SMVariantsRequest, db: Session = Depends(ge
                 f"SM filament {group.master_spoolman_filament_id} is marked skip and cannot be a master",
             )
     set_config_value(db, "wizard_sm_variant_decisions", [g.model_dump() for g in payload.groups])
+    if payload.reconcile:
+        set_config_value(db, "wizard_variances_reconcile", [r.model_dump() for r in payload.reconcile])
     db.commit()
-    return WizardDecisionAck(persisted=len(payload.groups))
+    persisted = len(payload.groups)
+    return WizardDecisionAck(persisted=persisted)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +469,17 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
     fdb_filaments: list[FDBFilament] = await request.app.state.filamentdb.get_filaments()
 
     included_filaments = [f for f in sm_filaments if f.id in included]
+
+    # Phase 1: Build SM filament id → matched FDB filament type (for material_type field)
+    match_decisions: list[dict] = get_config_value(db, "wizard_match_decisions", []) or []
+    fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}
+    sm_to_fdb_type: dict[int, str | None] = {}
+    for d in match_decisions:
+        sm_id = d.get("spoolman_filament_id")
+        fdb_id = d.get("filamentdb_id")
+        if sm_id and fdb_id and d.get("action") == "link":
+            fdb_fil = fdb_by_id.get(fdb_id)
+            sm_to_fdb_type[sm_id] = fdb_fil.type if fdb_fil else None
 
     # Spool ids per filament (active only; D4 — skip zero-weight spools when toggle is off)
     spool_ids_per_filament: dict[int, list[int]] = {}
@@ -522,6 +548,10 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
                 spool_weight=m.spool_weight,
                 settings_extruder_temp=m.settings_extruder_temp,
                 settings_bed_temp=m.settings_bed_temp,
+                # Phase 1: enriched display fields
+                material_type=sm_to_fdb_type.get(m.id),
+                diameter=m.diameter,
+                color_hex=m.color_hex,
             ))
         display_base = normalize_name(
             f"{(master.vendor.name + ' ') if master.vendor else ''}{master.material or ''}".strip()
@@ -555,6 +585,10 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
                 spool_weight=sm.spool_weight,
                 settings_extruder_temp=sm.settings_extruder_temp,
                 settings_bed_temp=sm.settings_bed_temp,
+                # Phase 1: enriched display fields
+                material_type=sm_to_fdb_type.get(sm.id),
+                diameter=sm.diameter,
+                color_hex=sm.color_hex,
             ))
 
     return VariancesResponse(direction="spoolman", groups=groups, ungrouped=ungrouped)
@@ -704,6 +738,78 @@ def _seed_snapshots(db: Session, sm_spool, fdb_spool_obj: FDBSpool) -> None:
                        getattr(sm_spool, "id", "?"), sm_spool, exc)
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 — Reconcile helpers
+# ---------------------------------------------------------------------------
+
+# Mapping from canonical reconcile key → (FDB payload key, SM payload key)
+_RECONCILE_FIELD_MAP: dict[str, tuple[str, str]] = {
+    "type":         ("type", "material"),
+    "density":      ("density", "density"),
+    "diameter":     ("diameter", "diameter"),
+    "nozzle_temp":  ("temperatures.nozzle", "settings_extruder_temp"),
+    "bed_temp":     ("temperatures.bed", "settings_bed_temp"),
+    "spool_weight": ("spoolWeight", "spool_weight"),
+}
+
+
+def _build_reconcile_by_master(reconcile_decisions: list[dict]) -> dict[int, list[dict]]:
+    """Build {master_sm_id: [reconciled_field_dicts]} from persisted wizard_variances_reconcile."""
+    result: dict[int, list[dict]] = {}
+    for entry in reconcile_decisions:
+        master_id = entry.get("master_spoolman_filament_id")
+        fields = entry.get("fields", [])
+        if master_id is not None:
+            result[master_id] = fields
+    return result
+
+
+def _overlay_reconcile_on_fdb_payload(payload: dict, reconcile_fields: list[dict]) -> dict:
+    """Overlay reconciled canonical values onto an FDB create/update payload.
+
+    Only sets shared-property fields (type/density/diameter/temperatures/spoolWeight).
+    Color is never touched. FDB `settings{}` bag is never touched.
+    Returns a new dict (does not mutate in place).
+    """
+    result = dict(payload)
+    for rf in reconcile_fields:
+        canonical_key = rf.get("field")
+        value = rf.get("value")
+        if canonical_key not in _RECONCILE_FIELD_MAP:
+            continue
+        fdb_key, _ = _RECONCILE_FIELD_MAP[canonical_key]
+        if "." in fdb_key:
+            # Nested: e.g. "temperatures.nozzle"
+            top, sub = fdb_key.split(".", 1)
+            nested = dict(result.get(top) or {})
+            nested[sub] = value
+            result[top] = nested
+        else:
+            result[fdb_key] = value
+    return result
+
+
+def _compute_sm_reconcile_patch(
+    sm_filament: SpoolmanFilament,
+    reconcile_fields: list[dict],
+) -> dict:
+    """Build the Spoolman PATCH payload for a filament: only fields that differ from canonical.
+
+    Maps canonical keys to Spoolman field names. Never touches color fields.
+    """
+    patch: dict = {}
+    for rf in reconcile_fields:
+        canonical_key = rf.get("field")
+        canonical_value = rf.get("value")
+        if canonical_key not in _RECONCILE_FIELD_MAP:
+            continue
+        _, sm_key = _RECONCILE_FIELD_MAP[canonical_key]
+        current = getattr(sm_filament, sm_key, None)
+        if current != canonical_value:
+            patch[sm_key] = canonical_value
+    return patch
+
+
 async def _execute_spoolman_to_fdb(
     db: Session,
     res: _ExecResult,
@@ -716,6 +822,7 @@ async def _execute_spoolman_to_fdb(
     master_of_sm: dict[int, int],
     attach_parent_for_sm: dict[int, str],
     tare_by_sm_spool: dict[int, float],
+    reconcile_by_master: dict[int, list[dict]] | None = None,
     precision: int = 2,
     include_empty_spools: bool = True,
 ) -> None:
@@ -739,6 +846,9 @@ async def _execute_spoolman_to_fdb(
     just_created_fdb_ids: set[str] = set()
     # master_sm_id → fdb_id; populated during Pass 1 so Pass 2 can resolve parentId
     master_map: dict[int, str] = {}
+
+    # Phase 3: build reconcile lookup (master sm_id → reconcile field dicts)
+    _reconcile_by_master: dict[int, list[dict]] = reconcile_by_master or {}
 
     # ---- Pass 1: masters + ungrouped (variant_master_sm_id is None) ----
     for item in plan.filament_items:
@@ -772,6 +882,11 @@ async def _execute_spoolman_to_fdb(
             payload = dict(item.fdb_payload)
             if attach_parent:
                 payload["parentId"] = attach_parent  # D3: all attach-group members get parentId
+            # Phase 3: overlay reconciled canonical values on the master/ungrouped payload (masters only —
+            # variants inherit from parent in FDB; never set shared props on variant payloads)
+            reconcile_fields = _reconcile_by_master.get(item.sm_filament.id, [])
+            if reconcile_fields:
+                payload = _overlay_reconcile_on_fdb_payload(payload, reconcile_fields)
             try:
                 created = await filamentdb.create_filament(payload)
                 item.fdb_id = created.id
@@ -834,6 +949,53 @@ async def _execute_spoolman_to_fdb(
                 res.add(db, "filament", "failed", error=str(exc),
                         sm_filament_id=item.sm_filament.id)
                 item.error = str(exc)
+
+    # ---- Pass 2.5: Spoolman write-backs (Phase 3 reconcile) ----
+    # For each SM filament in a group that has reconcile decisions, PATCH it with the canonical
+    # values. Apply to ALL members (master + variants). Skip if no fields differ.
+    # Master's canonical values were already used to seed FDB — now we correct Spoolman.
+    if _reconcile_by_master:
+        # Build: variant_sm_id → master_sm_id (reverse of plan.master_of_sm)
+        sm_by_id_reconcile: dict[int, SpoolmanFilament] = {f.id: f for f in sm_filaments}
+        for item in plan.filament_items:
+            # Determine which master's reconcile fields apply to this SM filament
+            if item.variant_master_sm_id is not None:
+                # This is a variant — use its master's reconcile fields
+                master_sm_id = item.variant_master_sm_id
+            else:
+                # This is a master/ungrouped — its own reconcile fields apply (if any)
+                master_sm_id = item.sm_filament.id
+            reconcile_fields = _reconcile_by_master.get(master_sm_id, [])
+            if not reconcile_fields:
+                continue
+            sm_fil = sm_by_id_reconcile.get(item.sm_filament.id)
+            if sm_fil is None:
+                continue
+            patch = _compute_sm_reconcile_patch(sm_fil, reconcile_fields)
+            if not patch:
+                continue
+            try:
+                await spoolman.update_filament(item.sm_filament.id, patch)
+                _log(
+                    db, res.cycle_id, res.direction, "update", "filament",
+                    spoolman_id=item.sm_filament.id,
+                    new_value=patch,
+                )
+                logger.info(
+                    "wizard execute %s: Spoolman write-back for filament %s: %s",
+                    res.cycle_id, item.sm_filament.id, patch,
+                )
+            except Exception as exc:
+                logger.error(
+                    "wizard execute %s: Spoolman write-back for filament %s failed: %s",
+                    res.cycle_id, item.sm_filament.id, exc,
+                )
+                # Non-fatal: log and continue (don't abort the execute run)
+                _log(
+                    db, res.cycle_id, res.direction, "error", "filament",
+                    spoolman_id=item.sm_filament.id,
+                    error_message=f"Spoolman reconcile write-back failed: {exc}",
+                )
 
     # ---- Pass 3: FilamentMappings + spool seeding ----
     spool_items_by_fil: dict[int, list[_SpoolPlanItem]] = {}
@@ -1181,6 +1343,118 @@ def _compute_sm_variant_plan(
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 — Planned writes helper
+# ---------------------------------------------------------------------------
+
+
+def _compute_planned_writes(
+    plan: "_SyncPlan",
+    sm_filaments: list[SpoolmanFilament],
+    reconcile_by_master: dict[int, list[dict]],
+) -> list["PlannedWrite"]:
+    """Build the structured write-op list for the Phase-4 pre-flight summary.
+
+    Covers:
+    - FDB filament creates (action=="create")
+    - FDB variant creates (action=="create" with variant_master_sm_id set)
+    - FDB spool creates (spool_items with action=="create")
+    - Spoolman filament write-backs (reconcile-driven PATCHes for differing fields)
+
+    Does NOT perform any I/O — purely computes what execute would do.
+    """
+    sm_by_id: dict[int, SpoolmanFilament] = {f.id: f for f in sm_filaments}
+    planned_writes: list[PlannedWrite] = []
+
+    # FDB filament creates + variant creates
+    for item in plan.filament_items:
+        if item.action != "create" or item.error:
+            continue
+        sm = item.sm_filament
+        label_parts = [sm.name]
+        if sm.vendor:
+            label_parts.append(f"({sm.vendor.name})")
+        label_parts.append(f"[SM #{sm.id}]")
+        label = " ".join(label_parts)
+        # Compute fields from the payload
+        payload = item.fdb_payload or {}
+        # Overlay reconcile for master/ungrouped creates
+        if item.variant_master_sm_id is None:
+            rec_fields = reconcile_by_master.get(sm.id, [])
+            if rec_fields:
+                payload = _overlay_reconcile_on_fdb_payload(payload, rec_fields)
+        fields = [
+            PlannedWriteField(name=k, old=None, new=v)
+            for k, v in payload.items()
+            if k not in ("name", "vendor")  # skip identity fields for cleaner display
+        ]
+        planned_writes.append(PlannedWrite(
+            system="filamentdb",
+            entity_type="filament",
+            action="create",
+            target_label=label,
+            fields=fields,
+        ))
+
+    # FDB spool creates
+    for si in plan.spool_items:
+        if si.action != "create":
+            continue
+        sm_spool = si.sm_spool
+        sm_fil = getattr(sm_spool, "filament", None)
+        fil_name = sm_fil.name if sm_fil else f"SM filament #{getattr(sm_fil, 'id', '?')}"
+        label = f"{fil_name} — Spool #{sm_spool.id}"
+        planned_writes.append(PlannedWrite(
+            system="filamentdb",
+            entity_type="spool",
+            action="create",
+            target_label=label,
+            fields=[
+                PlannedWriteField(name="totalWeight", old=None, new=si.planned_gross),
+                PlannedWriteField(name="tare_source", old=None, new=si.tare_source),
+            ],
+        ))
+
+    # Spoolman filament write-backs (reconcile PATCHes)
+    for item in plan.filament_items:
+        # Determine which master's reconcile fields apply
+        if item.variant_master_sm_id is not None:
+            master_sm_id = item.variant_master_sm_id
+        else:
+            master_sm_id = item.sm_filament.id
+        rec_fields = reconcile_by_master.get(master_sm_id, [])
+        if not rec_fields:
+            continue
+        sm_fil = sm_by_id.get(item.sm_filament.id)
+        if sm_fil is None:
+            continue
+        patch = _compute_sm_reconcile_patch(sm_fil, rec_fields)
+        if not patch:
+            continue
+        label_parts = [sm_fil.name]
+        if sm_fil.vendor:
+            label_parts.append(f"({sm_fil.vendor.name})")
+        label_parts.append(f"[SM #{sm_fil.id}]")
+        label = " ".join(label_parts)
+        fields = [
+            PlannedWriteField(
+                name=sm_key,
+                old=getattr(sm_fil, sm_key, None),
+                new=canonical_value,
+            )
+            for sm_key, canonical_value in patch.items()
+        ]
+        planned_writes.append(PlannedWrite(
+            system="spoolman",
+            entity_type="filament",
+            action="update",
+            target_label=label,
+            fields=fields,
+        ))
+
+    return planned_writes
+
+
+# ---------------------------------------------------------------------------
 # FR-4 foundation — GET /api/wizard/preview (read-only)
 # ---------------------------------------------------------------------------
 
@@ -1203,6 +1477,9 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     sm_variant_decisions = get_config_value(db, "wizard_sm_variant_decisions", []) or []
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
     include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    # Phase 4: load reconcile decisions for the planned-writes summary
+    reconcile_decisions_raw = get_config_value(db, "wizard_variances_reconcile", []) or []
+    reconcile_by_master_preview = _build_reconcile_by_master(reconcile_decisions_raw)
 
     try:
         sm_filaments = await request.app.state.spoolman.get_filaments()
@@ -1260,6 +1537,8 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     default_tare = _compute_default_tare(plan)
     variant_groups = _compute_variant_groups(plan)
     variant_plan = _compute_sm_variant_plan(plan, sm_filaments)
+    # Phase 4: compute structured planned-writes list
+    planned_writes = _compute_planned_writes(plan, sm_filaments, reconcile_by_master_preview)
 
     return WizardPreviewResponse(
         direction=sync_direction,
@@ -1276,6 +1555,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         variant_groups=variant_groups,
         variant_plan=variant_plan,
         include_empty_spools=include_empty,
+        planned_writes=planned_writes,
     )
 
 
@@ -1309,6 +1589,10 @@ async def wizard_execute(
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
     attach_parent_for_sm = _build_attach_parent_for_sm(sm_variant_decisions)
     include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+
+    # Phase 3: load reconcile decisions
+    reconcile_decisions_raw = get_config_value(db, "wizard_variances_reconcile", []) or []
+    reconcile_by_master = _build_reconcile_by_master(reconcile_decisions_raw)
 
     # FDB-direction variant decisions (keyed on FDB ids, legacy — unchanged)
     variant_decisions = get_config_value(db, "wizard_variant_decisions", []) or []
@@ -1345,6 +1629,7 @@ async def wizard_execute(
             db, res, spoolman, filamentdb,
             sm_filaments, sm_spools, fdb_filaments,
             decisions_by_sm, master_of_sm, attach_parent_for_sm, tare_by_sm_spool,
+            reconcile_by_master=reconcile_by_master,
             precision=precision,
             include_empty_spools=include_empty,
         )

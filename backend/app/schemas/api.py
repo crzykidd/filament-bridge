@@ -344,6 +344,10 @@ class VariancesFilament(BaseModel):
     spool_weight: float | None = None
     settings_extruder_temp: int | None = None
     settings_bed_temp: int | None = None
+    # Phase 1: enriched display fields
+    material_type: str | None = None  # matched FDB filament's `type` field (or null if no match)
+    diameter: float | None = None  # Spoolman filament diameter
+    color_hex: str | None = None  # Spoolman filament color_hex (for swatch display)
 
 
 class VariancesGroupRow(BaseModel):
@@ -360,6 +364,39 @@ class VariancesResponse(BaseModel):
     direction: str
     groups: list[VariancesGroupRow] = Field(default_factory=list)
     ungrouped: list[VariancesFilament] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Per-field reconciliation
+# ---------------------------------------------------------------------------
+
+
+class ReconciledField(BaseModel):
+    """One reconciled canonical field for a variant group."""
+
+    field: str  # canonical key: type | density | diameter | nozzle_temp | bed_temp | spool_weight
+    value: Any
+    source: Literal["spoolman_filament", "manual"]
+    source_spoolman_filament_id: int | None = None  # set when source == "spoolman_filament"
+
+
+class VariancesGroupReconcile(BaseModel):
+    """Per-group reconciliation decisions (one per variant group)."""
+
+    master_spoolman_filament_id: int
+    fields: list[ReconciledField] = Field(default_factory=list)
+
+
+class SMVariancesDecisionsRequest(BaseModel):
+    """Extends the existing SM variants POST to include reconciliation decisions.
+
+    This replaces (extends) the SMVariantsRequest to carry both grouping + reconcile
+    decisions in a single call, persisted via the existing wizard_sm_variant_decisions
+    and the new wizard_variances_reconcile BridgeConfig keys.
+    """
+
+    groups: list[SMVariantDecision] = Field(default_factory=list)
+    reconcile: list[VariancesGroupReconcile] = Field(default_factory=list)
 
 
 class VariantDecision(BaseModel):
@@ -466,6 +503,24 @@ class PreviewFlagCounts(BaseModel):
     variant_group: int
 
 
+class PlannedWriteField(BaseModel):
+    """A field-level change in a planned write operation."""
+
+    name: str
+    old: Any  # None for creates
+    new: Any
+
+
+class PlannedWrite(BaseModel):
+    """One planned write operation shown in the Phase-4 pre-flight summary."""
+
+    system: Literal["filamentdb", "spoolman"]
+    entity_type: Literal["filament", "spool"]
+    action: Literal["create", "update"]
+    target_label: str  # human-readable identifier (name + system id)
+    fields: list[PlannedWriteField] = Field(default_factory=list)
+
+
 class WizardPreviewResponse(BaseModel):
     direction: SyncDirection
     plan_rows: list[WizardExecuteRecord]
@@ -476,6 +531,8 @@ class WizardPreviewResponse(BaseModel):
     variant_groups: list[VariantGroupPreviewEntry]
     variant_plan: list[SMVariantGroupRow] = Field(default_factory=list)
     include_empty_spools: bool = False
+    # Phase 4: structured write summary for the pre-flight review
+    planned_writes: list[PlannedWrite] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

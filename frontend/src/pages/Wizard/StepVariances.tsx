@@ -10,9 +10,11 @@ import {
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import type {
+  ReconciledField,
   SMVariantDecision,
   VariancesFilament,
   VariancesGroupRow,
+  VariancesGroupReconcile,
   VariancesResponse,
   VariantDecision,
   VariantPropConflict,
@@ -28,6 +30,7 @@ function computeConflicts(master: VariancesFilament, member: VariancesFilament):
   const checks: Array<[string, unknown, unknown]> = [
     ['material', master.material ?? null, member.material ?? null],
     ['density', master.density ?? null, member.density ?? null],
+    ['diameter', master.diameter ?? null, member.diameter ?? null],
     ['spool_weight', master.spool_weight ?? null, member.spool_weight ?? null],
     ['settings_extruder_temp', master.settings_extruder_temp ?? null, member.settings_extruder_temp ?? null],
     ['settings_bed_temp', master.settings_bed_temp ?? null, member.settings_bed_temp ?? null],
@@ -38,6 +41,21 @@ function computeConflicts(master: VariancesFilament, member: VariancesFilament):
     if (mv !== memv) result.push({ field, master_value: mv, member_value: memv })
   }
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Color swatch helper
+// ---------------------------------------------------------------------------
+
+function ColorSwatch({ hex }: { hex: string | null | undefined }) {
+  if (!hex) return null
+  return (
+    <span
+      className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0"
+      style={{ backgroundColor: hex.startsWith('#') ? hex : `#${hex}` }}
+      title={hex}
+    />
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +130,9 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   // Which filament is currently being ignored (loading state)
   const [ignoringId, setIgnoringId] = useState<number | null>(null)
   const [ignoreErr, setIgnoreErr] = useState<string | null>(null)
+
+  // Phase 2: reconcile decisions per group — reconcileByGroup[groupIdx] = {field → ReconciledField}
+  const [reconcileByGroup, setReconcileByGroup] = useState<Record<number, Record<string, ReconciledField>>>({})
 
   // tare per SM filament id (string for input binding)
   const [tareBySMId, setTareBySMId] = useState<Record<number, string>>(() => {
@@ -291,7 +312,18 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
           groups.push({ master_spoolman_filament_id: masterId, variant_spoolman_filament_ids: variants })
         }
       }
-      await postWizardSmVariants({ groups })
+      // Phase 2: build reconcile list from per-group reconcile state
+      const reconcile: VariancesGroupReconcile[] = []
+      for (const [idxStr, fieldMap] of Object.entries(reconcileByGroup)) {
+        const groupIdx = parseInt(idxStr)
+        const masterId = masters[groupIdx]
+        if (masterId == null) continue
+        const fields = Object.values(fieldMap)
+        if (fields.length > 0) {
+          reconcile.push({ master_spoolman_filament_id: masterId, fields })
+        }
+      }
+      await postWizardSmVariants({ groups, reconcile: reconcile.length > 0 ? reconcile : undefined })
 
       // Expand per-group / per-standalone tare to per-spool overrides
       const tare: WizardTareOverride[] = []
@@ -513,11 +545,20 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
+                            <ColorSwatch hex={filData.color_hex} />
                             <span className={`text-sm ${isMaster ? 'font-semibold text-indigo-700' : 'text-gray-700'}`}>
                               {filData.ref.name}
                             </span>
                             {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
-                            {filData.ref.color && <span className="text-xs text-gray-400 font-mono">{filData.ref.color}</span>}
+                            {filData.color_hex && <span className="text-xs text-gray-400 font-mono">{filData.color_hex}</span>}
+                            {filData.material_type && (
+                              <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded">
+                                FDB: {filData.material_type}
+                              </span>
+                            )}
+                            {filData.diameter != null && (
+                              <span className="text-xs text-gray-500">{filData.diameter} mm</span>
+                            )}
                             <DeepLinks spoolmanFilamentId={filData.ref.spoolman_filament_id} />
                           </div>
                           {conflicts.length > 0 && (
@@ -569,6 +610,96 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     )
                   })}
                 </div>
+
+                {/* Phase 2: per-group reconcile UI for conflicting fields */}
+                {(() => {
+                  // Collect all conflicts across all members (excluding master)
+                  const conflictFields = new Map<string, { values: Map<string, { smId: number; value: unknown }[]> }>()
+                  for (const smId of Array.from(membership)) {
+                    const filData = allFilamentData.get(smId)
+                    if (!filData || smId === masterId) continue
+                    const conflicts = getLiveConflicts(groupIdx, smId)
+                    for (const c of conflicts) {
+                      if (!conflictFields.has(c.field)) conflictFields.set(c.field, { values: new Map() })
+                      const valKey = String(c.member_value)
+                      const entry = conflictFields.get(c.field)!
+                      if (!entry.values.has(valKey)) entry.values.set(valKey, [])
+                      entry.values.get(valKey)!.push({ smId, value: c.member_value })
+                    }
+                  }
+                  if (conflictFields.size === 0) return null
+                  const masterData = allFilamentData.get(masterId)
+                  return (
+                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
+                      <p className="text-xs font-medium text-amber-800">Reconcile conflicting properties</p>
+                      <p className="text-xs text-amber-700">Choose which value to use for each conflicting field. This will be applied to both Filament DB and Spoolman on execute.</p>
+                      {Array.from(conflictFields.entries()).map(([field, { values }]) => {
+                        const current = reconcileByGroup[groupIdx]?.[field]
+                        const masterVal = masterData ? (masterData as Record<string, unknown>)[field] : undefined
+                        // All distinct values: master value + member values
+                        const allValues: { label: string; value: unknown; smId: number | null }[] = [
+                          { label: `Master (${String(masterVal ?? 'none')})`, value: masterVal, smId: masterId },
+                          ...Array.from(values.entries()).map(([valKey, entries]) => ({
+                            label: `${valKey} (${entries.map(e => e.smId).join(', ')})`,
+                            value: entries[0].value,
+                            smId: entries[0].smId,
+                          })),
+                        ]
+                        return (
+                          <div key={field} className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-gray-700 w-28 shrink-0">{field}:</span>
+                            {allValues.map((opt, i) => {
+                              const isSelected = current?.value === opt.value ||
+                                (current == null && i === 0)  // default: master value
+                              return (
+                                <button
+                                  key={i}
+                                  onClick={() => setReconcileByGroup(prev => ({
+                                    ...prev,
+                                    [groupIdx]: {
+                                      ...(prev[groupIdx] ?? {}),
+                                      [field]: {
+                                        field,
+                                        value: opt.value,
+                                        source: opt.smId === masterId ? 'spoolman_filament' : 'spoolman_filament',
+                                        source_spoolman_filament_id: opt.smId,
+                                      },
+                                    },
+                                  }))}
+                                  className={`text-xs px-2 py-1 rounded border transition-colors ${
+                                    isSelected
+                                      ? 'bg-amber-600 text-white border-amber-600'
+                                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              )
+                            })}
+                            <input
+                              type="text"
+                              placeholder="Manual value…"
+                              className="text-xs border border-gray-300 rounded px-2 py-1 w-24 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                              onBlur={e => {
+                                const v = e.target.value.trim()
+                                if (!v) return
+                                const num = parseFloat(v)
+                                const parsed = isNaN(num) ? v : num
+                                setReconcileByGroup(prev => ({
+                                  ...prev,
+                                  [groupIdx]: {
+                                    ...(prev[groupIdx] ?? {}),
+                                    [field]: { field, value: parsed, source: 'manual', source_spoolman_filament_id: null },
+                                  },
+                                }))
+                              }}
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
 
                 {addCandidates.length > 0 && (
                   <div className="mt-3">
@@ -636,9 +767,18 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
+                      <ColorSwatch hex={f.color_hex} />
                       <span className="text-sm text-gray-700">{f.ref.name}</span>
                       {f.ref.vendor && <span className="text-xs text-gray-400">{f.ref.vendor}</span>}
-                      {f.ref.color && <span className="text-xs font-mono text-gray-400">{f.ref.color}</span>}
+                      {f.color_hex && <span className="text-xs font-mono text-gray-400">{f.color_hex}</span>}
+                      {f.material_type && (
+                        <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded">
+                          FDB: {f.material_type}
+                        </span>
+                      )}
+                      {f.diameter != null && (
+                        <span className="text-xs text-gray-500">{f.diameter} mm</span>
+                      )}
                       {f.suggest_exclude && (
                         <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">suggested standalone (prop conflict)</span>
                       )}

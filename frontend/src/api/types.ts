@@ -317,6 +317,28 @@ export interface VariancesFilament {
   spool_weight: number | null
   settings_extruder_temp: number | null
   settings_bed_temp: number | null
+  // Phase 1 enriched display fields
+  material_type: string | null
+  diameter: number | null
+  color_hex: string | null
+}
+
+// Phase 2 — per-group reconcile decisions
+export interface ReconciledField {
+  field: string
+  value: unknown
+  source: 'spoolman_filament' | 'manual'
+  source_spoolman_filament_id: number | null
+}
+
+export interface VariancesGroupReconcile {
+  master_spoolman_filament_id: number
+  fields: ReconciledField[]
+}
+
+export interface SMVariancesDecisionsRequest {
+  groups: SMVariantDecision[]
+  reconcile?: VariancesGroupReconcile[]
 }
 
 export interface VariancesGroupRow {
@@ -416,6 +438,21 @@ export interface PreviewFlagCounts {
   variant_group: number
 }
 
+// Phase 4 — planned writes summary
+export interface PlannedWriteField {
+  name: string
+  old: unknown
+  new: unknown
+}
+
+export interface PlannedWrite {
+  system: 'filamentdb' | 'spoolman'
+  entity_type: 'filament' | 'spool'
+  action: 'create' | 'update'
+  target_label: string
+  fields: PlannedWriteField[]
+}
+
 export interface WizardPreviewResponse {
   direction: SyncDirection
   plan_rows: WizardExecuteRecord[]
@@ -426,6 +463,7 @@ export interface WizardPreviewResponse {
   variant_groups: VariantGroupPreviewEntry[]
   variant_plan: SMVariantGroupRow[]
   include_empty_spools: boolean
+  planned_writes: PlannedWrite[]
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ import type {
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
-  SMVariantsRequest,
+  SMVariancesDecisionsRequest,
   SyncLogResponse,
   SyncStatusResponse,
   VariancesResponse,
@@ -169,7 +169,7 @@ export const getWizardWeights = () => request<WizardWeightsResponse>('/wizard/we
 export const getWizardVariants = () => request<WizardVariantsResponse>('/wizard/variants')
 export const postWizardVariants = (body: WizardVariantsRequest) =>
   json<WizardDecisionAck>('/wizard/variants', 'POST', body)
-export const postWizardSmVariants = (body: SMVariantsRequest) =>
+export const postWizardSmVariants = (body: SMVariancesDecisionsRequest) =>
   json<WizardDecisionAck>('/wizard/variants/sm', 'POST', body)
 
 export const getWizardVariances = () => request<VariancesResponse>('/wizard/variances')

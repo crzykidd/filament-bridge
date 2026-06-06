@@ -188,6 +188,7 @@ def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> lis
     checks = [
         ("material", master.material, member.material),
         ("density", master.density, member.density),
+        ("diameter", master.diameter, member.diameter),
         ("spool_weight", master.spool_weight, member.spool_weight),
         ("settings_extruder_temp", master.settings_extruder_temp, member.settings_extruder_temp),
         ("settings_bed_temp", master.settings_bed_temp, member.settings_bed_temp),

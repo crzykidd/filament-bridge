@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { getWizardPreview } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
+import type { PlannedWrite } from '../../api/types'
 import type { WizardCtx } from './index'
 
 type FlagKey = 'name_collision' | 'empty_active' | 'default_tare' | 'variant_group'
+type PlannedWritesFilter = 'all' | 'filamentdb' | 'spoolman'
 
 const FLAG_LABELS: Record<FlagKey, string> = {
   name_collision: 'Name collisions',
@@ -20,6 +22,7 @@ function emptyActiveLabel(includeEmpty: boolean): string {
 export default function StepNPreview({ next, prev }: WizardCtx) {
   const { data, loading, error } = useApi(getWizardPreview)
   const [open, setOpen] = useState<Set<FlagKey>>(new Set())
+  const [plannedWritesFilter, setPlannedWritesFilter] = useState<PlannedWritesFilter>('all')
 
   function toggle(key: FlagKey) {
     setOpen(s => {
@@ -205,6 +208,43 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
         </div>
       </FlagSection>
 
+      {/* Phase 4: Planned writes — structured pre-flight write summary */}
+      {isSpoolmanImport && (data.planned_writes?.length ?? 0) > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-medium text-gray-700">
+              Planned writes
+              <span className="ml-2 text-xs text-gray-400">({data.planned_writes.length} total)</span>
+            </h3>
+            {/* Filter chips */}
+            <div className="flex gap-1">
+              {(['all', 'filamentdb', 'spoolman'] as const).map(f => (
+                <button
+                  key={f}
+                  onClick={() => setPlannedWritesFilter(f)}
+                  className={`px-2.5 py-1 text-xs rounded-full border font-medium transition-colors ${
+                    plannedWritesFilter === f
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  {f === 'all' ? 'All' : f === 'filamentdb' ? 'Filament DB' : 'Spoolman'}
+                  {f !== 'all' && (
+                    <span className="ml-1 text-xs opacity-70">
+                      ({data.planned_writes.filter(w => w.system === f).length})
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+          <PlannedWritesList
+            writes={data.planned_writes}
+            filter={plannedWritesFilter}
+          />
+        </div>
+      )}
+
       <div className="flex justify-between">
         <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
           ← Back
@@ -213,6 +253,61 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
           Next →
         </button>
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Planned writes list component (Phase 4)
+// ---------------------------------------------------------------------------
+
+function PlannedWritesList({
+  writes,
+  filter,
+}: {
+  writes: PlannedWrite[]
+  filter: PlannedWritesFilter
+}) {
+  const filtered = filter === 'all' ? writes : writes.filter(w => w.system === filter)
+  if (filtered.length === 0) {
+    return <p className="text-xs text-gray-400">No writes planned for this filter.</p>
+  }
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+      {filtered.map((w, i) => (
+        <div key={i} className="px-4 py-3">
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${
+              w.system === 'filamentdb'
+                ? 'bg-blue-100 text-blue-700'
+                : 'bg-orange-100 text-orange-700'
+            }`}>
+              {w.system === 'filamentdb' ? 'Filament DB' : 'Spoolman'}
+            </span>
+            <span className={`inline-flex px-1.5 py-0.5 rounded text-xs font-medium ${
+              w.action === 'create' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+            }`}>
+              {w.action}
+            </span>
+            <span className="text-xs text-gray-500 capitalize">{w.entity_type}</span>
+            <span className="text-sm text-gray-800 font-medium truncate">{w.target_label}</span>
+          </div>
+          {w.fields.length > 0 && (
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 pl-1">
+              {w.fields.map((f, fi) => (
+                <span key={fi} className="text-xs text-gray-500">
+                  <span className="font-medium text-gray-700">{f.name}</span>
+                  {f.old != null && (
+                    <span className="text-gray-400"> {String(f.old)} →</span>
+                  )}
+                  {' '}
+                  <span className="text-gray-800">{f.new != null ? String(f.new) : '—'}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }

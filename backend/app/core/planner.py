@@ -80,6 +80,7 @@ def _fdb_filament_payload_from_sm(sm: SpoolmanFilament) -> dict:
         "type": material,
         "color": mc["color"],
         "density": sm.density,
+        "diameter": sm.diameter,
         "spoolWeight": sm.spool_weight,
     }
     if mc["secondaryColors"]:

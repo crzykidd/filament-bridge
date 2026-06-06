@@ -907,3 +907,55 @@ whose master failed to resolve at execute time emits a `failed` report entry
 **Un-grouping after a successful run is out of scope.** The wizard builds the
 tree before the first write only; reorganizing an already-synced parent/variant
 tree is a separate, later concern.
+
+## 2026-06-05 — Variances detail enrichment, per-field reconciliation, execute write-back, pre-flight summary
+
+### Phase 1: Variances enriched display fields
+
+`VariancesFilament` gained three new fields: `material_type` (the FDB `type` field from
+the matched filament — only populated for `link` decisions, `None` for `create`), `diameter`
+(SM filament diameter), and `color_hex` (SM filament color, for the color swatch). These
+are populated in `wizard_variances` by building a `sm_to_fdb_type` map from `wizard_match_decisions`
+and using the link's FDB filament's `type`. The `diameter` conflict check was also added to
+`sm_prop_conflicts` in `matcher.py` (missing it was a bug) and the diameter field was added
+to `_fdb_filament_payload_from_sm` in `planner.py` (another pre-existing omission).
+
+### Phase 2: Per-group reconcile decisions
+
+New schemas `ReconciledField` / `VariancesGroupReconcile` / `SMVariancesDecisionsRequest`
+extend the existing `POST /wizard/variants/sm` endpoint to accept an optional `reconcile`
+list (backwards-compatible — defaults to empty). Reconcile decisions are persisted under the
+new `wizard_variances_reconcile` BridgeConfig key. An absent/empty `reconcile` payload leaves
+any previously stored decisions untouched (non-destructive update).
+
+### Phase 3: Execute write-back
+
+`_execute_spoolman_to_fdb` gained:
+- **Pass 2.5** (between variant creates and spool seeding): for each SM filament whose group
+  has reconcile decisions, `_compute_sm_reconcile_patch` diffs canonical vs current SM values
+  and calls `spoolman.update_filament`. Empty patch = no call. Errors are non-fatal (log and
+  continue, per NFR-4). This pass runs only when `_reconcile_by_master` is non-empty.
+- **FDB create overlay**: for master/ungrouped `create` items, `_overlay_reconcile_on_fdb_payload`
+  is applied before `filamentdb.create_filament`. Nested keys (`temperatures.nozzle`) are handled
+  via dot-notation splitting. Variants inherit from the FDB parent and are never overlaid separately.
+
+**Canonical field map** (`_RECONCILE_FIELD_MAP`):
+| canonical key | FDB payload key | Spoolman field |
+|---|---|---|
+| `type` | `type` | `material` |
+| `density` | `density` | `density` |
+| `diameter` | `diameter` | `diameter` |
+| `nozzle_temp` | `temperatures.nozzle` | `settings_extruder_temp` |
+| `bed_temp` | `temperatures.bed` | `settings_bed_temp` |
+| `spool_weight` | `spoolWeight` | `spool_weight` |
+
+Color fields are never written via the reconcile path. FDB `settings{}` is never touched.
+
+### Phase 4: Pre-flight planned-writes summary
+
+`_compute_planned_writes(plan, sm_filaments, reconcile_by_master)` is a pure helper that
+produces `list[PlannedWrite]` covering: FDB filament creates (with reconcile overlay), FDB
+spool creates, and Spoolman write-back PATCHes. It calls the exact same sub-functions as
+execute, so `preview ≡ execute` by construction. `WizardPreviewResponse` gained `planned_writes`.
+The frontend `StepNPreview.tsx` shows the section only for SM direction when the list is
+non-empty, with All / Filament DB / Spoolman filter chips.
