@@ -551,13 +551,24 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                             </span>
                             {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
                             {filData.color_hex && <span className="text-xs text-gray-400 font-mono">{filData.color_hex}</span>}
-                            {filData.material_type && (
-                              <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded">
+                            {/* Type chip — primary source is SM material; FDB material_type shown as mismatch only */}
+                            <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
+                              {filData.material ?? '—'}
+                            </span>
+                            {filData.material_type && filData.material_type !== filData.material && (
+                              <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">
                                 FDB: {filData.material_type}
                               </span>
                             )}
-                            {filData.diameter != null && (
-                              <span className="text-xs text-gray-500">{filData.diameter} mm</span>
+                            {/* Diameter chip — always shown, dash when null */}
+                            <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                              {filData.diameter != null ? `${filData.diameter} mm` : '⌀ —'}
+                            </span>
+                            {/* Temps chip — shown when at least one temp is set */}
+                            {(filData.settings_extruder_temp != null || filData.settings_bed_temp != null) && (
+                              <span className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
+                                {filData.settings_extruder_temp ?? '—'}° / {filData.settings_bed_temp ?? '—'}°
+                              </span>
                             )}
                             <DeepLinks spoolmanFilamentId={filData.ref.spoolman_filament_id} />
                           </div>
@@ -771,13 +782,24 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       <span className="text-sm text-gray-700">{f.ref.name}</span>
                       {f.ref.vendor && <span className="text-xs text-gray-400">{f.ref.vendor}</span>}
                       {f.color_hex && <span className="text-xs font-mono text-gray-400">{f.color_hex}</span>}
-                      {f.material_type && (
-                        <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded">
+                      {/* Type chip — primary source is SM material; FDB material_type shown as mismatch only */}
+                      <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
+                        {f.material ?? '—'}
+                      </span>
+                      {f.material_type && f.material_type !== f.material && (
+                        <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">
                           FDB: {f.material_type}
                         </span>
                       )}
-                      {f.diameter != null && (
-                        <span className="text-xs text-gray-500">{f.diameter} mm</span>
+                      {/* Diameter chip — always shown, dash when null */}
+                      <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                        {f.diameter != null ? `${f.diameter} mm` : '⌀ —'}
+                      </span>
+                      {/* Temps chip — shown when at least one temp is set */}
+                      {(f.settings_extruder_temp != null || f.settings_bed_temp != null) && (
+                        <span className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
+                          {f.settings_extruder_temp ?? '—'}° / {f.settings_bed_temp ?? '—'}°
+                        </span>
                       )}
                       {f.suggest_exclude && (
                         <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">suggested standalone (prop conflict)</span>

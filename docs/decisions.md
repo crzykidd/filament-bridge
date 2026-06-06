@@ -1,5 +1,20 @@
 # Decision record
 
+## 2026-06-05 — Variances type/diameter/temps display
+
+Every variant-group member row and standalone filament row in `StepVariances.tsx` now
+always renders three property chips: **type** (blue, from `filData.material` — SM's native
+`material` field), **diameter** (gray, `{N} mm` or `⌀ —` when null), and **temps**
+(orange, `{nozzle}° / {bed}°`, shown only when at least one temp is non-null).
+
+The old `material_type`-only chip (green, prefixed "FDB:") was the primary type indicator
+but it's only populated for `link` decisions — null in fresh imports. The fix: primary type
+= `material` (always present from SM); `material_type` is now a secondary amber mismatch
+chip shown only when it differs from `material`. All three fields (`diameter`,
+`settings_extruder_temp`, `settings_bed_temp`) were already populated by the
+`GET /wizard/variances` backend endpoint via the SM filament list fetch — no backend change
+was needed.
+
 ## 2026-06-05 — Conflicts page: client-side type filter
 
 `classifyConflict` derives a `ConflictType` bucket purely from `field_name` and `spoolman_id`
