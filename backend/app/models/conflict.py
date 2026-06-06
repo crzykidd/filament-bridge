@@ -4,6 +4,8 @@ from sqlalchemy.sql import func
 
 from app.db import Base
 
+DELETION_FIELD = "__record_deleted__"
+
 
 class Conflict(Base):
     __tablename__ = "conflicts"

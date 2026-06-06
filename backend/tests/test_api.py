@@ -145,11 +145,18 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
     _snap(db, "filamentdb", "spool-3", {"totalWeight": 1200.0})
     db.commit()
 
+    archived = SpoolmanSpool(
+        id=99,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=0.0,
+        archived=True,
+        extra={},
+    )
     spoolman = _fake_spoolman(spools=[
         _sm_spool(1, 795.0),
         _sm_spool(2, 500.0),
         _sm_spool(3, 850.0),   # changed from 900 snapshot → weight conflict
-        # sm_id=99 absent → archived skip
+        archived,              # sm_id=99 archived (in sm_all_ids but not active) → skip
     ])
     filamentdb = _fake_filamentdb(filaments=[
         _fdb_filament("fil-1", "spool-1", 1000.0),
@@ -264,6 +271,75 @@ def test_bulk_resolve(db):
     body = resp.json()
     assert body["resolved"] == 3
     assert body["skipped"] == [999]
+
+
+def test_resolve_deletion_conflict_removes_mapping_and_snapshots(db):
+    """Resolving a __record_deleted__ conflict removes the SpoolMapping and Snapshots."""
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.add(Snapshot(source="spoolman", entity_type="spool", entity_id="1", data='{"remaining_weight": 800}'))
+    db.add(Snapshot(source="filamentdb", entity_type="spool", entity_id="spool-1", data='{"totalWeight": 1000}'))
+    db.add(Conflict(
+        entity_type="spool",
+        spoolman_id=1,
+        filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1",
+        field_name="__record_deleted__",
+        spoolman_value=json.dumps({"exists": True, "deleted_side": "filamentdb"}),
+        filamentdb_value=None,
+    ))
+    db.commit()
+    cid = db.query(Conflict).first().id
+    client = _client(db)
+
+    resp = client.post(f"/api/conflicts/{cid}/resolve", json={"resolution": "spoolman"})
+    assert resp.status_code == 200
+
+    assert db.query(SpoolMapping).count() == 0
+    assert db.query(Snapshot).count() == 0
+    assert db.query(Conflict).filter_by(resolved_at=None).count() == 0
+
+
+def test_resolve_normal_conflict_keeps_mapping(db):
+    """Resolving a normal field conflict does NOT remove the SpoolMapping."""
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.add(Conflict(
+        entity_type="spool",
+        spoolman_id=1,
+        filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1",
+        field_name="weight",
+        spoolman_value=json.dumps(790.0),
+        filamentdb_value=json.dumps(1050.0),
+    ))
+    db.commit()
+    cid = db.query(Conflict).first().id
+    client = _client(db)
+
+    resp = client.post(f"/api/conflicts/{cid}/resolve", json={"resolution": "spoolman"})
+    assert resp.status_code == 200
+
+    assert db.query(SpoolMapping).count() == 1
+
+
+def test_bulk_resolve_deletion_conflict_removes_mapping(db):
+    """bulk-resolve on a deletion conflict also removes the SpoolMapping."""
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.add(Conflict(
+        entity_type="spool",
+        spoolman_id=1,
+        filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1",
+        field_name="__record_deleted__",
+        filamentdb_value=json.dumps({"exists": True, "deleted_side": "spoolman"}),
+        spoolman_value=None,
+    ))
+    db.commit()
+    cid = db.query(Conflict).first().id
+    client = _client(db)
+
+    resp = client.post("/api/conflicts/bulk-resolve", json={"ids": [cid], "resolution": "filamentdb"})
+    assert resp.status_code == 200
+    assert db.query(SpoolMapping).count() == 0
 
 
 # ---------------------------------------------------------------------------

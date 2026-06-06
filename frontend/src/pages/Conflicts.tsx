@@ -12,19 +12,31 @@ function ValueDisplay({ value }: { value: unknown }) {
   return <span className="font-mono text-xs">{s}</span>
 }
 
+const DELETION_FIELD = '__record_deleted__'
+
+function deletedSideLabel(conflict: ConflictResponse): string {
+  const descriptor = (conflict.spoolman_value ?? conflict.filamentdb_value) as { deleted_side?: string } | null
+  if (descriptor?.deleted_side === 'filamentdb') return 'Filament DB'
+  if (descriptor?.deleted_side === 'spoolman') return 'Spoolman'
+  return 'one side'
+}
+
 function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onResolved: () => void }) {
   const [resolution, setResolution] = useState<Resolution>('spoolman')
   const [manualValue, setManualValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
-  async function submit() {
+  const isDeletion = conflict.field_name === DELETION_FIELD
+
+  async function submit(overrideResolution?: Resolution) {
+    const res = overrideResolution ?? resolution
     setSubmitting(true)
     setErr(null)
     try {
       await resolveConflict(conflict.id, {
-        resolution,
-        value: resolution === 'manual' ? manualValue : undefined,
+        resolution: res,
+        value: res === 'manual' ? manualValue : undefined,
       })
       onResolved()
     } catch (e) {
@@ -39,7 +51,9 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
       <div className="flex items-start justify-between gap-4">
         <div>
           <span className="text-xs text-gray-500 uppercase tracking-wide">{conflict.entity_type}</span>
-          <h3 className="font-medium text-gray-900">{conflict.field_name}</h3>
+          <h3 className="font-medium text-gray-900">
+            {isDeletion ? 'Record deleted upstream' : conflict.field_name}
+          </h3>
           <p className="text-xs text-gray-400 mt-0.5">Detected {new Date(conflict.detected_at).toLocaleString()}</p>
         </div>
         <DeepLinks
@@ -48,48 +62,67 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4 text-sm">
-        <div className="bg-emerald-50 rounded p-3">
-          <p className="text-xs font-medium text-emerald-700 mb-1">Spoolman value</p>
-          <ValueDisplay value={conflict.spoolman_value} />
+      {isDeletion ? (
+        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
+          This record was deleted in <strong>{deletedSideLabel(conflict)}</strong>. Removing the
+          mapping will drop the pair from Synced Records. The deleted record will not be recreated.
         </div>
-        <div className="bg-blue-50 rounded p-3">
-          <p className="text-xs font-medium text-blue-700 mb-1">Filament DB value</p>
-          <ValueDisplay value={conflict.filamentdb_value} />
+      ) : (
+        <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="bg-emerald-50 rounded p-3">
+            <p className="text-xs font-medium text-emerald-700 mb-1">Spoolman value</p>
+            <ValueDisplay value={conflict.spoolman_value} />
+          </div>
+          <div className="bg-blue-50 rounded p-3">
+            <p className="text-xs font-medium text-blue-700 mb-1">Filament DB value</p>
+            <ValueDisplay value={conflict.filamentdb_value} />
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="flex items-center gap-2 flex-wrap">
-        {(['spoolman', 'filamentdb', 'manual'] as const).map(r => (
+      {isDeletion ? (
+        <div className="flex items-center gap-2">
           <button
-            key={r}
-            onClick={() => setResolution(r)}
-            className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-              resolution === r
-                ? 'bg-indigo-600 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
+            onClick={() => submit('spoolman')}
+            disabled={submitting}
+            className="px-4 py-1.5 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
           >
-            Use {r === 'manual' ? 'manual value' : r}
+            {submitting ? 'Removing…' : 'Remove mapping'}
           </button>
-        ))}
-        {resolution === 'manual' && (
-          <input
-            type="text"
-            placeholder="Enter value…"
-            value={manualValue}
-            onChange={e => setManualValue(e.target.value)}
-            className="border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          />
-        )}
-        <button
-          onClick={submit}
-          disabled={submitting || (resolution === 'manual' && !manualValue.trim())}
-          className="ml-auto px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-        >
-          {submitting ? 'Saving…' : 'Resolve'}
-        </button>
-      </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(['spoolman', 'filamentdb', 'manual'] as const).map(r => (
+            <button
+              key={r}
+              onClick={() => setResolution(r)}
+              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                resolution === r
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Use {r === 'manual' ? 'manual value' : r}
+            </button>
+          ))}
+          {resolution === 'manual' && (
+            <input
+              type="text"
+              placeholder="Enter value…"
+              value={manualValue}
+              onChange={e => setManualValue(e.target.value)}
+              className="border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          )}
+          <button
+            onClick={() => submit()}
+            disabled={submitting || (resolution === 'manual' && !manualValue.trim())}
+            className="ml-auto px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {submitting ? 'Saving…' : 'Resolve'}
+          </button>
+        </div>
+      )}
       {err && <p className="text-sm text-red-600">{err}</p>}
     </div>
   )

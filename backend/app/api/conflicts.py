@@ -18,7 +18,9 @@ from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
 from app.db import get_db
-from app.models.conflict import Conflict
+from app.models.conflict import DELETION_FIELD, Conflict
+from app.models.mapping import SpoolMapping
+from app.models.snapshot import Snapshot
 from app.schemas.api import (
     BulkResolveRequest,
     BulkResolveResponse,
@@ -27,6 +29,29 @@ from app.schemas.api import (
 )
 
 router = APIRouter()
+
+
+def _cleanup_orphaned_mapping(db: Session, c: Conflict) -> None:
+    """Delete bridge-local SpoolMapping + Snapshots for a resolved deletion conflict."""
+    mapping = (
+        db.query(SpoolMapping)
+        .filter(
+            SpoolMapping.spoolman_spool_id == c.spoolman_id,
+            SpoolMapping.filamentdb_spool_id == c.filamentdb_spool_id,
+        )
+        .first()
+    )
+    if mapping is None:
+        return
+    if c.spoolman_id is not None:
+        db.query(Snapshot).filter_by(
+            source="spoolman", entity_type="spool", entity_id=str(c.spoolman_id)
+        ).delete()
+    if c.filamentdb_spool_id is not None:
+        db.query(Snapshot).filter_by(
+            source="filamentdb", entity_type="spool", entity_id=c.filamentdb_spool_id
+        ).delete()
+    db.delete(mapping)
 
 
 def _decode(raw: str | None):
@@ -96,6 +121,8 @@ def resolve_conflict(
     c.resolution = payload.resolution
     c.resolved_value = json.dumps(_resolved_value(c, payload.resolution, payload.value))
     c.resolved_at = datetime.datetime.now(datetime.timezone.utc)
+    if c.field_name == DELETION_FIELD:
+        _cleanup_orphaned_mapping(db, c)
     db.commit()
     db.refresh(c)
     return _to_response(c)
@@ -117,6 +144,8 @@ def bulk_resolve(payload: BulkResolveRequest, db: Session = Depends(get_db)) -> 
         c.resolution = payload.resolution
         c.resolved_value = json.dumps(_resolved_value(c, payload.resolution, payload.value))
         c.resolved_at = now
+        if c.field_name == DELETION_FIELD:
+            _cleanup_orphaned_mapping(db, c)
         resolved += 1
     db.commit()
     return BulkResolveResponse(resolved=resolved, skipped=skipped)

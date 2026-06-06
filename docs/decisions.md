@@ -1,5 +1,47 @@
 # Decision record
 
+## 2026-06-05 — Upstream deletion detection → conflict queue
+
+### Design
+
+When a mapped record disappears from an upstream fetch, the bridge now queues a
+`Conflict` row with `field_name = "__record_deleted__"` (sentinel constant
+`DELETION_FIELD` in `app/models/conflict.py`) instead of logging a skip/error and
+continuing. This keeps the "conflicts are never auto-resolved" hard rule and gives the
+user an explicit UI action to take.
+
+**Archived vs deleted (Spoolman side):** `sm_all_ids` (set of all spool ids returned
+by Spoolman, including archived ones) is built each cycle. An id absent from
+`sm_all_ids` is gone entirely → deletion conflict. An id present but not in the
+active (non-archived) dict → skip as before. This preserves the existing archived-spool
+skip behavior.
+
+**Dedup:** `_queue_deletion_conflict` checks for an existing open conflict with the
+same sentinel `field_name`, `spoolman_id`, and `filamentdb_spool_id` before inserting.
+This prevents a new conflict row from accumulating every cycle until the user resolves.
+
+**Value encoding:** the surviving side's value carries
+`{"exists": true, "deleted_side": "<spoolman|filamentdb>"}`. The deleted side is
+`null`. The frontend keys off `deleted_side` to render a human-readable explanation
+instead of a raw value diff.
+
+**Dashboard / Synced Records:** `build_mapping_rows` already flips a row to
+`status="conflict"` when any open conflict references its spool ids. No changes to
+`mappings.py` were needed — queueing the deletion conflict is sufficient.
+
+### Resolution cleanup
+
+When `resolve_conflict` or `bulk_resolve` marks a `DELETION_FIELD` conflict as
+resolved, `_cleanup_orphaned_mapping` deletes the `SpoolMapping` row and both `Snapshot`
+rows for that pair from bridge-local SQLite. This is bridge-local state only — no
+upstream writes. The mapping disappears from Synced Records and the Dashboard count
+corrects itself on the next page load.
+
+**Upstream re-create is Phase 2.** If the user wants to restore the deleted upstream
+record and re-link it, that is a separate future workflow. The conflict router never
+writes to Spoolman or Filament DB (existing hard rule; see "resolve = record, apply
+next cycle" philosophy above).
+
 ## 2026-06-04 — variant_line_keywords user setting + Standalone "Move to existing group"
 
 ### variant_line_keywords — user-configurable finish/line keyword lexicon

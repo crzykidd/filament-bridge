@@ -37,7 +37,7 @@ from app.core.matcher import match_filaments
 from app.core.version import MULTICOLOR_MIN_FDB, version_gte
 from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross, weight_changed
 from app.models.config import BridgeConfig
-from app.models.conflict import Conflict
+from app.models.conflict import DELETION_FIELD, Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.models.snapshot import Snapshot
 from app.models.sync_log import SyncLog
@@ -156,6 +156,51 @@ def _queue_conflict(
         field_name=field_name,
         old_value=spoolman_value,
         new_value=filamentdb_value,
+    )
+
+
+def _queue_deletion_conflict(
+    db: Session,
+    cycle_id: str,
+    mapping: SpoolMapping,
+    *,
+    deleted_side: str,  # "spoolman" | "filamentdb"
+) -> None:
+    """Queue a deletion conflict for an orphaned spool mapping, with dedup.
+
+    The surviving side carries a descriptor; the deleted side is null.
+    """
+    exists = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.field_name == DELETION_FIELD,
+            Conflict.spoolman_id == mapping.spoolman_spool_id,
+            Conflict.filamentdb_spool_id == mapping.filamentdb_spool_id,
+        )
+        .first()
+    )
+    if exists:
+        return
+
+    descriptor = json.dumps({"exists": True, "deleted_side": deleted_side})
+    db.add(
+        Conflict(
+            entity_type="spool",
+            spoolman_id=mapping.spoolman_spool_id,
+            filamentdb_filament_id=mapping.filamentdb_filament_id,
+            filamentdb_spool_id=mapping.filamentdb_spool_id,
+            field_name=DELETION_FIELD,
+            spoolman_value=descriptor if deleted_side == "filamentdb" else None,
+            filamentdb_value=descriptor if deleted_side == "spoolman" else None,
+        )
+    )
+    _log(
+        db, cycle_id, "conflict", "conflict", "spool",
+        spoolman_id=mapping.spoolman_spool_id,
+        fdb_filament_id=mapping.filamentdb_filament_id,
+        fdb_spool_id=mapping.filamentdb_spool_id,
+        error_message=f"upstream record deleted ({deleted_side})",
     )
 
 
@@ -933,6 +978,7 @@ async def run_sync_cycle(
         return result
 
     sm_spools: dict[int, SpoolmanSpool] = {s.id: s for s in sm_spools_all if not s.archived}
+    sm_all_ids: set[int] = {s.id for s in sm_spools_all}  # includes archived
     sm_filaments: dict[int, Any] = {f.id: f for f in sm_filaments_all}
     fdb_filaments: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments_all}
 
@@ -972,41 +1018,70 @@ async def run_sync_cycle(
         fdb_entry = fdb_spool_index.get(mapping.filamentdb_spool_id)
 
         if sm_spool is None:
+            if mapping.spoolman_spool_id not in sm_all_ids:
+                # Not archived — gone entirely. Queue a deletion conflict.
+                if dry_run:
+                    fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
+                    result.preview.append({
+                        "action": "conflict",
+                        "entity_type": "spool",
+                        "direction": "conflict",
+                        "label": _preview_label(fdb_filament=fdb_fil),
+                        "field": DELETION_FIELD,
+                        "old": None, "new": None,
+                        "reason": "record deleted upstream (spoolman)",
+                        "spoolman_id": mapping.spoolman_spool_id,
+                        "fdb_filament_id": mapping.filamentdb_filament_id,
+                        "fdb_spool_id": mapping.filamentdb_spool_id,
+                    })
+                else:
+                    _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="spoolman")
+                result.conflicts += 1
+            else:
+                # Present but archived — keep existing skip behavior.
+                if dry_run:
+                    fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
+                    result.preview.append({
+                        "action": "skip",
+                        "entity_type": "spool",
+                        "direction": None,
+                        "label": _preview_label(fdb_filament=fdb_fil),
+                        "field": None,
+                        "old": None, "new": None,
+                        "reason": "Spoolman spool archived or not in active set",
+                        "spoolman_id": mapping.spoolman_spool_id,
+                        "fdb_filament_id": mapping.filamentdb_filament_id,
+                        "fdb_spool_id": mapping.filamentdb_spool_id,
+                    })
+                else:
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "skip", "spool",
+                        spoolman_id=mapping.spoolman_spool_id,
+                        fdb_filament_id=mapping.filamentdb_filament_id,
+                        fdb_spool_id=mapping.filamentdb_spool_id,
+                        error_message="SM spool not in active set (archived?)",
+                    )
+                result.skipped += 1
+            continue
+
+        if fdb_entry is None:
+            # FDB spool absent from current fetch — deleted upstream.
             if dry_run:
-                fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
                 result.preview.append({
-                    "action": "skip",
+                    "action": "conflict",
                     "entity_type": "spool",
-                    "direction": None,
-                    "label": _preview_label(fdb_filament=fdb_fil),
-                    "field": None,
+                    "direction": "conflict",
+                    "label": _preview_label(sm_spool=sm_spool),
+                    "field": DELETION_FIELD,
                     "old": None, "new": None,
-                    "reason": "Spoolman spool archived or not in active set",
+                    "reason": "record deleted upstream (filamentdb)",
                     "spoolman_id": mapping.spoolman_spool_id,
                     "fdb_filament_id": mapping.filamentdb_filament_id,
                     "fdb_spool_id": mapping.filamentdb_spool_id,
                 })
             else:
-                _log(
-                    db, cycle_id, "spoolman_to_filamentdb", "skip", "spool",
-                    spoolman_id=mapping.spoolman_spool_id,
-                    fdb_filament_id=mapping.filamentdb_filament_id,
-                    fdb_spool_id=mapping.filamentdb_spool_id,
-                    error_message="SM spool not in active set (archived?)",
-                )
-            result.skipped += 1
-            continue
-
-        if fdb_entry is None:
-            if not dry_run:
-                _log(
-                    db, cycle_id, "filamentdb_to_spoolman", "error", "spool",
-                    spoolman_id=mapping.spoolman_spool_id,
-                    fdb_filament_id=mapping.filamentdb_filament_id,
-                    fdb_spool_id=mapping.filamentdb_spool_id,
-                    error_message="FDB spool not found in current fetch",
-                )
-            result.errors += 1
+                _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="filamentdb")
+            result.conflicts += 1
             continue
 
         fdb_filament_id, fdb_spool = fdb_entry

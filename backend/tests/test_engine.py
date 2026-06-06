@@ -457,3 +457,117 @@ async def test_multicolor_skipped_when_fdb_too_old(db):
     fdb_client.update_filament.assert_not_called()
     fdb_client.get_filament.assert_not_called()  # gated before detail fetch
     assert result.skipped >= 1
+
+
+# ---------------------------------------------------------------------------
+# Upstream deletion detection (FR-16 extension)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fdb_deletion_queues_conflict(db):
+    """FDB spool absent from fetch → exactly one deletion conflict queued."""
+    sm_spool = _sm_spool(1, 800.0)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    # FDB returns an empty list — spool is gone.
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 1
+    assert result.errors == 0
+    conflict = db.query(Conflict).filter_by(resolved_at=None).first()
+    assert conflict is not None
+    assert conflict.field_name == "__record_deleted__"
+    assert conflict.spoolman_id == 1
+    assert conflict.filamentdb_spool_id == "spool-1"
+
+
+@pytest.mark.asyncio
+async def test_fdb_deletion_no_duplicate(db):
+    """Second cycle after FDB deletion does not create a second conflict."""
+    sm_spool = _sm_spool(1, 800.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+    await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID + "-2")
+
+    assert db.query(Conflict).filter_by(resolved_at=None).count() == 1
+
+
+@pytest.mark.asyncio
+async def test_fdb_deletion_mapping_row_shows_conflict(db):
+    """After deletion conflict is queued, build_mapping_rows returns status='conflict'."""
+    from app.api.mappings import build_mapping_rows
+
+    sm_spool = _sm_spool(1, 800.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    rows = build_mapping_rows(db)
+    assert len(rows) == 1
+    assert rows[0].status == "conflict"
+
+
+@pytest.mark.asyncio
+async def test_sm_deletion_queues_conflict(db):
+    """Spoolman spool absent from full fetch (not just non-archived) → deletion conflict."""
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    # Spoolman returns empty list — spool id=1 is gone entirely.
+    spoolman = _fake_spoolman(spools=[])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 1
+    conflict = db.query(Conflict).filter_by(resolved_at=None).first()
+    assert conflict is not None
+    assert conflict.field_name == "__record_deleted__"
+    assert conflict.spoolman_id == 1
+
+
+@pytest.mark.asyncio
+async def test_archived_sm_spool_logs_skip_no_conflict(db):
+    """Archived Spoolman spool is in sm_all_ids → skip logged, no deletion conflict."""
+    archived_spool = SpoolmanSpool(
+        id=1,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=800.0,
+        archived=True,
+        extra={},
+    )
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[archived_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 0
+    assert result.skipped == 1
+    assert db.query(Conflict).count() == 0
+    skip_log = db.query(SyncLog).filter_by(action="skip").first()
+    assert skip_log is not None
