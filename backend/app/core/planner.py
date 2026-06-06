@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb
+from app.core.fields import resolve_effective_cost
 from app.core.matcher import sm_prop_conflicts
 from app.core.weight import spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
@@ -60,11 +61,18 @@ class _SyncPlan:
     master_of_sm: dict = dc_field(default_factory=dict)  # variant_sm_id → master_sm_id
 
 
-def _fdb_filament_payload_from_sm(sm: SpoolmanFilament) -> dict:
+def _fdb_filament_payload_from_sm(
+    sm: SpoolmanFilament,
+    *,
+    effective_cost: float | None = None,
+) -> dict:
     """Map a Spoolman filament onto the FDB create-filament body (core fields only).
 
     Structured multicolor (color/secondaryColors/optTags) is included for v1.33.0+
     Filament DB; on older instances the unknown keys are harmless extras.
+
+    effective_cost: pre-resolved spool-first cost (pass from _plan_spoolman_to_fdb);
+    included in the payload only when non-null.
     """
     material = sm.material
     if not material:
@@ -83,6 +91,8 @@ def _fdb_filament_payload_from_sm(sm: SpoolmanFilament) -> dict:
         "diameter": sm.diameter,
         "spoolWeight": sm.spool_weight,
     }
+    if effective_cost is not None:
+        payload["cost"] = effective_cost
     if mc["secondaryColors"]:
         payload["secondaryColors"] = mc["secondaryColors"]
     if mc["optTags"]:
@@ -163,7 +173,11 @@ def _plan_spoolman_to_fdb(
                 )
             plan.filament_items.append(item)
         elif action == "create":
-            payload = _fdb_filament_payload_from_sm(sm_fil)
+            cost = resolve_effective_cost(
+                sm_fil.price,
+                sm_spools_by_filament.get(sm_fil.id, []),
+            )
+            payload = _fdb_filament_payload_from_sm(sm_fil, effective_cost=cost)
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="create",
                 fdb_id=None, fdb_payload=payload, resolved=True,

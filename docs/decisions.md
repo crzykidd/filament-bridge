@@ -1,5 +1,50 @@
 # Decision record
 
+## 2026-06-06 — Filament cost sync: spool-price-first, filament fallback; matprop SoT; snapshot merge
+
+### Effective Spoolman cost resolved spool-first
+
+`resolve_effective_cost(filament_price, spools)` in `backend/app/core/fields.py` returns the
+price of the first spool (by id) with a non-null `price`; if no spool has a price, it falls
+back to the filament-level `price`. This is the canonical cost value used throughout the
+bridge — in the wizard import and in ongoing sync.
+
+### Wizard import: FDB filament create payload includes cost
+
+`_fdb_filament_payload_from_sm` in `backend/app/core/planner.py` now accepts an
+`effective_cost` keyword argument. `_plan_spoolman_to_fdb` resolves the cost for each
+`create` action using the active (non-archived) spools for that filament and passes it to
+the payload builder. The resulting `cost` field appears in the FDB filament create payload
+and is visible in the Phase-4 planned-writes preview.
+
+### FDB→SM write-back targets the Spoolman FILAMENT price
+
+Because FDB cost is filament-level, the FDB→SM write direction updates
+`spoolman.update_filament(sm_fil_id, {"price": fdb_cost_now})` — the Spoolman **filament**
+price. Per-spool Spoolman prices are the user's actual purchase prices and must never be
+overwritten by a filament-level value.
+
+### Cost follows material_properties_source_of_truth
+
+`_sync_cost` in `backend/app/core/engine.py` iterates `filament_mappings` each cycle,
+computes effective SM cost (spool-first) and FDB cost, then:
+- Neither side has cost → skip
+- First sight (both snapshots have no `_cost` key) → store baseline, no write
+- One side changed and SoT favours that side → apply the write
+- Both changed and disagree → queue a `cost` conflict (never auto-resolve)
+- Both changed into agreement → refresh baseline
+
+SoT semantics mirror `resolve_field_map` / `_apply_field_changes` exactly — no new behavior.
+
+### Filament snapshots now merge keys (_mc_sig + _cost coexist)
+
+The multicolor and cost passes both store filament-level snapshots. Previously `_sync_multicolor`'s
+inner `_store()` called `_upsert_snapshot` directly with only `{"_mc_sig": ...}`, replacing
+the entire row on each write. A new `_merge_snapshot` helper (reads existing data, updates
+the one key, writes back) is used by **both** passes. This means `_mc_sig` and `_cost`
+coexist in the shared filament snapshot row and neither pass clobbers the other's key.
+Regression test: `test_cost_and_multicolor_snapshots_coexist`.
+
 ## 2026-06-05 — Tare excluded from variant-prop conflicts; conflict badges name specific fields
 
 ### Tare (`spool_weight`) excluded from `sm_prop_conflicts`

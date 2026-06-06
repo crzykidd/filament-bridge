@@ -92,3 +92,16 @@ def should_skip_inherited(filament: "FDBFilamentDetail", fdb_path: str) -> bool:
     """
     top = fdb_path.split(".")[0]
     return top in filament.inherited_fields
+
+
+def resolve_effective_cost(filament_price: float | None, spools: list) -> float | None:
+    """Return the effective cost for a Spoolman filament (spool price first, filament fallback).
+
+    Uses the price of the first spool (by id) that has a non-null price.
+    Falls back to the filament-level price if no spool has a price set.
+    Tolerates empty spool lists.
+    """
+    for s in sorted(spools, key=lambda s: s.id):
+        if s.price is not None:
+            return s.price
+    return filament_price

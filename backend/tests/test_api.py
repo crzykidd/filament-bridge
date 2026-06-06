@@ -2855,3 +2855,109 @@ def test_wizard_preview_planned_writes_no_sm_writeback_when_no_reconcile(db):
     body = client.get("/api/wizard/preview").json()
     sm_writes = [w for w in body["planned_writes"] if w["system"] == "spoolman"]
     assert sm_writes == []
+
+
+# ---------------------------------------------------------------------------
+# Wizard cost sync tests (spool-first, filament fallback)
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_execute_create_payload_includes_spool_price(db):
+    """Wizard execute: FDB filament create payload uses spool price when set."""
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=20.0)
+    # Spool has price=29.99 — spool price wins over filament price
+    sm_spool = SpoolmanSpool(
+        id=1, filament=sm_fil, remaining_weight=500.0, price=29.99, archived=False, extra={},
+    )
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, _fake_spoolman(filaments=[sm_fil], spools=[sm_spool]), filamentdb)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200
+    filamentdb.create_filament.assert_awaited_once()
+    payload = filamentdb.create_filament.await_args.args[0]
+    # Spool price (29.99) must appear as cost in the FDB create payload
+    assert payload.get("cost") == pytest.approx(29.99)
+
+
+def test_wizard_execute_create_payload_falls_back_to_filament_price(db):
+    """Wizard execute: FDB filament create payload uses filament price when no spool price."""
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=14.99)
+    # Spool has no price — filament price is the fallback
+    sm_spool = SpoolmanSpool(
+        id=1, filament=sm_fil, remaining_weight=500.0, price=None, archived=False, extra={},
+    )
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, _fake_spoolman(filaments=[sm_fil], spools=[sm_spool]), filamentdb)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200
+    filamentdb.create_filament.assert_awaited_once()
+    payload = filamentdb.create_filament.await_args.args[0]
+    assert payload.get("cost") == pytest.approx(14.99)
+
+
+def test_wizard_execute_create_payload_omits_cost_when_none(db):
+    """Wizard execute: FDB filament create payload omits cost when both spool and filament price are None."""
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=None)
+    sm_spool = SpoolmanSpool(
+        id=1, filament=sm_fil, remaining_weight=500.0, price=None, archived=False, extra={},
+    )
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, _fake_spoolman(filaments=[sm_fil], spools=[sm_spool]), filamentdb)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200
+    filamentdb.create_filament.assert_awaited_once()
+    payload = filamentdb.create_filament.await_args.args[0]
+    assert "cost" not in payload
+
+
+def test_wizard_preview_planned_writes_includes_cost_field(db):
+    """Wizard preview: planned_writes FDB filament create includes cost field when spool price set."""
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_fil = SpoolmanFilament(id=10, name="PLA Red", vendor=elegoo, material="PLA", price=9.99)
+    sm_spool = SpoolmanSpool(
+        id=1, filament=sm_fil, remaining_weight=500.0, price=24.99, archived=False, extra={},
+    )
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    client = _client(db, _fake_spoolman(filaments=[sm_fil], spools=[sm_spool]), _fake_filamentdb())
+
+    body = client.get("/api/wizard/preview").json()
+    fdb_creates = [w for w in body["planned_writes"]
+                   if w["system"] == "filamentdb" and w["action"] == "create"
+                   and w["entity_type"] == "filament"]
+    assert len(fdb_creates) == 1
+    field_names = [f["name"] for f in fdb_creates[0]["fields"]]
+    # cost = spool price (24.99) must appear in the planned fields
+    assert "cost" in field_names
+    cost_field = next(f for f in fdb_creates[0]["fields"] if f["name"] == "cost")
+    assert cost_field["new"] == pytest.approx(24.99)

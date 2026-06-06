@@ -571,3 +571,282 @@ async def test_archived_sm_spool_logs_skip_no_conflict(db):
     assert db.query(Conflict).count() == 0
     skip_log = db.query(SyncLog).filter_by(action="skip").first()
     assert skip_log is not None
+
+
+# ---------------------------------------------------------------------------
+# Filament-level cost sync
+# ---------------------------------------------------------------------------
+
+COST_SM_FIL_ID = 50
+COST_FDB_FIL_ID = "fil-cost"
+
+
+def _sm_fil_with_cost(price: float | None = None) -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=COST_SM_FIL_ID,
+        name="Cost PLA",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        price=price,
+    )
+
+
+def _sm_spool_with_price(spool_id: int, price: float | None, sm_fil_id: int = COST_SM_FIL_ID) -> SpoolmanSpool:
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=SpoolmanFilament(id=sm_fil_id, name="Cost PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=500.0,
+        price=price,
+        archived=False,
+        extra={},
+    )
+
+
+def _fdb_list_fil_cost(cost: float | None = None) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": COST_FDB_FIL_ID,
+        "name": "Cost PLA",
+        "cost": cost,
+        "spools": [],
+    })
+
+
+def _add_filament_mapping_cost(db):
+    db.add(FilamentMapping(spoolman_filament_id=COST_SM_FIL_ID, filamentdb_id=COST_FDB_FIL_ID))
+    db.flush()
+
+
+def _cost_settings(mock_settings, matprop_sot="spoolman"):
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+def _seed_cost_config(db, matprop_sot="spoolman"):
+    from app.models.config import BridgeConfig
+    import json as _json
+    db.merge(BridgeConfig(key="material_properties_source_of_truth", value=_json.dumps(matprop_sot)))
+    db.commit()
+
+
+@pytest.mark.asyncio
+async def test_cost_sm_to_fdb_when_matprop_sot_spoolman(db):
+    """SM filament price changed → FDB cost updated when matprop_sot=spoolman."""
+    _add_filament_mapping_cost(db)
+    _seed_cost_config(db, matprop_sot="spoolman")
+    sm_fil = _sm_fil_with_cost(price=24.99)
+    fdb_list = _fdb_list_fil_cost(cost=20.0)  # FDB unchanged at 20.0
+    # Baseline: SM had price 20.0, FDB had cost 20.0; only SM changed
+    _store_snapshot(db, "spoolman", "filament", str(COST_SM_FIL_ID), {"_cost": 20.0})
+    _store_snapshot(db, "filamentdb", "filament", COST_FDB_FIL_ID, {"_cost": 20.0})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list])
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_called_once_with(COST_FDB_FIL_ID, {"cost": 24.99})
+    assert result.updated == 1
+    spoolman.update_filament.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cost_fdb_to_sm_when_matprop_sot_filamentdb(db):
+    """FDB cost changed → SM filament price updated when matprop_sot=filamentdb."""
+    _add_filament_mapping_cost(db)
+    _seed_cost_config(db, matprop_sot="filamentdb")
+    sm_fil = _sm_fil_with_cost(price=20.0)
+    fdb_list = _fdb_list_fil_cost(cost=29.99)
+    # Baseline: SM had 20.0, FDB had 20.0 — FDB changed
+    _store_snapshot(db, "spoolman", "filament", str(COST_SM_FIL_ID), {"_cost": 20.0})
+    _store_snapshot(db, "filamentdb", "filament", COST_FDB_FIL_ID, {"_cost": 20.0})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list])
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    spoolman.update_filament.assert_called_once_with(COST_SM_FIL_ID, {"price": 29.99})
+    assert result.updated == 1
+    fdb_client.update_filament.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cost_both_changed_creates_conflict(db):
+    """Both SM and FDB cost changed and disagree → Conflict row, no writes."""
+    _add_filament_mapping_cost(db)
+    _seed_cost_config(db, matprop_sot="spoolman")
+    sm_fil = _sm_fil_with_cost(price=24.99)
+    fdb_list = _fdb_list_fil_cost(cost=35.00)
+    # Baseline: both had 20.0 — both changed
+    _store_snapshot(db, "spoolman", "filament", str(COST_SM_FIL_ID), {"_cost": 20.0})
+    _store_snapshot(db, "filamentdb", "filament", COST_FDB_FIL_ID, {"_cost": 20.0})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list])
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 1
+    assert result.updated == 0
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_filament.assert_not_called()
+    conflict = db.query(Conflict).first()
+    assert conflict is not None
+    assert conflict.field_name == "cost"
+    assert conflict.spoolman_id == COST_SM_FIL_ID
+
+
+@pytest.mark.asyncio
+async def test_cost_first_sight_stores_baseline_no_write(db):
+    """No prior cost snapshots → store baseline, no upstream writes."""
+    _add_filament_mapping_cost(db)
+    sm_fil = _sm_fil_with_cost(price=19.99)
+    fdb_list = _fdb_list_fil_cost(cost=19.99)
+    # No snapshots stored
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list])
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_filament.assert_not_called()
+    assert result.updated == 0
+    assert result.conflicts == 0
+    # _cost key stored in filament snapshots
+    sm_snap = db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="filament", entity_id=str(COST_SM_FIL_ID)
+    ).first()
+    assert sm_snap is not None
+    assert json.loads(sm_snap.data).get("_cost") == 19.99
+
+
+@pytest.mark.asyncio
+async def test_cost_and_multicolor_snapshots_coexist(db):
+    """After a cycle, _mc_sig and _cost must coexist in the filament snapshot (no clobber)."""
+    # Use the multicolor SM/FDB IDs from earlier tests (SM_FIL_ID = 20, FDB_FIL_ID = "fil-mc")
+    # Reuse _sm_fil + _fdb_list_fil helpers from the multicolor test block.
+    from app.schemas.filamentdb import FDBFilamentDetail
+
+    mc_sm_id = SM_FIL_ID   # 20
+    mc_fdb_id = FDB_FIL_ID  # "fil-mc"
+    cost_sm_id = COST_SM_FIL_ID  # 50
+    cost_fdb_id = COST_FDB_FIL_ID  # "fil-cost"
+
+    # Add both filament mappings
+    db.add(FilamentMapping(spoolman_filament_id=mc_sm_id, filamentdb_id=mc_fdb_id))
+    db.add(FilamentMapping(spoolman_filament_id=cost_sm_id, filamentdb_id=cost_fdb_id))
+    db.flush()
+
+    # Multicolor filament: pre-seed _mc_sig so the multicolor pass stores its key
+    mc_sig = "solid|93be2f|"
+    _store_snapshot(db, "spoolman", "filament", str(mc_sm_id), {"_mc_sig": mc_sig})
+    _store_snapshot(db, "filamentdb", "filament", mc_fdb_id, {"_mc_sig": mc_sig})
+
+    # Cost filament: pre-seed _cost so the cost pass does not trigger a write
+    _store_snapshot(db, "spoolman", "filament", str(cost_sm_id), {"_cost": 20.0})
+    _store_snapshot(db, "filamentdb", "filament", cost_fdb_id, {"_cost": 20.0})
+
+    # SM filaments: solid for mc, price-bearing for cost
+    sm_fil_mc = SpoolmanFilament(
+        id=mc_sm_id, name="Multicolor PLA",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        color_hex="93be2f",  # solid, no multi_color_hexes
+    )
+    sm_fil_cost = _sm_fil_with_cost(price=20.0)
+
+    # FDB filaments
+    fdb_list_mc = FDBFilament.model_validate({
+        "_id": mc_fdb_id, "name": "Multicolor PLA",
+        "color": "#93be2f", "secondaryColors": [], "optTags": [], "spools": [],
+    })
+    fdb_list_cost = _fdb_list_fil_cost(cost=20.0)
+    fdb_detail_mc = FDBFilamentDetail.model_validate({
+        "_id": mc_fdb_id, "name": "Multicolor PLA",
+        "color": "#93be2f", "secondaryColors": [], "optTags": [], "_inherited": [], "spools": [],
+    })
+
+    spoolman = _fake_spoolman(filaments=[sm_fil_mc, sm_fil_cost])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list_mc, fdb_list_cost], detail=fdb_detail_mc)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _mc_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # After the cycle, the multicolor filament snapshot must contain _mc_sig
+    # AND must not have lost it due to the cost pass (or vice versa).
+    # For the cost filament, check that _cost persists after a multicolor refresh.
+    cost_sm_snap = db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="filament", entity_id=str(cost_sm_id)
+    ).first()
+    assert cost_sm_snap is not None
+    cost_sm_data = json.loads(cost_sm_snap.data)
+    assert "_cost" in cost_sm_data, "_cost key missing after cycle"
+
+    # For the multicolor filament snapshot: _mc_sig must survive a fresh cycle run
+    # (cost pass skips it because sm+fdb cost is both None → no snapshot write).
+    mc_sm_snap = db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="filament", entity_id=str(mc_sm_id)
+    ).first()
+    assert mc_sm_snap is not None
+    mc_sm_data = json.loads(mc_sm_snap.data)
+    assert "_mc_sig" in mc_sm_data, "_mc_sig key missing after cycle"
+
+    # Now run a second cycle where BOTH filaments have all keys — test merge:
+    # Inject both keys into the cost filament snapshot to simulate the merged state.
+    # Use _upsert_snapshot (not _store_snapshot) since the row already exists.
+    from app.core.engine import _upsert_snapshot as _upsert
+    _upsert(db, "spoolman", "filament", str(cost_sm_id), {"_cost": 20.0, "_mc_sig": "irrelevant"})
+    _upsert(db, "filamentdb", "filament", cost_fdb_id, {"_cost": 20.0, "_mc_sig": "irrelevant"})
+
+    await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID + "-2")
+
+    cost_sm_snap2 = db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="filament", entity_id=str(cost_sm_id)
+    ).first()
+    cost_sm_data2 = json.loads(cost_sm_snap2.data)
+    # Both keys must coexist after the cycle
+    assert "_cost" in cost_sm_data2, "_cost key lost after second cycle"
+    assert "_mc_sig" in cost_sm_data2, "_mc_sig key lost after second cycle"
+
+
+@pytest.mark.asyncio
+async def test_cost_spool_price_wins_over_filament_price(db):
+    """Spool-level price takes precedence over filament-level price in the cost pass."""
+    _add_filament_mapping_cost(db)
+    _seed_cost_config(db, matprop_sot="spoolman")
+    # SM filament price = 20 but spool price = 30 (spool wins)
+    sm_fil = _sm_fil_with_cost(price=20.0)
+    sm_spool_with_p = _sm_spool_with_price(spool_id=99, price=30.0)
+    fdb_list = _fdb_list_fil_cost(cost=20.0)
+    # Baseline cost = 20 (the filament price); SM effective cost is now 30 (spool)
+    _store_snapshot(db, "spoolman", "filament", str(COST_SM_FIL_ID), {"_cost": 20.0})
+    _store_snapshot(db, "filamentdb", "filament", COST_FDB_FIL_ID, {"_cost": 20.0})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil], spools=[sm_spool_with_p])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list])
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # Spool price (30) should be used, not filament price (20) — SM changed → FDB updated
+    fdb_client.update_filament.assert_called_once_with(COST_FDB_FIL_ID, {"cost": 30.0})
+    assert result.updated == 1

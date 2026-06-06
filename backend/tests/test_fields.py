@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from app.core.fields import get_fdb_field_value, resolve_field_map, should_skip_inherited
+from app.core.fields import get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
 from app.schemas.filamentdb import FDBFilamentDetail, FDBTemperatures
 
 
@@ -109,3 +109,44 @@ class TestShouldSkipInherited:
     def test_empty_inherited_list(self):
         detail = _fdb_detail()
         assert should_skip_inherited(detail, "density") is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_effective_cost
+# ---------------------------------------------------------------------------
+
+
+class _FakeSpool:
+    """Minimal spool stub with id and price."""
+    def __init__(self, sid: int, price: float | None):
+        self.id = sid
+        self.price = price
+
+
+class TestResolveEffectiveCost:
+    def test_spool_price_wins_over_filament_price(self):
+        spools = [_FakeSpool(1, 19.99), _FakeSpool(2, 25.00)]
+        assert resolve_effective_cost(9.99, spools) == 19.99
+
+    def test_first_spool_by_id_wins(self):
+        # spool id=1 has lower id than id=3; id=1's price should win
+        spools = [_FakeSpool(3, 30.00), _FakeSpool(1, 15.00)]
+        assert resolve_effective_cost(9.99, spools) == 15.00
+
+    def test_falls_back_to_filament_price_when_no_spool_has_price(self):
+        spools = [_FakeSpool(1, None), _FakeSpool(2, None)]
+        assert resolve_effective_cost(12.50, spools) == 12.50
+
+    def test_skips_none_priced_spool_and_uses_next_with_price(self):
+        spools = [_FakeSpool(1, None), _FakeSpool(2, 22.00)]
+        assert resolve_effective_cost(9.99, spools) == 22.00
+
+    def test_handles_empty_spool_list(self):
+        assert resolve_effective_cost(7.99, []) == 7.99
+
+    def test_returns_none_when_all_prices_are_none(self):
+        spools = [_FakeSpool(1, None)]
+        assert resolve_effective_cost(None, spools) is None
+
+    def test_returns_none_for_empty_spools_and_none_filament_price(self):
+        assert resolve_effective_cost(None, []) is None

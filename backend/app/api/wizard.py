@@ -1387,6 +1387,8 @@ def _compute_planned_writes(
             for k, v in payload.items()
             if k not in ("name", "vendor")  # skip identity fields for cleaner display
         ]
+        # Ensure cost is always surfaced in the planned-write fields when present.
+        # (payload filtering above already includes it; this comment documents intent.)
         planned_writes.append(PlannedWrite(
             system="filamentdb",
             entity_type="filament",

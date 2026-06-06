@@ -32,7 +32,7 @@ from app.core.color import (
     to_sm_color,
 )
 from app.core.differ import diff_spool_pair
-from app.core.fields import FieldMapping, get_fdb_field_value, resolve_field_map, should_skip_inherited
+from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
 from app.core.matcher import match_filaments
 from app.core.version import MULTICOLOR_MIN_FDB, version_gte
 from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross, weight_changed
@@ -91,6 +91,18 @@ def _upsert_snapshot(db: Session, source: str, entity_type: str, entity_id: str,
         )
     )
     db.execute(stmt)
+
+
+def _merge_snapshot(db: Session, source: str, entity_type: str, entity_id: str, updates: dict) -> None:
+    """Merge key-value pairs into an existing filament snapshot, preserving other keys.
+
+    Used by the multicolor and cost passes to store their respective keys
+    (_mc_sig, _cost) without clobbering each other's data in the shared
+    filament-level snapshot row.
+    """
+    existing = _get_snapshot(db, source, entity_type, entity_id) or {}
+    merged = {**existing, **updates}
+    _upsert_snapshot(db, source, entity_type, entity_id, merged)
 
 
 def _log(
@@ -583,8 +595,8 @@ async def _sync_multicolor(
         fdb_sig_then = fdb_snap.get("_mc_sig") if fdb_snap else None
 
         def _store(sm_sig: str, fdb_sig: str) -> None:
-            _upsert_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_mc_sig": sm_sig})
-            _upsert_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {"_mc_sig": fdb_sig})
+            _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_mc_sig": sm_sig})
+            _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {"_mc_sig": fdb_sig})
 
         # First sight — store baseline, no write (matches the spool-pair baseline rule).
         if sm_sig_then is None or fdb_sig_then is None:
@@ -710,6 +722,198 @@ async def _sync_multicolor(
                 "fdb_spool_id": None,
             })
             result.updated += 1
+
+
+# ---------------------------------------------------------------------------
+# Filament-level cost sync (bidirectional)
+# ---------------------------------------------------------------------------
+
+
+async def _sync_cost(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    dry_run: bool,
+    *,
+    filament_mappings: list[FilamentMapping],
+    sm_filaments: dict[int, Any],
+    sm_spools_by_filament: dict[int, list[Any]],
+    fdb_filaments: dict[str, Any],
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+    matprop_sot: str,
+) -> None:
+    """Bidirectional filament-level cost sync, one operation per filament pair.
+
+    Cost is governed by material_properties_source_of_truth (same as density/temps).
+    Effective SM cost = spool price first (first spool by id with a non-null price),
+    falling back to the filament price.  FDB cost is filament-level.
+
+    One-sided change: apply in the direction permitted by matprop_sot.
+    Both sides changed and disagree: queue a conflict (never auto-resolve).
+
+    Snapshots store _cost per side; writes merge so _mc_sig survives.
+    """
+    for m in filament_mappings:
+        sm_fil = sm_filaments.get(m.spoolman_filament_id)
+        fdb_list = fdb_filaments.get(m.filamentdb_id)
+        if sm_fil is None or fdb_list is None:
+            continue
+
+        sm_cost_now = resolve_effective_cost(
+            sm_fil.price,
+            sm_spools_by_filament.get(m.spoolman_filament_id, []),
+        )
+        fdb_cost_now = fdb_list.cost
+
+        # Both None — nothing to do.
+        if sm_cost_now is None and fdb_cost_now is None:
+            continue
+
+        sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
+        fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
+        sm_cost_then = sm_snap.get("_cost") if sm_snap else None
+        fdb_cost_then = fdb_snap.get("_cost") if fdb_snap else None
+
+        def _store_cost(sm_val: Any, fdb_val: Any) -> None:
+            _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_cost": sm_val})
+            _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {"_cost": fdb_val})
+
+        # First sight — store baseline, no write (matches multicolor / spool-pair rule).
+        if sm_cost_then is None and fdb_cost_then is None:
+            if not dry_run:
+                _store_cost(sm_cost_now, fdb_cost_now)
+            else:
+                result.preview.append({
+                    "action": "skip",
+                    "entity_type": "filament",
+                    "direction": None,
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "cost",
+                    "old": None, "new": None,
+                    "reason": "first sync of this pair — baseline stored, no diff yet",
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.skipped += 1
+            continue
+
+        sm_changed = sm_cost_then != sm_cost_now
+        fdb_changed = fdb_cost_then != fdb_cost_now
+
+        # Nothing changed → no-op.
+        if not sm_changed and not fdb_changed:
+            continue
+
+        # Both sides changed into agreement → refresh baseline silently.
+        if sm_changed and fdb_changed and sm_cost_now == fdb_cost_now:
+            if not dry_run:
+                _store_cost(sm_cost_now, fdb_cost_now)
+            continue
+
+        # Both sides changed and disagree — conflict, never auto-resolve.
+        if sm_changed and fdb_changed:
+            if not dry_run:
+                _queue_conflict(
+                    db, cycle_id, "filament", "cost",
+                    spoolman_id=m.spoolman_filament_id,
+                    fdb_filament_id=m.filamentdb_id,
+                    spoolman_value=sm_cost_now,
+                    filamentdb_value=fdb_cost_now,
+                )
+            else:
+                result.preview.append({
+                    "action": "conflict",
+                    "entity_type": "filament",
+                    "direction": None,
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "cost",
+                    "old": sm_cost_now, "new": fdb_cost_now,
+                    "reason": "both sides changed cost",
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+            result.conflicts += 1
+            continue
+
+        # One-sided change — apply in the direction permitted by matprop_sot.
+        # SM changed, FDB unchanged → SM→FDB when matprop_sot favours spoolman.
+        if sm_changed and not fdb_changed:
+            if matprop_sot != "spoolman":
+                continue  # wrong SoT direction — skip
+            if not dry_run:
+                try:
+                    await filamentdb.update_filament(m.filamentdb_id, {"cost": sm_cost_now})
+                    _store_cost(sm_cost_now, sm_cost_now)
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="cost", old_value=fdb_cost_now, new_value=sm_cost_now,
+                    )
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: cost SM→FDB failed %s: %s", cycle_id, m.filamentdb_id, exc)
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="cost", error_message=str(exc),
+                    )
+                    result.errors += 1
+            else:
+                result.preview.append({
+                    "action": "update",
+                    "entity_type": "filament",
+                    "direction": "spoolman_to_filamentdb",
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "cost",
+                    "old": fdb_cost_now, "new": sm_cost_now,
+                    "reason": None,
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.updated += 1
+            continue
+
+        # FDB changed, SM unchanged → FDB→SM when matprop_sot favours filamentdb.
+        # FDB→SM writes the Spoolman FILAMENT price (never per-spool prices).
+        if fdb_changed and not sm_changed:
+            if matprop_sot != "filamentdb":
+                continue  # wrong SoT direction — skip
+            if not dry_run:
+                try:
+                    await spoolman.update_filament(m.spoolman_filament_id, {"price": fdb_cost_now})
+                    _store_cost(fdb_cost_now, fdb_cost_now)
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="cost", old_value=sm_cost_now, new_value=fdb_cost_now,
+                    )
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: cost FDB→SM failed %s: %s", cycle_id, m.spoolman_filament_id, exc)
+                    _log(
+                        db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        field_name="cost", error_message=str(exc),
+                    )
+                    result.errors += 1
+            else:
+                result.preview.append({
+                    "action": "update",
+                    "entity_type": "filament",
+                    "direction": "filamentdb_to_spoolman",
+                    "label": getattr(sm_fil, "name", None) or fdb_list.name,
+                    "field": "cost",
+                    "old": sm_cost_now, "new": fdb_cost_now,
+                    "reason": None,
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id,
+                    "fdb_spool_id": None,
+                })
+                result.updated += 1
 
 
 # ---------------------------------------------------------------------------
@@ -1278,6 +1482,23 @@ async def run_sync_cycle(
         spoolman=spoolman,
         filamentdb=filamentdb,
         multicolor_supported=multicolor_supported,
+    )
+
+    # ---- Filament-level cost sync (bidirectional, follows matprop_sot) ----
+    # Build spool-by-filament lookup for cost resolution (active spools only).
+    sm_spools_by_filament_for_cost: dict[int, list[Any]] = {}
+    for s in sm_spools_all:
+        if not s.archived:
+            sm_spools_by_filament_for_cost.setdefault(s.filament.id, []).append(s)
+    await _sync_cost(
+        db, cycle_id, result, dry_run,
+        filament_mappings=filament_mappings,
+        sm_filaments=sm_filaments,
+        sm_spools_by_filament=sm_spools_by_filament_for_cost,
+        fdb_filaments=fdb_filaments,
+        spoolman=spoolman,
+        filamentdb=filamentdb,
+        matprop_sot=matprop_sot,
     )
 
     # ---- New spool detection (FR-12) ----
