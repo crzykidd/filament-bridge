@@ -2635,6 +2635,73 @@ def test_wizard_execute_reconcile_no_patch_when_values_already_match(db):
     spoolman.update_filament.assert_not_called()
 
 
+def test_wizard_execute_reconcile_nozzle_temp_overlays_fdb_and_patches_spoolman(db):
+    """Regression: nozzle_temp/bed_temp canonical keys (not settings_extruder_temp) reach FDB+SM.
+
+    Before the canonical-key fix, the frontend emitted 'settings_extruder_temp' as the
+    ReconciledField.field name.  The backend _RECONCILE_FIELD_MAP keys on 'nozzle_temp',
+    so mismatched keys caused temp reconcile decisions to be silently dropped.
+    This test verifies the correct canonical key 'nozzle_temp' / 'bed_temp' flows end-to-end.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    set_config_value(db, "wizard_sm_variant_decisions", [
+        {"master_spoolman_filament_id": 10, "variant_spoolman_filament_ids": [11]},
+    ])
+    set_config_value(db, "wizard_variances_reconcile", [
+        {
+            "master_spoolman_filament_id": 10,
+            "fields": [
+                # Canonical keys — what the frontend must now emit (was 'settings_extruder_temp')
+                {"field": "nozzle_temp", "value": 215, "source": "manual",
+                 "source_spoolman_filament_id": None},
+                {"field": "bed_temp", "value": 65, "source": "manual",
+                 "source_spoolman_filament_id": None},
+            ],
+        }
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA",
+                         density=1.24, settings_extruder_temp=210, settings_bed_temp=60),
+        SpoolmanFilament(id=11, name="PLA Red", vendor=elegoo, material="PLA",
+                         density=1.24, settings_extruder_temp=210, settings_bed_temp=60),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    filamentdb = _fake_filamentdb()
+    create_calls = []
+
+    async def _create(payload):
+        create_calls.append(payload)
+        return MagicMock(id="new-fdb-fil")
+
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    # FDB create payload for the master must have reconciled temps via temperatures.nozzle/bed
+    assert len(create_calls) >= 1
+    master_payload = create_calls[0]
+    assert master_payload.get("temperatures", {}).get("nozzle") == 215
+    assert master_payload.get("temperatures", {}).get("bed") == 65
+
+    # Both SM filaments should be PATCHed since their current values (210/60) differ from canonical
+    update_calls = spoolman.update_filament.call_args_list
+    patched_ids = {c.args[0] for c in update_calls}
+    assert 10 in patched_ids
+    assert 11 in patched_ids
+    for call in update_calls:
+        if call.args[0] in (10, 11):
+            assert call.args[1].get("settings_extruder_temp") == 215
+            assert call.args[1].get("settings_bed_temp") == 65
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 — preview emits PlannedWrite matching what execute does
 # ---------------------------------------------------------------------------

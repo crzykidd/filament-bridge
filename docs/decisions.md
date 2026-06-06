@@ -1,5 +1,51 @@
 # Decision record
 
+## 2026-06-05 — Reconcile canonical-key contract + editable master temps
+
+### Canonical-key contract between frontend and backend
+
+`ReconciledField.field` in the frontend MUST use canonical keys matching
+`_RECONCILE_FIELD_MAP` in `backend/app/api/wizard.py`. The frontend constant
+`CONFLICT_FIELD_TO_CANONICAL` (in `StepVariances.tsx`) maps raw Spoolman field
+names to their canonical equivalents:
+
+| Raw SM / conflict field | Canonical key |
+|---|---|
+| `material` | `type` |
+| `settings_extruder_temp` | `nozzle_temp` |
+| `settings_bed_temp` | `bed_temp` |
+| `density`, `diameter`, `spool_weight` | (same) |
+
+The state map `reconcileByGroup[groupIdx]` is also keyed by canonical names.
+Raw field names are used only for display labels. `material_type` is excluded
+from the reconcile set entirely — it is derived/display-only and not in the
+canonical map; its mismatch chip is still shown but no reconcile option is offered.
+
+**Why this was broken:** the original code emitted raw SM names
+(`settings_extruder_temp`, `material`) as `ReconciledField.field`. The backend
+`_RECONCILE_FIELD_MAP` checks `if canonical_key not in _RECONCILE_FIELD_MAP: continue`,
+so temp and type reconcile decisions were silently dropped. Only `density`, `diameter`,
+and `spool_weight` happened to have the same raw and canonical names, so those worked.
+
+A regression test `test_wizard_execute_reconcile_nozzle_temp_overlays_fdb_and_patches_spoolman`
+was added to `backend/tests/test_api.py` to lock this contract.
+
+### Editable master temps
+
+On the master member row in `StepVariances.tsx` (SM direction, auto groups only),
+the read-only temps chip is replaced with two compact number inputs (nozzle and bed),
+styled within the same orange chip. Editing upserts `nozzle_temp` / `bed_temp`
+canonical reconcile entries with `source: 'manual'` into `reconcileByGroup[groupIdx]`,
+which then flow to the FDB parent payload (via `temperatures.nozzle` / `temperatures.bed`)
+and the Spoolman write-back PATCH (`settings_extruder_temp` / `settings_bed_temp`) via
+the existing `handleSave` → POST → execute path — no backend changes.
+
+Clearing an input removes the override key from the map (no null persisted).
+Non-master rows retain the read-only chip.
+
+Possible follow-ups (not in scope): editable type/diameter/density on master row;
+editable temps on standalone rows; live conflict-badge update when master temp is overridden.
+
 ## 2026-06-05 — Variances type/diameter/temps display
 
 Every variant-group member row and standalone filament row in `StepVariances.tsx` now

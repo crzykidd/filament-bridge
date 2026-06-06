@@ -23,6 +23,21 @@ import type {
 import type { WizardCtx } from './index'
 
 // ---------------------------------------------------------------------------
+// Canonical key mapping — frontend reconcile field names → backend _RECONCILE_FIELD_MAP keys
+// ReconciledField.field MUST use canonical keys so the backend applies them correctly.
+// Raw SM field names are used only for display labels and computeConflicts keying.
+// ---------------------------------------------------------------------------
+
+const CONFLICT_FIELD_TO_CANONICAL: Record<string, string> = {
+  material: 'type',
+  density: 'density',
+  diameter: 'diameter',
+  settings_extruder_temp: 'nozzle_temp',
+  settings_bed_temp: 'bed_temp',
+  spool_weight: 'spool_weight',
+}
+
+// ---------------------------------------------------------------------------
 // Client-side conflict computation — mirrors backend sm_prop_conflicts
 // ---------------------------------------------------------------------------
 
@@ -564,12 +579,90 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                             <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
                               {filData.diameter != null ? `${filData.diameter} mm` : '⌀ —'}
                             </span>
-                            {/* Temps chip — shown when at least one temp is set */}
-                            {(filData.settings_extruder_temp != null || filData.settings_bed_temp != null) && (
+                            {/* Temps — editable inputs for master, read-only chip for non-master */}
+                            {isMaster ? (
+                              <span className="inline-flex items-center gap-1 text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
+                                🌡
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  placeholder={filData.settings_extruder_temp != null ? String(filData.settings_extruder_temp) : '—'}
+                                  value={
+                                    reconcileByGroup[groupIdx]?.['nozzle_temp']?.value != null
+                                      ? String(reconcileByGroup[groupIdx]['nozzle_temp'].value)
+                                      : filData.settings_extruder_temp != null
+                                        ? String(filData.settings_extruder_temp)
+                                        : ''
+                                  }
+                                  onChange={e => {
+                                    const raw = e.target.value
+                                    if (raw === '') {
+                                      // Clear override — remove the key entirely
+                                      setReconcileByGroup(prev => {
+                                        const groupMap = { ...(prev[groupIdx] ?? {}) }
+                                        delete groupMap['nozzle_temp']
+                                        return { ...prev, [groupIdx]: groupMap }
+                                      })
+                                      return
+                                    }
+                                    const parsed = parseInt(raw, 10)
+                                    if (isNaN(parsed)) return
+                                    setReconcileByGroup(prev => ({
+                                      ...prev,
+                                      [groupIdx]: {
+                                        ...(prev[groupIdx] ?? {}),
+                                        nozzle_temp: { field: 'nozzle_temp', value: parsed, source: 'manual', source_spoolman_filament_id: null },
+                                      },
+                                    }))
+                                  }}
+                                  className="w-12 bg-transparent border-b border-orange-300 text-center focus:outline-none focus:border-orange-500"
+                                  title="Nozzle temp (°C)"
+                                />
+                                °/
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  placeholder={filData.settings_bed_temp != null ? String(filData.settings_bed_temp) : '—'}
+                                  value={
+                                    reconcileByGroup[groupIdx]?.['bed_temp']?.value != null
+                                      ? String(reconcileByGroup[groupIdx]['bed_temp'].value)
+                                      : filData.settings_bed_temp != null
+                                        ? String(filData.settings_bed_temp)
+                                        : ''
+                                  }
+                                  onChange={e => {
+                                    const raw = e.target.value
+                                    if (raw === '') {
+                                      // Clear override — remove the key entirely
+                                      setReconcileByGroup(prev => {
+                                        const groupMap = { ...(prev[groupIdx] ?? {}) }
+                                        delete groupMap['bed_temp']
+                                        return { ...prev, [groupIdx]: groupMap }
+                                      })
+                                      return
+                                    }
+                                    const parsed = parseInt(raw, 10)
+                                    if (isNaN(parsed)) return
+                                    setReconcileByGroup(prev => ({
+                                      ...prev,
+                                      [groupIdx]: {
+                                        ...(prev[groupIdx] ?? {}),
+                                        bed_temp: { field: 'bed_temp', value: parsed, source: 'manual', source_spoolman_filament_id: null },
+                                      },
+                                    }))
+                                  }}
+                                  className="w-12 bg-transparent border-b border-orange-300 text-center focus:outline-none focus:border-orange-500"
+                                  title="Bed temp (°C)"
+                                />
+                                °
+                              </span>
+                            ) : (filData.settings_extruder_temp != null || filData.settings_bed_temp != null) ? (
                               <span className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
                                 {filData.settings_extruder_temp ?? '—'}° / {filData.settings_bed_temp ?? '—'}°
                               </span>
-                            )}
+                            ) : null}
                             <DeepLinks spoolmanFilamentId={filData.ref.spoolman_filament_id} />
                           </div>
                           {conflicts.length > 0 && (
@@ -624,13 +717,15 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
 
                 {/* Phase 2: per-group reconcile UI for conflicting fields */}
                 {(() => {
-                  // Collect all conflicts across all members (excluding master)
+                  // Collect all conflicts across all members (excluding master).
+                  // material_type is derived/display-only and not in _RECONCILE_FIELD_MAP — skip it.
                   const conflictFields = new Map<string, { values: Map<string, { smId: number; value: unknown }[]> }>()
                   for (const smId of Array.from(membership)) {
                     const filData = allFilamentData.get(smId)
                     if (!filData || smId === masterId) continue
                     const conflicts = getLiveConflicts(groupIdx, smId)
                     for (const c of conflicts) {
+                      if (c.field === 'material_type') continue  // display-only, not reconcilable
                       if (!conflictFields.has(c.field)) conflictFields.set(c.field, { values: new Map() })
                       const valKey = String(c.member_value)
                       const entry = conflictFields.get(c.field)!
@@ -644,9 +739,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
                       <p className="text-xs font-medium text-amber-800">Reconcile conflicting properties</p>
                       <p className="text-xs text-amber-700">Choose which value to use for each conflicting field. This will be applied to both Filament DB and Spoolman on execute.</p>
-                      {Array.from(conflictFields.entries()).map(([field, { values }]) => {
-                        const current = reconcileByGroup[groupIdx]?.[field]
-                        const masterVal = masterData ? (masterData as Record<string, unknown>)[field] : undefined
+                      {Array.from(conflictFields.entries()).map(([rawField, { values }]) => {
+                        // Translate raw SM field name → canonical key for backend _RECONCILE_FIELD_MAP
+                        const canonicalKey = CONFLICT_FIELD_TO_CANONICAL[rawField] ?? rawField
+                        const current = reconcileByGroup[groupIdx]?.[canonicalKey]
+                        const masterVal = masterData ? (masterData as Record<string, unknown>)[rawField] : undefined
                         // All distinct values: master value + member values
                         const allValues: { label: string; value: unknown; smId: number | null }[] = [
                           { label: `Master (${String(masterVal ?? 'none')})`, value: masterVal, smId: masterId },
@@ -657,8 +754,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                           })),
                         ]
                         return (
-                          <div key={field} className="flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-medium text-gray-700 w-28 shrink-0">{field}:</span>
+                          <div key={canonicalKey} className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-gray-700 w-28 shrink-0">{rawField}:</span>
                             {allValues.map((opt, i) => {
                               const isSelected = current?.value === opt.value ||
                                 (current == null && i === 0)  // default: master value
@@ -669,10 +766,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                     ...prev,
                                     [groupIdx]: {
                                       ...(prev[groupIdx] ?? {}),
-                                      [field]: {
-                                        field,
+                                      // Key by canonical name; value.field is also canonical
+                                      [canonicalKey]: {
+                                        field: canonicalKey,
                                         value: opt.value,
-                                        source: opt.smId === masterId ? 'spoolman_filament' : 'spoolman_filament',
+                                        source: 'spoolman_filament',
                                         source_spoolman_filament_id: opt.smId,
                                       },
                                     },
@@ -700,7 +798,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                   ...prev,
                                   [groupIdx]: {
                                     ...(prev[groupIdx] ?? {}),
-                                    [field]: { field, value: parsed, source: 'manual', source_spoolman_filament_id: null },
+                                    [canonicalKey]: { field: canonicalKey, value: parsed, source: 'manual', source_spoolman_filament_id: null },
                                   },
                                 }))
                               }}
