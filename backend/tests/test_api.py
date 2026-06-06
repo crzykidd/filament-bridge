@@ -1318,33 +1318,43 @@ def test_preview_makes_no_writes(db):
 
 
 def test_preview_name_collision_vs_existing_and_intra_batch(db):
-    """Name collisions: vs_existing when FDB already has the name, intra_batch when SM batch duplicates it."""
-    # Three SM filaments all named "Black PLA" → intra-batch collision among themselves
-    # One of them also collides with an existing FDB filament named "Black PLA"
+    """Name collisions: vendor-aware — only same-vendor+name collides.
+
+    - ids 10 and 11 are both "Black PLA" from ELEGOO → intra_batch=True, vs_existing=True
+      (existing FDB "Black PLA" is also from ELEGOO)
+    - id 13 is "Black PLA" from a DIFFERENT vendor (Bambu) → no collision with ELEGOO entry
+    - id 12 ("White PLA" / ELEGOO) is unique → no collision entry
+    """
     sm_filaments = [
         SpoolmanFilament(id=10, name="Black PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
-        SpoolmanFilament(id=11, name="Black PLA", vendor=SpoolmanVendor(id=2, name="Bambu")),
+        SpoolmanFilament(id=11, name="Black PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
         SpoolmanFilament(id=12, name="White PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        SpoolmanFilament(id=13, name="Black PLA", vendor=SpoolmanVendor(id=2, name="Bambu")),
     ]
     fdb_filaments = [
-        FDBFilament.model_validate({"_id": "existing", "name": "Black PLA"}),
+        # Same vendor+name as ids 10 and 11 → vs_existing should fire
+        FDBFilament.model_validate({"_id": "existing", "name": "Black PLA", "vendor": "ELEGOO"}),
     ]
     decisions = [
         {"spoolman_filament_id": 10, "action": "create"},
         {"spoolman_filament_id": 11, "action": "create"},
         {"spoolman_filament_id": 12, "action": "create"},
+        {"spoolman_filament_id": 13, "action": "create"},
     ]
     client, _, _ = _setup_preview(db, sm_filaments=sm_filaments, fdb_filaments=fdb_filaments, decisions=decisions)
 
     body = client.get("/api/wizard/preview").json()
     collisions = body["name_collisions"]
 
-    # "black pla" collision (vs_existing=True and intra_batch=True)
+    # "black pla" from ELEGOO: intra_batch (ids 10+11) and vs_existing
     black_entry = next(c for c in collisions if c["normalized_name"] == "black pla")
     assert black_entry["vs_existing"] is True
     assert black_entry["intra_batch"] is True
     assert black_entry["existing_fdb_filament_id"] == "existing"
     assert set(black_entry["sm_filament_ids"]) == {10, 11}
+
+    # id 13 "Black PLA" from Bambu → different vendor, no collision entry for it
+    assert not any(13 in c["sm_filament_ids"] for c in collisions)
 
     # "white pla" is unique — no collision entry
     assert not any(c["normalized_name"] == "white pla" for c in collisions)

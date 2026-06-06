@@ -1,5 +1,19 @@
 # Decision record
 
+## 2026-06-06 — Name-collision detection is vendor-aware
+
+`_compute_name_collisions` in `backend/app/api/wizard.py` now keys both the
+`existing` FDB filament map and the `incoming` create-plan map on
+`(normalize_vendor(vendor), normalize_name(name))` instead of `normalize_name(name)`
+alone.
+
+**Why non-obvious:** the original name-only key caused false-positive collision flags
+when two vendors happen to sell a filament with the same name (e.g. "Beige" from
+ELEGOO and "Beige" from Bambu Lab). The bridge's own matcher already keys on
+vendor+name+color, so the collision check should be at least as precise. Same
+vendor+name still flags correctly (genuine potential duplicate); different vendors
+with the same name do not.
+
 ## 2026-06-06 — Conflict cards carry snapshot-derived identity
 
 Each conflict card now shows a compact identity header (color swatch, label,

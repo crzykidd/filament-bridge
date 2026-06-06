@@ -1257,16 +1257,23 @@ async def _execute_fdb_to_spoolman(
 def _compute_name_collisions(
     plan: _SyncPlan, fdb_filaments: list[FDBFilament]
 ) -> list[NameCollisionEntry]:
-    existing: dict[str, str] = {normalize_name(f.name): f.id for f in fdb_filaments}
-    incoming: dict[str, list[_FilamentPlanItem]] = {}
+    # Key on (vendor, name) so that same name from different vendors does NOT collide.
+    existing: dict[tuple[str, str], str] = {
+        (normalize_vendor(f.vendor), normalize_name(f.name)): f.id
+        for f in fdb_filaments
+    }
+    incoming: dict[tuple[str, str], list[_FilamentPlanItem]] = {}
     for item in plan.filament_items:
         if item.action == "create" and not item.error and item.fdb_payload:
-            norm = normalize_name(item.fdb_payload.get("name", "") or "")
-            if norm:
-                incoming.setdefault(norm, []).append(item)
+            norm_name = normalize_name(item.fdb_payload.get("name", "") or "")
+            norm_vendor = normalize_vendor(item.fdb_payload.get("vendor") or "")
+            if norm_name:
+                key = (norm_vendor, norm_name)
+                incoming.setdefault(key, []).append(item)
     result: list[NameCollisionEntry] = []
-    for norm_name, items in incoming.items():
-        vs_existing = norm_name in existing
+    for (norm_vendor, norm_name), items in incoming.items():
+        key = (norm_vendor, norm_name)
+        vs_existing = key in existing
         intra_batch = len(items) > 1
         if vs_existing or intra_batch:
             result.append(NameCollisionEntry(
@@ -1274,7 +1281,7 @@ def _compute_name_collisions(
                 sm_filament_ids=[i.sm_filament.id for i in items],
                 vs_existing=vs_existing,
                 intra_batch=intra_batch,
-                existing_fdb_filament_id=existing.get(norm_name),
+                existing_fdb_filament_id=existing.get(key),
             ))
     return result
 
