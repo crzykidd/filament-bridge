@@ -1,5 +1,22 @@
 # Decision record
 
+## 2026-06-06 — Import now sets FDB netFilamentWeight from Spoolman filament weight
+
+When the wizard imports a Spoolman filament into Filament DB, `_fdb_filament_payload_from_sm`
+now sets `netFilamentWeight` (the full spool capacity) on the create payload so that Filament
+DB can compute and render the spool fill % bar immediately after import.
+
+Resolution order: use `SpoolmanFilament.weight` when set; fall back to the `initial_weight`
+of the first spool (sorted by id, mirroring `resolve_effective_cost`) that has a non-null
+value; omit the field entirely if neither is available (Filament DB continues to show "—",
+no fabricated value). `spoolWeight`, `totalWeight`, `planned_gross`, and all weight math are
+unchanged — this is a purely additive create-payload field.
+
+Because FDB already logs Spoolman weight decrements as usage entries (FR-9), the % bar will
+track downward automatically as usage accrues once `netFilamentWeight` is set — no
+ongoing-sync change is needed. Backfilling `netFilamentWeight` on filaments imported before
+this fix is a possible follow-up, not implemented here.
+
 ## 2026-06-06 — Dry-run preview lists in-sync pairs as "matched — no updates"
 
 Spool pairs that are already in sync produced no preview entry, making the dry-run

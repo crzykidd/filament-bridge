@@ -65,6 +65,7 @@ def _fdb_filament_payload_from_sm(
     sm: SpoolmanFilament,
     *,
     effective_cost: float | None = None,
+    spools: list | None = None,
 ) -> dict:
     """Map a Spoolman filament onto the FDB create-filament body (core fields only).
 
@@ -73,6 +74,9 @@ def _fdb_filament_payload_from_sm(
 
     effective_cost: pre-resolved spool-first cost (pass from _plan_spoolman_to_fdb);
     included in the payload only when non-null.
+
+    spools: non-archived spools for this filament; used to resolve netFilamentWeight
+    when sm.weight is None (mirrors resolve_effective_cost selection style).
     """
     material = sm.material
     if not material:
@@ -93,6 +97,17 @@ def _fdb_filament_payload_from_sm(
     }
     if effective_cost is not None:
         payload["cost"] = effective_cost
+    # Resolve net filament weight (full spool capacity) for the FDB % bar.
+    # Primary: Spoolman filament-level weight. Fallback: first spool (by id)
+    # with a non-null initial_weight (mirrors resolve_effective_cost style).
+    net_filament_weight: float | None = sm.weight
+    if net_filament_weight is None and spools:
+        for s in sorted(spools, key=lambda s: s.id):
+            if s.initial_weight is not None:
+                net_filament_weight = s.initial_weight
+                break
+    if net_filament_weight is not None:
+        payload["netFilamentWeight"] = net_filament_weight
     if mc["secondaryColors"]:
         payload["secondaryColors"] = mc["secondaryColors"]
     if mc["optTags"]:
@@ -173,11 +188,11 @@ def _plan_spoolman_to_fdb(
                 )
             plan.filament_items.append(item)
         elif action == "create":
-            cost = resolve_effective_cost(
-                sm_fil.price,
-                sm_spools_by_filament.get(sm_fil.id, []),
+            fil_spools = sm_spools_by_filament.get(sm_fil.id, [])
+            cost = resolve_effective_cost(sm_fil.price, fil_spools)
+            payload = _fdb_filament_payload_from_sm(
+                sm_fil, effective_cost=cost, spools=fil_spools
             )
-            payload = _fdb_filament_payload_from_sm(sm_fil, effective_cost=cost)
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="create",
                 fdb_id=None, fdb_payload=payload, resolved=True,
