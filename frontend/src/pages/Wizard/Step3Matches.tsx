@@ -142,6 +142,9 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           onChange={v => setDec(smId, v ? 'link' : 'skip', v ? row.fdbId : undefined)} />
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <FTag f={row.sm} side="sm" />
+          {row.smId != null && (
+            <span className="text-xs text-gray-400">SM #{row.smId}</span>
+          )}
           <DeepLinks spoolmanFilamentId={row.sm?.spoolman_filament_id} />
         </div>
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
@@ -172,6 +175,9 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           onChange={v => setDec(smId, v ? 'create' : 'skip')} />
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <FTag f={row.sm} side="sm" />
+          {row.smId != null && (
+            <span className="text-xs text-gray-400">SM #{row.smId}</span>
+          )}
           <DeepLinks spoolmanFilamentId={smId} />
         </div>
         <span className="text-xs text-gray-400 italic pt-0.5">
@@ -217,6 +223,9 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           }} />
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <FTag f={row.sm} side="sm" />
+          {row.smId != null && (
+            <span className="text-xs text-gray-400">SM #{row.smId}</span>
+          )}
           <DeepLinks spoolmanFilamentId={smId} />
         </div>
         <span className="text-xs text-gray-400 italic pt-0.5">Pick a match ↓</span>
@@ -321,7 +330,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     if (filterStatus !== 'all' && r.status !== filterStatus) return false
     if (search) {
       const lq = search.toLowerCase()
-      const hay = [rName(r), rVendor(r), rMaterial(r), r.fdb?.name ?? ''].join(' ').toLowerCase()
+      const hay = [rName(r), rVendor(r), rMaterial(r), r.fdb?.name ?? '', String(r.smId ?? '')].join(' ').toLowerCase()
       if (!hay.includes(lq)) return false
     }
     if (colFilter.name && !rName(r).toLowerCase().includes(colFilter.name.toLowerCase())) return false
