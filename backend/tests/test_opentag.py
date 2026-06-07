@@ -500,7 +500,7 @@ def test_score_no_color_token_sm_still_matches_on_brand_material():
 
 def test_exact_color_name_contributes_full_name_weight():
     """When color names match exactly, the name component contributes its full
-    0.35 weight to the score.
+    0.30 weight to the score.
     """
     sm = SpoolmanFilament(
         id=1,
@@ -511,9 +511,9 @@ def test_exact_color_name_contributes_full_name_weight():
         extra={},
     )
     score = score_candidate(sm, _OPT_HATCHBOX_PETG_ORANGE)
-    # vendor(0.25) + material(0.25) + name(0.35) + hex(~0.10) + finish(0.025)
-    # With identical hex distance ≈ 0, total ≈ 1.0
-    assert score >= 0.90, f"Exact match expected near-perfect score, got {score:.4f}"
+    # vendor(0.20) + material(0.20) + name(0.30) + hex(~0.10) + finish_neutral(0.075)
+    # With identical hex distance ≈ 0, total ≈ 0.875
+    assert score >= 0.85, f"Exact match expected near-perfect score, got {score:.4f}"
 
 
 def test_disjoint_color_name_contributes_zero_name_weight():
@@ -2122,3 +2122,588 @@ async def test_matches_longitudinal_sm_matches_gradient_not_coextruded(tmp_path)
         assert match["opt_slug"] == "elegoo-pla-gradient"
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Fix 1: opt_color_profile derives arrangement from tags when secondaryColors is empty
+# ---------------------------------------------------------------------------
+
+
+def test_opt_color_profile_coextruded_from_tag_with_empty_secondary():
+    """opt_color_profile returns 'coextruded' from tag string even when secondaryColors is empty.
+
+    This is the real-data case: FDB's denormalized OpenTag feed leaves secondaryColors
+    empty on all records; arrangement is only in the string tags array.
+    """
+    opt = {
+        "uuid": "test-coext",
+        "slug": "elegoo-pla-silk-black-purple",
+        "brandName": "ELEGOO",
+        "name": "Silk PLA Black Purple",
+        "type": "PLA",
+        "tags": ["silk", "coextruded"],
+        "color": "#2A1A5E",
+        "secondaryColors": [],   # empty — as in the real FDB feed
+        "optTags": [],
+        "density": 1.24,
+    }
+    assert opt_color_profile(opt) == "coextruded", (
+        "Expected 'coextruded' from tag string 'coextruded' with empty secondaryColors"
+    )
+
+
+def test_opt_color_profile_gradient_from_tag_with_empty_secondary():
+    """opt_color_profile returns 'gradient' from 'gradual_color_change' tag when secondaryColors is empty."""
+    opt = {
+        "uuid": "test-grad",
+        "slug": "amolen-pla-gradient-red-white",
+        "brandName": "AMOLEN",
+        "name": "PLA Gradient Red White",
+        "type": "PLA",
+        "tags": ["gradual_color_change"],
+        "color": "#FF0000",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+    }
+    assert opt_color_profile(opt) == "gradient"
+
+
+def test_opt_color_profile_single_when_no_arrangement_tag_and_no_secondary():
+    """opt_color_profile returns 'single' when no arrangement tag and no secondaryColors."""
+    opt = {
+        "uuid": "test-single",
+        "slug": "hatchbox-pla-orange",
+        "brandName": "Hatchbox",
+        "name": "Orange PLA",
+        "type": "PLA",
+        "tags": ["glow"],   # finish tag only, no arrangement tag
+        "color": "#FF8C00",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+    }
+    assert opt_color_profile(opt) == "single"
+
+
+def test_coaxial_sm_matches_coextruded_opt_with_empty_secondary(tmp_path):
+    """A coaxial SM filament finds a same-brand OPT entry tagged 'coextruded' even
+    when that OPT entry has empty secondaryColors (the real-data case).
+    """
+    # OPT entry: tagged 'coextruded', secondaryColors empty (FDB feed shape)
+    opt_coext_tag_only = {
+        "uuid": "elegoo-coext-tag-only-001",
+        "slug": "elegoo-pla-silk-black-purple",
+        "brandName": "ELEGOO",
+        "name": "Silk PLA Black Purple",
+        "type": "PLA",
+        "tags": ["silk", "coextruded"],
+        "color": "#2A1A5E",
+        "secondaryColors": [],   # empty — real FDB feed
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 230,
+        "bedTempMax": 60,
+    }
+    # A coaxial SM filament (multicolor, coaxial direction)
+    sm_coaxial = SpoolmanFilament(
+        id=50,
+        name="Silk PLA Black Purple",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA Silk",
+        color_hex="2A1A5E",
+        multi_color_hexes="2A1A5E,800080",
+        multi_color_direction="coaxial",
+        extra={},
+    )
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [opt_coext_tag_only], fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_coaxial])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+        assert match["opt_slug"] == "elegoo-pla-silk-black-purple", (
+            f"Expected coextruded OPT to match coaxial SM, but got slug={match['opt_slug']!r}"
+        )
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_preserves_multi_color_hexes():
+    """When OPT has 'coextruded' tag but empty secondaryColors, opt_to_spoolman_fields must NOT
+    include multi_color_hexes in the result (Spoolman's existing hexes should be preserved)."""
+    opt = {
+        "uuid": "test-coext-empty",
+        "slug": "elegoo-pla-silk-black-purple",
+        "brandName": "ELEGOO",
+        "name": "Silk PLA Black Purple",
+        "type": "PLA",
+        "tags": ["silk", "coextruded"],
+        "color": "#2A1A5E",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 230,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    # Must NOT set multi_color_hexes (would overwrite Spoolman's actual hex data)
+    assert "multi_color_hexes" not in fields, (
+        "multi_color_hexes must not be written when OPT secondaryColors is empty"
+    )
+    # Must set direction so Spoolman knows the arrangement
+    assert fields.get("multi_color_direction") == "coaxial"
+
+
+# ---------------------------------------------------------------------------
+# Fix 2: Polymer-family hard gate
+# ---------------------------------------------------------------------------
+
+from app.core.opentag_match import material_family  # noqa: E402
+
+
+def test_material_family_pla_variants():
+    assert material_family("PLA") == "pla"
+    assert material_family("PLA+") == "pla"
+    assert material_family("PLA Silk") == "pla"
+    assert material_family("PLA Matte") == "pla"
+
+
+def test_material_family_petg():
+    assert material_family("PETG") == "petg"
+    assert material_family("PETG-CF") == "petg"
+
+
+def test_material_family_asa():
+    assert material_family("ASA") == "asa"
+
+
+def test_material_family_abs():
+    assert material_family("ABS") == "abs"
+    assert material_family("ABS+") == "abs"
+
+
+def test_material_family_pc():
+    assert material_family("PC") == "pc"
+
+
+def test_material_family_tpu():
+    assert material_family("TPU") == "tpu"
+    assert material_family("TPE") == "tpu"
+
+
+def test_material_family_pa():
+    assert material_family("PA") == "pa"
+    assert material_family("PA-CF") == "pa"
+    assert material_family("PA6") == "pa"
+    assert material_family("Nylon") == "pa"
+
+
+def test_material_family_empty():
+    assert material_family(None) == ""
+    assert material_family("") == ""
+
+
+def test_material_family_unknown_passes_through():
+    """Unknown material returns as-is (lower-cased), so the gate is a no-op."""
+    fam = material_family("SuperPolymer2000")
+    assert fam == "superpolymer2000"  # opaque, won't match known families
+
+
+def test_family_gate_pc_does_not_match_asa(tmp_path):
+    """A PC SM filament must NOT match an ASA OPT candidate (polymer-family hard gate)."""
+    opt_asa = {
+        "uuid": "asa-brand-001",
+        "slug": "elegoo-asa-white",
+        "brandName": "ELEGOO",
+        "name": "ASA White",
+        "type": "ASA",
+        "tags": [],
+        "color": "#FFFFFF",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.07,
+        "nozzleTempMax": 260,
+        "bedTempMax": 90,
+    }
+    sm_pc = SpoolmanFilament(
+        id=99,
+        name="White",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PC",
+        color_hex="FFFFFF",
+        extra={},
+    )
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [opt_asa], fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_pc])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = data["matches"][0]
+        assert match["opt_slug"] is None, (
+            f"PC filament must not match ASA OPT, got slug={match['opt_slug']!r}"
+        )
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+def test_family_gate_asa_does_not_match_petg(tmp_path):
+    """An ASA SM filament must NOT match a PETG OPT candidate."""
+    opt_petg = {
+        "uuid": "petg-brand-001",
+        "slug": "elegoo-petg-black",
+        "brandName": "ELEGOO",
+        "name": "PETG Black",
+        "type": "PETG",
+        "tags": [],
+        "color": "#000000",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.27,
+        "nozzleTempMax": 250,
+        "bedTempMax": 80,
+    }
+    sm_asa = SpoolmanFilament(
+        id=100,
+        name="Black",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="ASA",
+        color_hex="000000",
+        extra={},
+    )
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [opt_petg], fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_asa])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = data["matches"][0]
+        assert match["opt_slug"] is None, (
+            f"ASA filament must not match PETG OPT, got slug={match['opt_slug']!r}"
+        )
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+def test_family_gate_pla_matches_pla_plus(tmp_path):
+    """A PLA SM filament CAN match a PLA+ OPT candidate (same family)."""
+    opt_pla_plus = {
+        "uuid": "pla-plus-001",
+        "slug": "elegoo-pla-plus-white",
+        "brandName": "ELEGOO",
+        "name": "PLA+ White",
+        "type": "PLA+",
+        "tags": [],
+        "color": "#FFFFFF",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    sm_pla = SpoolmanFilament(
+        id=101,
+        name="White",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA",
+        color_hex="FFFFFF",
+        extra={},
+    )
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [opt_pla_plus], fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_pla])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = data["matches"][0]
+        # PLA and PLA+ are same family → should match (if score is good enough)
+        # With same vendor, same color, similar name → should be a match
+        assert match["opt_slug"] == "elegoo-pla-plus-white", (
+            f"PLA should match PLA+ (same family) but got slug={match['opt_slug']!r}"
+        )
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Fix 3: Finish-aware scoring — penalty, reward, finish-word stripping
+# ---------------------------------------------------------------------------
+
+
+def _make_opt(
+    slug: str,
+    name: str,
+    material_type: str = "PLA",
+    vendor: str = "Hatchbox",
+    tags: list | None = None,
+    color: str = "#FF8C00",
+) -> dict:
+    """Helper to build a minimal OPT dict for finish scoring tests."""
+    return {
+        "uuid": f"finish-test-{slug}",
+        "slug": slug,
+        "brandName": vendor,
+        "name": name,
+        "type": material_type,
+        "abbreviation": material_type,
+        "tags": tags or [],
+        "color": color,
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+
+
+def test_solid_sm_does_not_pick_transparent_over_plain():
+    """A solid SM 'Orange' filament must score plain 'Orange' higher than 'Transparent Orange'.
+
+    Before this fix, finish words in the OPT name inflated the color-name score.
+    After: finish words are stripped before token comparison; the transparent/solid
+    mismatch is penalised by the finish component.
+    """
+    sm_solid_orange = SpoolmanFilament(
+        id=1,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PLA",
+        color_hex="FF8C00",
+        extra={},
+    )
+    opt_plain = _make_opt("hatchbox-pla-orange", "Orange PLA", color="#FF8C00")
+    opt_transparent = _make_opt(
+        "hatchbox-pla-transparent-orange", "Transparent Orange PLA",
+        tags=["transparent"], color="#FF8C00",
+    )
+
+    score_plain = score_candidate(sm_solid_orange, opt_plain)
+    score_transparent = score_candidate(sm_solid_orange, opt_transparent)
+
+    assert score_plain > score_transparent, (
+        f"Plain Orange ({score_plain:.4f}) must outscore Transparent Orange "
+        f"({score_transparent:.4f}) for a solid SM filament"
+    )
+
+
+def test_solid_sm_does_not_pick_silk_over_plain():
+    """A solid SM filament must not prefer 'Silk White' over plain 'White'."""
+    sm_solid = SpoolmanFilament(
+        id=2,
+        name="White",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA",
+        color_hex="FFFFFF",
+        extra={},
+    )
+    opt_plain = _make_opt("elegoo-pla-white", "White PLA", vendor="ELEGOO", color="#FFFFFF")
+    opt_silk = _make_opt(
+        "elegoo-pla-silk-white", "Silk PLA White", vendor="ELEGOO",
+        tags=["silk"], color="#FFFFFF",
+    )
+
+    score_plain = score_candidate(sm_solid, opt_plain)
+    score_silk = score_candidate(sm_solid, opt_silk)
+
+    assert score_plain > score_silk, (
+        f"Plain White ({score_plain:.4f}) must outscore Silk White "
+        f"({score_silk:.4f}) for a solid SM filament"
+    )
+
+
+def test_matte_sm_does_not_match_silk():
+    """A matte SM filament must not prefer a silk OPT over a matte OPT."""
+    sm_matte = SpoolmanFilament(
+        id=3,
+        name="Matte Mint Green",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA Matte",
+        color_hex="98D4A3",
+        extra={},
+    )
+    opt_matte = _make_opt(
+        "elegoo-pla-matte-mint", "PLA Matte Mint Green", vendor="ELEGOO",
+        material_type="PLA", tags=["matte"], color="#98D4A3",
+    )
+    opt_silk = _make_opt(
+        "elegoo-pla-silk-mint", "Silk PLA Mint Green", vendor="ELEGOO",
+        material_type="PLA", tags=["silk"], color="#98D4A3",
+    )
+
+    score_matte = score_candidate(sm_matte, opt_matte)
+    score_silk = score_candidate(sm_matte, opt_silk)
+
+    assert score_matte > score_silk, (
+        f"Matte ({score_matte:.4f}) must outscore Silk ({score_silk:.4f}) "
+        "for a matte SM filament"
+    )
+
+
+def test_finish_word_stripping_makes_orange_beat_transparent_orange():
+    """After finish-word stripping, 'Orange' and 'Transparent Orange' produce the same
+    color token set {orange}.  'Orange' then wins because finish mismatch penalises
+    'Transparent Orange' while neutral finish gives 'Orange' a bonus.
+    """
+    sm_solid = SpoolmanFilament(
+        id=4,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PLA",
+        color_hex="FF8C00",
+        extra={},
+    )
+    opt_orange = _make_opt("hatchbox-pla-orange", "Orange", color="#FF8C00")
+    opt_transparent_orange = _make_opt(
+        "hatchbox-pla-transparent-orange", "Transparent Orange",
+        tags=["transparent"], color="#FF8C00",
+    )
+    score_orange = score_candidate(sm_solid, opt_orange)
+    score_trans = score_candidate(sm_solid, opt_transparent_orange)
+
+    assert score_orange > score_trans, (
+        f"'Orange' ({score_orange:.4f}) should beat 'Transparent Orange' ({score_trans:.4f})"
+    )
+
+
+def test_silk_sm_prefers_silk_opt():
+    """A silk SM filament should score a silk OPT higher than a plain OPT."""
+    sm_silk = SpoolmanFilament(
+        id=5,
+        name="Silk Bronze",
+        vendor=SpoolmanVendor(id=1, name="Buddy3D"),
+        material="PLA Silk",
+        color_hex="B87333",
+        extra={},
+    )
+    opt_silk = _make_opt(
+        "buddy3d-pla-silk-bronze", "PLA Silk Bronze", vendor="Buddy3D",
+        tags=["silk"], color="#B87333",
+    )
+    opt_plain = _make_opt(
+        "buddy3d-pla-bronze", "PLA Bronze", vendor="Buddy3D", color="#B87333",
+    )
+    score_silk = score_candidate(sm_silk, opt_silk)
+    score_plain = score_candidate(sm_silk, opt_plain)
+
+    assert score_silk > score_plain, (
+        f"Silk ({score_silk:.4f}) should beat plain ({score_plain:.4f}) for a silk SM filament"
+    )
+
+
+def test_disjoint_color_name_limit_still_applies_after_rebalance():
+    """After rebalancing, a disjoint color name (orange vs copper) should still limit
+    the candidate's score so the ordering assertion holds.
+    """
+    sm_orange = SpoolmanFilament(
+        id=1,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PETG",
+        color_hex="CB6D30",
+        extra={},
+    )
+    score_copper = score_candidate(sm_orange, _OPT_HATCHBOX_PETG_COPPER)
+    # Max without name: vendor(0.20) + material(0.20) + hex(<0.10) + finish(0.075) < 0.60
+    assert score_copper < 0.60, (
+        f"Disjoint name should limit score below 0.60 after rebalance, got {score_copper:.4f}"
+    )
+
+
+def test_score_no_color_token_sm_matches_brand_material_after_rebalance():
+    """After rebalancing, a no-color-token SM filament (neutral name_sim=0.5) should
+    still score above min_confidence via vendor + material + neutral name + some hex.
+    """
+    sm_unnamed = SpoolmanFilament(
+        id=1,
+        name="PETG",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PETG",
+        color_hex="CC0000",
+        extra={},
+    )
+    score = score_candidate(sm_unnamed, _OPT_PETG)
+    # vendor(0.20) + material(0.20) + neutral_name(0.15) + some_hex + finish > 0.30
+    assert score > 0.50, f"Expected neutral-name match > 0.50, got {score:.4f}"

@@ -54,15 +54,16 @@ def sm_color_profile(sm: SpoolmanFilament) -> str:
 def opt_color_profile(opt: dict[str, Any], tag_map: dict[str, int] | None = None) -> str:
     """Return the color profile of an OPTMaterial dict.
 
-    ``single``         — no ``secondaryColors``
-    ``coextruded``     — optTag 29 present (or tag string "coextruded")
-    ``gradient``       — optTag 28 present (or tag string "gradual_color_change")
+    ``single``         — no arrangement tag AND no ``secondaryColors``
+    ``coextruded``     — tag string "coextruded" OR optTag 29 present
+    ``gradient``       — tag string "gradual_color_change"/"gradient" OR optTag 28 present
     ``multi_unknown``  — ``secondaryColors`` present but no arrangement tag
-    """
-    secondary: list = opt.get("secondaryColors") or []
-    if not secondary:
-        return _PROFILE_SINGLE
 
+    IMPORTANT: FDB's denormalized OpenTag feed leaves ``secondaryColors`` EMPTY on all
+    records.  Arrangement is only signalled via the string ``tags`` array (e.g. "coextruded",
+    "gradual_color_change").  Therefore we derive arrangement from tags FIRST; we only fall
+    back to ``secondaryColors`` for the ``multi_unknown`` case when tags are absent.
+    """
     # Build integer opt-tags list from the optTags field (integer tag IDs)
     opt_tags_int: list[int] = []
     for t in opt.get("optTags") or []:
@@ -71,20 +72,26 @@ def opt_color_profile(opt: dict[str, Any], tag_map: dict[str, int] | None = None
         except (TypeError, ValueError):
             pass
 
-    # Also scan string tags for arrangement words (coextruded / gradual_color_change)
-    # by mapping them to the integer tag IDs understood by arrangement_from_tags.
+    # Scan string tags for arrangement words (coextruded / gradual_color_change / gradient).
+    # This is the primary signal in FDB's denormalized feed where secondaryColors is always [].
     tag_strings: list[str] = [s.lower().strip() for s in (opt.get("tags") or []) if isinstance(s, str)]
     if "coextruded" in tag_strings:
         opt_tags_int.append(TAG_COEXTRUDED)
     if "gradual_color_change" in tag_strings or "gradient" in tag_strings:
         opt_tags_int.append(TAG_GRADIENT)
 
+    # If any arrangement tag is present, classify by it regardless of secondaryColors.
     arrangement = arrangement_from_tags(opt_tags_int)
     if arrangement == "coextruded":
         return _PROFILE_COEXTRUDED
     if arrangement == "gradient":
         return _PROFILE_GRADIENT
-    return _PROFILE_MULTI_UNKNOWN
+
+    # No arrangement tag — fall back to secondaryColors to distinguish single vs multi_unknown.
+    secondary: list = opt.get("secondaryColors") or []
+    if secondary:
+        return _PROFILE_MULTI_UNKNOWN
+    return _PROFILE_SINGLE
 
 
 def profiles_compatible(a: str, b: str) -> bool:
@@ -174,12 +181,13 @@ def opt_to_spoolman_fields(
     if "gradual_color_change" in tag_strings_lower or "gradient" in tag_strings_lower:
         opt_tags_int.append(TAG_GRADIENT)
 
+    arrangement = arrangement_from_tags(opt_tags_int)
+
     if secondary:
         # Multicolor: delegate to fdb_multicolor_to_sm for coextruded/gradient so SM↔FDB
         # stays consistent (handles empty primary for coextruded, builds correct hex CSV).
         # For multi_unknown (secondaries present but no arrangement tag), fdb_multicolor_to_sm
         # would drop the secondaries (solid fallback), so we handle that case directly.
-        arrangement = arrangement_from_tags(opt_tags_int)
         if arrangement in ("coextruded", "gradient"):
             sm_color = fdb_multicolor_to_sm(opt_color, secondary, opt_tags_int)
             if sm_color["color_hex"] is not None:
@@ -198,6 +206,17 @@ def opt_to_spoolman_fields(
             all_hexes.extend(c.lstrip("#").upper() for c in secondary if c)
             if all_hexes:
                 result["multi_color_hexes"] = ",".join(all_hexes)
+    elif arrangement in ("coextruded", "gradient"):
+        # secondaryColors is empty (FDB's denormalized feed) but arrangement tag IS present.
+        # Do NOT write multi_color_hexes — preserve whatever Spoolman already has.
+        # Still set multi_color_direction so SM knows the arrangement.
+        if arrangement == "coextruded":
+            result["multi_color_direction"] = "coaxial"
+        else:
+            result["multi_color_direction"] = "longitudinal"
+        # Map primary color if present, but do not overwrite multi_color_hexes.
+        if opt_color:
+            result["color_hex"] = opt_color.lstrip("#").upper()
     else:
         # Single-color: map primary color directly
         if opt_color:
@@ -233,6 +252,91 @@ def opt_to_spoolman_fields(
 
 
 # ---------------------------------------------------------------------------
+# Polymer-family normalisation
+# ---------------------------------------------------------------------------
+
+# Finish words that must be stripped before identifying the base polymer family.
+# (We reuse ``strip_finish_words`` which covers silk, matte, cf, etc.)
+
+#: Map of base-material token → polymer-family string.
+_FAMILY_MAP: dict[str, str] = {
+    "pla+":  "pla",
+    "pla":   "pla",
+    "petg":  "petg",
+    "asa":   "asa",
+    "abs":   "abs",
+    "pc":    "pc",
+    "tpu":   "tpu",
+    "tpe":   "tpu",
+    "pa":    "pa",
+    "nylon": "pa",
+    "pva":   "pva",
+}
+
+# Prefixes that inherit the same family (e.g. "pa-cf" → "pa", "pa6" → "pa").
+_FAMILY_PREFIX_ORDER: list[tuple[str, str]] = [
+    ("pla+", "pla"),
+    ("pla",  "pla"),
+    ("petg", "petg"),
+    ("asa",  "asa"),
+    ("abs",  "abs"),
+    ("tpe",  "tpu"),
+    ("tpu",  "tpu"),
+    # PA / Nylon and all variants (PA-CF, PA6, PA12, etc.)
+    ("pa",   "pa"),
+    ("nylon", "pa"),
+    ("pc",   "pc"),
+    ("pva",  "pva"),
+]
+
+
+def material_family(material: str | None, tag_map: dict[str, int] | None = None) -> str:
+    """Normalise ``material`` to a base polymer family string.
+
+    Strips finish words first (so "PLA Silk" → "pla"), then matches against the
+    family map / prefix list.  Returns the lower-cased stripped token when the
+    material is unknown, so callers can still use it as an opaque key.  Returns
+    ``""`` when ``material`` is empty / None.
+
+    Examples::
+
+        material_family("PLA")       → "pla"
+        material_family("PLA+")      → "pla"
+        material_family("PLA Silk")  → "pla"
+        material_family("PETG")      → "petg"
+        material_family("PETG-CF")   → "petg"
+        material_family("ASA")       → "asa"
+        material_family("PC")        → "pc"
+        material_family("TPU")       → "tpu"
+        material_family("PA-CF")     → "pa"
+        material_family("Nylon")     → "pa"
+        material_family("ABS+")      → "abs"
+    """
+    if not material:
+        return ""
+    # Strip finish modifiers first (silk, matte, cf, etc.)
+    stripped = strip_finish_words(material, tag_map).strip().lower()
+    if not stripped:
+        stripped = material.strip().lower()
+
+    # Exact lookup first.
+    if stripped in _FAMILY_MAP:
+        return _FAMILY_MAP[stripped]
+
+    # Prefix lookup handles compound tokens like "petg-cf", "pa6", "pa-cf", "abs+".
+    # Sort by prefix length descending so longer prefixes win (e.g. "pla+" before "pla").
+    for prefix, family in _FAMILY_PREFIX_ORDER:
+        if stripped.startswith(prefix) and (
+            len(stripped) == len(prefix)
+            or not stripped[len(prefix)].isalpha()  # separator / digit follows prefix
+        ):
+            return family
+
+    # Unknown material → return as-is (normalised), so the gate is a no-op.
+    return stripped
+
+
+# ---------------------------------------------------------------------------
 # Scoring helpers
 # ---------------------------------------------------------------------------
 
@@ -260,6 +364,7 @@ def _color_name_tokens(
         _color_name_tokens("Orange", "Hatchbox", "PETG", ...)  → {"orange"}
         _color_name_tokens("Copper PETG", "Hatchbox", "PETG", ...)  → {"copper"}
         _color_name_tokens("PLA Silk Bronze", "Buddy3D", "PLA Silk", ...)  → {"bronze"}
+        _color_name_tokens("Transparent Orange", "Hatchbox", "PLA", ...)  → {"orange"}
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
@@ -284,7 +389,8 @@ def _color_name_tokens(
     for tok in mat_norm.split():
         text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
 
-    # Remove finish words
+    # Remove finish words (also strips "transparent", "silk", "matte", etc. from color names
+    # so that "Transparent Orange" → {"orange"} and the finish component handles the mismatch).
     for keyword in sorted(tag_map.keys(), key=len, reverse=True):
         text = re.sub(r'\b' + re.escape(keyword) + r'\b', ' ', text, flags=re.IGNORECASE)
 
@@ -351,6 +457,40 @@ def _color_distance(hex1: str | None, hex2: str | None) -> float:
     return dist / (255 * 3 ** 0.5)
 
 
+def _finish_score(
+    sm_finish_ids: set[int],
+    opt_finish_ids: set[int],
+) -> float:
+    """Return a finish component in [-0.15, +0.15].
+
+    Rules:
+    - Both empty (solid vs solid): neutral +0.075
+    - Perfect match (same non-empty sets): +0.15
+    - Both non-empty, partial overlap: Jaccard × 0.15
+    - One solid, other has finish (clear mismatch): −0.15 penalty
+    - Both non-empty but disjoint: −0.10 penalty (matte vs silk)
+
+    A mismatch (penalty) is large enough to drop a wrong-finish candidate below a
+    correct plain/solid one of the same color name.
+    """
+    if not sm_finish_ids and not opt_finish_ids:
+        # Both plain/solid → neutral (half the max reward)
+        return 0.075
+
+    if not sm_finish_ids or not opt_finish_ids:
+        # One solid, the other finished → clear mismatch penalty
+        return -0.15
+
+    union = sm_finish_ids | opt_finish_ids
+    inter = sm_finish_ids & opt_finish_ids
+    if not inter:
+        # Both finished but different (e.g. matte vs silk) → mismatch penalty
+        return -0.10
+
+    jaccard = len(inter) / len(union)
+    return 0.15 * jaccard
+
+
 def score_candidate(
     sm: SpoolmanFilament,
     opt: dict[str, Any],
@@ -360,66 +500,62 @@ def score_candidate(
 
     Returns a confidence in [0.0, 1.0].  Higher is better.
 
-    Scoring components (sum ≈ 1.0):
-    - Type/material match:   0.25 exact / 0.125 substring
-    - Vendor/brand match:    0.25 exact / 0.125 substring
-    - Color name similarity: 0.35  ← key within-brand/material discriminator
+    Scoring components (weights sum to 1.0 for a perfect match):
+    - Type/material match:   0.20 exact / 0.10 substring
+    - Vendor/brand match:    0.20 exact / 0.10 substring
+    - Color name similarity: 0.30  ← key within-brand/material discriminator
+      (finish words stripped BEFORE tokenising so "Transparent Orange" → {orange})
+    - Finish tag overlap:    up to +0.15 reward; −0.10 to −0.15 mismatch penalty
     - Color hex proximity:   0.10
-    - Finish tag overlap:    0.05
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
 
     score = 0.0
 
-    # ---- Type / material (0.25) ----
+    # ---- Type / material (0.20) ----
     sm_mat = _norm(strip_finish_words(sm.material, tag_map) or sm.material)
     opt_type_raw = opt.get("type") or opt.get("abbreviation") or ""
     opt_mat = _norm(strip_finish_words(opt_type_raw, tag_map) or opt_type_raw)
     if sm_mat and opt_mat:
         if sm_mat == opt_mat:
-            score += 0.25
+            score += 0.20
         elif sm_mat in opt_mat or opt_mat in sm_mat:
-            score += 0.125
+            score += 0.10
 
-    # ---- Vendor / brand (0.25) ----
+    # ---- Vendor / brand (0.20) ----
     sm_vendor_name = sm.vendor.name if sm.vendor else None
     sm_vendor = normalize_vendor(sm_vendor_name)
     opt_brand = normalize_vendor(opt.get("brandName"))
     if sm_vendor and opt_brand:
         if sm_vendor == opt_brand:
-            score += 0.25
+            score += 0.20
         elif sm_vendor in opt_brand or opt_brand in sm_vendor:
-            score += 0.125
+            score += 0.10
 
-    # ---- Color name similarity (0.35) ----
+    # ---- Color name similarity (0.30) ----
+    # Finish words are removed inside _color_name_tokens so "Transparent Orange" → {"orange"};
+    # the transparent/solid mismatch is then handled separately by the finish component.
     sm_color_tokens = _color_name_tokens(sm.name, sm_vendor_name, sm.material, tag_map)
     opt_color_tokens = _color_name_tokens(
         opt.get("name"), opt.get("brandName"), opt_type_raw, tag_map
     )
     name_sim = _name_similarity(sm_color_tokens, opt_color_tokens)
-    score += 0.35 * name_sim
+    score += 0.30 * name_sim
 
-    # ---- Color hex proximity (0.10) ----
-    color_dist = _color_distance(sm.color_hex, opt.get("color"))
-    # distance 0 → 0.10, distance 1 → 0.0
-    score += max(0.0, 0.10 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
-
-    # ---- Finish tag overlap (0.05) ----
+    # ---- Finish component (up to +0.15, min −0.15) ----
     sm_finish_ids = finish_ids_from_text(sm.name, sm.material, tag_map)
     opt_tags_raw: list[str] = opt.get("tags") or []
     opt_finish_ids: set[int] = set()
     for ts in opt_tags_raw:
         opt_finish_ids.update(finish_ids_from_text(ts, None, tag_map))
     opt_finish_ids.update(finish_ids_from_text(opt.get("name", ""), opt_type_raw, tag_map))
-    if sm_finish_ids or opt_finish_ids:
-        union = sm_finish_ids | opt_finish_ids
-        inter = sm_finish_ids & opt_finish_ids
-        jaccard = len(inter) / len(union) if union else 1.0
-        score += 0.05 * jaccard
-    else:
-        # Both have no finish tags → neutral match
-        score += 0.025
+    score += _finish_score(sm_finish_ids, opt_finish_ids)
+
+    # ---- Color hex proximity (0.10) ----
+    color_dist = _color_distance(sm.color_hex, opt.get("color"))
+    # distance 0 → 0.10, distance 1 → 0.0
+    score += max(0.0, 0.10 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
 
     return round(score, 4)
 

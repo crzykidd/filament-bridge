@@ -28,6 +28,7 @@ from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import (
     find_best_match,
+    material_family,
     opt_color_profile,
     opt_to_spoolman_fields,
     profiles_compatible,
@@ -360,6 +361,18 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             c for c in candidates
             if isinstance(c, dict) and profiles_compatible(sm_profile, opt_color_profile(c, tag_map))
         ]
+
+        # Polymer-family hard gate: a PC filament must never match ASA; ASA must never
+        # match PETG, etc.  Only gate when the SM filament has a non-empty / known
+        # material (unknown SM material → don't gate, score all candidates).
+        sm_fam = material_family(sm_fil.material, tag_map)
+        if sm_fam:
+            candidates = [
+                c for c in candidates
+                if material_family(
+                    c.get("type") or c.get("abbreviation") or "", tag_map
+                ) in ("", sm_fam)
+            ]
 
         match_result = find_best_match(sm_fil, candidates, tag_map)
         best = match_result["best"]

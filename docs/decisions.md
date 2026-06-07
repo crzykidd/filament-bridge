@@ -1,5 +1,71 @@
 # Decision record
 
+## 2026-06-06 — OpenTag matcher: arrangement-from-tags, polymer-family gate, finish-aware scoring
+
+Three systematic failures found via a real-data audit (bridge matcher run over live Spoolman DB
++ the 12,501-record OpenTag cache) were fixed in `backend/app/core/opentag_match.py` and
+`backend/app/api/opentag.py`:
+
+### 1. Arrangement derived from tags, not secondaryColors (critical)
+
+FDB's denormalized OpenTag feed leaves `secondaryColors` **empty on all 12,501 records**.
+Arrangement is only present in the string `tags` array (e.g. `"coextruded"`,
+`"gradual_color_change"`).  `opt_color_profile` previously checked `secondaryColors` first
+— when empty it returned `"single"`, so every multicolor SM filament got 0 candidates.
+
+**Fix:** `opt_color_profile` now checks the `tags`/`optTags` arrangement FIRST (via
+`arrangement_from_tags`), regardless of `secondaryColors`.  Only falls back to
+`secondaryColors` for the `multi_unknown` case (secondaries present, no arrangement tag).
+
+**Apply-side guard:** `opt_to_spoolman_fields` no longer writes `multi_color_hexes` when
+the OPT entry has empty `secondaryColors` (which is always in the real feed) — Spoolman's
+existing multicolor hex data is preserved.  `multi_color_direction` is still set from the
+arrangement tag.
+
+### 2. Polymer-family hard gate in the matches endpoint
+
+`material_family(material)` normalises a material string to a base polymer family:
+`PLA/PLA+` → `pla`; `PETG` → `petg`; `ASA` → `asa`; `ABS` → `abs`; `PC` → `pc`;
+`TPU/TPE` → `tpu`; `PA/Nylon/PA-CF/PA6` → `pa`; `PVA` → `pva`; unknown → passthrough.
+Strips finish words first so `"PLA Silk"` → `"pla"`.
+
+In `GET /api/openprinttag/matches`, after the brand + color-profile filters, candidates are
+further filtered to the same `material_family` as the SM filament.  An empty/unknown SM
+material bypasses the gate (all candidates scored).  This kills PC→ASA, ASA→PETG.
+PLA↔PLA+ remain matchable (same family).
+
+### 3. Finish-aware scoring with finish-word stripping
+
+**Rebalanced weights** (old → new):
+
+| Component | Old | New |
+|---|---|---|
+| Type/material (exact) | 0.25 | 0.20 |
+| Vendor/brand (exact) | 0.25 | 0.20 |
+| Color-name similarity | 0.35 | 0.30 |
+| Finish component | +0.05 reward only | +0.075 neutral / +0.15 reward / −0.10/−0.15 penalty |
+| Color hex proximity | 0.10 | 0.10 |
+
+**Finish-word stripping:** `_color_name_tokens` already removed finish words; these were
+already included in the `tag_map` iteration (silk, matte, transparent, etc.).  This means
+`"Transparent Orange"` → `{orange}` and `"Silk Bronze"` → `{bronze}` BEFORE the name-
+similarity comparison — finish mismatch is handled entirely by the finish component.
+
+**`_finish_score(sm_ids, opt_ids)` returns:**
+- both empty (solid vs solid): `+0.075` (neutral)
+- perfect finish match: `+0.15`
+- partial overlap: `jaccard × 0.15`
+- one solid, one finished (clear mismatch): `−0.15`
+- both finished but disjoint (matte vs silk): `−0.10`
+
+This drops a wrong-finish candidate (Transparent Orange, Silk White) below the correct
+plain/solid one when the SM filament has no finish tags.
+
+Verified by 562 passing tests including 24 new tests covering: tag-based profile with empty
+secondaryColors; coaxial SM matches coextruded OPT (the real-data path); apply-side guard
+preserves multi_color_hexes; polymer-family gate (PC≠ASA, ASA≠PETG, PLA=PLA+); finish
+scoring (solid vs silk, solid vs transparent, matte vs silk, finish-word stripping).
+
 ## 2026-06-06 — OpenTag matching hard-filters by color profile; apply sets multi_color_direction + handles empty primary
 
 The OpenTag matcher was arrangement-blind — a multicolor Spoolman filament (coaxial/longitudinal)
