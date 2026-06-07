@@ -536,6 +536,14 @@ export interface OpenTagDatasetMeta {
   stale: boolean
 }
 
+export interface OpenTagCacheStatus {
+  exists: boolean
+  fetched_at: string | null
+  count: number
+  stale: boolean
+  max_age_hours: number
+}
+
 export interface OpenTagFieldRow {
   field: string
   spoolman_value: unknown

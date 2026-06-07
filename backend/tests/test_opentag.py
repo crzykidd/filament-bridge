@@ -787,6 +787,87 @@ def test_old_opentag_matches_route_404():
 
 
 # ---------------------------------------------------------------------------
+# GET /api/openprinttag/status — lightweight cache metadata, no FDB fetch
+# ---------------------------------------------------------------------------
+
+
+def test_openprinttag_status_no_cache(tmp_path):
+    """GET /api/openprinttag/status returns exists:false when cache file is absent.
+
+    The FDB client must NOT be called.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_fdb = AsyncMock()
+    # If get_openprinttag is called the test should fail loudly
+    fake_fdb.get_openprinttag = AsyncMock(side_effect=AssertionError("must not call FDB"))
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app)
+        resp = client.get("/api/openprinttag/status")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["exists"] is False
+        assert data["fetched_at"] is None
+        assert data["count"] == 0
+        assert data["stale"] is True
+        assert "max_age_hours" in data
+        fake_fdb.get_openprinttag.assert_not_called()
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+def test_openprinttag_status_fresh_cache_no_fdb_fetch(tmp_path):
+    """GET /api/openprinttag/status returns exists:true with count + age when cache is fresh.
+
+    The FDB client must NOT be called even when a fresh cache is present.
+    """
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [_OPT_PLA_SILK, _OPT_PETG], fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(side_effect=AssertionError("must not call FDB"))
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app)
+        resp = client.get("/api/openprinttag/status")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["exists"] is True
+        assert data["count"] == 2
+        assert data["stale"] is False
+        assert data["fetched_at"] is not None
+        assert isinstance(data["max_age_hours"], int)
+        fake_fdb.get_openprinttag.assert_not_called()
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
 # get_openprinttag: 120 s timeout override
 # ---------------------------------------------------------------------------
 

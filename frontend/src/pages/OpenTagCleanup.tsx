@@ -9,11 +9,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getOpenTagMatches,
+  getOpenTagStatus,
   postOpenTagApply,
   postOpenTagRefresh,
 } from '../api/client'
 import type {
   OpenTagApplyRequest,
+  OpenTagCacheStatus,
   OpenTagDatasetMeta,
   OpenTagFieldDecision,
   OpenTagFieldRow,
@@ -356,8 +358,12 @@ function ConfirmStep({
 type Step = 'review' | 'confirm' | 'done'
 
 export default function OpenTagCleanup() {
-  const [loading, setLoading] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
+  // Cache status — loaded instantly on mount, no fetch
+  const [cacheStatus, setCacheStatus] = useState<OpenTagCacheStatus | null>(null)
+
+  // Loading / work state
+  const [working, setWorking] = useState(false)
+  const [statusMsg, setStatusMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [response, setResponse] = useState<OpenTagMatchesResponse | null>(null)
   const [step, setStep] = useState<Step>('review')
@@ -369,48 +375,78 @@ export default function OpenTagCleanup() {
   // Ignored filament IDs
   const [ignoredIds, setIgnoredIds] = useState<Set<number>>(new Set())
 
-  const fetchMatches = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await getOpenTagMatches()
-      setResponse(data)
-      // Initialize decisions: default to OpenTag values for each field
-      const initial: Record<number, Record<string, OpenTagFieldDecision>> = {}
-      for (const m of data.matches) {
-        initial[m.spoolman_filament_id] = {}
-        for (const row of m.fields) {
-          initial[m.spoolman_filament_id][row.field] = {
-            field: row.field,
-            value: row.opentag_value,
-            keep_mine: false,
-          }
-        }
-      }
-      setFieldDecisions(initial)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
+  // Load cache status on mount (instant — no network fetch to FDB)
+  useEffect(() => {
+    getOpenTagStatus()
+      .then(s => setCacheStatus(s))
+      .catch(() => { /* status unavailable — banner stays absent */ })
   }, [])
 
-  useEffect(() => {
-    fetchMatches()
-  }, [fetchMatches])
+  const _applyMatchesData = useCallback((data: OpenTagMatchesResponse) => {
+    setResponse(data)
+    // Update cache status banner from the response's dataset meta
+    setCacheStatus(prev => ({
+      exists: true,
+      fetched_at: data.dataset.fetched_at,
+      count: data.dataset.count,
+      stale: data.dataset.stale,
+      max_age_hours: prev?.max_age_hours ?? 24,
+    }))
+    // Initialize decisions: default to OpenTag values for each field
+    const initial: Record<number, Record<string, OpenTagFieldDecision>> = {}
+    for (const m of data.matches) {
+      initial[m.spoolman_filament_id] = {}
+      for (const row of m.fields) {
+        initial[m.spoolman_filament_id][row.field] = {
+          field: row.field,
+          value: row.opentag_value,
+          keep_mine: false,
+        }
+      }
+    }
+    setFieldDecisions(initial)
+  }, [])
 
-  const handleRefresh = async () => {
-    setRefreshing(true)
+  // Run the full load: optionally refresh dataset first, then fetch matches.
+  // skipRefresh=true when the cache is already fresh (warm run).
+  const runLoad = useCallback(async (skipRefresh: boolean) => {
+    setWorking(true)
     setError(null)
+    setStatusMsg(null)
     try {
-      await postOpenTagRefresh()
-      await fetchMatches()
+      if (!skipRefresh) {
+        setStatusMsg(
+          'Fetching the OpenTag dataset from Filament DB… ' +
+          '(first load downloads ≈​11k records — up to a minute)',
+        )
+        await postOpenTagRefresh()
+        // Refresh status banner after fetch
+        getOpenTagStatus().then(s => setCacheStatus(s)).catch(() => {})
+      }
+      setStatusMsg('Matching your Spoolman filaments…')
+      const data = await getOpenTagMatches()
+      _applyMatchesData(data)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setRefreshing(false)
+      setWorking(false)
+      setStatusMsg(null)
     }
-  }
+  }, [_applyMatchesData])
+
+  // On mount: once status is known, kick off the appropriate load
+  const [autoLoadDone, setAutoLoadDone] = useState(false)
+  useEffect(() => {
+    if (cacheStatus === null) return   // still waiting for status
+    if (autoLoadDone) return           // already started
+    setAutoLoadDone(true)
+    runLoad(cacheStatus.exists && !cacheStatus.stale)
+  }, [cacheStatus, autoLoadDone, runLoad])
+
+  // Refresh button: always force a fresh fetch
+  const handleRefresh = useCallback(async () => {
+    runLoad(false)
+  }, [runLoad])
 
   const handleFieldChange = useCallback(
     (smId: number, field: string, updated: OpenTagFieldDecision) => {
@@ -464,7 +500,6 @@ export default function OpenTagCleanup() {
     }
   }
 
-  const dataset: OpenTagDatasetMeta | null = response?.dataset ?? null
   const matches = response?.matches ?? []
   const withMatch = matches.filter(m => m.confidence >= 0.30)
   const noMatch = matches.filter(m => m.confidence < 0.30)
@@ -478,30 +513,32 @@ export default function OpenTagCleanup() {
         Filament DB.
       </p>
 
-      {/* Dataset status bar */}
+      {/* Dataset status banner — populated instantly from cache, no FDB fetch */}
       <div className="flex items-center gap-4 mb-6 p-3 bg-gray-50 border border-gray-200 rounded-lg">
-        {dataset ? (
+        {cacheStatus?.exists ? (
           <>
             <span className="text-sm text-gray-600">
-              Dataset: <strong>{dataset.count}</strong> materials
+              OpenTag dataset: <strong>{cacheStatus.count}</strong> materials
             </span>
             <span className="text-sm text-gray-500">
-              Fetched {formatAge(dataset.fetched_at)}
+              fetched {formatAge(cacheStatus.fetched_at)}
             </span>
-            {dataset.stale && (
+            {cacheStatus.stale && (
               <span className="px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 text-xs">stale</span>
             )}
           </>
         ) : (
-          <span className="text-sm text-gray-500">No cached dataset</span>
+          <span className="text-sm text-gray-500">
+            {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
+          </span>
         )}
         <button
           type="button"
           className="ml-auto px-3 py-1 text-sm border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50 disabled:opacity-50"
           onClick={handleRefresh}
-          disabled={refreshing || loading}
+          disabled={working}
         >
-          {refreshing ? 'Refreshing…' : 'Refresh dataset'}
+          {working ? 'Working…' : 'Refresh dataset'}
         </button>
       </div>
 
@@ -511,15 +548,17 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {(loading || refreshing) && (
-        <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
-          {refreshing
-            ? 'Refreshing dataset from Filament DB — the first download can take 20–60 seconds…'
-            : 'Loading matches — fetching the OpenTag dataset from Filament DB if not cached (first load can take 20–60 seconds)…'}
+      {working && statusMsg && (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+          <svg className="animate-spin h-4 w-4 shrink-0 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+          </svg>
+          {statusMsg}
         </div>
       )}
 
-      {!loading && step === 'review' && response && (
+      {!working && step === 'review' && response && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-600">
@@ -569,7 +608,7 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {!loading && step === 'confirm' && response && (
+      {!working && step === 'confirm' && response && (
         <ConfirmStep
           matches={matches}
           fieldDecisions={fieldDecisions}
@@ -593,7 +632,7 @@ export default function OpenTagCleanup() {
           <button
             type="button"
             className="px-4 py-2 border border-gray-300 rounded text-sm hover:bg-gray-50"
-            onClick={() => { setStep('review'); fetchMatches() }}
+            onClick={() => { setStep('review'); runLoad(true) }}
           >
             Start over
           </button>

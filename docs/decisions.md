@@ -1,5 +1,29 @@
 # Decision record
 
+## 2026-06-06 — OpenTag cleanup: instant dataset banner + staged fetch/match progress
+
+Added `GET /api/openprinttag/status` — a side-effect-free endpoint that reads local
+cache metadata via `opentag_cache.get_cache_metadata()` without calling FDB. Returns
+`{ exists, fetched_at, count, stale, max_age_hours }`. New `OpenTagCacheStatus` Pydantic
+model; matching `OpenTagCacheStatus` TypeScript interface + `getOpenTagStatus` client fn.
+
+The `OpenTagCleanup.tsx` page now has two-phase startup:
+
+1. **Instant banner** — `getOpenTagStatus()` fires on mount and populates the dataset
+   banner (count + relative age + stale chip) immediately, before any slow work starts.
+   While the status call is in-flight the banner reads "Checking dataset cache…".
+
+2. **Staged loading messages** — once the status resolves, a `runLoad(skipRefresh)` call
+   begins. A spinner + `statusMsg` string is shown prominently during work:
+   - Cold run (cache missing or stale): "Fetching the OpenTag dataset from Filament
+     DB… (first load downloads ≈11k records — up to a minute)" while `POST /refresh`
+     runs, then "Matching your Spoolman filaments…" while `GET /matches` runs.
+   - Warm run (cache fresh): skips the fetch stage entirely, shows only
+     "Matching your Spoolman filaments…".
+   - Refresh button always forces cold run.
+
+The existing review → confirm → apply flow is unchanged.
+
 ## 2026-06-06 — OpenTag matching pre-filters candidates by normalized brand for performance; progress logged
 
 `GET /api/openprinttag/matches` was hanging because `find_best_match` scored all ~11k

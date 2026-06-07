@@ -44,6 +44,15 @@ class OpenTagDatasetMeta(BaseModel):
     stale: bool
 
 
+class OpenTagCacheStatus(BaseModel):
+    """Lightweight cache metadata — returned without fetching from FDB."""
+    exists: bool
+    fetched_at: str | None
+    count: int
+    stale: bool
+    max_age_hours: int
+
+
 class OpenTagFieldRow(BaseModel):
     """Per-field comparison row for the review step."""
     field: str
@@ -199,6 +208,23 @@ def _build_sm_patch(
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@router.get("/openprinttag/status", response_model=OpenTagCacheStatus)
+async def opentag_status() -> OpenTagCacheStatus:
+    """Return local cache metadata WITHOUT fetching from FDB.
+
+    Fast and side-effect free — the page can call this on mount to show the
+    dataset state (count, age, stale) instantly, before any slow fetch begins.
+    """
+    meta = get_cache_metadata(_settings.data_dir, _settings.opentag_cache_max_age_hours)
+    return OpenTagCacheStatus(
+        exists=meta["fetched_at"] is not None,
+        fetched_at=meta["fetched_at"],
+        count=meta["count"],
+        stale=meta["stale"],
+        max_age_hours=_settings.opentag_cache_max_age_hours,
+    )
 
 
 @router.post("/openprinttag/refresh", response_model=OpenTagDatasetMeta)

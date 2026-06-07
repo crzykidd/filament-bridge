@@ -15,6 +15,7 @@ import type {
   MappingUpdateRequest,
   OpenTagApplyRequest,
   OpenTagApplyResponse,
+  OpenTagCacheStatus,
   OpenTagDatasetMeta,
   OpenTagMatchesResponse,
   SMVariancesDecisionsRequest,
@@ -187,6 +188,7 @@ export const postWizardExecute = (body: WizardExecuteRequest) =>
 // OpenTag cleanup tool
 // ---------------------------------------------------------------------------
 
+export const getOpenTagStatus = () => request<OpenTagCacheStatus>('/openprinttag/status')
 export const getOpenTagMatches = () => request<OpenTagMatchesResponse>('/openprinttag/matches')
 export const postOpenTagRefresh = () =>
   request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
