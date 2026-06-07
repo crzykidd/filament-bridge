@@ -1,5 +1,23 @@
 # Decision record
 
+## 2026-06-07 — OpenTag apply no longer writes multi_color_direction when secondaryColors is empty
+
+`opt_to_spoolman_fields` in `backend/app/core/opentag_match.py` previously set
+`multi_color_direction` ("coaxial" or "longitudinal") in the branch where an arrangement
+tag is present but `secondaryColors` is empty (always the case in FDB's denormalized feed).
+Spoolman rejects a PATCH with `multi_color_direction` but no `multi_color_hexes` → 422,
+causing the entire filament apply to fail for multicolor filaments (e.g. SM #86 Silk Gradient).
+
+The fix removes the `multi_color_direction` assignment from that branch entirely.  When OpenTag
+carries no `secondaryColors`, neither `multi_color_direction` nor `multi_color_hexes` is
+emitted — Spoolman's existing arrangement data is left untouched.  The `if secondary:` branch
+(which sets both fields together when real secondary colors are present) is unchanged.
+
+This is correct because the SM filament already has the right multicolor hexes + direction
+(that's how the match was found in the first place via `sm_color_profile` reading
+`sm.multi_color_direction`).  The apply has nothing new to add for those fields when OPT
+provides no secondary colors.
+
 ## 2026-06-07 — OpenTag apply self-creates required extra fields; ensure_extra_fields is per-section resilient
 
 ### Root cause

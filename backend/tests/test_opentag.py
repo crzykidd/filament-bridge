@@ -2251,9 +2251,15 @@ def test_coaxial_sm_matches_coextruded_opt_with_empty_secondary(tmp_path):
         _ot_mod._settings.data_dir = original_data_dir
 
 
-def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_preserves_multi_color_hexes():
-    """When OPT has 'coextruded' tag but empty secondaryColors, opt_to_spoolman_fields must NOT
-    include multi_color_hexes in the result (Spoolman's existing hexes should be preserved)."""
+def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_no_multicolor_fields():
+    """When OPT has 'coextruded' tag but empty secondaryColors, opt_to_spoolman_fields must
+    emit NEITHER multi_color_hexes NOR multi_color_direction.
+
+    Spoolman rejects a PATCH that contains multi_color_direction without multi_color_hexes
+    (→ 422).  The SM filament already carries the correct arrangement from its own data (that
+    is how it was matched), so the apply has nothing new to contribute for multicolor fields.
+    Native fields (material, density, finish tags, color_hex) are still emitted normally.
+    """
     opt = {
         "uuid": "test-coext-empty",
         "slug": "elegoo-pla-silk-black-purple",
@@ -2273,8 +2279,72 @@ def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_preserves_mu
     assert "multi_color_hexes" not in fields, (
         "multi_color_hexes must not be written when OPT secondaryColors is empty"
     )
-    # Must set direction so Spoolman knows the arrangement
-    assert fields.get("multi_color_direction") == "coaxial"
+    # Must NOT set multi_color_direction — Spoolman 422s direction-without-hexes
+    assert "multi_color_direction" not in fields, (
+        "multi_color_direction must not be written when secondaryColors is empty "
+        "(Spoolman rejects direction without hexes → 422)"
+    )
+    # Native fields are still present
+    assert fields.get("material") == "PLA"
+    assert fields.get("density") == 1.24
+    assert fields.get("color_hex") == "2A1A5E"
+
+
+def test_opt_to_spoolman_fields_gradient_tag_empty_secondary_no_multicolor_fields():
+    """Gradient tag + empty secondaryColors → neither multi_color_direction nor multi_color_hexes.
+
+    Same 422-avoidance rule: longitudinal direction without hexes is rejected by Spoolman.
+    """
+    opt = {
+        "uuid": "test-grad-empty",
+        "slug": "silk-gradient-blue-red",
+        "brandName": "SomeBrand",
+        "name": "Silk Gradient Blue Red",
+        "type": "PLA",
+        "tags": ["gradual_color_change"],
+        "color": "#0000FF",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 230,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "multi_color_direction" not in fields, (
+        "multi_color_direction must not be written when secondaryColors is empty (gradient case)"
+    )
+    assert "multi_color_hexes" not in fields, (
+        "multi_color_hexes must not be written when OPT secondaryColors is empty (gradient case)"
+    )
+    # color_hex is still emitted from the primary color
+    assert fields.get("color_hex") == "0000FF"
+
+
+def test_opt_to_spoolman_fields_with_secondaries_still_sets_both_multicolor_fields():
+    """When OPT actually has secondaryColors, both multi_color_hexes AND multi_color_direction
+    are still set together (the `if secondary:` branch is unchanged).
+    """
+    opt = {
+        "uuid": "coext-with-secondary",
+        "slug": "brand-pla-coextruded-red-green",
+        "brandName": "BRAND",
+        "name": "PLA Coextruded",
+        "type": "PLA",
+        "tags": ["coextruded"],
+        "color": "",
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    # Both fields must be set together when secondaryColors is populated
+    assert "multi_color_hexes" in fields, "multi_color_hexes must be set when secondaryColors is present"
+    assert "multi_color_direction" in fields, "multi_color_direction must be set when secondaryColors is present"
+    assert fields["multi_color_direction"] == "coaxial"
+    assert "FF0000" in fields["multi_color_hexes"]
+    assert "00FF00" in fields["multi_color_hexes"]
 
 
 # ---------------------------------------------------------------------------

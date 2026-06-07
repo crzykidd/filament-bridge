@@ -208,13 +208,10 @@ def opt_to_spoolman_fields(
                 result["multi_color_hexes"] = ",".join(all_hexes)
     elif arrangement in ("coextruded", "gradient"):
         # secondaryColors is empty (FDB's denormalized feed) but arrangement tag IS present.
-        # Do NOT write multi_color_hexes — preserve whatever Spoolman already has.
-        # Still set multi_color_direction so SM knows the arrangement.
-        if arrangement == "coextruded":
-            result["multi_color_direction"] = "coaxial"
-        else:
-            result["multi_color_direction"] = "longitudinal"
-        # Map primary color if present, but do not overwrite multi_color_hexes.
+        # Emit NO multi_color_* fields — Spoolman already has the correct hexes + direction
+        # (that's how the match was found), and Spoolman rejects multi_color_direction when
+        # multi_color_hexes is absent (→ 422).  Leave existing multicolor data untouched.
+        # Map primary color if present, but do not touch any multi_color_* fields.
         if opt_color:
             result["color_hex"] = opt_color.lstrip("#").upper()
     else:
