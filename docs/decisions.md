@@ -1,5 +1,49 @@
 # Decision record
 
+## 2026-06-07 — OpenTag secondary_colors recovered from raw tarball; multicolor mismatch flag
+
+### Problem
+
+FDB's `/api/openprinttag` feed leaves `secondaryColors` **empty on all 12,501 records**.
+FDB's parser reads flat `secondary_color_0..4` keys, but the OpenPrintTag YAML schema stores
+them in a `secondary_colors` ARRAY — so the bridge can't bring in gradient/multicolor colors.
+Result: the OpenTag cleanup can't produce `multi_color_hexes` / `multi_color_direction` updates
+for any filament even when OpenTag has the data.
+
+### Fix: recover from raw tarball
+
+New module `backend/app/core/opentag_secondary.py` — `fetch_secondary_colors(http?)`:
+- Fetches `https://api.github.com/repos/OpenPrintTag/openprinttag-database/tarball/main`
+  (gzipped tar, ~3 MB) with `httpx.Timeout(120.0)`.
+- Untars in-memory (`tarfile` over `io.BytesIO`); for each `data/materials/**/*.yaml`,
+  `yaml.safe_load`s it and extracts `secondary_colors[].color_rgba` → hex strings
+  (`_rgba_to_hex('#000000ff') → '000000'`, strip `#`, drop trailing alpha, uppercase).
+- Returns `{ uuid: [hexes], slug: [hexes], ... }` (both keyed for uuid-primary / slug-fallback).
+- Errors (network, bad tar, YAML) → `{}` and a logged warning (non-fatal).
+
+`load_opentag_dataset` in `opentag_cache.py` now calls `fetch_secondary_colors()` after every
+FDB fetch, then merges by uuid (fallback: slug) for materials whose `secondaryColors` is empty.
+The merged dataset is written to `opentag_cache.json` so the merge happens once per refresh,
+not per request. If the raw fetch returns `{}`, the FDB feed is used unchanged (graceful degrade).
+
+`PyYAML>=6.0` added to `backend/requirements.txt`.
+
+### Colors now flow as cleanup updates
+
+With `secondaryColors` populated, `opt_to_spoolman_fields`'s `if secondary:` branch runs —
+delegates to `fdb_multicolor_to_sm` for gradient/coextruded materials, producing `color_hex` +
+`multi_color_hexes` + `multi_color_direction` together (no Spoolman 422). The empty-secondaries
+guard from the previous session stays as a fallback for any record still lacking secondaries.
+
+### multicolor_mismatch flag
+
+`OpenTagFilamentMatch` gains `multicolor_mismatch: bool` (default `False`):
+- `True` when SM filament is multicolor (`sm_color_profile != "single"`) AND the matched OPT
+  entry is single-color (no `secondaryColors` AND no arrangement tag).
+- Also `True` on no-match rows when SM is multicolor (brand has no compatible multicolor OPT entry).
+- Frontend (`OpenTagCleanup.tsx`): small amber "multicolor mismatch" badge on the filament card
+  header when `multicolor_mismatch` is true.
+
 ## 2026-06-07 — OpenTag review: exact-UUID match, existing identity display, reviewable name
 
 ### Exact-UUID match (confidence 1.0)

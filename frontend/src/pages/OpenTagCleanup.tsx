@@ -164,6 +164,14 @@ function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: Fi
             </span>
           )}
           <span className="text-xs text-gray-400">SM #{match.spoolman_filament_id}</span>
+          {match.multicolor_mismatch && (
+            <span
+              className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium"
+              title="Spoolman has multicolor data but the matched OpenTag entry is single-color"
+            >
+              multicolor mismatch
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {match.opt_brand && (

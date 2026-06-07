@@ -29,6 +29,8 @@ from typing import Any
 
 import httpx
 
+from app.core.opentag_secondary import fetch_secondary_colors
+
 logger = logging.getLogger(__name__)
 
 _CACHE_FILENAME = "opentag_cache.json"
@@ -126,6 +128,35 @@ async def load_opentag_dataset(
                     response=exc.response,
                 ) from exc
             raise
+
+        # Recover secondary_colors from the OpenPrintTag raw tarball.
+        # FDB's feed leaves secondaryColors empty (flat secondary_color_N keys vs
+        # the array schema).  Fetch the raw tarball from GitHub and merge by uuid/slug.
+        # If the fetch fails, proceed with FDB's feed unchanged (degrade gracefully).
+        secondary_map = await fetch_secondary_colors()
+        n_recovered = 0
+        if secondary_map:
+            for mat in materials:
+                if not isinstance(mat, dict):
+                    continue
+                if mat.get("secondaryColors"):
+                    # Already has secondaries — leave untouched
+                    continue
+                uuid_val = mat.get("uuid")
+                slug_val = mat.get("slug")
+                hexes: list[str] | None = None
+                if uuid_val and uuid_val in secondary_map:
+                    hexes = secondary_map[uuid_val]
+                elif slug_val and slug_val in secondary_map:
+                    hexes = secondary_map[slug_val]
+                if hexes:
+                    mat["secondaryColors"] = hexes
+                    n_recovered += 1
+            logger.info(
+                "opentag_cache: secondary_colors recovered for %d / %d materials",
+                n_recovered, len(materials),
+            )
+
         fetched_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         _save_cache(data_dir, materials, fetched_at)
         cache = {"fetched_at": fetched_at, "count": len(materials), "materials": materials}

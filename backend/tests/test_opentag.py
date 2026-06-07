@@ -3538,3 +3538,468 @@ async def test_ensure_extra_fields_spool_section_isolated_from_filament_section(
     assert _s.spoolman_field_openprinttag_uuid in filament_fields_attempted, (
         "openprinttag_uuid was not attempted — spool failure aborted the filament section"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: opentag_secondary — rgba_to_hex, fetch_secondary_colors
+# ---------------------------------------------------------------------------
+
+
+def test_rgba_to_hex_strips_alpha_and_uppercases():
+    from app.core.opentag_secondary import _rgba_to_hex
+    assert _rgba_to_hex("#98282fff") == "98282F"
+
+
+def test_rgba_to_hex_black():
+    from app.core.opentag_secondary import _rgba_to_hex
+    assert _rgba_to_hex("#000000ff") == "000000"
+
+
+def test_rgba_to_hex_no_alpha():
+    from app.core.opentag_secondary import _rgba_to_hex
+    assert _rgba_to_hex("#AABBCC") == "AABBCC"
+
+
+def test_rgba_to_hex_ddb95d():
+    from app.core.opentag_secondary import _rgba_to_hex
+    assert _rgba_to_hex("#ddb95dff") == "DDB95D"
+
+
+def test_rgba_to_hex_none_returns_none():
+    from app.core.opentag_secondary import _rgba_to_hex
+    assert _rgba_to_hex(None) is None
+    assert _rgba_to_hex("") is None
+    assert _rgba_to_hex("#AB") is None
+
+
+def _build_test_tar(materials: list[dict]) -> bytes:
+    """Build an in-memory gzipped tarball with ``data/materials/brand/X.yaml`` entries."""
+    import io as _io
+    import tarfile as _tarfile
+    import yaml as _yaml
+
+    buf = _io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for i, mat in enumerate(materials):
+            content = _yaml.dump(mat).encode()
+            info = _tarfile.TarInfo(
+                name=f"openprinttag-database-main/data/materials/brand/material_{i}.yaml"
+            )
+            info.size = len(content)
+            tf.addfile(info, _io.BytesIO(content))
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_fetch_secondary_colors_parses_tar():
+    """fetch_secondary_colors parses a small in-memory tar and returns uuid→hexes map."""
+    from app.core.opentag_secondary import fetch_secondary_colors
+
+    sample_materials = [
+        {
+            "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
+            "slug": "amolen-pla-silk-gradient",
+            "type": "PLA",
+            "secondary_colors": [
+                {"color_rgba": "#000000ff"},
+                {"color_rgba": "#98282fff"},
+                {"color_rgba": "#ddb95dff"},
+            ],
+        },
+        {
+            "uuid": "aaaabbbb-cccc-dddd-eeee-ffffffffffff",
+            "slug": "brand-pla-red",
+            "type": "PLA",
+            "secondary_colors": [],  # no secondaries → should be skipped
+        },
+        {
+            "uuid": "11112222-3333-4444-5555-666677778888",
+            "slug": "brand-petg-blue",
+            "type": "PETG",
+            # no secondary_colors key at all → skipped
+        },
+    ]
+    tar_bytes = _build_test_tar(sample_materials)
+
+    # Mock the HTTP client to return our in-memory tar
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.content = tar_bytes
+
+    fake_http = AsyncMock(spec=httpx.AsyncClient)
+    fake_http.get = AsyncMock(return_value=fake_resp)
+
+    result = await fetch_secondary_colors(http=fake_http)
+
+    # The gradient material should be keyed by both uuid AND slug
+    assert "ccf32809-fbef-527a-8487-ccb75ceafab6" in result
+    assert result["ccf32809-fbef-527a-8487-ccb75ceafab6"] == ["000000", "98282F", "DDB95D"]
+    assert "amolen-pla-silk-gradient" in result
+    assert result["amolen-pla-silk-gradient"] == ["000000", "98282F", "DDB95D"]
+
+    # Empty / missing secondary_colors should not produce an entry
+    assert "aaaabbbb-cccc-dddd-eeee-ffffffffffff" not in result
+    assert "11112222-3333-4444-5555-666677778888" not in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_secondary_colors_returns_empty_on_network_error():
+    """fetch_secondary_colors returns {} (not raises) when the HTTP request fails."""
+    from app.core.opentag_secondary import fetch_secondary_colors
+
+    fake_http = AsyncMock(spec=httpx.AsyncClient)
+    fake_http.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
+
+    result = await fetch_secondary_colors(http=fake_http)
+    assert result == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_secondary_colors_returns_empty_on_bad_tar():
+    """fetch_secondary_colors returns {} (not raises) when the response body is not a valid tar."""
+    from app.core.opentag_secondary import fetch_secondary_colors
+
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.content = b"not a tarball"
+
+    fake_http = AsyncMock(spec=httpx.AsyncClient)
+    fake_http.get = AsyncMock(return_value=fake_resp)
+
+    result = await fetch_secondary_colors(http=fake_http)
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: load_opentag_dataset merges secondary_colors; degrades gracefully
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_opentag_dataset_fills_empty_secondary_colors_by_uuid(tmp_path):
+    """When the raw tarball provides secondary_colors, they are merged by uuid."""
+    from unittest.mock import patch as _patch
+    from app.core.opentag_cache import load_opentag_dataset
+
+    gradient_material = {
+        **_OPT_PLA_SILK,
+        "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
+        "secondaryColors": [],  # FDB feed leaves this empty
+    }
+
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock(return_value=[gradient_material])
+
+    secondary_map = {
+        "ccf32809-fbef-527a-8487-ccb75ceafab6": ["000000", "98282F", "DDB95D"],
+    }
+
+    with _patch(
+        "app.core.opentag_cache.fetch_secondary_colors",
+        AsyncMock(return_value=secondary_map),
+    ):
+        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
+
+    mats = result["materials"]
+    assert len(mats) == 1
+    assert mats[0]["secondaryColors"] == ["000000", "98282F", "DDB95D"]
+
+
+@pytest.mark.asyncio
+async def test_load_opentag_dataset_fills_empty_secondary_colors_by_slug_fallback(tmp_path):
+    """When uuid is absent but slug matches, secondary_colors are filled by slug."""
+    from unittest.mock import patch as _patch
+    from app.core.opentag_cache import load_opentag_dataset
+
+    mat_no_uuid = {
+        **_OPT_PLA_SILK,
+        "uuid": None,
+        "slug": "brand-pla-gradient",
+        "secondaryColors": [],
+    }
+
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock(return_value=[mat_no_uuid])
+
+    secondary_map = {
+        "brand-pla-gradient": ["FF0000", "00FF00"],
+    }
+
+    with _patch(
+        "app.core.opentag_cache.fetch_secondary_colors",
+        AsyncMock(return_value=secondary_map),
+    ):
+        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
+
+    assert result["materials"][0]["secondaryColors"] == ["FF0000", "00FF00"]
+
+
+@pytest.mark.asyncio
+async def test_load_opentag_dataset_degrades_gracefully_when_secondary_fetch_fails(tmp_path):
+    """When fetch_secondary_colors returns {}, the FDB feed is used unchanged (no crash)."""
+    from unittest.mock import patch as _patch
+    from app.core.opentag_cache import load_opentag_dataset
+
+    material = {**_OPT_PLA_SILK, "secondaryColors": []}
+
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock(return_value=[material])
+
+    with _patch(
+        "app.core.opentag_cache.fetch_secondary_colors",
+        AsyncMock(return_value={}),
+    ):
+        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
+
+    # secondaryColors should remain empty — no crash
+    assert result["materials"][0]["secondaryColors"] == []
+    assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_load_opentag_dataset_does_not_overwrite_existing_secondary_colors(tmp_path):
+    """Materials that already have secondaryColors are left untouched."""
+    from unittest.mock import patch as _patch
+    from app.core.opentag_cache import load_opentag_dataset
+
+    material_with_existing = {
+        **_OPT_PLA_SILK,
+        "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
+        "secondaryColors": ["EXISTING_HEX"],
+    }
+
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock(return_value=[material_with_existing])
+
+    secondary_map = {
+        "ccf32809-fbef-527a-8487-ccb75ceafab6": ["000000", "98282F"],
+    }
+
+    with _patch(
+        "app.core.opentag_cache.fetch_secondary_colors",
+        AsyncMock(return_value=secondary_map),
+    ):
+        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
+
+    # Existing secondaryColors must not be overwritten
+    assert result["materials"][0]["secondaryColors"] == ["EXISTING_HEX"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: gradient material → color_hex + multi_color_hexes + multi_color_direction
+# ---------------------------------------------------------------------------
+
+
+def test_opt_to_spoolman_fields_gradient_yields_all_three_color_fields():
+    """A gradient OPT material (gradual_color_change tag + recovered secondaryColors) must
+    produce color_hex, multi_color_hexes, AND multi_color_direction together (no 422)."""
+    gradient_opt = {
+        "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
+        "slug": "amolen-pla-silk-gradient",
+        "brandName": "Amolen",
+        "name": "PLA Silk Gradient",
+        "type": "PLA",
+        "abbreviation": "PLA",
+        "tags": ["silk", "gradual_color_change"],
+        "color": "#000000",
+        "secondaryColors": ["98282F", "DDB95D"],
+        "density": 1.28,
+        "nozzleTempMin": 200,
+        "nozzleTempMax": 230,
+        "bedTempMin": 50,
+        "bedTempMax": 65,
+        "completenessScore": 90,
+    }
+    fields = opt_to_spoolman_fields(gradient_opt)
+
+    # All three multicolor fields must be present (Spoolman 422s if direction is set without hexes)
+    assert "color_hex" in fields, "color_hex missing"
+    assert "multi_color_hexes" in fields, "multi_color_hexes missing"
+    assert "multi_color_direction" in fields, "multi_color_direction missing"
+    assert fields["multi_color_direction"] == "longitudinal"
+    # The hexes CSV must contain all three colors
+    hexes_csv = fields["multi_color_hexes"]
+    assert "000000" in hexes_csv or "98282F" in hexes_csv, f"Unexpected hexes: {hexes_csv!r}"
+
+
+def test_opt_to_spoolman_fields_gradient_apply_patch_sets_direction_with_hexes():
+    """Verify that the apply patch (as built by opt_to_spoolman_fields) sets
+    multi_color_direction only when multi_color_hexes is also set — preventing the
+    earlier direction-without-hexes 422."""
+    gradient_opt = {
+        "uuid": "test-uuid",
+        "slug": "test-gradient",
+        "brandName": "TestBrand",
+        "name": "Gradient PLA",
+        "type": "PLA",
+        "tags": ["gradual_color_change"],
+        "color": "#FF0000",
+        "secondaryColors": ["00FF00", "0000FF"],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(gradient_opt)
+
+    has_hexes = "multi_color_hexes" in fields and fields["multi_color_hexes"]
+    has_direction = "multi_color_direction" in fields and fields["multi_color_direction"]
+
+    if has_direction:
+        assert has_hexes, (
+            "multi_color_direction is set without multi_color_hexes → Spoolman would 422"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: multicolor_mismatch flag
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_matches_multicolor_mismatch_true_when_sm_multicolor_opt_single(tmp_path):
+    """multicolor_mismatch=True when SM is multicolor and OPT match is single-color."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    # OPT entry with NO secondary colors and NO arrangement tag → single
+    single_opt = {**_OPT_PLA_SILK, "tags": [], "secondaryColors": []}
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [single_opt], fresh_ts)
+
+    # SM filament is multicolor (has multi_color_hexes)
+    sm_multicolor = SpoolmanFilament(
+        id=10,
+        name="PLA Silk Bronze",
+        vendor=SpoolmanVendor(id=10, name="Buddy3D"),
+        material="PLA Silk",
+        color_hex="B87333",
+        multi_color_hexes="B87333,FF0000",
+        multi_color_direction="longitudinal",
+        extra={},
+    )
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_multicolor])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        # Find our filament's match
+        match_rows = [m for m in data["matches"] if m["spoolman_filament_id"] == 10]
+        assert match_rows, "No match row found for SM filament 10"
+        row = match_rows[0]
+        assert row["multicolor_mismatch"] is True, (
+            f"Expected multicolor_mismatch=True, got {row.get('multicolor_mismatch')}"
+        )
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_multicolor_mismatch_false_when_sm_single(tmp_path):
+    """multicolor_mismatch=False when SM is single-color (even if OPT also single)."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    single_opt = {**_OPT_PLA_SILK, "tags": [], "secondaryColors": []}
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [single_opt], fresh_ts)
+
+    # SM filament is single-color (no multi_color_hexes)
+    sm_single = _sm_fil(sm_id=20, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_single])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match_rows = [m for m in data["matches"] if m["spoolman_filament_id"] == 20]
+        assert match_rows
+        assert match_rows[0]["multicolor_mismatch"] is False
+
+
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_multicolor_mismatch_false_when_opt_is_also_multicolor(tmp_path):
+    """multicolor_mismatch=False when both SM and OPT are multicolor (gradient arrangement tag)."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    # OPT with gradient arrangement tag → gradient profile
+    gradient_opt = {
+        **_OPT_PLA_SILK,
+        "tags": ["silk", "gradual_color_change"],
+        "secondaryColors": ["98282F", "DDB95D"],
+    }
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [gradient_opt], fresh_ts)
+
+    # SM filament is also gradient
+    sm_gradient = SpoolmanFilament(
+        id=30,
+        name="PLA Silk Bronze",
+        vendor=SpoolmanVendor(id=10, name="Buddy3D"),
+        material="PLA Silk",
+        color_hex="B87333",
+        multi_color_hexes="B87333,98282F,DDB95D",
+        multi_color_direction="longitudinal",
+        extra={},
+    )
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_gradient])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match_rows = [m for m in data["matches"] if m["spoolman_filament_id"] == 30]
+        assert match_rows
+        assert match_rows[0]["multicolor_mismatch"] is False
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

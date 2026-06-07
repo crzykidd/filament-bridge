@@ -565,6 +565,7 @@ export interface OpenTagFilamentMatch {
   fields: OpenTagFieldRow[]
   alternates: Record<string, unknown>[]
   ignored?: boolean
+  multicolor_mismatch?: boolean
 }
 
 export interface OpenTagMatchesResponse {

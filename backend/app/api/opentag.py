@@ -84,6 +84,10 @@ class OpenTagFilamentMatch(BaseModel):
     fields: list[OpenTagFieldRow]
     alternates: list[dict[str, Any]]  # top alternate OPTMaterial dicts
     ignored: bool = False
+    # True when SM filament is multicolor but the matched OPT entry is NOT
+    # (no secondaryColors AND no arrangement tag).  Also set on no-match rows
+    # when the SM filament is multicolor but no compatible OPT entry was found.
+    multicolor_mismatch: bool = False
 
 
 class OpenTagMatchesResponse(BaseModel):
@@ -377,6 +381,9 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             matched += 1
             opt_fields = opt_to_spoolman_fields(best, tag_map)
             field_rows = _build_field_rows(sm_fil, opt_fields)
+            _sm_profile = sm_color_profile(sm_fil)
+            _opt_profile = opt_color_profile(best, tag_map)
+            _mismatch = _sm_profile != "single" and _opt_profile == "single"
             matches.append(OpenTagFilamentMatch(
                 spoolman_filament_id=sm_fil.id,
                 spoolman_name=sm_fil.name,
@@ -390,6 +397,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 confidence=confidence,
                 fields=field_rows,
                 alternates=alternates,
+                multicolor_mismatch=_mismatch,
             ))
             continue
 
@@ -422,8 +430,12 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         alternates = match_result["alternates"]
 
         if best is None:
-            # Include low-confidence / no-match filaments with empty field rows
+            # Include low-confidence / no-match filaments with empty field rows.
+            # Flag multicolor_mismatch when SM is multicolor but no match was found
+            # (the color-profile pre-filter means incompatible OPT entries were excluded,
+            # but the SM side was multicolor — signal that to the user).
             no_match += 1
+            mismatch = sm_profile != "single"
             matches.append(OpenTagFilamentMatch(
                 spoolman_filament_id=sm_fil.id,
                 spoolman_name=sm_fil.name,
@@ -437,12 +449,18 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 confidence=confidence,
                 fields=[],
                 alternates=alternates,
+                multicolor_mismatch=mismatch,
             ))
             continue
 
         matched += 1
         opt_fields = opt_to_spoolman_fields(best, tag_map)
         field_rows = _build_field_rows(sm_fil, opt_fields)
+
+        # multicolor_mismatch: SM is multicolor but the matched OPT entry is NOT
+        # (no secondaryColors AND no arrangement tag).
+        opt_profile = opt_color_profile(best, tag_map)
+        mismatch = sm_profile != "single" and opt_profile == "single"
 
         matches.append(OpenTagFilamentMatch(
             spoolman_filament_id=sm_fil.id,
@@ -457,6 +475,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             confidence=confidence,
             fields=field_rows,
             alternates=alternates,
+            multicolor_mismatch=mismatch,
         ))
 
     logger.info("opentag matches: %d matched, %d no-match", matched, no_match)
