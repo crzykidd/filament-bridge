@@ -18,7 +18,9 @@ NEVER modified by this module.
 
 from __future__ import annotations
 
+import json
 import re
+from typing import Iterable
 
 # ---------------------------------------------------------------------------
 # The managed finish-ID set — IDs the bridge actively manages here.
@@ -65,6 +67,84 @@ DEFAULT_MATERIAL_TAG_IDS: dict[str, int] = {
     "rapid":       71,
     "recycled":    60,
 }
+
+
+# ---------------------------------------------------------------------------
+# Serialization helpers for Spoolman extra-field storage
+# ---------------------------------------------------------------------------
+
+
+def serialize_material_tags(ids: Iterable[int]) -> str:
+    """Serialize finish-tag IDs to a comma-separated string for Spoolman text fields.
+
+    Spoolman text extra fields accept a JSON string value (``"17,28"``), NOT a JSON
+    array (``"[17, 28]"`` → 400 Bad Request).  This function produces the correct
+    CSV string form that ``encode_extra_value`` will then JSON-quote for the wire.
+
+    Examples::
+
+        serialize_material_tags([17, 28]) → "17,28"
+        serialize_material_tags([28, 17]) → "17,28"   # sorted
+        serialize_material_tags([17])     → "17"
+        serialize_material_tags([])       → ""
+    """
+    sorted_ids = sorted(set(ids))
+    return ",".join(str(i) for i in sorted_ids)
+
+
+def parse_material_tags(raw: object) -> list[int]:
+    """Parse a material-tags value read from a Spoolman extra field back to a list of ints.
+
+    Tolerant / backward-compatible:
+    - New CSV string form: ``"17,28"``   → ``[17, 28]``
+    - Empty string:         ``""``       → ``[]``
+    - Legacy JSON-array string: ``"[17]"`` → ``[17]``   (pre-fix Spoolman had this fail on write
+      but any value that did get stored as a JSON-decoded list is also accepted)
+    - A real Python list (already decoded upstream): ``[17]`` → ``[17]``
+    - None or unknown types → ``[]``
+
+    Returns a sorted list of unique ints (only values that are parseable as int are kept).
+    """
+    if raw is None:
+        return []
+    # If it's already a list (decoded upstream), iterate directly.
+    if isinstance(raw, list):
+        result: list[int] = []
+        for v in raw:
+            try:
+                result.append(int(v))
+            except (TypeError, ValueError):
+                pass
+        return sorted(set(result))
+    if not isinstance(raw, str):
+        return []
+    text = raw.strip()
+    if not text:
+        return []
+    # Try legacy JSON-array form first: "[17]" or "[17, 28]"
+    if text.startswith("["):
+        try:
+            decoded = json.loads(text)
+            if isinstance(decoded, list):
+                result = []
+                for v in decoded:
+                    try:
+                        result.append(int(v))
+                    except (TypeError, ValueError):
+                        pass
+                return sorted(set(result))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # New CSV form: "17" or "17,28"
+    result = []
+    for part in text.split(","):
+        part = part.strip()
+        if part:
+            try:
+                result.append(int(part))
+            except ValueError:
+                pass
+    return sorted(set(result))
 
 
 def parse_material_tag_ids_config(raw: str) -> dict[str, int]:

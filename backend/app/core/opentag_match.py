@@ -17,7 +17,7 @@ import unicodedata
 from typing import Any
 
 from app.core.color import TAG_COEXTRUDED, TAG_GRADIENT, arrangement_from_tags, fdb_multicolor_to_sm
-from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, finish_ids_from_text, strip_finish_words
+from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, finish_ids_from_text, serialize_material_tags, strip_finish_words
 from app.core.matcher import normalize_name, normalize_vendor
 from app.schemas.spoolman import SpoolmanFilament
 
@@ -161,7 +161,7 @@ def opt_to_spoolman_fields(
         finish_ids.update(ids)
     # Also scan name/type for finish hints
     finish_ids.update(finish_ids_from_text(opt.get("name", ""), raw_type, tag_map))
-    result["extra.filamentdb_material_tags"] = sorted(finish_ids)
+    result["extra.filamentdb_material_tags"] = serialize_material_tags(finish_ids)
 
     # Color — reuse fdb_multicolor_to_sm for consistency (handles empty primary,
     # arrangement, and single-color cases uniformly).

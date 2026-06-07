@@ -35,7 +35,7 @@ from app.core.color import (
 )
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
-from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text
+from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text, parse_material_tags, serialize_material_tags
 from app.core.matcher import match_filaments
 from app.core.sync_policy import SyncAction, resolve_sync_action
 from app.core.version import MULTICOLOR_MIN_FDB, version_gte
@@ -1123,14 +1123,8 @@ def _sm_finish_ids_from_filament(sm_fil: Any, tag_map: dict) -> frozenset[int]:
     raw = sm_fil.extra.get(mt_field) if hasattr(sm_fil, "extra") else None
     if raw is not None:
         decoded = decode_extra_value(raw)
-        if isinstance(decoded, list):
-            ids = set()
-            for v in decoded:
-                try:
-                    ids.add(int(v))
-                except (TypeError, ValueError):
-                    pass
-            return frozenset(ids & MANAGED_FINISH_IDS)
+        ids = parse_material_tags(decoded)
+        return frozenset(set(ids) & MANAGED_FINISH_IDS)
     # Fallback: parse from text
     return frozenset(finish_ids_from_text(getattr(sm_fil, "name", None), getattr(sm_fil, "material", None), tag_map))
 
@@ -1317,8 +1311,11 @@ async def _sync_finish_tags(
             continue
 
         if action == SyncAction.PUSH_FDB_TO_SM:
-            # FDB → SM: write finish IDs into SM filament extra field.
-            encoded = encode_extra_value(sorted(fdb_ids_now))
+            # FDB → SM: write finish IDs into SM filament extra field as a CSV string.
+            # Spoolman text fields accept a JSON-quoted string ("17,28"), not a JSON
+            # array ("[17, 28]") — the latter 400s. serialize_material_tags produces the
+            # CSV string; encode_extra_value JSON-quotes it to '"17,28"' for the wire.
+            encoded = encode_extra_value(serialize_material_tags(fdb_ids_now))
             if not dry_run:
                 try:
                     await spoolman.update_filament(m.spoolman_filament_id, {"extra": {mt_field: encoded}})

@@ -1,5 +1,31 @@
 # Decision record
 
+## 2026-06-07 — filamentdb_material_tags stored as CSV string in Spoolman text extra field
+
+Spoolman's text extra fields accept a JSON-quoted string value (e.g. `"17,28"` on the wire
+becomes `'"17,28"'` in the PATCH body). They do NOT accept a JSON array (`"[17]"` → 400 Bad
+Request). The bridge was passing a Python list through `encode_extra_value` which does
+`json.dumps(value)` — so `[17]` became `"[17]"`, a JSON array, causing every PATCH to
+`filamentdb_material_tags` to 400. The field has therefore never persisted any values.
+
+**Fix:**
+
+- `serialize_material_tags(ids)` in `backend/app/core/material_tags.py` converts an iterable
+  of ints to a sorted comma-separated string (`"17"`, `"17,28"`, `""`).
+- `parse_material_tags(raw)` in the same module parses back to `list[int]`, tolerating the new
+  CSV string form, an empty string, the legacy JSON-array string (`"[17]"`), and a real Python
+  list (all backward-compatible).
+- The two write sites now call `encode_extra_value(serialize_material_tags(ids))`:
+  - `opt_to_spoolman_fields` in `backend/app/core/opentag_match.py` (OpenTag apply path)
+  - FDB→SM finish-tag write in `backend/app/core/engine.py` `_sync_finish_tags`
+- The read site (`_sm_finish_ids_from_filament` in engine.py) now uses `parse_material_tags`
+  after `decode_extra_value` instead of the old `isinstance(decoded, list)` branch.
+- The apply error handler in `backend/app/api/opentag.py` now logs `exc.response.text` when
+  available so future 4xx errors show Spoolman's detail message.
+
+The snapshot signature (`",".join(str(i) for i in sorted(ids))`) was already CSV — now the
+stored value matches it, so the round-trip is stable (no flapping).
+
 ## 2026-06-07 — OpenTag apply no longer writes multi_color_direction when secondaryColors is empty
 
 `opt_to_spoolman_fields` in `backend/app/core/opentag_match.py` previously set

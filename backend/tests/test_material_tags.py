@@ -7,6 +7,8 @@ from app.core.material_tags import (
     MANAGED_FINISH_IDS,
     finish_ids_from_text,
     parse_material_tag_ids_config,
+    parse_material_tags,
+    serialize_material_tags,
     strip_finish_words,
 )
 
@@ -45,6 +47,80 @@ class TestSeedMap:
         # Every seed value must be in MANAGED_FINISH_IDS
         for _kw, tag_id in DEFAULT_MATERIAL_TAG_IDS.items():
             assert tag_id in MANAGED_FINISH_IDS, f"seed id {tag_id} not in MANAGED_FINISH_IDS"
+
+
+# ---------------------------------------------------------------------------
+# serialize_material_tags
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeMaterialTags:
+    def test_single_id(self):
+        assert serialize_material_tags([17]) == "17"
+
+    def test_two_ids_sorted(self):
+        # Input unsorted — output must be sorted
+        assert serialize_material_tags([28, 17]) == "17,28"
+
+    def test_canonical_example(self):
+        assert serialize_material_tags([17, 28]) == "17,28"
+
+    def test_empty_returns_empty_string(self):
+        assert serialize_material_tags([]) == ""
+
+    def test_deduplicates(self):
+        assert serialize_material_tags([17, 17, 28]) == "17,28"
+
+    def test_frozenset_input(self):
+        result = serialize_material_tags(frozenset({17, 28}))
+        assert result == "17,28"
+
+
+# ---------------------------------------------------------------------------
+# parse_material_tags
+# ---------------------------------------------------------------------------
+
+
+class TestParseMaterialTags:
+    def test_csv_single(self):
+        assert parse_material_tags("17") == [17]
+
+    def test_csv_two(self):
+        assert parse_material_tags("17,28") == [17, 28]
+
+    def test_csv_unsorted_returned_sorted(self):
+        assert parse_material_tags("28,17") == [17, 28]
+
+    def test_empty_string_returns_empty_list(self):
+        assert parse_material_tags("") == []
+
+    def test_none_returns_empty_list(self):
+        assert parse_material_tags(None) == []
+
+    def test_legacy_json_array_string(self):
+        # Pre-fix Spoolman rejected these on write, but any stored value round-trips
+        assert parse_material_tags("[17]") == [17]
+
+    def test_legacy_json_array_multiple(self):
+        assert parse_material_tags("[17, 28]") == [17, 28]
+
+    def test_real_list_input(self):
+        # Already-decoded list (e.g. from decode_extra_value on a legacy entry)
+        assert parse_material_tags([17]) == [17]
+
+    def test_real_list_multiple(self):
+        assert parse_material_tags([28, 17]) == [17, 28]
+
+    def test_deduplicates_csv(self):
+        assert parse_material_tags("17,17,28") == [17, 28]
+
+    def test_round_trip(self):
+        ids = [17, 28]
+        serialized = serialize_material_tags(ids)
+        assert parse_material_tags(serialized) == ids
+
+    def test_unknown_type_returns_empty(self):
+        assert parse_material_tags(12345) == []
 
 
 # ---------------------------------------------------------------------------

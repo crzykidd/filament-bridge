@@ -1420,10 +1420,13 @@ async def test_finish_tags_fdb_to_sm_writes_extra_field(db):
     assert sm_fil_id == FINISH_SM_FIL_ID
     assert "extra" in sm_payload
     assert "filamentdb_material_tags" in sm_payload["extra"]
-    # Decoded value should contain tag 17
+    # Decoded value must be a CSV string containing "17" (not a JSON array)
     from app.schemas.spoolman import decode_extra_value
+    from app.core.material_tags import parse_material_tags
     decoded = decode_extra_value(sm_payload["extra"]["filamentdb_material_tags"])
-    assert 17 in decoded
+    assert isinstance(decoded, str), f"Expected CSV string, got {type(decoded)}: {decoded!r}"
+    parsed = parse_material_tags(decoded)
+    assert 17 in parsed
     assert result.updated >= 1
 
 
@@ -1614,4 +1617,88 @@ async def test_ensure_extra_fields_registers_filament_material_tags_field():
 
     assert "filamentdb_material_tags" in posted_filament_keys, (
         "ensure_extra_fields must POST /api/v1/field/filament/filamentdb_material_tags"
+    )
+
+
+# ---------------------------------------------------------------------------
+# material_tags encoding round-trip: FDB→SM write and SM read back
+# ---------------------------------------------------------------------------
+
+
+def test_finish_tags_fdb_to_sm_encodes_as_csv_string():
+    """The FDB→SM write path must send a JSON-quoted CSV string, not a JSON array.
+
+    Specifically:
+    - serialize_material_tags([17]) → "17"
+    - encode_extra_value("17") → '"17"'   (a JSON string value)
+    - json.loads('"17"') → "17"           (a Python str, NOT a list)
+
+    Spoolman text fields accept '"17"', not '[17]'.
+    """
+    import json as _json
+    from app.core.material_tags import serialize_material_tags
+    from app.schemas.spoolman import encode_extra_value, decode_extra_value
+
+    ids = frozenset({17})
+    serialized = serialize_material_tags(ids)
+    assert isinstance(serialized, str), f"serialize must return str, got {type(serialized)}"
+    assert serialized == "17"
+
+    on_wire = encode_extra_value(serialized)
+    # Must be a JSON-quoted string: '"17"'
+    decoded_back = _json.loads(on_wire)
+    assert isinstance(decoded_back, str), (
+        f"encode_extra_value(csv_string) must decode to str, not {type(decoded_back)}: {decoded_back!r}"
+    )
+    assert decoded_back == "17"
+
+
+def test_finish_tags_sm_read_parses_csv_string():
+    """The SM read path must parse the CSV string back to the correct int set."""
+    from app.core.material_tags import parse_material_tags, serialize_material_tags
+    from app.schemas.spoolman import decode_extra_value, encode_extra_value
+
+    original_ids = [17, 28]
+    # Simulate write: serialize → encode_extra_value
+    on_wire = encode_extra_value(serialize_material_tags(original_ids))
+    # Simulate read: decode_extra_value → parse_material_tags
+    decoded = decode_extra_value(on_wire)
+    parsed = parse_material_tags(decoded)
+    assert parsed == original_ids, f"round-trip mismatch: {parsed!r} != {original_ids!r}"
+
+
+def test_finish_tags_sm_read_parses_legacy_array():
+    """The SM read path must tolerate the legacy JSON-array form for backward-compat."""
+    from app.core.material_tags import parse_material_tags
+    from app.schemas.spoolman import decode_extra_value, encode_extra_value
+
+    # Legacy encoded form: encode_extra_value([17]) → '"[17]"' would have been wrong
+    # but any value already stored as a plain array string "[17]" must still parse
+    legacy_raw = '"[17]"'   # the JSON-wire form for the string "[17]"
+    decoded = decode_extra_value(legacy_raw)
+    parsed = parse_material_tags(decoded)
+    assert parsed == [17], f"legacy array string should parse to [17], got {parsed!r}"
+
+
+def test_finish_tags_snapshot_sig_stable_after_round_trip():
+    """After a write→read round-trip, the finish-sig is identical to the original.
+
+    This confirms the engine snapshot key stays stable and the cycle does not
+    perpetually re-write (no flapping).
+    """
+    from app.core.material_tags import parse_material_tags, serialize_material_tags
+    from app.schemas.spoolman import decode_extra_value, encode_extra_value
+
+    original_ids = frozenset({17, 31})
+    original_sig = ",".join(str(i) for i in sorted(original_ids))
+
+    # Simulate write
+    on_wire = encode_extra_value(serialize_material_tags(original_ids))
+    # Simulate read
+    decoded = decode_extra_value(on_wire)
+    parsed_ids = frozenset(parse_material_tags(decoded))
+    recovered_sig = ",".join(str(i) for i in sorted(parsed_ids))
+
+    assert recovered_sig == original_sig, (
+        f"Snapshot sig changed after round-trip: {original_sig!r} → {recovered_sig!r}"
     )

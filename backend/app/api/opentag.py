@@ -521,9 +521,18 @@ async def opentag_apply(
             ))
         except Exception as exc:
             errors += 1
+            # Include Spoolman's response body when available so the error log
+            # shows Spoolman's detail message (e.g. field type mismatch) rather
+            # than just the HTTP status code.
+            resp_body: str = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                try:
+                    resp_body = f" — response: {exc.response.text}"
+                except Exception:
+                    pass
             logger.error(
-                "opentag apply: error for SM filament %d: %s",
-                decision.spoolman_filament_id, exc,
+                "opentag apply: error for SM filament %d: %s%s",
+                decision.spoolman_filament_id, exc, resp_body,
             )
             results.append(OpenTagApplyFilamentResult(
                 spoolman_filament_id=decision.spoolman_filament_id,

@@ -290,8 +290,11 @@ def test_opt_to_spoolman_fields_basic():
     assert fields["settings_bed_temp"] == 65
     assert fields["extra.openprinttag_slug"] == "buddy3d-pla-silk-bronze"
     assert fields["extra.openprinttag_uuid"] == "d22442a5-1234-0000-0000-000000000001"
-    # Silk tag should be present
-    assert 17 in fields["extra.filamentdb_material_tags"]
+    # material_tags must be a STRING (CSV), not a list — Spoolman text field rejects arrays
+    mt = fields["extra.filamentdb_material_tags"]
+    assert isinstance(mt, str), f"expected str, got {type(mt)}: {mt!r}"
+    # Silk tag (17) should be present in the CSV
+    assert "17" in mt.split(",")
 
 
 def test_opt_to_spoolman_fields_secondary_colors():
@@ -299,6 +302,39 @@ def test_opt_to_spoolman_fields_secondary_colors():
     fields = opt_to_spoolman_fields(opt)
     assert "multi_color_hexes" in fields
     assert "FF0000" in fields["multi_color_hexes"]
+
+
+def test_opt_to_spoolman_fields_material_tags_is_string_not_list():
+    """material_tags must be a CSV STRING, not a list — Spoolman text field rejects arrays."""
+    fields = opt_to_spoolman_fields(_OPT_PLA_SILK)  # has tags: ["silk"] → id 17
+    mt = fields["extra.filamentdb_material_tags"]
+    assert isinstance(mt, str), f"Expected str, got {type(mt)}: {mt!r}"
+
+
+def test_opt_to_spoolman_fields_empty_finish_returns_empty_string():
+    """OPT material with no finish tags should produce an empty string for material_tags."""
+    fields = opt_to_spoolman_fields(_OPT_PETG)  # tags: []
+    mt = fields["extra.filamentdb_material_tags"]
+    assert isinstance(mt, str)
+    assert mt == ""
+
+
+def test_opt_to_spoolman_fields_material_tags_encodes_to_json_string():
+    """encode_extra_value(serialize_material_tags(ids)) must produce a JSON string, not a JSON array.
+
+    Specifically: encode_extra_value("17") == '"17"', NOT '[17]'.
+    Spoolman text fields accept JSON-quoted strings, not JSON arrays.
+    """
+    from app.schemas.spoolman import encode_extra_value
+    fields = opt_to_spoolman_fields(_OPT_PLA_SILK)  # silk → id 17
+    mt = fields["extra.filamentdb_material_tags"]
+    encoded = encode_extra_value(mt)
+    # Must be a JSON-quoted string: '"17"', not '[17]'
+    import json
+    decoded = json.loads(encoded)
+    assert isinstance(decoded, str), f"Expected encoded value to decode to str, got {type(decoded)}: {decoded!r}"
+    # Must NOT be a list
+    assert not isinstance(decoded, list), "Spoolman text field rejects JSON arrays — encode must produce a string"
 
 
 def test_score_candidate_exact_vendor_and_material():
