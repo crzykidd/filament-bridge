@@ -270,9 +270,8 @@ function ConfirmStep({
           newValue: d.value,
         })
       }
-      // slug/uuid are always written if present
-      if (m.opt_slug) result.push({ smId: m.spoolman_filament_id, name: m.spoolman_name, field: 'extra.openprinttag_slug', oldValue: null, newValue: m.opt_slug })
-      if (m.opt_uuid) result.push({ smId: m.spoolman_filament_id, name: m.spoolman_name, field: 'extra.openprinttag_uuid', oldValue: null, newValue: m.opt_uuid })
+      // slug/uuid now come from match.fields (with the real existing SM value as oldValue).
+      // No explicit push here — _build_field_rows on the backend includes them as rows.
     }
     return result
   }, [matches, fieldDecisions, ignoredIds])

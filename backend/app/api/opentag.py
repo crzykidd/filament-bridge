@@ -151,17 +151,17 @@ def _build_field_rows(
 ) -> list[OpenTagFieldRow]:
     """Build per-field comparison rows, SM current vs OPT suggested.
 
-    openprinttag_slug and openprinttag_uuid are intentionally excluded here.
-    They are identity stamps surfaced via match.opt_slug / match.opt_uuid and
-    pushed to Spoolman once by the frontend + written via decision.openprinttag_slug/uuid.
-    Including them in field_rows would cause the confirm page to list them twice.
+    Each row's spoolman_value is the filament's CURRENT live value (native attr
+    for native fields, decoded extra[key] for extra.* fields), so the "old" column
+    in the review UI reflects reality.
+
+    openprinttag_slug and openprinttag_uuid are included as rows (their spoolman_value
+    shows any existing identity), NOT excluded. The frontend must NOT push them
+    separately — they flow through the generic field-rows path. _build_sm_patch
+    deduplicates them if decision.openprinttag_slug/uuid also sets them.
     """
-    slug_field = f"extra.{_settings.spoolman_field_openprinttag_slug}"
-    uuid_field = f"extra.{_settings.spoolman_field_openprinttag_uuid}"
     rows = []
     for field, opt_value in opt_fields.items():
-        if field in (slug_field, uuid_field):
-            continue
         sm_value = _current_spoolman_value(sm_filament, field)
         rows.append(OpenTagFieldRow(
             field=field,
@@ -343,11 +343,15 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     # Build a brand index once — keyed by normalize_vendor(brandName) — so each SM
     # filament only scores its own brand's candidates instead of all ~11k materials.
     materials_by_brand: dict[str, list[dict[str, Any]]] = {}
+    # Also build a UUID index for exact-match bypass (filament already tagged by a prior run).
+    by_uuid: dict[str, dict[str, Any]] = {}
     for m in materials:
         if not isinstance(m, dict):
             continue
         brand_key = normalize_vendor(m.get("brandName"))
         materials_by_brand.setdefault(brand_key, []).append(m)
+        if m.get("uuid"):
+            by_uuid[m["uuid"]] = m
 
     n_filaments = len(sm_filaments)
     n_materials = len(materials)
@@ -357,10 +361,38 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         n_filaments, n_materials, n_brands,
     )
 
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+
     matched = 0
     no_match = 0
     matches: list[OpenTagFilamentMatch] = []
     for sm_fil in sm_filaments:
+        # Exact-UUID match: if the SM filament already carries an openprinttag_uuid that
+        # maps to a known material, return that material at confidence 1.0 — skip fuzzy.
+        existing_uuid = decode_extra_value(sm_fil.extra.get(uuid_field))
+        if existing_uuid and existing_uuid in by_uuid:
+            best = by_uuid[existing_uuid]
+            confidence = 1.0
+            alternates: list[dict[str, Any]] = []
+            matched += 1
+            opt_fields = opt_to_spoolman_fields(best, tag_map)
+            field_rows = _build_field_rows(sm_fil, opt_fields)
+            matches.append(OpenTagFilamentMatch(
+                spoolman_filament_id=sm_fil.id,
+                spoolman_name=sm_fil.name,
+                spoolman_vendor=sm_fil.vendor.name if sm_fil.vendor else None,
+                spoolman_material=sm_fil.material,
+                spoolman_color_hex=sm_fil.color_hex,
+                opt_uuid=best.get("uuid"),
+                opt_slug=best.get("slug"),
+                opt_brand=best.get("brandName"),
+                opt_name=best.get("name"),
+                confidence=confidence,
+                fields=field_rows,
+                alternates=alternates,
+            ))
+            continue
+
         sm_brand_key = normalize_vendor(sm_fil.vendor.name if sm_fil.vendor else None)
         candidates = materials_by_brand.get(sm_brand_key, [])
 

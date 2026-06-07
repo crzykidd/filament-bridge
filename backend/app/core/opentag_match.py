@@ -236,6 +236,11 @@ def opt_to_spoolman_fields(
     if bed_max is not None:
         result["settings_bed_temp"] = int(bed_max)
 
+    # Name — reviewable field; defaults to OpenTag name
+    opt_name = opt.get("name")
+    if opt_name is not None:
+        result["name"] = opt_name
+
     # Identity fields → extra
     slug = opt.get("slug")
     if slug:

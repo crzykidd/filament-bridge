@@ -1,5 +1,34 @@
 # Decision record
 
+## 2026-06-07 — OpenTag review: exact-UUID match, existing identity display, reviewable name
+
+### Exact-UUID match (confidence 1.0)
+
+`GET /api/openprinttag/matches` now builds a `by_uuid` index over the full materials list.
+Before fuzzy scoring, if the SM filament's `extra.openprinttag_uuid` (decoded) exists in
+that index, the corresponding material is returned directly with `confidence = 1.0`,
+bypassing brand-filter and all fuzzy scoring. This covers SM filaments that were already
+tagged by a prior cleanup run — they are immediately re-identified without re-scoring.
+
+### Review shows existing OpenTag identity
+
+`_build_field_rows` in `backend/app/api/opentag.py` now **includes** `extra.openprinttag_slug`
+and `extra.openprinttag_uuid` as review rows (previously excluded, commit 48c05d6 was reversed).
+Each row's `spoolman_value` is the SM filament's current decoded extra value — blank/`None` when
+unset, showing the existing identity when already set.  The removal of the frontend's explicit
+slug/uuid push in `OpenTagCleanup.tsx` (`~274-275`) prevents duplicates: the rows are now
+the single source, and `_build_sm_patch` deduplicates via the `if key not in native["extra"]`
+guard for anything that also comes through `decision.openprinttag_slug/uuid`.
+
+### Reviewable name field (default OpenTag)
+
+`opt_to_spoolman_fields` in `backend/app/core/opentag_match.py` now includes
+`result["name"] = opt.get("name")` — the OpenTag material name is offered as the
+Spoolman filament name.  The `name` row flows through the generic field-rows path: default =
+OpenTag value, keep-mine toggle supported, `_build_sm_patch` writes it as a native Spoolman
+field when not kept.  `spoolman_value` for the `name` row is set to `sm_fil.name` by
+`_current_spoolman_value` (native attribute lookup).
+
 ## 2026-06-07 — filamentdb_material_tags stored as CSV string in Spoolman text extra field
 
 Spoolman's text extra fields accept a JSON-quoted string value (e.g. `"17,28"` on the wire
