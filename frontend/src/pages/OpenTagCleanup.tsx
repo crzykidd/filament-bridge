@@ -574,6 +574,31 @@ export default function OpenTagCleanup() {
             </button>
           </div>
 
+          {/* Bulk-action bar */}
+          <div className="flex items-center gap-3 mb-4 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+            <span className="text-sm text-gray-600">
+              {withMatch.length - withMatch.filter(m => ignoredIds.has(m.spoolman_filament_id)).length} of {withMatch.length} selected
+            </span>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                className="text-xs px-3 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                onClick={() => setIgnoredIds(new Set())}
+                disabled={withMatch.length === 0}
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                className="text-xs px-3 py-1 rounded border border-orange-300 bg-white text-orange-600 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                onClick={() => setIgnoredIds(new Set(withMatch.map(m => m.spoolman_filament_id)))}
+                disabled={withMatch.length === 0}
+              >
+                Ignore all
+              </button>
+            </div>
+          </div>
+
           {withMatch.length === 0 && noMatch.length === 0 && (
             <p className="text-gray-500 italic text-sm">No Spoolman filaments found.</p>
           )}
