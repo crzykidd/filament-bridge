@@ -1238,3 +1238,179 @@ async def test_matches_returns_200_when_cache_has_malformed_data(tmp_path):
         fake_fdb.get_openprinttag.assert_called_once()
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Brand pre-filter: matches endpoint only scores same-brand candidates
+# ---------------------------------------------------------------------------
+
+
+def _make_matches_test_app(tmp_path, materials, sm_filaments):
+    """Return a wired TestClient for GET /api/openprinttag/matches with seeded cache."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=sm_filaments)
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    return TestClient(test_app), _ot_mod, fake_fdb
+
+
+@pytest.mark.asyncio
+async def test_matches_brand_prefilter_same_brand_only(tmp_path):
+    """An Elegoo SM filament is matched against only Elegoo OPT materials, not Buddy3D ones.
+
+    Specifically: a same-name Buddy3D material should NOT appear as the best match when
+    an Elegoo material with the same type/color is also in the dataset.
+    """
+    # OPT material: same name/type as _OPT_PLA_SILK but with brandName ELEGOO
+    opt_elegoo_pla_silk = {
+        **_OPT_PLA_SILK,
+        "uuid": "eeee0000-0000-0000-0000-000000000099",
+        "slug": "elegoo-pla-silk-bronze",
+        "brandName": "ELEGOO",
+    }
+
+    # SM filament: Elegoo vendor
+    sm_elegoo = _sm_fil(sm_id=10, vendor="ELEGOO", material="PLA Silk", color_hex="B87333")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    materials = [_OPT_PLA_SILK, opt_elegoo_pla_silk]  # Buddy3D first, then Elegoo
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_elegoo])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+        # Must have matched against the ELEGOO material, not the Buddy3D one
+        assert match["opt_slug"] == "elegoo-pla-silk-bronze"
+        assert match["opt_brand"] == "ELEGOO"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_vendor_absent_from_opentag_brands_yields_no_match(tmp_path):
+    """A SM filament whose vendor has no OpenTag materials yields a no-match row (opt_slug=None)."""
+    # SM filament from a brand that has NO OPT materials
+    sm_unknown = _sm_fil(sm_id=20, vendor="UnknownBrand9999", material="PLA", color_hex="FF0000")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    # Dataset has materials only for Buddy3D and ELEGOO — not UnknownBrand9999
+    materials = [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE]
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_unknown])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+        # No matching brand → no match
+        assert match["opt_slug"] is None
+        assert match["opt_uuid"] is None
+        assert match["opt_brand"] is None
+        assert match["fields"] == []
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_multi_brand_dataset_returns_correct_best_match(tmp_path):
+    """With materials from several brands, each SM filament matches its own brand's best material."""
+    # Two SM filaments from different brands
+    sm_buddy3d = _sm_fil(sm_id=1, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+    sm_elegoo = _sm_fil(sm_id=2, vendor="ELEGOO", material="PETG", color_hex="CC0000")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    # All three materials in the dataset (two ELEGOO, one Buddy3D)
+    materials = [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE]
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_buddy3d, sm_elegoo])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 2
+
+        # Find each result by filament id
+        by_id = {m["spoolman_filament_id"]: m for m in data["matches"]}
+
+        # Buddy3D PLA Silk → buddy3d-pla-silk-bronze
+        b3d = by_id[1]
+        assert b3d["opt_slug"] == "buddy3d-pla-silk-bronze"
+
+        # ELEGOO PETG Red → elegoo-petg-red (best ELEGOO PETG match)
+        elegoo = by_id[2]
+        assert elegoo["opt_slug"] == "elegoo-petg-red"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

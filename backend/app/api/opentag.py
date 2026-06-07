@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from app.api.errors import api_error
 from app.config import settings as _settings
 from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import find_best_match, opt_to_spoolman_fields
 from app.db import get_db
@@ -296,15 +297,37 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
 
     sm_filaments = await sm.get_filaments()
 
+    # Build a brand index once — keyed by normalize_vendor(brandName) — so each SM
+    # filament only scores its own brand's candidates instead of all ~11k materials.
+    materials_by_brand: dict[str, list[dict[str, Any]]] = {}
+    for m in materials:
+        if not isinstance(m, dict):
+            continue
+        brand_key = normalize_vendor(m.get("brandName"))
+        materials_by_brand.setdefault(brand_key, []).append(m)
+
+    n_filaments = len(sm_filaments)
+    n_materials = len(materials)
+    n_brands = len(materials_by_brand)
+    logger.info(
+        "opentag matches: scoring %d filaments against %d materials across %d brands",
+        n_filaments, n_materials, n_brands,
+    )
+
+    matched = 0
+    no_match = 0
     matches: list[OpenTagFilamentMatch] = []
     for sm_fil in sm_filaments:
-        match_result = find_best_match(sm_fil, materials, tag_map)
+        sm_brand_key = normalize_vendor(sm_fil.vendor.name if sm_fil.vendor else None)
+        candidates = materials_by_brand.get(sm_brand_key, [])
+        match_result = find_best_match(sm_fil, candidates, tag_map)
         best = match_result["best"]
         confidence = match_result["confidence"]
         alternates = match_result["alternates"]
 
         if best is None:
             # Include low-confidence / no-match filaments with empty field rows
+            no_match += 1
             matches.append(OpenTagFilamentMatch(
                 spoolman_filament_id=sm_fil.id,
                 spoolman_name=sm_fil.name,
@@ -321,6 +344,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             ))
             continue
 
+        matched += 1
         opt_fields = opt_to_spoolman_fields(best, tag_map)
         field_rows = _build_field_rows(sm_fil, opt_fields)
 
@@ -338,6 +362,8 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             fields=field_rows,
             alternates=alternates,
         ))
+
+    logger.info("opentag matches: %d matched, %d no-match", matched, no_match)
 
     dataset_meta = OpenTagDatasetMeta(
         fetched_at=dataset["fetched_at"],

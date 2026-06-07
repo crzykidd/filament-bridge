@@ -1,5 +1,22 @@
 # Decision record
 
+## 2026-06-06 — OpenTag matching pre-filters candidates by normalized brand for performance; progress logged
+
+`GET /api/openprinttag/matches` was hanging because `find_best_match` scored all ~11k
+OpenTag materials for every Spoolman filament — hundreds × 11k scoring ops per request.
+
+**Fix:** in `opentag_matches` (`backend/app/api/opentag.py`), a `materials_by_brand`
+index is built once from the full dataset, keyed by `normalize_vendor(m.get("brandName"))`.
+For each SM filament, only its brand's candidates are passed to `find_best_match`.
+A SM vendor with no matching OpenTag brand gets an empty candidates list → no-match (correct;
+brand is a strong signal). `find_best_match` is unchanged in signature and behavior.
+
+**Progress logging added** before and after the scoring loop:
+- Before: `opentag matches: scoring N filaments against M materials across B brands`
+- After: `opentag matches: X matched, Y no-match`
+
+These were absent, which is why the user saw "no log entries" during the long hang.
+
 ## 2026-06-06 — FDB /api/openprinttag returns OPTDatabase wrapper; bridge extracts .materials; cache self-heals malformed data
 
 ### Root cause
