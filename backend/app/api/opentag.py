@@ -149,9 +149,19 @@ def _build_field_rows(
     sm_filament: Any,
     opt_fields: dict[str, Any],
 ) -> list[OpenTagFieldRow]:
-    """Build per-field comparison rows, SM current vs OPT suggested."""
+    """Build per-field comparison rows, SM current vs OPT suggested.
+
+    openprinttag_slug and openprinttag_uuid are intentionally excluded here.
+    They are identity stamps surfaced via match.opt_slug / match.opt_uuid and
+    pushed to Spoolman once by the frontend + written via decision.openprinttag_slug/uuid.
+    Including them in field_rows would cause the confirm page to list them twice.
+    """
+    slug_field = f"extra.{_settings.spoolman_field_openprinttag_slug}"
+    uuid_field = f"extra.{_settings.spoolman_field_openprinttag_uuid}"
     rows = []
     for field, opt_value in opt_fields.items():
+        if field in (slug_field, uuid_field):
+            continue
         sm_value = _current_spoolman_value(sm_filament, field)
         rows.append(OpenTagFieldRow(
             field=field,

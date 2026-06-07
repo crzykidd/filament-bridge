@@ -3062,6 +3062,104 @@ async def test_ensure_extra_fields_skips_already_existing_filament_fields():
     assert post_calls == [], f"Expected no field creation POSTs, got: {post_calls}"
 
 
+# ---------------------------------------------------------------------------
+# Fix: _build_field_rows excludes openprinttag_slug/uuid (prevent duplicate display)
+# ---------------------------------------------------------------------------
+
+
+def test_build_field_rows_excludes_slug_and_uuid():
+    """_build_field_rows must not include extra.openprinttag_slug or extra.openprinttag_uuid.
+
+    These identity stamps are surfaced via match.opt_slug/opt_uuid and pushed once by
+    the frontend; including them in field_rows would list them twice on the confirm page.
+    opt_to_spoolman_fields still returns them (other call sites rely on the full output),
+    but _build_field_rows filters them out at the field-rows layer.
+    """
+    from app.api.opentag import _build_field_rows
+    from app.config import settings as _s
+
+    sm = _sm_fil(sm_id=1, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+    opt_fields = opt_to_spoolman_fields(_OPT_PLA_SILK)
+
+    # Sanity-check: opt_to_spoolman_fields still returns the slug/uuid keys
+    assert f"extra.{_s.spoolman_field_openprinttag_slug}" in opt_fields
+    assert f"extra.{_s.spoolman_field_openprinttag_uuid}" in opt_fields
+
+    rows = _build_field_rows(sm, opt_fields)
+    row_fields = [r.field for r in rows]
+
+    # slug and uuid must NOT appear in field rows
+    assert f"extra.{_s.spoolman_field_openprinttag_slug}" not in row_fields, (
+        "extra.openprinttag_slug must not appear in field rows (would duplicate confirm page)"
+    )
+    assert f"extra.{_s.spoolman_field_openprinttag_uuid}" not in row_fields, (
+        "extra.openprinttag_uuid must not appear in field rows (would duplicate confirm page)"
+    )
+
+    # Native fields and extra.filamentdb_material_tags must still be present
+    assert "material" in row_fields
+    assert f"extra.{_s.spoolman_field_filamentdb_material_tags}" in row_fields
+    assert len(rows) > 0, "field_rows must not be empty after filtering"
+
+
+@pytest.mark.asyncio
+async def test_matches_endpoint_fields_exclude_slug_uuid_while_opt_fields_populated(tmp_path):
+    """GET /api/openprinttag/matches: each matched filament's .fields must not include
+    extra.openprinttag_slug or extra.openprinttag_uuid, while opt_slug/opt_uuid are
+    still populated and native field rows (material, density, etc.) are present.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+    from app.config import settings as _s
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [_OPT_PLA_SILK], fresh_ts)
+
+    sm_fil = _sm_fil(sm_id=1, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_fil])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+
+        # opt_slug and opt_uuid must still be populated on the match
+        assert match["opt_slug"] == "buddy3d-pla-silk-bronze"
+        assert match["opt_uuid"] == "d22442a5-1234-0000-0000-000000000001"
+
+        # field rows must NOT contain the slug/uuid extra fields
+        field_names = [f["field"] for f in match["fields"]]
+        slug_key = f"extra.{_s.spoolman_field_openprinttag_slug}"
+        uuid_key = f"extra.{_s.spoolman_field_openprinttag_uuid}"
+        assert slug_key not in field_names, (
+            f"{slug_key} appeared in match.fields (causes duplicate on confirm page)"
+        )
+        assert uuid_key not in field_names, (
+            f"{uuid_key} appeared in match.fields (causes duplicate on confirm page)"
+        )
+
+        # Native fields must still be present
+        assert "material" in field_names
+        assert f"extra.{_s.spoolman_field_filamentdb_material_tags}" in field_names
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
 @pytest.mark.asyncio
 async def test_ensure_extra_fields_spool_section_isolated_from_filament_section():
     """A get_field_definitions failure in the spool section must not prevent
