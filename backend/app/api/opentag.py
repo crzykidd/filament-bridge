@@ -437,9 +437,25 @@ async def opentag_apply(
     Each filament decision is applied independently; per-filament errors are
     non-fatal. Only fields not marked keep_mine are written. Only fields with
     a non-None value are written.
+
+    Before the decision loop, ensure the required Spoolman extra fields exist so that
+    PATCH writes to openprinttag_slug / openprinttag_uuid / filamentdb_material_tags
+    never 422 due to undefined field keys.
     """
     sm: Any = request.app.state.spoolman
     fdb: Any = request.app.state.filamentdb
+
+    # Self-heal: create any missing Spoolman extra fields before any write attempt.
+    # ensure_extra_fields is idempotent — it only POSTs fields that are not yet defined.
+    try:
+        await sm.ensure_extra_fields()
+    except Exception as exc:
+        logger.error("opentag apply: could not ensure Spoolman extra fields: %s", exc)
+        raise api_error(
+            502,
+            "opentag_field_setup_failed",
+            f"Could not ensure the OpenTag extra fields exist in Spoolman: {exc}",
+        ) from exc
 
     results: list[OpenTagApplyFilamentResult] = []
     applied = 0

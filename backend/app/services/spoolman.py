@@ -149,15 +149,26 @@ class SpoolmanClient:
     async def ensure_extra_fields(self) -> None:
         """Create the bridge's required extra fields on spool and filament if they don't exist.
 
-        Called once on startup. Spoolman stores extra fields JSON-double-quoted;
-        default_value for a text field is the JSON encoding of an empty string: '""'.
+        Called once on startup and before any OpenTag apply writes. Idempotent —
+        only POSTs fields not yet registered in Spoolman. Spoolman stores extra
+        field values JSON-double-quoted; default_value for a text field is '""'.
 
         Spool fields: filamentdb_id, filamentdb_parent_id, filamentdb_spool_id
-        Filament fields: filamentdb_material_tags (finish OpenPrintTag IDs)
+        Filament fields: filamentdb_material_tags, openprinttag_slug, openprinttag_uuid
+
+        The spool section and filament section run independently — a failure in one
+        (including a transient error on get_field_definitions) does not abort the other.
         """
         # ---- Spool fields ----
-        existing_spool = await self.get_field_definitions("spool")
-        existing_spool_keys = {f.key for f in existing_spool}
+        try:
+            existing_spool = await self.get_field_definitions("spool")
+            existing_spool_keys = {f.key for f in existing_spool}
+        except Exception as exc:
+            logger.warning(
+                "ensure_extra_fields: could not read spool field definitions, "
+                "skipping spool section: %s", exc,
+            )
+            existing_spool_keys = set()
 
         for field_def in _REQUIRED_SPOOL_FIELDS:
             key = field_def["key"]
@@ -172,18 +183,27 @@ class SpoolmanClient:
                 resp = await self._http.post(f"/api/v1/field/spool/{key}", json=payload)
                 resp.raise_for_status()
                 logger.info("Created Spoolman extra field: spool.%s", key)
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                body = exc.response.text if isinstance(exc, httpx.HTTPStatusError) else str(exc)
                 logger.warning(
                     "Could not create Spoolman extra field spool.%s: %s %s",
-                    key, exc.response.status_code, exc.response.text,
+                    key, status, body,
                 )
 
         # ---- Filament fields ----
         from app.config import settings as _settings
-        existing_filament = await self.get_field_definitions("filament")
-        existing_filament_keys = {f.key for f in existing_filament}
+        try:
+            existing_filament = await self.get_field_definitions("filament")
+            existing_filament_keys = {f.key for f in existing_filament}
+        except Exception as exc:
+            logger.warning(
+                "ensure_extra_fields: could not read filament field definitions, "
+                "will attempt to create all filament fields: %s", exc,
+            )
+            existing_filament_keys = set()
 
-        # Build the runtime field list, substituting the config-overridable key.
+        # Build the runtime field list, substituting the config-overridable keys.
         runtime_filament_fields = [
             {
                 "key": _settings.spoolman_field_filamentdb_material_tags,
@@ -215,10 +235,12 @@ class SpoolmanClient:
                 resp = await self._http.post(f"/api/v1/field/filament/{key}", json=payload)
                 resp.raise_for_status()
                 logger.info("Created Spoolman extra field: filament.%s", key)
-            except httpx.HTTPStatusError as exc:
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                body = exc.response.text if isinstance(exc, httpx.HTTPStatusError) else str(exc)
                 logger.warning(
                     "Could not create Spoolman extra field filament.%s: %s %s",
-                    key, exc.response.status_code, exc.response.text,
+                    key, status, body,
                 )
 
     # ------------------------------------------------------------------

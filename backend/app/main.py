@@ -4,7 +4,8 @@ Startup sequence:
   1. Config is validated at import time (app/config.py raises SystemExit on missing vars)
   2. Lifespan runs Alembic migrations and seeds default BridgeConfig rows
   3. Lifespan opens async HTTP clients for both upstream APIs
-  4. ensure_extra_fields() creates the three Spoolman cross-ref fields if absent
+  4. ensure_extra_fields() creates the Spoolman cross-ref spool fields and the filament
+     fields (filamentdb_material_tags, openprinttag_slug, openprinttag_uuid) if absent
   5. APScheduler registers an interval job (SYNC_INTERVAL_SECONDS) that reads
      auto_sync_enabled from BridgeConfig each tick — if false it is a no-op
   6. Health endpoint is available immediately at GET /api/health

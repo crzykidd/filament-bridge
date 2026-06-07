@@ -1,5 +1,46 @@
 # Decision record
 
+## 2026-06-07 — OpenTag apply self-creates required extra fields; ensure_extra_fields is per-section resilient
+
+### Root cause
+
+The OpenTag apply endpoint (`POST /api/openprinttag/apply`) was 422-ing on every filament
+because the Spoolman filament extra fields `openprinttag_slug` and `openprinttag_uuid` were
+never created. `ensure_extra_fields` creates these at startup but is wrapped in a swallow-all
+`try/except` in `main.py`, so a transient/partial failure at startup left them missing
+silently — with no log entry visible to the user.
+
+### Fix 1: apply self-heals (`backend/app/api/opentag.py`)
+
+`opentag_apply` now calls `await sm.ensure_extra_fields()` once before the decision loop.
+`ensure_extra_fields` is idempotent (only POSTs fields not yet defined), so calling it on
+every apply is safe and cheap. A failure in this call returns a clear 502
+`opentag_field_setup_failed` error with a descriptive message, rather than letting the first
+PATCH attempt fail with a 422 for each filament.
+
+### Fix 2: per-section isolation in ensure_extra_fields (`backend/app/services/spoolman.py`)
+
+The spool field section and the filament field section now each wrap their
+`get_field_definitions(...)` call (previously un-try'd) in independent try/except blocks.
+A failure in the spool section logs a warning and continues to the filament section; a
+failure in the filament section does not block the spool section. This means a transient
+Spoolman error against one entity type cannot silently leave the other type's fields
+uncreated.
+
+The per-field creation `except` was broadened from `httpx.HTTPStatusError` only to
+`(httpx.HTTPStatusError, httpx.RequestError)`, so transient connection/timeout errors
+on individual field POSTs are logged and skipped rather than bubbling up and aborting
+the remaining fields.
+
+### Fix 3: main.py docstring tidied
+
+The startup comment (step 4) previously said "the three cross-ref fields". It now
+accurately lists the full set: cross-ref spool fields +
+`filamentdb_material_tags` / `openprinttag_slug` / `openprinttag_uuid`.
+
+All field creation stays via the Spoolman REST API (`POST /api/v1/field/{entity}/{key}`),
+never touching the DB directly.
+
 ## 2026-06-06 — OpenTag matcher: arrangement-from-tags, polymer-family gate, finish-aware scoring
 
 Three systematic failures found via a real-data audit (bridge matcher run over live Spoolman DB

@@ -2707,3 +2707,337 @@ def test_score_no_color_token_sm_matches_brand_material_after_rebalance():
     score = score_candidate(sm_unnamed, _OPT_PETG)
     # vendor(0.20) + material(0.20) + neutral_name(0.15) + some_hex + finish > 0.30
     assert score > 0.50, f"Expected neutral-name match > 0.50, got {score:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Fix: opentag_apply self-heals by calling ensure_extra_fields before writes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_calls_ensure_extra_fields_before_decision_loop():
+    """opentag_apply must call sm.ensure_extra_fields() before any PATCH write."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    ensure_called: list[bool] = []
+    patch_called_before_ensure: list[bool] = []
+
+    async def _fake_ensure():
+        ensure_called.append(True)
+
+    async def _fake_patch(fil_id, payload):
+        # If ensure hasn't been called yet when patch runs, record that
+        patch_called_before_ensure.append(len(ensure_called) == 0)
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock(side_effect=_fake_ensure)
+    fake_sm.update_filament = AsyncMock(side_effect=_fake_patch)
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 7,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": "test-slug",
+                "openprinttag_uuid": "test-uuid",
+                "fields": [
+                    {"field": "material", "value": "PLA", "keep_mine": False},
+                ],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+    assert data["errors"] == 0
+
+    # ensure_extra_fields must have been called exactly once
+    fake_sm.ensure_extra_fields.assert_called_once()
+    # The PATCH must not have happened before ensure completed
+    assert not any(patch_called_before_ensure), (
+        "update_filament was called before ensure_extra_fields completed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_succeeds_when_fields_were_missing_and_ensure_creates_them():
+    """apply succeeds (no 422) when the required extra fields were missing and
+    ensure_extra_fields creates them just-in-time before any PATCH.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    # Simulate a SM client where ensure_extra_fields silently creates the missing fields
+    # and update_filament then succeeds (no 422).
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock(return_value=None)  # fields created OK
+    fake_sm.update_filament = AsyncMock(return_value=MagicMock())  # PATCH succeeds
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 99,
+                "ignored": False,
+                "fdb_filament_id": "fdb-99",
+                "openprinttag_slug": "brand-pla-black",
+                "openprinttag_uuid": "uuid-999",
+                "fields": [
+                    {"field": "material", "value": "PLA", "keep_mine": False},
+                ],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+    assert data["errors"] == 0
+    fake_sm.ensure_extra_fields.assert_called_once()
+    fake_sm.update_filament.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_apply_returns_502_when_ensure_extra_fields_fails():
+    """When ensure_extra_fields raises, apply must return 502 opentag_field_setup_failed."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    fake_sm.update_filament = AsyncMock()
+
+    fake_fdb = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app, raise_server_exceptions=False)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 1,
+                "ignored": False,
+                "fields": [{"field": "material", "value": "PLA", "keep_mine": False}],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 502, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "opentag_field_setup_failed"
+    assert "OpenTag extra fields" in detail["message"]
+    # No PATCH should have been attempted
+    fake_sm.update_filament.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Fix: ensure_extra_fields — per-section isolation + broader exception handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_creates_filament_fields_when_spool_section_raises():
+    """When the spool section's get_field_definitions raises, the filament section
+    still runs and creates all missing filament fields.
+    """
+    from app.services.spoolman import SpoolmanClient
+    from app.config import settings as _s
+
+    created_keys: list[str] = []
+
+    async def _fake_get_fields(url, **kwargs):
+        if "spool" in url:
+            raise httpx.ConnectError("spool fetch failed")
+        # Filament: no fields yet
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=[])
+        return resp
+
+    async def _fake_post(url, json=None):
+        key = url.split("/")[-1]
+        created_keys.append(key)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = SpoolmanClient("http://spoolman.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get_fields)
+    client._http.post = AsyncMock(side_effect=_fake_post)
+
+    # Should NOT raise — spool failure is swallowed, filament section runs
+    await client.ensure_extra_fields()
+
+    # All three filament fields must have been created
+    assert _s.spoolman_field_filamentdb_material_tags in created_keys
+    assert _s.spoolman_field_openprinttag_slug in created_keys
+    assert _s.spoolman_field_openprinttag_uuid in created_keys
+
+
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_creates_remaining_filament_fields_after_one_post_raises():
+    """When one filament field POST raises a RequestError, the remaining filament
+    fields are still attempted and created.
+    """
+    from app.services.spoolman import SpoolmanClient
+    from app.config import settings as _s
+
+    created_keys: list[str] = []
+    call_count = [0]
+
+    async def _fake_get_fields(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=[])  # no fields exist yet
+        return resp
+
+    async def _fake_post(url, json=None):
+        key = url.split("/")[-1]
+        call_count[0] += 1
+        # Fail only the first filament field POST (material_tags)
+        if _s.spoolman_field_filamentdb_material_tags in url and call_count[0] == 1:
+            raise httpx.ConnectError("transient failure")
+        created_keys.append(key)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = SpoolmanClient("http://spoolman.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get_fields)
+    client._http.post = AsyncMock(side_effect=_fake_post)
+
+    # Must not raise — one failure is logged and skipped
+    await client.ensure_extra_fields()
+
+    # The two remaining filament fields (slug + uuid) must still have been created
+    assert _s.spoolman_field_openprinttag_slug in created_keys
+    assert _s.spoolman_field_openprinttag_uuid in created_keys
+
+
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_skips_already_existing_filament_fields():
+    """When all filament fields already exist, no POST should be issued for them."""
+    from app.services.spoolman import SpoolmanClient
+    from app.config import settings as _s
+    from app.schemas.spoolman import SpoolmanFieldDef
+
+    post_calls: list[str] = []
+
+    async def _fake_get_fields(url, **kwargs):
+        if "spool" in url:
+            # All spool fields already exist
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json = MagicMock(return_value=[
+                {"key": "filamentdb_id", "name": "x", "field_type": "text", "entity_type": "spool"},
+                {"key": "filamentdb_parent_id", "name": "x", "field_type": "text", "entity_type": "spool"},
+                {"key": "filamentdb_spool_id", "name": "x", "field_type": "text", "entity_type": "spool"},
+            ])
+        else:
+            # All filament fields already exist
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json = MagicMock(return_value=[
+                {"key": _s.spoolman_field_filamentdb_material_tags, "name": "x", "field_type": "text", "entity_type": "filament"},
+                {"key": _s.spoolman_field_openprinttag_slug, "name": "x", "field_type": "text", "entity_type": "filament"},
+                {"key": _s.spoolman_field_openprinttag_uuid, "name": "x", "field_type": "text", "entity_type": "filament"},
+            ])
+        return resp
+
+    async def _fake_post(url, json=None):
+        post_calls.append(url)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = SpoolmanClient("http://spoolman.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get_fields)
+    client._http.post = AsyncMock(side_effect=_fake_post)
+
+    await client.ensure_extra_fields()
+
+    # No POSTs should have been made — all fields existed
+    assert post_calls == [], f"Expected no field creation POSTs, got: {post_calls}"
+
+
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_spool_section_isolated_from_filament_section():
+    """A get_field_definitions failure in the spool section must not prevent
+    the filament section from running (per-section isolation).
+
+    This tests the specific bug: previously the un-try'd get_field_definitions
+    call would abort the entire function, leaving filament fields uncreated.
+    """
+    from app.services.spoolman import SpoolmanClient
+    from app.config import settings as _s
+
+    filament_fields_attempted: list[str] = []
+
+    async def _fake_get_fields(url, **kwargs):
+        if "spool" in url:
+            # Simulate a 500 from Spoolman when reading spool field defs
+            mock_resp = MagicMock()
+            mock_resp.status_code = 500
+            mock_req = MagicMock()
+            raise httpx.HTTPStatusError("500", request=mock_req, response=mock_resp)
+        # Filament fields: empty (none registered)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=[])
+        return resp
+
+    async def _fake_post(url, json=None):
+        key = url.split("/")[-1]
+        if "filament" in url:
+            filament_fields_attempted.append(key)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = SpoolmanClient("http://spoolman.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get_fields)
+    client._http.post = AsyncMock(side_effect=_fake_post)
+
+    # Must not raise
+    await client.ensure_extra_fields()
+
+    # Filament fields must still have been attempted despite spool section failure
+    assert _s.spoolman_field_openprinttag_slug in filament_fields_attempted, (
+        "openprinttag_slug was not attempted — spool failure aborted the filament section"
+    )
+    assert _s.spoolman_field_openprinttag_uuid in filament_fields_attempted, (
+        "openprinttag_uuid was not attempted — spool failure aborted the filament section"
+    )
