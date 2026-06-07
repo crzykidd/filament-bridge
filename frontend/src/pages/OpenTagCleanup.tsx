@@ -352,6 +352,98 @@ function ConfirmStep({
 }
 
 // ---------------------------------------------------------------------------
+// Group / sort controls
+// ---------------------------------------------------------------------------
+
+type GroupBy = 'none' | 'brand' | 'material'
+type SortBy = 'confidence' | 'brand' | 'material' | 'name'
+
+interface MatchGroup {
+  key: string
+  matches: OpenTagFilamentMatch[]
+}
+
+function groupLabel(groupBy: GroupBy): string {
+  if (groupBy === 'brand') return 'Brand'
+  if (groupBy === 'material') return 'Material'
+  return ''
+}
+
+function sortLabel(sortBy: SortBy): string {
+  if (sortBy === 'confidence') return 'Confidence (high→low)'
+  if (sortBy === 'brand') return 'Brand (A→Z)'
+  if (sortBy === 'material') return 'Material (A→Z)'
+  return 'Name (A→Z)'
+}
+
+function groupKey(m: OpenTagFilamentMatch, groupBy: GroupBy): string {
+  if (groupBy === 'brand') return m.spoolman_vendor?.trim() || 'Unknown / no vendor'
+  if (groupBy === 'material') return m.spoolman_material?.trim() || 'Unknown / no material'
+  return ''
+}
+
+function sortMatches(list: OpenTagFilamentMatch[], sortBy: SortBy): OpenTagFilamentMatch[] {
+  return [...list].sort((a, b) => {
+    if (sortBy === 'confidence') return b.confidence - a.confidence
+    if (sortBy === 'brand') {
+      const av = (a.spoolman_vendor ?? '').toLowerCase()
+      const bv = (b.spoolman_vendor ?? '').toLowerCase()
+      if (av !== bv) return av < bv ? -1 : 1
+      return (a.spoolman_name ?? '').toLowerCase() < (b.spoolman_name ?? '').toLowerCase() ? -1 : 1
+    }
+    if (sortBy === 'material') {
+      const am = (a.spoolman_material ?? '').toLowerCase()
+      const bm = (b.spoolman_material ?? '').toLowerCase()
+      if (am !== bm) return am < bm ? -1 : 1
+      return (a.spoolman_name ?? '').toLowerCase() < (b.spoolman_name ?? '').toLowerCase() ? -1 : 1
+    }
+    // name
+    return (a.spoolman_name ?? '').toLowerCase() < (b.spoolman_name ?? '').toLowerCase() ? -1 : 1
+  })
+}
+
+interface GroupSectionProps {
+  group: MatchGroup
+  fieldDecisions: Record<number, Record<string, OpenTagFieldDecision>>
+  ignoredIds: Set<number>
+  onFieldChange: (smId: number, field: string, updated: OpenTagFieldDecision) => void
+  onIgnore: (smId: number, ignored: boolean) => void
+  showHeader: boolean
+}
+
+function GroupSection({ group, fieldDecisions, ignoredIds, onFieldChange, onIgnore, showHeader }: GroupSectionProps) {
+  const [collapsed, setCollapsed] = useState(false)
+
+  return (
+    <div className="mb-4">
+      {showHeader && (
+        <button
+          type="button"
+          className="flex items-center gap-2 w-full text-left px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md mb-2 select-none"
+          onClick={() => setCollapsed(c => !c)}
+        >
+          <span className="text-gray-400 text-xs w-3 shrink-0">
+            {collapsed ? '▶' : '▼'}
+          </span>
+          <span className="text-sm font-semibold text-gray-700">{group.key}</span>
+          <span className="text-xs text-gray-400 ml-1">({group.matches.length})</span>
+        </button>
+      )}
+      {!collapsed && group.matches.map(m => (
+        <FilamentCard
+          key={m.spoolman_filament_id}
+          match={m}
+          decisions={fieldDecisions[m.spoolman_filament_id] ?? {}}
+          onFieldChange={(field, updated) => onFieldChange(m.spoolman_filament_id, field, updated)}
+          onIgnore={ignored => onIgnore(m.spoolman_filament_id, ignored)}
+          ignored={ignoredIds.has(m.spoolman_filament_id)}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -360,6 +452,10 @@ type Step = 'review' | 'confirm' | 'done'
 export default function OpenTagCleanup() {
   // Cache status — loaded instantly on mount, no fetch
   const [cacheStatus, setCacheStatus] = useState<OpenTagCacheStatus | null>(null)
+
+  // Group / sort state
+  const [groupBy, setGroupBy] = useState<GroupBy>('brand')
+  const [sortBy, setSortBy] = useState<SortBy>('confidence')
 
   // Loading / work state
   const [working, setWorking] = useState(false)
@@ -504,6 +600,34 @@ export default function OpenTagCleanup() {
   const withMatch = matches.filter(m => m.confidence >= 0.30)
   const noMatch = matches.filter(m => m.confidence < 0.30)
 
+  // Grouped + sorted display for the review step
+  const displayGroups = useMemo<MatchGroup[]>(() => {
+    const sorted = sortMatches(withMatch, sortBy)
+    if (groupBy === 'none') {
+      return [{ key: '', matches: sorted }]
+    }
+    // Build ordered group map
+    const order: string[] = []
+    const map = new Map<string, OpenTagFilamentMatch[]>()
+    for (const m of sorted) {
+      const k = groupKey(m, groupBy)
+      if (!map.has(k)) {
+        order.push(k)
+        map.set(k, [])
+      }
+      map.get(k)!.push(m)
+    }
+    // Sort group keys A→Z (unknown last)
+    order.sort((a, b) => {
+      const aUnknown = a.startsWith('Unknown')
+      const bUnknown = b.startsWith('Unknown')
+      if (aUnknown && !bUnknown) return 1
+      if (!aUnknown && bUnknown) return -1
+      return a.toLowerCase() < b.toLowerCase() ? -1 : 1
+    })
+    return order.map(k => ({ key: k, matches: map.get(k)! }))
+  }, [withMatch, groupBy, sortBy])
+
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-1">OpenTag Cleanup</h1>
@@ -574,6 +698,45 @@ export default function OpenTagCleanup() {
             </button>
           </div>
 
+          {/* Group / sort controls */}
+          <div className="flex flex-wrap items-center gap-4 mb-3 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium">Group by:</span>
+              {(['none', 'brand', 'material'] as GroupBy[]).map(g => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                    groupBy === g
+                      ? 'bg-indigo-100 border-indigo-400 text-indigo-700 font-semibold'
+                      : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
+                  }`}
+                  onClick={() => setGroupBy(g)}
+                >
+                  {g === 'none' ? 'None' : groupLabel(g)}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium">Sort by:</span>
+              {(['confidence', 'brand', 'material', 'name'] as SortBy[]).map(s => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                    sortBy === s
+                      ? 'bg-indigo-100 border-indigo-400 text-indigo-700 font-semibold'
+                      : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
+                  }`}
+                  onClick={() => setSortBy(s)}
+                  title={sortLabel(s)}
+                >
+                  {s === 'confidence' ? 'Confidence' : s === 'brand' ? 'Brand' : s === 'material' ? 'Material' : 'Name'}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Bulk-action bar */}
           <div className="flex items-center gap-3 mb-4 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
             <span className="text-sm text-gray-600">
@@ -603,16 +766,15 @@ export default function OpenTagCleanup() {
             <p className="text-gray-500 italic text-sm">No Spoolman filaments found.</p>
           )}
 
-          {withMatch.map(m => (
-            <FilamentCard
-              key={m.spoolman_filament_id}
-              match={m}
-              decisions={fieldDecisions[m.spoolman_filament_id] ?? {}}
-              onFieldChange={(field, updated) =>
-                handleFieldChange(m.spoolman_filament_id, field, updated)
-              }
-              onIgnore={ignored => handleIgnore(m.spoolman_filament_id, ignored)}
-              ignored={ignoredIds.has(m.spoolman_filament_id)}
+          {displayGroups.map(group => (
+            <GroupSection
+              key={group.key || '__flat__'}
+              group={group}
+              fieldDecisions={fieldDecisions}
+              ignoredIds={ignoredIds}
+              onFieldChange={handleFieldChange}
+              onIgnore={handleIgnore}
+              showHeader={groupBy !== 'none'}
             />
           ))}
 
