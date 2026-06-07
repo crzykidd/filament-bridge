@@ -1,5 +1,37 @@
 # Decision record
 
+## 2026-06-06 — OpenTag matcher: color NAME is the key within-brand/material discriminator; hex demoted
+
+`score_candidate` in `backend/app/core/opentag_match.py` previously ignored the color
+name entirely — it scored brand (0.30) + material (0.40) + hex-proximity (0.20) +
+finish (0.10). Within a brand+material, all color variants received the same 0.70
+baseline and the tiebreaker was RGB distance, which is unreliable (e.g. CB6D30 "Orange"
+is closer in RGB to AF784D "Copper" than to some true-orange hex).
+
+**Fix:** rebalanced weights and added a color-name similarity component:
+
+| Component | Old weight | New weight |
+|---|---|---|
+| material/type (exact) | 0.40 | 0.25 |
+| vendor/brand (exact) | 0.30 | 0.25 |
+| **color-name similarity** | — | **0.35** |
+| color hex proximity | 0.20 | 0.10 |
+| finish tag overlap | 0.10 | 0.05 |
+
+Two new pure helpers:
+- `_color_name_tokens(name, vendor, material, tag_map)` — strips vendor tokens, material
+  tokens (base + full), and finish keywords from the name string; returns the remaining
+  lowercase token set (the isolatable color name).
+- `_name_similarity(sm_tokens, opt_tokens)` — Jaccard similarity with a containment bonus
+  for single-token colors; returns 0.5 (neutral) when either side has no color token so
+  naming gaps don't nuke an otherwise-good match; returns 0.0 when both sides have tokens
+  and they're disjoint.
+
+With these changes, "Orange / Hatchbox / PETG" scores the OpenTag Orange candidate strictly
+higher than the Copper candidate of the same brand+material, even when the Orange hex is
+RGB-closer to Copper. Verified by `test_orange_vs_copper_bug_orange_scores_higher` and
+`test_find_best_match_returns_orange_not_copper`.
+
 ## 2026-06-06 — OpenTag cleanup: instant dataset banner + staged fetch/match progress
 
 Added `GET /api/openprinttag/status` — a side-effect-free endpoint that reads local

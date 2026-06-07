@@ -3,8 +3,9 @@
 Scores OPTMaterial candidates against a SpoolmanFilament by:
   1. Material/type match (normalised, finish-stripped)
   2. Vendor/brand name match
-  3. Color hex proximity
-  4. Finish tag overlap
+  3. Color name similarity  ← key within-brand/material discriminator
+  4. Color hex proximity
+  5. Finish tag overlap
 
 Returns best match + confidence + alternates list.
 """
@@ -117,6 +118,93 @@ def _norm(s: str | None) -> str:
     return unicodedata.normalize("NFKC", s).lower().strip()
 
 
+def _color_name_tokens(
+    name: str | None,
+    vendor: str | None,
+    material: str | None,
+    tag_map: dict[str, int] | None = None,
+) -> set[str]:
+    """Extract the color-name tokens from a filament name by removing vendor,
+    material, and finish words.
+
+    Returns a (possibly empty) set of lowercase token strings.  An empty set
+    means no distinguishable color token could be isolated.
+
+    Examples::
+
+        _color_name_tokens("Orange", "Hatchbox", "PETG", ...)  → {"orange"}
+        _color_name_tokens("Copper PETG", "Hatchbox", "PETG", ...)  → {"copper"}
+        _color_name_tokens("PLA Silk Bronze", "Buddy3D", "PLA Silk", ...)  → {"bronze"}
+    """
+    if tag_map is None:
+        tag_map = DEFAULT_MATERIAL_TAG_IDS
+
+    text = _norm(name)
+    if not text:
+        return set()
+
+    # Remove vendor tokens
+    vendor_norm = _norm(vendor)
+    for tok in vendor_norm.split():
+        # Whole-word removal
+        text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
+
+    # Remove material tokens (base material, finish-stripped)
+    mat_norm = _norm(material)
+    base_mat = _norm(strip_finish_words(mat_norm, tag_map) or mat_norm)
+    for tok in base_mat.split():
+        text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
+
+    # Remove full material string tokens (catches e.g. "petg" in "Copper PETG")
+    for tok in mat_norm.split():
+        text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
+
+    # Remove finish words
+    for keyword in sorted(tag_map.keys(), key=len, reverse=True):
+        text = re.sub(r'\b' + re.escape(keyword) + r'\b', ' ', text, flags=re.IGNORECASE)
+
+    # Tokenize what remains
+    tokens = {t for t in text.split() if len(t) > 1}
+    return tokens
+
+
+def _name_similarity(
+    sm_tokens: set[str],
+    opt_tokens: set[str],
+) -> float:
+    """Score color-name token overlap in [0.0, 1.0].
+
+    Scoring:
+    - If both token sets are non-empty: Jaccard similarity with a containment
+      bonus for single-token names (e.g. {"orange"} inside {"pumpkin", "orange"}).
+    - If either side has no color tokens: return 0.5 (neutral — naming gap
+      shouldn't nuke an otherwise-good match).
+    - Disjoint non-empty sets: 0.0.
+    """
+    if not sm_tokens or not opt_tokens:
+        # One side has no isolatable color token → neutral
+        return 0.5
+
+    inter = sm_tokens & opt_tokens
+    union = sm_tokens | opt_tokens
+
+    if not inter:
+        return 0.0
+
+    jaccard = len(inter) / len(union)
+
+    # Containment bonus: if the smaller set is fully contained in the larger,
+    # treat it as a strong partial match even when sizes differ (e.g. "orange"
+    # ⊂ {"pumpkin", "orange"}).
+    smaller = sm_tokens if len(sm_tokens) <= len(opt_tokens) else opt_tokens
+    larger = opt_tokens if len(sm_tokens) <= len(opt_tokens) else sm_tokens
+    if smaller <= larger:
+        containment = len(smaller) / len(larger)
+        return max(jaccard, containment)
+
+    return jaccard
+
+
 def _color_distance(hex1: str | None, hex2: str | None) -> float:
     """Simple RGB Euclidean distance normalised to [0, 1]. 0 = same, 1 = max apart."""
     def _parse(h: str | None) -> tuple[int, int, int] | None:
@@ -147,42 +235,52 @@ def score_candidate(
 
     Returns a confidence in [0.0, 1.0].  Higher is better.
 
-    Scoring components:
-    - Type/material match:  0.40 (most important)
-    - Vendor/brand match:   0.30
-    - Color proximity:      0.20
-    - Finish tag overlap:   0.10
+    Scoring components (sum ≈ 1.0):
+    - Type/material match:   0.25 exact / 0.125 substring
+    - Vendor/brand match:    0.25 exact / 0.125 substring
+    - Color name similarity: 0.35  ← key within-brand/material discriminator
+    - Color hex proximity:   0.10
+    - Finish tag overlap:    0.05
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
 
     score = 0.0
 
-    # ---- Type / material (0.40) ----
+    # ---- Type / material (0.25) ----
     sm_mat = _norm(strip_finish_words(sm.material, tag_map) or sm.material)
     opt_type_raw = opt.get("type") or opt.get("abbreviation") or ""
     opt_mat = _norm(strip_finish_words(opt_type_raw, tag_map) or opt_type_raw)
     if sm_mat and opt_mat:
         if sm_mat == opt_mat:
-            score += 0.40
+            score += 0.25
         elif sm_mat in opt_mat or opt_mat in sm_mat:
-            score += 0.20
+            score += 0.125
 
-    # ---- Vendor / brand (0.30) ----
-    sm_vendor = normalize_vendor(sm.vendor.name if sm.vendor else None)
+    # ---- Vendor / brand (0.25) ----
+    sm_vendor_name = sm.vendor.name if sm.vendor else None
+    sm_vendor = normalize_vendor(sm_vendor_name)
     opt_brand = normalize_vendor(opt.get("brandName"))
     if sm_vendor and opt_brand:
         if sm_vendor == opt_brand:
-            score += 0.30
+            score += 0.25
         elif sm_vendor in opt_brand or opt_brand in sm_vendor:
-            score += 0.15
+            score += 0.125
 
-    # ---- Color proximity (0.20) ----
+    # ---- Color name similarity (0.35) ----
+    sm_color_tokens = _color_name_tokens(sm.name, sm_vendor_name, sm.material, tag_map)
+    opt_color_tokens = _color_name_tokens(
+        opt.get("name"), opt.get("brandName"), opt_type_raw, tag_map
+    )
+    name_sim = _name_similarity(sm_color_tokens, opt_color_tokens)
+    score += 0.35 * name_sim
+
+    # ---- Color hex proximity (0.10) ----
     color_dist = _color_distance(sm.color_hex, opt.get("color"))
-    # distance 0 → 0.20, distance 1 → 0.0
-    score += max(0.0, 0.20 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
+    # distance 0 → 0.10, distance 1 → 0.0
+    score += max(0.0, 0.10 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
 
-    # ---- Finish tag overlap (0.10) ----
+    # ---- Finish tag overlap (0.05) ----
     sm_finish_ids = finish_ids_from_text(sm.name, sm.material, tag_map)
     opt_tags_raw: list[str] = opt.get("tags") or []
     opt_finish_ids: set[int] = set()
@@ -193,10 +291,10 @@ def score_candidate(
         union = sm_finish_ids | opt_finish_ids
         inter = sm_finish_ids & opt_finish_ids
         jaccard = len(inter) / len(union) if union else 1.0
-        score += 0.10 * jaccard
+        score += 0.05 * jaccard
     else:
         # Both have no finish tags → neutral match
-        score += 0.05
+        score += 0.025
 
     return round(score, 4)
 

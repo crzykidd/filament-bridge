@@ -21,7 +21,13 @@ from app.core.opentag_cache import (
     get_cache_metadata,
     load_opentag_dataset,
 )
-from app.core.opentag_match import find_best_match, opt_to_spoolman_fields, score_candidate
+from app.core.opentag_match import (
+    _color_name_tokens,
+    _name_similarity,
+    find_best_match,
+    opt_to_spoolman_fields,
+    score_candidate,
+)
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor
 
 
@@ -303,7 +309,8 @@ def test_score_candidate_exact_vendor_and_material():
 
 
 def test_score_candidate_different_material():
-    sm = _sm_fil(vendor="Buddy3D", material="PETG", color_hex="CC0000")
+    # Use a realistic SM name to match material (PETG Red), not the default PLA Silk Bronze
+    sm = _sm_fil(name="PETG Red", vendor="Buddy3D", material="PETG", color_hex="CC0000")
     score = score_candidate(sm, _OPT_PLA_SILK)
     assert score < 0.50
 
@@ -335,6 +342,198 @@ def test_find_best_match_returns_alternates():
     sm = _sm_fil(vendor="ELEGOO", material="PLA", color_hex="FFFFFF")
     result = find_best_match(sm, [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE])
     assert isinstance(result["alternates"], list)
+
+
+# ---------------------------------------------------------------------------
+# Color-name component: unit tests for helpers and integration
+# ---------------------------------------------------------------------------
+
+# OPT materials for the Orange-vs-Copper bug scenario
+_OPT_HATCHBOX_PETG_ORANGE = {
+    "uuid": "hatchbox-0000-0000-0000-000000000001",
+    "slug": "hatchbox-petg-orange",
+    "brandName": "Hatchbox",
+    "name": "Orange PETG",
+    "type": "PETG",
+    "abbreviation": "PETG",
+    "tags": [],
+    "color": "#FF8C00",  # a real orange hex
+    "secondaryColors": [],
+    "density": 1.27,
+    "nozzleTempMin": 230,
+    "nozzleTempMax": 250,
+    "bedTempMin": 70,
+    "bedTempMax": 80,
+    "completenessScore": 85,
+}
+
+_OPT_HATCHBOX_PETG_COPPER = {
+    "uuid": "hatchbox-0000-0000-0000-000000000002",
+    "slug": "hatchbox-petg-copper",
+    "brandName": "Hatchbox",
+    "name": "Copper PETG",
+    "type": "PETG",
+    "abbreviation": "PETG",
+    "tags": [],
+    "color": "#AF784D",  # copper hex from the bug report
+    "secondaryColors": [],
+    "density": 1.27,
+    "nozzleTempMin": 230,
+    "nozzleTempMax": 250,
+    "bedTempMin": 70,
+    "bedTempMax": 80,
+    "completenessScore": 85,
+}
+
+
+def test_color_name_tokens_isolates_color():
+    """_color_name_tokens strips vendor, material, and finish; leaves color."""
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens("Orange PETG", "Hatchbox", "PETG", DEFAULT_MATERIAL_TAG_IDS)
+    assert toks == {"orange"}
+
+
+def test_color_name_tokens_strips_silk():
+    """Finish word 'silk' is removed; the remaining token is the color."""
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens("PLA Silk Bronze", "Buddy3D", "PLA", DEFAULT_MATERIAL_TAG_IDS)
+    assert toks == {"bronze"}
+
+
+def test_color_name_tokens_empty_when_only_material_name():
+    """When the name IS just the material, no color token remains → empty set."""
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens("PLA", "ELEGOO", "PLA", DEFAULT_MATERIAL_TAG_IDS)
+    assert toks == set()
+
+
+def test_name_similarity_exact_match():
+    """Identical single-token color names score 1.0."""
+    assert _name_similarity({"orange"}, {"orange"}) == 1.0
+
+
+def test_name_similarity_disjoint():
+    """Completely different color names score 0.0."""
+    assert _name_similarity({"orange"}, {"copper"}) == 0.0
+
+
+def test_name_similarity_partial_overlap():
+    """Partial overlap (containment) scores between 0 and 1."""
+    score = _name_similarity({"orange"}, {"pumpkin", "orange"})
+    assert 0.0 < score < 1.0
+    # The smaller set {"orange"} is contained in {"pumpkin", "orange"} → containment = 0.5
+    assert score == 0.5
+
+
+def test_name_similarity_neutral_when_sm_has_no_color_token():
+    """Empty SM color tokens → neutral score (0.5), not 0."""
+    score = _name_similarity(set(), {"orange"})
+    assert score == 0.5
+
+
+def test_name_similarity_neutral_when_opt_has_no_color_token():
+    """Empty OPT color tokens → neutral score (0.5), not 0."""
+    score = _name_similarity({"orange"}, set())
+    assert score == 0.5
+
+
+def test_orange_vs_copper_bug_orange_scores_higher():
+    """Core regression: SM 'Orange / Hatchbox / PETG' (hex CB6D30) must score
+    the OpenTag Orange candidate strictly higher than the Copper candidate of
+    the same brand+material, even though CB6D30 is closer in RGB to Copper's
+    AF784D than to Orange's FF8C00.
+    """
+    sm_orange = SpoolmanFilament(
+        id=1,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PETG",
+        color_hex="CB6D30",  # the hex from the bug report — closer to copper in RGB
+        extra={},
+    )
+    score_orange = score_candidate(sm_orange, _OPT_HATCHBOX_PETG_ORANGE)
+    score_copper = score_candidate(sm_orange, _OPT_HATCHBOX_PETG_COPPER)
+
+    assert score_orange > score_copper, (
+        f"Expected Orange ({score_orange:.4f}) > Copper ({score_copper:.4f}), "
+        "but the color-name component didn't dominate"
+    )
+
+
+def test_find_best_match_returns_orange_not_copper():
+    """find_best_match must return the Orange candidate, not Copper, for an
+    'Orange / Hatchbox / PETG' SM filament (the end-to-end regression check).
+    """
+    sm_orange = SpoolmanFilament(
+        id=1,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PETG",
+        color_hex="CB6D30",
+        extra={},
+    )
+    result = find_best_match(sm_orange, [_OPT_HATCHBOX_PETG_ORANGE, _OPT_HATCHBOX_PETG_COPPER])
+    assert result["best"] is not None
+    assert result["best"]["slug"] == "hatchbox-petg-orange", (
+        f"Expected 'hatchbox-petg-orange' but got '{result['best']['slug']}'"
+    )
+
+
+def test_score_no_color_token_sm_still_matches_on_brand_material():
+    """An SM filament with no distinguishable color token in its name
+    (neutral name_similarity = 0.5) should still match on brand+material+hex.
+    """
+    # SM name is just the material — no color token extractable
+    sm_unnamed = SpoolmanFilament(
+        id=1,
+        name="PETG",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PETG",
+        color_hex="CC0000",
+        extra={},
+    )
+    score = score_candidate(sm_unnamed, _OPT_PETG)
+    # Should get vendor (0.25) + material (0.25) + neutral name (0.175) + some hex + some finish
+    # Total should exceed min_confidence threshold of 0.30 comfortably
+    assert score > 0.50, f"Expected graceful neutral-name match > 0.50, got {score:.4f}"
+
+
+def test_exact_color_name_contributes_full_name_weight():
+    """When color names match exactly, the name component contributes its full
+    0.35 weight to the score.
+    """
+    sm = SpoolmanFilament(
+        id=1,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PETG",
+        color_hex="FF8C00",
+        extra={},
+    )
+    score = score_candidate(sm, _OPT_HATCHBOX_PETG_ORANGE)
+    # vendor(0.25) + material(0.25) + name(0.35) + hex(~0.10) + finish(0.025)
+    # With identical hex distance ≈ 0, total ≈ 1.0
+    assert score >= 0.90, f"Exact match expected near-perfect score, got {score:.4f}"
+
+
+def test_disjoint_color_name_contributes_zero_name_weight():
+    """When color names are disjoint (e.g. 'orange' vs 'copper'), the name
+    component contributes 0 to the score.
+    """
+    sm_orange = SpoolmanFilament(
+        id=1,
+        name="Orange",
+        vendor=SpoolmanVendor(id=1, name="Hatchbox"),
+        material="PETG",
+        color_hex="CB6D30",
+        extra={},
+    )
+    # Score against Copper — name component should contribute 0
+    score_copper = score_candidate(sm_orange, _OPT_HATCHBOX_PETG_COPPER)
+    # Max achievable without name: vendor(0.25) + material(0.25) + hex(<0.10) + finish(0.025) < 0.63
+    assert score_copper < 0.63, (
+        f"Disjoint name should limit score below 0.63, but got {score_copper:.4f}"
+    )
 
 
 # ---------------------------------------------------------------------------
