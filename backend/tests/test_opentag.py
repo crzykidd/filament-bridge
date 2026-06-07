@@ -979,3 +979,262 @@ async def test_refresh_error_triggers_logger_error(tmp_path):
             mock_logger.error.assert_called()
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Fix: get_openprinttag extracts materials from FDB's OPTDatabase wrapper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_openprinttag_extracts_materials_from_wrapper():
+    """When FDB returns an OPTDatabase wrapper dict, get_openprinttag() returns only materials."""
+    from app.services.filamentdb import FilamentDBClient
+
+    wrapper_response = {
+        "brands": [{"name": "Buddy3D"}],
+        "materials": [_OPT_PLA_SILK, _OPT_PETG],
+        "cachedAt": "2026-06-06T00:00:00Z",
+        "totalFFF": 2,
+        "totalSLA": 0,
+    }
+
+    async def _fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=wrapper_response)
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+
+    result = await client.get_openprinttag()
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0]["slug"] == "buddy3d-pla-silk-bronze"
+    assert result[1]["slug"] == "elegoo-petg-red"
+
+
+@pytest.mark.asyncio
+async def test_get_openprinttag_passes_through_list_unchanged():
+    """When FDB already returns a list, get_openprinttag() returns it unchanged (defensive)."""
+    from app.services.filamentdb import FilamentDBClient
+
+    list_response = [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE]
+
+    async def _fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=list_response)
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+
+    result = await client.get_openprinttag()
+
+    assert result == list_response
+
+
+@pytest.mark.asyncio
+async def test_get_openprinttag_wrapper_missing_materials_returns_empty():
+    """When wrapper dict has no 'materials' key, get_openprinttag() returns []."""
+    from app.services.filamentdb import FilamentDBClient
+
+    async def _fake_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value={"brands": [], "cachedAt": "x", "totalFFF": 0, "totalSLA": 0})
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+
+    result = await client.get_openprinttag()
+
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# Fix: cache self-heals when stored materials are not a non-empty list of dicts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cache_self_heals_when_materials_are_strings(tmp_path):
+    """If cached materials contains strings (malformed), re-fetch is triggered."""
+    # Write a cache that looks valid but has string entries instead of dicts
+    malformed_cache = {
+        "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "count": 5,
+        "materials": ["brands", "materials", "cachedAt", "totalFFF", "totalSLA"],
+    }
+    cache_path = tmp_path / "opentag_cache.json"
+    cache_path.write_text(json.dumps(malformed_cache))
+
+    # FDB will return real data on re-fetch
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])
+
+    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
+
+    # Should have re-fetched despite the cache being "fresh"
+    fdb_mock.get_openprinttag.assert_called_once()
+    assert result["count"] == 2
+    assert all(isinstance(m, dict) for m in result["materials"])
+
+
+@pytest.mark.asyncio
+async def test_cache_self_heals_when_materials_is_empty_list(tmp_path):
+    """An empty materials list is also treated as malformed and triggers re-fetch."""
+    malformed_cache = {
+        "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "count": 0,
+        "materials": [],
+    }
+    cache_path = tmp_path / "opentag_cache.json"
+    cache_path.write_text(json.dumps(malformed_cache))
+
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK])
+
+    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
+
+    fdb_mock.get_openprinttag.assert_called_once()
+    assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_serves_valid_fresh_data_without_refetch(tmp_path):
+    """A fresh cache with valid dict entries is served without calling FDB."""
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [_OPT_PLA_SILK, _OPT_PETG], fresh_ts)
+
+    fdb_mock = AsyncMock()
+    fdb_mock.get_openprinttag = AsyncMock()
+
+    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
+
+    fdb_mock.get_openprinttag.assert_not_called()
+    assert result["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Fix: matcher tolerates non-dict entries in materials list
+# ---------------------------------------------------------------------------
+
+
+def test_find_best_match_tolerates_non_dict_entries():
+    """Non-dict entries in the materials list must be silently skipped (no AttributeError)."""
+    sm = _sm_fil(vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+    # Mix of valid dicts, strings, and None — all non-dicts should be skipped
+    materials_with_junk = ["brands", "materials", None, _OPT_PLA_SILK, 42, _OPT_PETG]
+    result = find_best_match(sm, materials_with_junk)
+    # Should find PLA Silk Bronze despite the junk entries
+    assert result["best"] is not None
+    assert result["best"]["slug"] == "buddy3d-pla-silk-bronze"
+
+
+def test_find_best_match_all_non_dict_returns_no_match():
+    """When every entry is a non-dict, find_best_match returns no match gracefully."""
+    sm = _sm_fil()
+    result = find_best_match(sm, ["brands", "materials", "cachedAt", "totalFFF", "totalSLA"])
+    assert result["best"] is None
+    assert result["confidence"] == 0.0
+    assert result["alternates"] == []
+
+
+# ---------------------------------------------------------------------------
+# Fix: /openprinttag/matches returns 200 with a wrapper-shaped FDB response
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_matches_returns_200_with_wrapper_shaped_fdb_response(tmp_path):
+    """GET /api/openprinttag/matches must return 200, not 500, when FDB returns an OPTDatabase wrapper."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    # FDB returns the wrapper object (the shape that was causing the 500)
+    wrapper_response = {
+        "brands": [{"name": "Buddy3D"}, {"name": "ELEGOO"}],
+        "materials": [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE],
+        "cachedAt": "2026-06-06T00:00:00Z",
+        "totalFFF": 3,
+        "totalSLA": 0,
+    }
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(return_value=wrapper_response["materials"])
+
+    fake_sm_fil = _sm_fil(sm_id=1, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[fake_sm_fil])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert "matches" in data
+        assert len(data["matches"]) == 1
+        assert data["matches"][0]["spoolman_filament_id"] == 1
+        # Should have matched against PLA Silk Bronze (not 500'd on string keys)
+        assert data["matches"][0]["opt_slug"] == "buddy3d-pla-silk-bronze"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_returns_200_when_cache_has_malformed_data(tmp_path):
+    """GET /api/openprinttag/matches must self-heal a malformed cache and return 200."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    # Seed the cache with the malformed string entries that caused the original 500
+    malformed_cache = {
+        "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "count": 5,
+        "materials": ["brands", "materials", "cachedAt", "totalFFF", "totalSLA"],
+    }
+    cache_path = tmp_path / "opentag_cache.json"
+    cache_path.write_text(json.dumps(malformed_cache))
+
+    # FDB will supply real data on re-fetch
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK])
+
+    fake_sm_fil = _sm_fil(sm_id=2, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[fake_sm_fil])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        # Self-heal triggered a re-fetch
+        fake_fdb.get_openprinttag.assert_called_once()
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

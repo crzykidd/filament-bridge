@@ -196,8 +196,22 @@ class FilamentDBClient:
     async def get_openprinttag(self) -> list[dict]:
         """GET /api/openprinttag — FDB denormalised OpenPrintTag dataset.
 
-        Returns a list of OPTMaterial dicts.  Raises httpx.HTTPStatusError on
-        non-2xx responses so callers can gate on 404 (FDB version too old).
+        FDB returns an OPTDatabase wrapper object, not a bare list::
+
+            {
+                "brands": [...],
+                "materials": [...OPTMaterial dicts...],
+                "cachedAt": "...",
+                "totalFFF": N,
+                "totalSLA": N,
+            }
+
+        This method extracts and returns only the ``materials`` array.
+        Each OPTMaterial dict already carries ``brandName``, so the
+        separate ``brands`` list is not needed by the bridge.
+
+        Raises httpx.HTTPStatusError on non-2xx responses so callers can
+        gate on 404 (FDB version too old).
 
         Uses a 120 s per-request timeout (overriding the global 15 s) because
         FDB downloads a ~3 MB gzip tarball and extracts it on first access —
@@ -208,7 +222,10 @@ class FilamentDBClient:
             timeout=httpx.Timeout(120.0),
         )
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if isinstance(data, dict):
+            return data.get("materials", []) or []
+        return data  # already a list (defensive passthrough)
 
     # ------------------------------------------------------------------
     # FDB settings-bag merge (scoped exception)

@@ -1,5 +1,43 @@
 # Decision record
 
+## 2026-06-06 — FDB /api/openprinttag returns OPTDatabase wrapper; bridge extracts .materials; cache self-heals malformed data
+
+### Root cause
+
+`GET /api/openprinttag` on Filament DB returns an **OPTDatabase wrapper object**, not a bare
+list of OPTMaterial dicts:
+
+```json
+{ "brands": [...], "materials": [...], "cachedAt": "...", "totalFFF": N, "totalSLA": N }
+```
+
+The bridge's `get_openprinttag()` was doing `return resp.json()` and treating the whole dict
+as the materials list. Downstream code iterated the 5 dict *keys* (strings `"brands"`,
+`"materials"`, etc.) — hence "saved 5 materials" in the log and
+`AttributeError: 'str' object has no attribute 'get'` in `score_candidate` when a key string
+was passed as an OPTMaterial.
+
+### Fix
+
+**`FilamentDBClient.get_openprinttag()`** now extracts the nested `materials` array:
+
+```python
+data = resp.json()
+if isinstance(data, dict):
+    return data.get("materials", []) or []
+return data  # already a list (defensive)
+```
+
+`brandName` is already present on each OPTMaterial dict, so the separate `brands` list is
+not needed by the bridge.
+
+**`load_opentag_dataset()` in `opentag_cache.py`** self-heals a malformed cache: if the
+stored `materials` list is not a non-empty list of dicts (e.g. contains string keys from the
+old bug), the loader treats the cache as stale and re-fetches — no manual Refresh required.
+
+**`find_best_match()` in `opentag_match.py`** defensively filters out any non-dict candidate
+before scoring, so a single bad entry cannot 500 the whole matches endpoint.
+
 ## 2026-06-06 — OpenTag cleanup API renamed to /openprinttag/*; 120 s fetch timeout; structured fetch errors
 
 ### Route rename: /opentag/* → /openprinttag/*

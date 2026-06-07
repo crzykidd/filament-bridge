@@ -229,10 +229,15 @@ def find_best_match(
     if not materials:
         return {"best": None, "confidence": 0.0, "alternates": []}
 
+    # Defensive: skip any candidate that isn't a dict (guard against shape drift
+    # or a malformed cache entry containing a string instead of an OPTMaterial).
     scored = [
         (score_candidate(sm, opt, tag_map), opt)
         for opt in materials
+        if isinstance(opt, dict)
     ]
+    if not scored:
+        return {"best": None, "confidence": 0.0, "alternates": []}
     scored.sort(key=lambda x: x[0], reverse=True)
 
     top = scored[:top_n + 1]

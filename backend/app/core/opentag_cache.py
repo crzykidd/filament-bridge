@@ -96,9 +96,22 @@ async def load_opentag_dataset(
     Raises ``RuntimeError`` for other unexpected HTTP errors.
     """
     cache = _load_cache(data_dir)
+
+    # Self-heal: treat a cached materials list that isn't a non-empty list of
+    # dicts as malformed (e.g. written when FDB returned the OPTDatabase wrapper
+    # and the bridge iterated its keys as strings).  Re-fetch as if stale so
+    # the bad data is replaced without requiring a manual Refresh call.
+    def _materials_valid(c: dict) -> bool:
+        materials = c.get("materials")
+        return (
+            isinstance(materials, list)
+            and len(materials) > 0
+            and all(isinstance(m, dict) for m in materials)
+        )
+
     needs_fetch = force or (cache is None) or _is_stale(
         (cache or {}).get("fetched_at"), max_age_hours
-    )
+    ) or (cache is not None and not _materials_valid(cache))
 
     if needs_fetch:
         logger.info("opentag_cache: fetching fresh dataset from FDB (force=%s)", force)
