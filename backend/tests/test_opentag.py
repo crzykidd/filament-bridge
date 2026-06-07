@@ -1694,3 +1694,431 @@ async def test_matches_multi_brand_dataset_returns_correct_best_match(tmp_path):
         assert elegoo["opt_slug"] == "elegoo-petg-red"
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Phase: Color-profile helpers — sm_color_profile / opt_color_profile /
+#         profiles_compatible
+# ---------------------------------------------------------------------------
+
+
+from app.core.opentag_match import (  # noqa: E402 — module-level import below test data ok
+    opt_color_profile,
+    profiles_compatible,
+    sm_color_profile,
+)
+from app.core.color import TAG_COEXTRUDED as _TAG_COEXTRUDED, TAG_GRADIENT as _TAG_GRADIENT  # noqa: E402
+
+
+# ---------- sm_color_profile ----------
+
+def test_sm_color_profile_single():
+    """No multi_color_hexes → 'single'."""
+    sm = _sm_fil(color_hex="FF0000")
+    assert sm_color_profile(sm) == "single"
+
+
+def test_sm_color_profile_coaxial():
+    """multi_color_direction='coaxial' → 'coextruded'."""
+    sm = SpoolmanFilament(
+        id=1, name="Dual", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA", color_hex="FF0000",
+        multi_color_hexes="FF0000,00FF00", multi_color_direction="coaxial",
+        extra={},
+    )
+    assert sm_color_profile(sm) == "coextruded"
+
+
+def test_sm_color_profile_longitudinal():
+    """multi_color_direction='longitudinal' → 'gradient'."""
+    sm = SpoolmanFilament(
+        id=1, name="Rainbow", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA", color_hex="AA0000",
+        multi_color_hexes="AA0000,00BB00,0000CC", multi_color_direction="longitudinal",
+        extra={},
+    )
+    assert sm_color_profile(sm) == "gradient"
+
+
+def test_sm_color_profile_multi_unknown_direction():
+    """multi_color_hexes present but direction None → 'multi_unknown'."""
+    sm = SpoolmanFilament(
+        id=1, name="Multi", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        material="PLA", color_hex="FF0000",
+        multi_color_hexes="FF0000,00FF00", multi_color_direction=None,
+        extra={},
+    )
+    assert sm_color_profile(sm) == "multi_unknown"
+
+
+# ---------- opt_color_profile ----------
+
+def test_opt_color_profile_single_no_secondary():
+    """No secondaryColors → 'single'."""
+    opt = {**_OPT_PLA_SILK, "secondaryColors": []}
+    assert opt_color_profile(opt) == "single"
+
+
+def test_opt_color_profile_coextruded_via_optTag_int():
+    """optTags=[29] → 'coextruded'."""
+    opt = {
+        **_OPT_PLA_SILK,
+        "color": "",  # empty primary is valid for coextruded
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [_TAG_COEXTRUDED],
+        "tags": [],
+    }
+    assert opt_color_profile(opt) == "coextruded"
+
+
+def test_opt_color_profile_gradient_via_optTag_int():
+    """optTags=[28] → 'gradient'."""
+    opt = {
+        **_OPT_PLA_SILK,
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [_TAG_GRADIENT],
+        "tags": [],
+    }
+    assert opt_color_profile(opt) == "gradient"
+
+
+def test_opt_color_profile_coextruded_via_tag_string():
+    """tags=['coextruded'] (string) → 'coextruded' even without optTags."""
+    opt = {
+        **_OPT_PLA_SILK,
+        "color": None,
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [],
+        "tags": ["coextruded"],
+    }
+    assert opt_color_profile(opt) == "coextruded"
+
+
+def test_opt_color_profile_gradient_via_tag_string():
+    """tags=['gradual_color_change'] → 'gradient'."""
+    opt = {
+        **_OPT_PLA_SILK,
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [],
+        "tags": ["gradual_color_change"],
+    }
+    assert opt_color_profile(opt) == "gradient"
+
+
+def test_opt_color_profile_multi_unknown_no_arrangement_tag():
+    """secondaryColors present but no arrangement tag → 'multi_unknown'."""
+    opt = {
+        **_OPT_PLA_SILK,
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [],
+        "tags": [],
+    }
+    assert opt_color_profile(opt) == "multi_unknown"
+
+
+def test_opt_color_profile_empty_primary_dual_color_coextruded():
+    """Empty primary color + secondaryColors + optTag 29 → 'coextruded'."""
+    opt = {
+        "uuid": "test",
+        "slug": "test-dual",
+        "brandName": "TestBrand",
+        "name": "Dual Coextruded",
+        "type": "PLA",
+        "abbreviation": "PLA",
+        "color": "",          # empty primary — valid for coextruded
+        "secondaryColors": ["#FF0000", "#00FF00"],
+        "optTags": [_TAG_COEXTRUDED],
+        "tags": [],
+        "density": 1.24,
+    }
+    assert opt_color_profile(opt) == "coextruded"
+
+
+# ---------- profiles_compatible ----------
+
+def test_profiles_compatible_single_single():
+    assert profiles_compatible("single", "single") is True
+
+
+def test_profiles_compatible_single_coextruded():
+    assert profiles_compatible("single", "coextruded") is False
+
+
+def test_profiles_compatible_single_gradient():
+    assert profiles_compatible("single", "gradient") is False
+
+
+def test_profiles_compatible_single_multi_unknown():
+    assert profiles_compatible("single", "multi_unknown") is False
+
+
+def test_profiles_compatible_coextruded_coextruded():
+    assert profiles_compatible("coextruded", "coextruded") is True
+
+
+def test_profiles_compatible_coextruded_gradient():
+    assert profiles_compatible("coextruded", "gradient") is False
+
+
+def test_profiles_compatible_gradient_gradient():
+    assert profiles_compatible("gradient", "gradient") is True
+
+
+def test_profiles_compatible_multi_unknown_coextruded():
+    """multi_unknown on either side matches any multicolor, not single."""
+    assert profiles_compatible("multi_unknown", "coextruded") is True
+
+
+def test_profiles_compatible_multi_unknown_gradient():
+    assert profiles_compatible("multi_unknown", "gradient") is True
+
+
+def test_profiles_compatible_multi_unknown_single():
+    assert profiles_compatible("multi_unknown", "single") is False
+
+
+# ---------------------------------------------------------------------------
+# Phase: opt_to_spoolman_fields — multicolor direction + empty-primary handling
+# ---------------------------------------------------------------------------
+
+
+# OPT coextruded material (empty primary color, secondaryColors, optTag 29)
+_OPT_COEXTRUDED = {
+    "uuid": "coext-0000-0000-0000-000000000001",
+    "slug": "elegoo-pla-coextruded-dual",
+    "brandName": "ELEGOO",
+    "name": "PLA Dual Coextruded",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "",  # empty primary — coextruded has no primary
+    "secondaryColors": ["#FF0000", "#00FF00"],
+    "optTags": [_TAG_COEXTRUDED],
+    "density": 1.24,
+    "nozzleTempMax": 220,
+    "bedTempMax": 60,
+}
+
+# OPT gradient material (primary color + secondaryColors, optTag 28)
+_OPT_GRADIENT = {
+    "uuid": "grad-0000-0000-0000-000000000001",
+    "slug": "elegoo-pla-gradient-rainbow",
+    "brandName": "ELEGOO",
+    "name": "PLA Gradient Rainbow",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "#AA0000",
+    "secondaryColors": ["#00BB00", "#0000CC"],
+    "optTags": [_TAG_GRADIENT],
+    "density": 1.24,
+    "nozzleTempMax": 220,
+    "bedTempMax": 60,
+}
+
+
+def test_opt_to_spoolman_fields_coextruded_sets_direction():
+    """Coextruded OPT → multi_color_direction='coaxial' + sensible color_hex even with empty primary."""
+    fields = opt_to_spoolman_fields(_OPT_COEXTRUDED)
+    assert fields.get("multi_color_direction") == "coaxial"
+    assert fields.get("multi_color_hexes") is not None
+    assert "FF0000" in fields["multi_color_hexes"] and "00FF00" in fields["multi_color_hexes"]
+    # color_hex must be set (synthesised from first secondary for coextruded)
+    assert fields.get("color_hex") is not None
+
+
+def test_opt_to_spoolman_fields_coextruded_empty_primary_synthesises_color_hex():
+    """Empty primary color on coextruded → color_hex derived from first secondary color."""
+    fields = opt_to_spoolman_fields(_OPT_COEXTRUDED)
+    # fdb_multicolor_to_sm synthesises primary from first secondary for coextruded
+    assert fields["color_hex"] == "FF0000"
+
+
+def test_opt_to_spoolman_fields_gradient_sets_direction():
+    """Gradient OPT → multi_color_direction='longitudinal'."""
+    fields = opt_to_spoolman_fields(_OPT_GRADIENT)
+    assert fields.get("multi_color_direction") == "longitudinal"
+    assert "AA0000" in fields.get("multi_color_hexes", "")
+    assert fields.get("color_hex") == "AA0000"
+
+
+def test_opt_to_spoolman_fields_gradient_multi_color_hexes_contains_all():
+    """Gradient multi_color_hexes = primary + all secondaries."""
+    fields = opt_to_spoolman_fields(_OPT_GRADIENT)
+    hexes = fields.get("multi_color_hexes", "")
+    assert "AA0000" in hexes
+    assert "00BB00" in hexes
+    assert "0000CC" in hexes
+
+
+def test_opt_to_spoolman_fields_single_color_unchanged():
+    """Single-color OPT → color_hex set, no multi fields."""
+    fields = opt_to_spoolman_fields(_OPT_PLA_SILK)
+    assert fields.get("color_hex") == "B87333"
+    assert "multi_color_direction" not in fields
+    assert "multi_color_hexes" not in fields
+
+
+# ---------------------------------------------------------------------------
+# Phase: Profile pre-filter in /matches endpoint
+# ---------------------------------------------------------------------------
+
+
+# OPT coextruded and gradient materials for ELEGOO (same brand/material as _OPT_PETG)
+_OPT_ELEGOO_COEXTRUDED = {
+    **_OPT_COEXTRUDED,
+    "uuid": "elegoo-coext-0000-0000-000000000002",
+    "slug": "elegoo-pla-coextruded",
+    "brandName": "ELEGOO",
+    "type": "PLA",
+}
+
+_OPT_ELEGOO_GRADIENT = {
+    **_OPT_GRADIENT,
+    "uuid": "elegoo-grad-0000-0000-000000000002",
+    "slug": "elegoo-pla-gradient",
+    "brandName": "ELEGOO",
+    "type": "PLA",
+}
+
+
+def _sm_coaxial(sm_id: int = 100, vendor: str = "ELEGOO") -> SpoolmanFilament:
+    """Helper: coaxial SM filament."""
+    return SpoolmanFilament(
+        id=sm_id, name="Dual Color",
+        vendor=SpoolmanVendor(id=1, name=vendor),
+        material="PLA", color_hex="FF0000",
+        multi_color_hexes="FF0000,00FF00", multi_color_direction="coaxial",
+        extra={},
+    )
+
+
+def _sm_longitudinal(sm_id: int = 101, vendor: str = "ELEGOO") -> SpoolmanFilament:
+    """Helper: longitudinal SM filament."""
+    return SpoolmanFilament(
+        id=sm_id, name="Rainbow",
+        vendor=SpoolmanVendor(id=1, name=vendor),
+        material="PLA", color_hex="AA0000",
+        multi_color_hexes="AA0000,00BB00,0000CC", multi_color_direction="longitudinal",
+        extra={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_matches_coaxial_sm_matches_only_coextruded_not_solid(tmp_path):
+    """A coaxial SM filament must match only coextruded OPT candidates, NOT a solid/gradient."""
+    # Dataset: one solid, one coextruded, one gradient — all same brand ELEGOO
+    materials = [_OPT_PETG, _OPT_ELEGOO_COEXTRUDED, _OPT_ELEGOO_GRADIENT]
+    sm_coaxial = _sm_coaxial()
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_coaxial])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+        # Must match the coextruded OPT, NOT the solid or gradient
+        assert match["opt_slug"] == "elegoo-pla-coextruded"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_single_sm_never_matches_multicolor_opt(tmp_path):
+    """A single-color SM filament must NOT match a multicolor OPT candidate."""
+    # Dataset: coextruded ELEGOO material only (no solid ELEGOO material)
+    materials = [_OPT_ELEGOO_COEXTRUDED]
+    sm_single = _sm_fil(sm_id=10, vendor="ELEGOO", material="PLA", color_hex="FF0000")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_single])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+        # Single SM must not match a multicolor OPT → no match
+        assert match["opt_slug"] is None, (
+            f"Expected no match but got slug={match['opt_slug']!r}"
+        )
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_longitudinal_sm_matches_gradient_not_coextruded(tmp_path):
+    """A longitudinal SM filament must match gradient OPT, not coextruded."""
+    materials = [_OPT_ELEGOO_COEXTRUDED, _OPT_ELEGOO_GRADIENT]
+    sm_long = _sm_longitudinal()
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_long])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=True)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["matches"]) == 1
+        match = data["matches"][0]
+        assert match["opt_slug"] == "elegoo-pla-gradient"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

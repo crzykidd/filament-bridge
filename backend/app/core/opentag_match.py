@@ -16,9 +16,96 @@ import re
 import unicodedata
 from typing import Any
 
+from app.core.color import TAG_COEXTRUDED, TAG_GRADIENT, arrangement_from_tags, fdb_multicolor_to_sm
 from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, finish_ids_from_text, strip_finish_words
 from app.core.matcher import normalize_name, normalize_vendor
 from app.schemas.spoolman import SpoolmanFilament
+
+
+# ---------------------------------------------------------------------------
+# Color-profile helpers — pure, no I/O
+# ---------------------------------------------------------------------------
+
+# Profile literals: single | coextruded | gradient | multi_unknown
+_PROFILE_SINGLE = "single"
+_PROFILE_COEXTRUDED = "coextruded"
+_PROFILE_GRADIENT = "gradient"
+_PROFILE_MULTI_UNKNOWN = "multi_unknown"
+
+
+def sm_color_profile(sm: SpoolmanFilament) -> str:
+    """Return the color profile of a Spoolman filament.
+
+    ``single``         — no ``multi_color_hexes``
+    ``coextruded``     — ``multi_color_direction == "coaxial"``
+    ``gradient``       — ``multi_color_direction == "longitudinal"``
+    ``multi_unknown``  — ``multi_color_hexes`` present but direction unknown/absent
+    """
+    if not sm.multi_color_hexes:
+        return _PROFILE_SINGLE
+    direction = sm.multi_color_direction
+    if direction == "coaxial":
+        return _PROFILE_COEXTRUDED
+    if direction == "longitudinal":
+        return _PROFILE_GRADIENT
+    return _PROFILE_MULTI_UNKNOWN
+
+
+def opt_color_profile(opt: dict[str, Any], tag_map: dict[str, int] | None = None) -> str:
+    """Return the color profile of an OPTMaterial dict.
+
+    ``single``         — no ``secondaryColors``
+    ``coextruded``     — optTag 29 present (or tag string "coextruded")
+    ``gradient``       — optTag 28 present (or tag string "gradual_color_change")
+    ``multi_unknown``  — ``secondaryColors`` present but no arrangement tag
+    """
+    secondary: list = opt.get("secondaryColors") or []
+    if not secondary:
+        return _PROFILE_SINGLE
+
+    # Build integer opt-tags list from the optTags field (integer tag IDs)
+    opt_tags_int: list[int] = []
+    for t in opt.get("optTags") or []:
+        try:
+            opt_tags_int.append(int(t))
+        except (TypeError, ValueError):
+            pass
+
+    # Also scan string tags for arrangement words (coextruded / gradual_color_change)
+    # by mapping them to the integer tag IDs understood by arrangement_from_tags.
+    tag_strings: list[str] = [s.lower().strip() for s in (opt.get("tags") or []) if isinstance(s, str)]
+    if "coextruded" in tag_strings:
+        opt_tags_int.append(TAG_COEXTRUDED)
+    if "gradual_color_change" in tag_strings or "gradient" in tag_strings:
+        opt_tags_int.append(TAG_GRADIENT)
+
+    arrangement = arrangement_from_tags(opt_tags_int)
+    if arrangement == "coextruded":
+        return _PROFILE_COEXTRUDED
+    if arrangement == "gradient":
+        return _PROFILE_GRADIENT
+    return _PROFILE_MULTI_UNKNOWN
+
+
+def profiles_compatible(a: str, b: str) -> bool:
+    """Return True when profile ``a`` (SM side) and ``b`` (OPT side) are compatible.
+
+    Rules:
+    - ``single`` matches only ``single``
+    - ``coextruded`` matches only ``coextruded``
+    - ``gradient`` matches only ``gradient``
+    - ``multi_unknown`` (either side) matches any multicolor profile, never ``single``
+    """
+    if a == _PROFILE_SINGLE and b == _PROFILE_SINGLE:
+        return True
+    if a == _PROFILE_SINGLE or b == _PROFILE_SINGLE:
+        return False  # single never matches any multicolor profile
+    # Both sides are multicolor — exact or lenient (multi_unknown) match
+    if a == b:
+        return True
+    if a == _PROFILE_MULTI_UNKNOWN or b == _PROFILE_MULTI_UNKNOWN:
+        return True  # lenient: multi_unknown matches any multicolor
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -38,8 +125,9 @@ def opt_to_spoolman_fields(
     Field mapping:
     - type (base, finish-stripped) → material
     - tags (finish strings) → extra.filamentdb_material_tags (JSON list of IDs)
-    - color → color_hex
-    - secondaryColors → multi_color_hexes (CSV)
+    - color + secondaryColors + arrangement → color_hex, multi_color_hexes,
+      multi_color_direction  (reuses fdb_multicolor_to_sm for consistency;
+      empty primary color is handled automatically)
     - density → density
     - 1.75 → diameter (always)
     - nozzleTempMax → settings_extruder_temp
@@ -68,15 +156,52 @@ def opt_to_spoolman_fields(
     finish_ids.update(finish_ids_from_text(opt.get("name", ""), raw_type, tag_map))
     result["extra.filamentdb_material_tags"] = sorted(finish_ids)
 
-    # Color
-    color = opt.get("color")
-    if color:
-        result["color_hex"] = color.lstrip("#").upper()
-
-    # Secondary colors → CSV
+    # Color — reuse fdb_multicolor_to_sm for consistency (handles empty primary,
+    # arrangement, and single-color cases uniformly).
+    opt_color = opt.get("color") or None  # treat empty string as None
     secondary: list[str] = opt.get("secondaryColors") or []
+
+    # Build integer optTags for arrangement detection (same logic as opt_color_profile)
+    opt_tags_int: list[int] = []
+    for t in opt.get("optTags") or []:
+        try:
+            opt_tags_int.append(int(t))
+        except (TypeError, ValueError):
+            pass
+    tag_strings_lower: list[str] = [s.lower().strip() for s in opt_tags_raw if isinstance(s, str)]
+    if "coextruded" in tag_strings_lower:
+        opt_tags_int.append(TAG_COEXTRUDED)
+    if "gradual_color_change" in tag_strings_lower or "gradient" in tag_strings_lower:
+        opt_tags_int.append(TAG_GRADIENT)
+
     if secondary:
-        result["multi_color_hexes"] = ",".join(c.lstrip("#").upper() for c in secondary)
+        # Multicolor: delegate to fdb_multicolor_to_sm for coextruded/gradient so SM↔FDB
+        # stays consistent (handles empty primary for coextruded, builds correct hex CSV).
+        # For multi_unknown (secondaries present but no arrangement tag), fdb_multicolor_to_sm
+        # would drop the secondaries (solid fallback), so we handle that case directly.
+        arrangement = arrangement_from_tags(opt_tags_int)
+        if arrangement in ("coextruded", "gradient"):
+            sm_color = fdb_multicolor_to_sm(opt_color, secondary, opt_tags_int)
+            if sm_color["color_hex"] is not None:
+                result["color_hex"] = sm_color["color_hex"].upper()
+            if sm_color["multi_color_hexes"] is not None:
+                result["multi_color_hexes"] = sm_color["multi_color_hexes"].upper()
+            if sm_color["multi_color_direction"] is not None:
+                result["multi_color_direction"] = sm_color["multi_color_direction"]
+        else:
+            # multi_unknown: preserve primary + secondary hexes; no direction
+            if opt_color:
+                result["color_hex"] = opt_color.lstrip("#").upper()
+            all_hexes = []
+            if opt_color:
+                all_hexes.append(opt_color.lstrip("#").upper())
+            all_hexes.extend(c.lstrip("#").upper() for c in secondary if c)
+            if all_hexes:
+                result["multi_color_hexes"] = ",".join(all_hexes)
+    else:
+        # Single-color: map primary color directly
+        if opt_color:
+            result["color_hex"] = opt_color.lstrip("#").upper()
 
     # Density
     density = opt.get("density")

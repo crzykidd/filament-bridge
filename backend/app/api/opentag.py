@@ -26,7 +26,13 @@ from app.config import settings as _settings
 from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
 from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
-from app.core.opentag_match import find_best_match, opt_to_spoolman_fields
+from app.core.opentag_match import (
+    find_best_match,
+    opt_color_profile,
+    opt_to_spoolman_fields,
+    profiles_compatible,
+    sm_color_profile,
+)
 from app.db import get_db
 from app.schemas.spoolman import decode_extra_value, encode_extra_value
 
@@ -346,6 +352,15 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     for sm_fil in sm_filaments:
         sm_brand_key = normalize_vendor(sm_fil.vendor.name if sm_fil.vendor else None)
         candidates = materials_by_brand.get(sm_brand_key, [])
+
+        # Color-profile pre-filter: only score candidates whose arrangement is
+        # compatible with the SM filament's arrangement (single/coextruded/gradient).
+        sm_profile = sm_color_profile(sm_fil)
+        candidates = [
+            c for c in candidates
+            if isinstance(c, dict) and profiles_compatible(sm_profile, opt_color_profile(c, tag_map))
+        ]
+
         match_result = find_best_match(sm_fil, candidates, tag_map)
         best = match_result["best"]
         confidence = match_result["confidence"]

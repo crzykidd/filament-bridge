@@ -1,5 +1,44 @@
 # Decision record
 
+## 2026-06-06 — OpenTag matching hard-filters by color profile; apply sets multi_color_direction + handles empty primary
+
+The OpenTag matcher was arrangement-blind — a multicolor Spoolman filament (coaxial/longitudinal)
+could wrongly match a solid OpenTag product, or the wrong arrangement.
+
+**Phase 1 — Color-profile pre-filter in `GET /api/openprinttag/matches`:**
+
+Three pure helpers added to `backend/app/core/opentag_match.py`:
+
+- `sm_color_profile(sm)` — `single` (no `multi_color_hexes`), `coextruded` (`coaxial`),
+  `gradient` (`longitudinal`), or `multi_unknown` (hexes present, direction absent).
+- `opt_color_profile(opt, tag_map)` — `single` (no `secondaryColors`), `coextruded` (optTag 29
+  or string tag "coextruded"), `gradient` (optTag 28 or "gradual_color_change"), `multi_unknown`.
+  Reads both the integer `optTags` array and the string `tags` array for arrangement detection,
+  reusing `color.arrangement_from_tags`.
+- `profiles_compatible(a, b)` — hard rules: `single↔single` only; `coextruded↔coextruded` only;
+  `gradient↔gradient` only; `multi_unknown` (either side) matches any multicolor but never `single`.
+
+In `opentag_matches` (`backend/app/api/opentag.py`), after the brand pre-filter, candidates are
+further filtered to those whose profile is compatible with the SM filament's profile. `find_best_match`
+remains pure — receives the already-filtered list.
+
+**Phase 2 — Complete `opt_to_spoolman_fields` multicolor mapping:**
+
+- When the matched OPT entry is coextruded (optTag 29) or gradient (optTag 28), delegates to
+  `fdb_multicolor_to_sm(opt_color, secondary, opt_tags_int)` so the OPT→SM mapping is consistent
+  with the FDB→SM sync direction. This sets `multi_color_direction` (`"coaxial"` or `"longitudinal"`),
+  `multi_color_hexes`, and `color_hex`.
+- Empty primary `color` (common for coextruded) is handled automatically: `fdb_multicolor_to_sm`
+  synthesises `color_hex` from the first secondary for coextruded filaments.
+- For `multi_unknown` (secondaries present, no arrangement tag), the hexes are preserved in
+  `multi_color_hexes` but no direction is set.
+- Single-color OPT entries are unchanged (primary `color` → `color_hex`, no multi fields).
+
+Verified by 538 passing tests including 44 new tests for profile detection (both sides, incl.
+empty-primary dual-color), profile compatibility rules, `opt_to_spoolman_fields` multicolor output,
+and endpoint integration (coaxial SM matches only coextruded; single never matches multicolor;
+longitudinal matches gradient).
+
 ## 2026-06-06 — OpenTag matcher: color NAME is the key within-brand/material discriminator; hex demoted
 
 `score_candidate` in `backend/app/core/opentag_match.py` previously ignored the color
