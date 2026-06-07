@@ -1,11 +1,47 @@
 # Decision record
 
+## 2026-06-06 — OpenTag cleanup API renamed to /openprinttag/*; 120 s fetch timeout; structured fetch errors
+
+### Route rename: /opentag/* → /openprinttag/*
+
+The bridge's OpenTag cleanup routes were at `/api/opentag/matches`, `/api/opentag/refresh`,
+and `/api/opentag/apply`. The token `opentag` (without "print") collides with the "Qubit
+OpenTag" web-analytics product, which EasyList and uBlock filter lists block at the network
+layer. Chrome reported `net::ERR_BLOCKED_BY_CLIENT` for every request, while the bridge log
+showed nothing (the requests never reached the backend).
+
+The routes are now at `/api/openprinttag/matches|refresh|apply`. The string `openprinttag`
+does not contain the blocked `opentag` substring, and FDB already exposes
+`/api/openprinttag` through the same ad blocker without issues. The client-side SPA route
+`/opentag-cleanup` is unchanged (browser navigation is not a network request and isn't
+blocked). Function and type names in the codebase are unchanged.
+
+### 120 s per-request timeout for get_openprinttag()
+
+`FilamentDBClient.get_openprinttag()` now passes `timeout=httpx.Timeout(120.0)` to the
+HTTP GET. The global client timeout stays at 15 s for all other endpoints. The cold fetch
+downloads FDB's ~3 MB gzip tarball and extracts it on the server, which takes 20–60 s.
+
+### Structured fetch errors (504/502) with logger.error
+
+`opentag_refresh` and `opentag_matches` now catch `httpx.TimeoutException`,
+`httpx.HTTPStatusError`, and `httpx.RequestError` from `load_opentag_dataset` and raise
+`api_error(...)` responses with stable codes:
+
+- `httpx.TimeoutException` → 504 `opentag_fetch_timeout`
+- FDB 404 `HTTPStatusError` → 502 `opentag_unavailable` (FDB too old)
+- other HTTP/request errors → 502 `opentag_fetch_failed`
+
+Each failure branch calls `logger.error(...)`. The frontend renders the backend `message`
+field in a visible error box, and shows a descriptive loading message during the long cold
+fetch (noting 20–60 s is expected).
+
 ## 2026-06-06 — OpenTag cleanup tool + scoped FDB settings-bag exception
 
 ### OpenTag cleanup tool
 
-New standalone tool (`/opentag-cleanup` page, `GET /api/opentag/matches`,
-`POST /api/opentag/refresh`, `POST /api/opentag/apply`) that:
+New standalone tool (`/opentag-cleanup` page, `GET /api/openprinttag/matches`,
+`POST /api/openprinttag/refresh`, `POST /api/openprinttag/apply`) that:
 
 1. Fetches the OpenPrintTag dataset from FDB's `GET /api/openprinttag`, caches it
    locally in `DATA_DIR/opentag_cache.json` with a configurable 24-hour staleness
@@ -40,7 +76,7 @@ stripping is bypassed for this path because `settings` is in that strip set — 
 merged `settings` bag is re-attached to the PUT payload after stripping.
 
 **Wire points:**
-- `backend/app/api/opentag.py` → `POST /api/opentag/apply` calls it after writing
+- `backend/app/api/opentag.py` → `POST /api/openprinttag/apply` calls it after writing
   each SM filament when `fdb_filament_id` is provided.
 - `backend/app/core/engine.py` → `_sync_opentag_identity()` is called once per live
   sync cycle (not dry-run) to ensure any SM filament with slug/uuid extras has them

@@ -198,8 +198,15 @@ class FilamentDBClient:
 
         Returns a list of OPTMaterial dicts.  Raises httpx.HTTPStatusError on
         non-2xx responses so callers can gate on 404 (FDB version too old).
+
+        Uses a 120 s per-request timeout (overriding the global 15 s) because
+        FDB downloads a ~3 MB gzip tarball and extracts it on first access —
+        a cold fetch can take 20–60 s.
         """
-        resp = await self._http.get("/api/openprinttag")
+        resp = await self._http.get(
+            "/api/openprinttag",
+            timeout=httpx.Timeout(120.0),
+        )
         resp.raise_for_status()
         return resp.json()
 

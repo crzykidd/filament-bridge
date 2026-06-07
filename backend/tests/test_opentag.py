@@ -385,7 +385,7 @@ async def test_apply_patches_provided_fields_only():
             }
         ]
     }
-    resp = client.post("/api/opentag/apply", json=request_body)
+    resp = client.post("/api/openprinttag/apply", json=request_body)
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["applied"] == 1
@@ -432,7 +432,7 @@ async def test_apply_skips_ignored_filaments():
             }
         ]
     }
-    resp = client.post("/api/opentag/apply", json=request_body)
+    resp = client.post("/api/openprinttag/apply", json=request_body)
     assert resp.status_code == 200
     data = resp.json()
     assert data["ignored"] == 1
@@ -479,7 +479,7 @@ async def test_apply_stamps_slug_and_uuid():
             }
         ]
     }
-    resp = client.post("/api/opentag/apply", json=request_body)
+    resp = client.post("/api/openprinttag/apply", json=request_body)
     assert resp.status_code == 200
     data = resp.json()
     assert data["applied"] == 1
@@ -698,3 +698,284 @@ async def test_merge_filament_settings_partial_update():
     assert settings_out["openprinttag_slug"] == "already-set"
     assert settings_out["openprinttag_uuid"] == "new-uuid"
     assert settings_out["slicer_key"] == "v"
+
+
+# ---------------------------------------------------------------------------
+# Route rename: new /openprinttag/* paths respond; old /opentag/* paths 404
+# ---------------------------------------------------------------------------
+
+
+def _make_test_app_with_mocks():
+    """Return a TestClient wrapping the opentag router with minimal mocks."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_sm = AsyncMock()
+    fake_fdb = AsyncMock()
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = fake_fdb
+    return TestClient(test_app), fake_sm, fake_fdb
+
+
+def test_openprinttag_apply_route_responds():
+    """POST /api/openprinttag/apply should respond (not 404)."""
+    client, fake_sm, fake_fdb = _make_test_app_with_mocks()
+    fake_sm.update_filament = AsyncMock(return_value=MagicMock())
+    fake_fdb.merge_filament_settings = AsyncMock()
+    resp = client.post(
+        "/api/openprinttag/apply",
+        json={"decisions": [{"spoolman_filament_id": 1, "ignored": True, "fields": []}]},
+    )
+    assert resp.status_code == 200
+
+
+def test_old_opentag_apply_route_404():
+    """POST /api/opentag/apply (old path) must 404 — ensure ad-blocker-blocked path is gone."""
+    client, _sm, _fdb = _make_test_app_with_mocks()
+    resp = client.post(
+        "/api/opentag/apply",
+        json={"decisions": []},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_openprinttag_refresh_route_responds(tmp_path):
+    """POST /api/openprinttag/refresh should respond (not 404) when FDB returns data."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    # Patch data_dir to a writable temp path
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app)
+        resp = client.post("/api/openprinttag/refresh")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 1
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+def test_old_opentag_refresh_route_404():
+    """POST /api/opentag/refresh (old path) must 404."""
+    client, _sm, _fdb = _make_test_app_with_mocks()
+    resp = client.post("/api/opentag/refresh")
+    assert resp.status_code == 404
+
+
+def test_old_opentag_matches_route_404():
+    """GET /api/opentag/matches (old path) must 404."""
+    client, _sm, _fdb = _make_test_app_with_mocks()
+    resp = client.get("/api/opentag/matches")
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# get_openprinttag: 120 s timeout override
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_openprinttag_uses_120s_timeout():
+    """get_openprinttag() must pass timeout=httpx.Timeout(120.0) to the HTTP client."""
+    from app.services.filamentdb import FilamentDBClient
+
+    timeout_used: list = []
+
+    async def _fake_get(url, **kwargs):
+        timeout_used.append(kwargs.get("timeout"))
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=[_OPT_PLA_SILK])
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+
+    result = await client.get_openprinttag()
+
+    assert result == [_OPT_PLA_SILK]
+    assert len(timeout_used) == 1
+    t = timeout_used[0]
+    assert isinstance(t, httpx.Timeout), f"Expected httpx.Timeout, got {type(t)}"
+    # httpx.Timeout(120.0) sets connect, read, write, pool all to 120 s
+    assert t.read == 120.0
+
+
+# ---------------------------------------------------------------------------
+# Fetch failures → structured api_error responses
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refresh_timeout_returns_504(tmp_path):
+    """POST /api/openprinttag/refresh: TimeoutException → 504 opentag_fetch_timeout."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(
+        side_effect=httpx.TimeoutException("timed out")
+    )
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=False)
+        resp = client.post("/api/openprinttag/refresh")
+        assert resp.status_code == 504
+        detail = resp.json()["detail"]
+        assert detail["code"] == "opentag_fetch_timeout"
+        assert "large file" in detail["message"]
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_refresh_404_returns_502_unavailable(tmp_path):
+    """POST /api/openprinttag/refresh: FDB 404 → 502 opentag_unavailable."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    mock_req = MagicMock()
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(
+        side_effect=httpx.HTTPStatusError("404", request=mock_req, response=mock_resp)
+    )
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=False)
+        resp = client.post("/api/openprinttag/refresh")
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert detail["code"] == "opentag_unavailable"
+        assert "upgrade" in detail["message"].lower()
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_refresh_connection_error_returns_502(tmp_path):
+    """POST /api/openprinttag/refresh: RequestError → 502 opentag_fetch_failed."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=False)
+        resp = client.post("/api/openprinttag/refresh")
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert detail["code"] == "opentag_fetch_failed"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_timeout_returns_504(tmp_path):
+    """GET /api/openprinttag/matches: TimeoutException → 504 opentag_fetch_timeout."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(
+        side_effect=httpx.TimeoutException("timed out")
+    )
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = TestClient(test_app, raise_server_exceptions=False)
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 504
+        detail = resp.json()["detail"]
+        assert detail["code"] == "opentag_fetch_timeout"
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_refresh_error_triggers_logger_error(tmp_path):
+    """Fetch failures must call logger.error (not go silent)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    import app.api.opentag as _ot_mod
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(
+        side_effect=httpx.TimeoutException("timed out")
+    )
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        with patch("app.api.opentag.logger") as mock_logger:
+            client = TestClient(test_app, raise_server_exceptions=False)
+            resp = client.post("/api/openprinttag/refresh")
+            assert resp.status_code == 504
+            mock_logger.error.assert_called()
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

@@ -507,12 +507,16 @@ export default function OpenTagCleanup() {
 
       {error && (
         <div className="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-          {error}
+          <strong>Error:</strong> {error}
         </div>
       )}
 
-      {loading && (
-        <p className="text-sm text-gray-500">Loading matches…</p>
+      {(loading || refreshing) && (
+        <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+          {refreshing
+            ? 'Refreshing dataset from Filament DB — the first download can take 20–60 seconds…'
+            : 'Loading matches — fetching the OpenTag dataset from Filament DB if not cached (first load can take 20–60 seconds)…'}
+        </div>
       )}
 
       {!loading && step === 'review' && response && (

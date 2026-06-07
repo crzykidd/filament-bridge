@@ -73,7 +73,7 @@ New-spool creation during a cycle (gated by `new_spool_sync_direction`):
 
 ## OpenTag cleanup tool writes (on-demand, on Apply)
 
-`POST /api/opentag/apply` — the explicit user action that authorises these writes.
+`POST /api/openprinttag/apply` — the explicit user action that authorises these writes.
 Only the fields the user confirmed (not marked "keep mine") are written.
 
 | Entity | Op | Field(s) | Trigger |

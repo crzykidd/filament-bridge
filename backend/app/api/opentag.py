@@ -1,9 +1,13 @@
-"""OpenTag cleanup tool — GET /api/opentag/matches, POST /api/opentag/refresh,
-POST /api/opentag/apply.
+"""OpenTag cleanup tool — GET /api/openprinttag/matches, POST /api/openprinttag/refresh,
+POST /api/openprinttag/apply.
 
 Standalone tool: match Spoolman filaments against the OpenPrintTag dataset
 (fetched from FDB's GET /api/openprinttag, cached locally), review per-field,
 confirm, and apply writes to Spoolman + push slug/uuid into FDB settings bag.
+
+Route prefix note: the path token "opentag" (without "print") collides with the
+Qubit OpenTag web-analytics product on EasyList/uBlock filter lists and is
+blocked by ad blockers.  The routes use "openprinttag" instead, which is safe.
 """
 
 from __future__ import annotations
@@ -12,10 +16,12 @@ import json
 import logging
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.errors import api_error
 from app.config import settings as _settings
 from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
 from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
@@ -194,16 +200,47 @@ def _build_sm_patch(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/opentag/refresh", response_model=OpenTagDatasetMeta)
+@router.post("/openprinttag/refresh", response_model=OpenTagDatasetMeta)
 async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
     """Force a fresh fetch of the OpenTag dataset from FDB."""
     fdb = request.app.state.filamentdb
-    result = await load_opentag_dataset(
-        fdb,
-        _settings.data_dir,
-        _settings.opentag_cache_max_age_hours,
-        force=True,
-    )
+    try:
+        result = await load_opentag_dataset(
+            fdb,
+            _settings.data_dir,
+            _settings.opentag_cache_max_age_hours,
+            force=True,
+        )
+    except httpx.TimeoutException as exc:
+        logger.error("opentag refresh: timed out fetching dataset from FDB: %s", exc)
+        raise api_error(
+            504,
+            "opentag_fetch_timeout",
+            "Timed out fetching the OpenTag dataset from Filament DB — "
+            "it downloads a large file on first load; try again.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            logger.error("opentag refresh: FDB /api/openprinttag returned 404: %s", exc)
+            raise api_error(
+                502,
+                "opentag_unavailable",
+                "This Filament DB version doesn't expose /api/openprinttag — "
+                "upgrade Filament DB.",
+            ) from exc
+        logger.error("opentag refresh: FDB returned HTTP %d: %s", exc.response.status_code, exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            f"Failed to fetch the OpenTag dataset from Filament DB (HTTP {exc.response.status_code}).",
+        ) from exc
+    except httpx.RequestError as exc:
+        logger.error("opentag refresh: connection error fetching dataset from FDB: %s", exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            "Failed to connect to Filament DB while fetching the OpenTag dataset.",
+        ) from exc
     return OpenTagDatasetMeta(
         fetched_at=result["fetched_at"],
         count=result["count"],
@@ -211,18 +248,49 @@ async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
     )
 
 
-@router.get("/opentag/matches", response_model=OpenTagMatchesResponse)
+@router.get("/openprinttag/matches", response_model=OpenTagMatchesResponse)
 async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     """Return per-Spoolman-filament OpenTag matches with per-field comparison."""
     fdb = request.app.state.filamentdb
     sm: Any = request.app.state.spoolman
 
-    dataset = await load_opentag_dataset(
-        fdb,
-        _settings.data_dir,
-        _settings.opentag_cache_max_age_hours,
-        force=False,
-    )
+    try:
+        dataset = await load_opentag_dataset(
+            fdb,
+            _settings.data_dir,
+            _settings.opentag_cache_max_age_hours,
+            force=False,
+        )
+    except httpx.TimeoutException as exc:
+        logger.error("opentag matches: timed out fetching dataset from FDB: %s", exc)
+        raise api_error(
+            504,
+            "opentag_fetch_timeout",
+            "Timed out fetching the OpenTag dataset from Filament DB — "
+            "it downloads a large file on first load; try again.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            logger.error("opentag matches: FDB /api/openprinttag returned 404: %s", exc)
+            raise api_error(
+                502,
+                "opentag_unavailable",
+                "This Filament DB version doesn't expose /api/openprinttag — "
+                "upgrade Filament DB.",
+            ) from exc
+        logger.error("opentag matches: FDB returned HTTP %d: %s", exc.response.status_code, exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            f"Failed to fetch the OpenTag dataset from Filament DB (HTTP {exc.response.status_code}).",
+        ) from exc
+    except httpx.RequestError as exc:
+        logger.error("opentag matches: connection error fetching dataset from FDB: %s", exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            "Failed to connect to Filament DB while fetching the OpenTag dataset.",
+        ) from exc
     materials: list[dict[str, Any]] = dataset["materials"]
     tag_map = _settings.parsed_material_tag_ids
 
@@ -279,7 +347,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     return OpenTagMatchesResponse(dataset=dataset_meta, matches=matches)
 
 
-@router.post("/opentag/apply", response_model=OpenTagApplyResponse)
+@router.post("/openprinttag/apply", response_model=OpenTagApplyResponse)
 async def opentag_apply(
     body: OpenTagApplyRequest,
     request: Request,

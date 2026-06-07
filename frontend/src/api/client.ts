@@ -187,8 +187,8 @@ export const postWizardExecute = (body: WizardExecuteRequest) =>
 // OpenTag cleanup tool
 // ---------------------------------------------------------------------------
 
-export const getOpenTagMatches = () => request<OpenTagMatchesResponse>('/opentag/matches')
+export const getOpenTagMatches = () => request<OpenTagMatchesResponse>('/openprinttag/matches')
 export const postOpenTagRefresh = () =>
-  request<OpenTagDatasetMeta>('/opentag/refresh', { method: 'POST' })
+  request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>
-  json<OpenTagApplyResponse>('/opentag/apply', 'POST', body)
+  json<OpenTagApplyResponse>('/openprinttag/apply', 'POST', body)
