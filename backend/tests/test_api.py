@@ -503,6 +503,70 @@ def test_mappings_status_filter(db):
     assert client.get("/api/mappings?status=in_sync").json() == []
 
 
+def test_mapping_row_enrichment_fields(db):
+    """MappingRow includes multi_color_hexes/direction, remaining_weight/is_empty, and conflict_id."""
+    fm = FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-mc")
+    db.add(fm)
+    db.flush()
+
+    # Multicolor filament snapshot
+    mc_filament = {
+        "id": 10,
+        "name": "Rainbow PLA",
+        "vendor": {"name": "ACME"},
+        "color_hex": None,
+        "multi_color_hexes": "FF0000,00FF00,0000FF",
+        "multi_color_direction": "longitudinal",
+    }
+
+    # Row 1: in_sync, multicolor, non-empty
+    db.add(SpoolMapping(spoolman_spool_id=10, filamentdb_filament_id="fil-mc",
+                        filamentdb_spool_id="s10", filament_mapping_id=fm.id))
+    _snap(db, "spoolman", "10", {"remaining_weight": 450.0, "filament": mc_filament})
+    _snap(db, "filamentdb", "s10", {"totalWeight": 650.0})
+
+    # Row 2: conflict — has an open Conflict; remaining_weight == 0 → is_empty True
+    fm2 = FilamentMapping(spoolman_filament_id=11, filamentdb_id="fil-empty")
+    db.add(fm2)
+    db.flush()
+    plain_filament = {
+        "id": 11,
+        "name": "Empty PLA",
+        "vendor": {"name": "ACME"},
+        "color_hex": "AABBCC",
+    }
+    db.add(SpoolMapping(spoolman_spool_id=11, filamentdb_filament_id="fil-empty",
+                        filamentdb_spool_id="s11", filament_mapping_id=fm2.id))
+    _snap(db, "spoolman", "11", {"remaining_weight": 0.0, "filament": plain_filament})
+    _snap(db, "filamentdb", "s11", {"totalWeight": 200.0})
+    conflict = Conflict(entity_type="spool", spoolman_id=11, filamentdb_spool_id="s11",
+                        field_name="weight")
+    db.add(conflict)
+    db.commit()
+    conflict_id = db.query(Conflict).filter_by(spoolman_id=11).first().id
+
+    client = _client(db)
+    rows = client.get("/api/mappings").json()
+    by_spool = {r["spoolman_spool_id"]: r for r in rows}
+
+    # Row 1: multicolor fields populated, not empty, no conflict_id
+    r1 = by_spool[10]
+    assert r1["multi_color_hexes"] == "FF0000,00FF00,0000FF"
+    assert r1["multi_color_direction"] == "longitudinal"
+    assert r1["remaining_weight"] == 450.0
+    assert r1["is_empty"] is False
+    assert r1["conflict_id"] is None
+
+    # Row 2: conflict_id set, is_empty True, no multicolor
+    r2 = by_spool[11]
+    assert r2["status"] == "conflict"
+    assert r2["conflict_id"] == conflict_id
+    assert r2["is_empty"] is True
+    assert r2["remaining_weight"] == 0.0
+    assert r2["multi_color_hexes"] is None
+    assert r2["multi_color_direction"] is None
+
+
 def test_delete_mapping_unlinks_only(db):
     db.add(SpoolMapping(spoolman_spool_id=5, filamentdb_filament_id="fil-x", filamentdb_spool_id="s5"))
     db.commit()

@@ -161,6 +161,12 @@ class MappingRow(BaseModel):
     spoolman_weight: float | None = None  # net remaining (last snapshot)
     filamentdb_weight: float | None = None  # gross total (last snapshot)
     last_synced: datetime.datetime | None = None
+    # Enrichment fields (all default None)
+    multi_color_hexes: str | None = None       # comma-separated hex list from SM filament snapshot
+    multi_color_direction: str | None = None   # "longitudinal" | "coaxial" | None
+    remaining_weight: float | None = None      # SM spool remaining_weight (same as spoolman_weight; named for clarity)
+    is_empty: bool = False                     # True when remaining_weight <= 0
+    conflict_id: int | None = None             # open Conflict.id for this spool (status=="conflict" rows)
 
 
 class MappingUpdateRequest(BaseModel):

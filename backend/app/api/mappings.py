@@ -48,6 +48,14 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
     conflict_fdb_spool_ids = {
         c.filamentdb_spool_id for c in open_conflicts if c.filamentdb_spool_id is not None
     }
+    # conflict_id lookup: spoolman_spool_id → Conflict.id (first open conflict for that spool)
+    conflict_id_by_sm: dict[int, int] = {}
+    conflict_id_by_fdb: dict[str, int] = {}
+    for c in open_conflicts:
+        if c.spoolman_id is not None and c.spoolman_id not in conflict_id_by_sm:
+            conflict_id_by_sm[c.spoolman_id] = c.id
+        if c.filamentdb_spool_id is not None and c.filamentdb_spool_id not in conflict_id_by_fdb:
+            conflict_id_by_fdb[c.filamentdb_spool_id] = c.id
 
     rows: list[MappingRow] = []
     for m in spool_mappings:
@@ -81,6 +89,12 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
         captures = [r.captured_at for r in (sm_snap_row, fdb_snap_row) if r is not None]
         last_synced = max(captures) if captures else m.updated_at
 
+        remaining = (sm_snap or {}).get("remaining_weight")
+        conflict_id = (
+            conflict_id_by_sm.get(m.spoolman_spool_id)
+            or conflict_id_by_fdb.get(m.filamentdb_spool_id)
+        ) if has_conflict else None
+
         rows.append(
             MappingRow(
                 id=m.id,
@@ -93,9 +107,14 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
                 name=sm_filament.get("name"),
                 vendor=sm_vendor.get("name"),
                 color=sm_filament.get("color_hex"),
-                spoolman_weight=(sm_snap or {}).get("remaining_weight"),
+                spoolman_weight=remaining,
                 filamentdb_weight=(fdb_snap or {}).get("totalWeight"),
                 last_synced=last_synced,
+                multi_color_hexes=sm_filament.get("multi_color_hexes"),
+                multi_color_direction=sm_filament.get("multi_color_direction"),
+                remaining_weight=remaining,
+                is_empty=(remaining is not None and remaining <= 0),
+                conflict_id=conflict_id,
             )
         )
     return rows

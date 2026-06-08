@@ -158,6 +158,12 @@ export interface MappingRow {
   spoolman_weight: number | null
   filamentdb_weight: number | null
   last_synced: string | null
+  // Enrichment fields
+  multi_color_hexes: string | null
+  multi_color_direction: string | null
+  remaining_weight: number | null
+  is_empty: boolean
+  conflict_id: number | null
 }
 
 export interface MappingUpdateRequest {
