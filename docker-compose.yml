@@ -1,51 +1,19 @@
+# filament-bridge — standard deployment.
+# Spoolman and Filament DB are separate projects you run yourself; point the bridge at them
+# with the URLs below. For a full local stack (bridge + Spoolman + Filament DB + Mongo) for
+# development/testing, use docker-compose.dev.yml instead.
 services:
   filament-bridge:
-    build: .
+    image: ghcr.io/hyiger/filament-bridge:latest
     ports:
       - "8090:8090"
     volumes:
-      - bridge-data:/data
+      - bridge-data:/data        # REQUIRED — persists the SQLite state database
     environment:
-      FILAMENTDB_URL: http://filament-db:3000
-      SPOOLMAN_URL: http://spoolman:7912
+      FILAMENTDB_URL: http://your-filament-db-host:3000   # your existing Filament DB
+      SPOOLMAN_URL: http://your-spoolman-host:7912         # your existing Spoolman
       # DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/...
-    depends_on:
-      - filament-db
-      - spoolman
-    restart: unless-stopped
-
-  filament-db:
-    image: ghcr.io/hyiger/filament-db:latest
-    ports:
-      - "3000:3000"
-    environment:
-      # Filament DB is a Next.js app backed by MongoDB — it 500s on every API
-      # call without this. State lives in MongoDB, not a local volume.
-      MONGODB_URI: mongodb://mongo:27017/filamentdb
-    depends_on:
-      - mongo
-    restart: unless-stopped
-
-  mongo:
-    image: mongo:7
-    volumes:
-      - mongo-data:/data/db
-    restart: unless-stopped
-
-  spoolman:
-    image: ghcr.io/donkie/spoolman:latest
-    ports:
-      - "7912:7912"
-    environment:
-      # Spoolman defaults to 8000 internally; pin it to 7912 so both the host
-      # mapping above and the in-network http://spoolman:7912 (used by the bridge
-      # service) resolve to the same port.
-      SPOOLMAN_PORT: "7912"
-    volumes:
-      - spoolman-data:/home/app/.local/share/spoolman
     restart: unless-stopped
 
 volumes:
   bridge-data:
-  mongo-data:
-  spoolman-data:

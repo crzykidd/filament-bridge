@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-08 — docker-compose.yml ships bridge-only; full dev stack moved to docker-compose.dev.yml
+
+`docker-compose.yml` previously bundled `filament-db`, `mongo`, and `spoolman` alongside the
+bridge. Filament DB and Spoolman are separate upstream projects that users typically run
+themselves; shipping them in the standard compose implied the bridge repo owns their lifecycle,
+which it does not.
+
+**Split:**
+
+- `docker-compose.yml` — bridge-only standard deployment. Uses the published image
+  (`ghcr.io/hyiger/filament-bridge:latest`), a single `bridge-data:/data` volume, and
+  placeholder `FILAMENTDB_URL` / `SPOOLMAN_URL` env vars pointing at the user's existing
+  Spoolman and Filament DB instances. No `depends_on`, no upstream service definitions.
+- `docker-compose.dev.yml` — full local stack for development and testing. Builds the
+  bridge from source (`build: .`) and also brings up `filament-db`, `mongo`, and `spoolman`
+  with internal network URLs (`http://filament-db:3000` / `http://spoolman:7912`). Uses
+  named volumes (`bridge-data`, `mongo-data`, `spoolman-data`). Intended only for contributors
+  and local testing — not for production deployments.
+
+README Quick start updated to lead with `docker-compose.yml` (standard deploy) and reference
+`docker-compose.dev.yml` for the full local stack.
+
 ## 2026-06-07 — Renamed to Bulk Import Wizard; ongoing SoT removed from wizard step; never_import_empties global setting
 
 ### Wizard renamed to "Bulk Import Wizard"

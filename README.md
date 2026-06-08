@@ -131,9 +131,19 @@ OctoPrint, Moonraker, and Klipper talk to **Spoolman** directly; the bridge is n
 
 ## Quick start (Docker)
 
-The repo ships a full runnable stack in [`docker-compose.yml`](docker-compose.yml) — it brings up filament-bridge, Filament DB, MongoDB, and Spoolman together.
+[`docker-compose.yml`](docker-compose.yml) is the standard bridge-only deployment — it pulls the published image and points at your existing Filament DB and Spoolman instances. Copy it, fill in your URLs, and run:
 
-For a minimal deployment alongside existing instances, add the bridge service to your compose file:
+```bash
+docker compose up -d
+```
+
+For a full local stack (bridge + Filament DB + MongoDB + Spoolman) for development or testing, use [`docker-compose.dev.yml`](docker-compose.dev.yml) instead:
+
+```bash
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+To add the bridge to an existing compose file:
 
 ```yaml
 services:
@@ -145,8 +155,8 @@ services:
     volumes:
       - bridge-data:/data        # REQUIRED — persists the SQLite state database
     environment:
-      FILAMENTDB_URL: http://filament-db:3000   # required
-      SPOOLMAN_URL: http://spoolman:7912         # required
+      FILAMENTDB_URL: http://your-filament-db-host:3000   # your existing Filament DB
+      SPOOLMAN_URL: http://your-spoolman-host:7912         # your existing Spoolman
       # SYNC_INTERVAL_SECONDS: 120
       # See docs/configuration.md for all options
 
@@ -261,7 +271,7 @@ Vendor name discrepancies between Spoolman and OpenPrintTag can be bridged with 
 ### Prerequisites
 
 - Python 3.12+, Node 22+
-- A running Filament DB instance and a running Spoolman instance (or use the full `docker-compose.yml`)
+- A running Filament DB instance and a running Spoolman instance (or use `docker-compose.dev.yml` to spin up the full local stack)
 
 ### Backend
 

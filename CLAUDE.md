@@ -134,7 +134,8 @@ filament-bridge/
 ├── README.md                               — open source project README
 ├── CLAUDE.md                               — this file (read first)
 ├── Dockerfile                              — multi-stage build (Node + Python)
-├── docker-compose.yml                      — example deployment with both upstream services
+├── docker-compose.yml                      — standard bridge-only deployment (published image, external Spoolman/FDB)
+├── docker-compose.dev.yml                  — full local dev stack (bridge build:. + Spoolman + Filament DB + Mongo)
 ├── backend/
 │   ├── app/
 │   │   ├── api/                            — FastAPI routers
