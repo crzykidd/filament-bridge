@@ -4,6 +4,13 @@
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
+> ## ⚠️ ALPHA — back up your databases before any writes
+>
+> filament-bridge is **alpha** software that writes to both **Spoolman** and **Filament DB**.
+> **Before** running the initial-sync wizard, applying an OpenTag cleanup, or enabling
+> auto-sync, **back up all three databases** (Spoolman, Filament DB, and the bridge). See
+> [Backups](#backups). Test against non-critical data first.
+
 ---
 
 ## Why?
@@ -14,6 +21,42 @@ Filament DB and Spoolman are both excellent tools that solve different parts of 
 - **Spoolman** excels at print-side inventory tracking — native OctoPrint and Moonraker/Klipper integration, real-time spool weight decrement during prints, Home Assistant integration, and broad ecosystem support.
 
 Neither can do what the other does well. filament-bridge keeps them in sync so you can use both without manual data entry.
+
+---
+
+## Backups
+
+**Before running the wizard, applying an OpenTag cleanup, or enabling auto-sync, back up all three systems.** The bridge keeps auto-sync OFF by default and never deletes upstream records without explicit user action — but during alpha a backup is still the safe move.
+
+### Spoolman
+
+Trigger a safe server-side backup via the API (Spoolman does not need to be stopped; it copies its database into a `backups/` folder inside its own data volume):
+
+```bash
+curl -X POST http://<spoolman-host>:7912/api/v1/backup
+```
+
+Make sure Spoolman's data volume is itself persisted/copied — the backup file lands inside that volume. Docs: <https://donkie.github.io/Spoolman/#operation/backup_backup_post>
+
+### Filament DB
+
+Filament DB has no backup API — it uses MongoDB. Back up at the database level:
+
+```bash
+docker exec <mongo-container> mongodump --archive=/data/db/fdb-$(date +%F).archive
+```
+
+Or snapshot the Mongo volume / use your MongoDB host's native backup tooling. Note: `GET /api/spools/export-csv` is a spools CSV export only — it is **not** a full backup.
+
+### filament-bridge
+
+Export the bridge's own state (mappings, snapshots, conflict queue):
+
+```bash
+curl http://<bridge-host>:8090/api/backup/export -o bridge-backup.json
+```
+
+Restore with `POST /api/backup/import`.
 
 ---
 
