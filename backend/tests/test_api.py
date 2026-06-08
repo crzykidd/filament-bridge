@@ -1090,6 +1090,92 @@ def test_sync_log_pagination_and_filter(db):
     assert all(it["action"] == "error" for it in errors["items"])
 
 
+def test_sync_log_windows(db):
+    """windows=N returns only entries from the most recent N distinct cycle_ids."""
+    import datetime
+
+    base = datetime.datetime(2024, 1, 1, 12, 0, 0)
+    # cycle "c1" — oldest (2 entries)
+    for i in range(2):
+        db.add(SyncLog(cycle_id="c1", direction="spoolman_to_filamentdb",
+                       action="update", entity_type="spool", spoolman_id=i,
+                       timestamp=base + datetime.timedelta(minutes=i)))
+    # cycle "c2" — middle (3 entries)
+    for i in range(3):
+        db.add(SyncLog(cycle_id="c2", direction="spoolman_to_filamentdb",
+                       action="update", entity_type="spool", spoolman_id=10 + i,
+                       timestamp=base + datetime.timedelta(hours=1, minutes=i)))
+    # cycle "c3" — newest (1 entry)
+    db.add(SyncLog(cycle_id="c3", direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool", spoolman_id=20,
+                   timestamp=base + datetime.timedelta(hours=2)))
+    db.commit()
+    client = _client(db)
+
+    # windows=1 — only the newest cycle (c3)
+    body1 = client.get("/api/sync-log?windows=1").json()
+    assert body1["total"] == 1
+    assert all(it["cycle_id"] == "c3" for it in body1["items"])
+
+    # windows=2 — last 2 cycles (c2 + c3 = 4 entries)
+    body2 = client.get("/api/sync-log?windows=2").json()
+    assert body2["total"] == 4
+    cycle_ids = {it["cycle_id"] for it in body2["items"]}
+    assert cycle_ids == {"c2", "c3"}
+
+    # windows=10 (more than available) — all 3 cycles (all 6 entries)
+    body3 = client.get("/api/sync-log?windows=10").json()
+    assert body3["total"] == 6
+
+    # without windows= — still works (total = 6)
+    body_all = client.get("/api/sync-log").json()
+    assert body_all["total"] == 6
+
+
+def test_sync_log_windows_oldest_cycle_excluded(db):
+    """windows=N selects only the most recent N cycles; older cycles are excluded."""
+    import datetime
+
+    base = datetime.datetime(2024, 1, 1, 12, 0, 0)
+    # Three cycles — only c2 and c3 should appear with windows=2
+    for cycle, delta, count in [("c1", 0, 2), ("c2", 60, 3), ("c3", 120, 1)]:
+        for i in range(count):
+            db.add(SyncLog(cycle_id=cycle, direction="spoolman_to_filamentdb",
+                           action="update", entity_type="spool",
+                           spoolman_id=100 * ord(cycle[-1]) + i,
+                           timestamp=base + datetime.timedelta(minutes=delta + i)))
+    db.commit()
+    client = _client(db)
+
+    # windows=2 should return c2 + c3 (4 entries) but NOT c1 (2 entries)
+    body = client.get("/api/sync-log?windows=2").json()
+    assert body["total"] == 4
+    cycle_ids = {it["cycle_id"] for it in body["items"]}
+    assert "c1" not in cycle_ids
+    assert cycle_ids == {"c2", "c3"}
+
+
+def test_sync_log_delete(db):
+    """DELETE /sync-log clears all rows and returns the count."""
+    for i in range(4):
+        db.add(SyncLog(cycle_id="c1", direction="spoolman_to_filamentdb",
+                       action="update", entity_type="spool", spoolman_id=i))
+    db.commit()
+    client = _client(db)
+
+    resp = client.delete("/api/sync-log")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["deleted"] == 4
+
+    # Table is now empty
+    assert db.query(SyncLog).count() == 0
+
+    # Second delete returns 0
+    resp2 = client.delete("/api/sync-log")
+    assert resp2.json()["deleted"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Backup round-trip (FR-24/FR-25)
 # ---------------------------------------------------------------------------

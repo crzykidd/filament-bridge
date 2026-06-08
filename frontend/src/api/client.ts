@@ -20,6 +20,7 @@ import type {
   OpenTagDatasetMeta,
   OpenTagMatchesResponse,
   SMVariancesDecisionsRequest,
+  SyncLogDeleteResponse,
   SyncLogResponse,
   SyncStatusResponse,
   VariancesResponse,
@@ -132,6 +133,7 @@ export interface SyncLogParams {
   action?: string
   limit?: number
   offset?: number
+  windows?: number
 }
 
 export const getSyncLog = (params: SyncLogParams = {}) => {
@@ -142,6 +144,9 @@ export const getSyncLog = (params: SyncLogParams = {}) => {
   const q = qs.toString()
   return request<SyncLogResponse>(`/sync-log${q ? `?${q}` : ''}`)
 }
+
+export const clearSyncLog = () =>
+  request<SyncLogDeleteResponse>('/sync-log', { method: 'DELETE' })
 
 // ---------------------------------------------------------------------------
 // Backup
