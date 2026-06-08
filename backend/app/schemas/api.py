@@ -235,6 +235,9 @@ class FilamentRef(BaseModel):
     vendor: str | None = None
     color: str | None = None
     material: str | None = None
+    # True when the Spoolman filament has a non-empty openprinttag_uuid extra field.
+    # Always False for FDB-only refs (no SM side).
+    openprinttag: bool = False
 
 
 class MatchPairRow(BaseModel):

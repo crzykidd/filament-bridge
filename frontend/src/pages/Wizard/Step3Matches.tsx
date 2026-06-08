@@ -274,6 +274,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState<RowStatus | 'all'>('all')
+  const [filterOpt, setFilterOpt] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [colFilter, setColFilter] = useState({ name: '', material: '' })
 
@@ -326,8 +327,17 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     return rows
   }, [data])
 
+  const optTaggedCount = useMemo(
+    () => allRows.filter(r => r.sm?.openprinttag).length,
+    [allRows],
+  )
+
   const filtered = useMemo(() => allRows.filter(r => {
     if (filterStatus !== 'all' && r.status !== filterStatus) return false
+    if (filterOpt) {
+      // When filter is on, hide rows with no SM side or whose SM filament is not OPT-tagged.
+      if (!r.sm?.openprinttag) return false
+    }
     if (search) {
       const lq = search.toLowerCase()
       const hay = [rName(r), rVendor(r), rMaterial(r), r.fdb?.name ?? '', String(r.smId ?? '')].join(' ').toLowerCase()
@@ -336,7 +346,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     if (colFilter.name && !rName(r).toLowerCase().includes(colFilter.name.toLowerCase())) return false
     if (colFilter.material && !rMaterial(r).toLowerCase().includes(colFilter.material.toLowerCase())) return false
     return true
-  }), [allRows, filterStatus, search, colFilter])
+  }), [allRows, filterStatus, filterOpt, search, colFilter])
 
   const sorted = useMemo(() => [...filtered].sort((a, b) => {
     if (sortCol === 'confidence') {
@@ -480,6 +490,17 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
               <option value="unmatched_sm">Unmatched (SM)</option>
               <option value="unmatched_fdb">Unmatched (FDB)</option>
             </select>
+          </label>
+
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input type="checkbox" checked={filterOpt} onChange={e => setFilterOpt(e.target.checked)}
+              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+            <span className="text-xs text-gray-500 shrink-0">OpenPrintTag-tagged only</span>
+            {optTaggedCount > 0 && (
+              <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+                {optTaggedCount}
+              </span>
+            )}
           </label>
 
           {/* Summary stats */}

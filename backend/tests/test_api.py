@@ -665,6 +665,34 @@ def test_wizard_matches_saved_decisions_echoed(db):
     assert saved[1]["action"] == "skip"
 
 
+def test_wizard_matches_openprinttag_flag(db):
+    """SM refs expose openprinttag=True when openprinttag_uuid extra is set, False otherwise."""
+    from app.schemas.spoolman import encode_extra_value
+
+    # SM filament 10 has a non-empty openprinttag_uuid → flag True
+    sm_tagged = SpoolmanFilament(
+        id=10, name="PLA", material="PLA",
+        vendor=SpoolmanVendor(id=1, name="Brand"),
+        extra={"openprinttag_uuid": encode_extra_value("some-uuid-value")},
+    )
+    # SM filament 11 has no openprinttag_uuid → flag False
+    sm_untagged = SpoolmanFilament(
+        id=11, name="PETG", material="PETG",
+        vendor=SpoolmanVendor(id=1, name="Brand"),
+        extra={},
+    )
+    fdb = [
+        FDBFilament.model_validate({"_id": "f1", "name": "PLA", "vendor": "Brand", "type": "PLA"}),
+        FDBFilament.model_validate({"_id": "f2", "name": "PETG", "vendor": "Brand", "type": "PETG"}),
+    ]
+    client = _client(db, _fake_spoolman(filaments=[sm_tagged, sm_untagged]), _fake_filamentdb(filaments=fdb))
+
+    body = client.get("/api/wizard/matches").json()
+    matched = {p["spoolman"]["spoolman_filament_id"]: p["spoolman"] for p in body["matched"]}
+    assert matched[10]["openprinttag"] is True, "tagged filament should have openprinttag=True"
+    assert matched[11]["openprinttag"] is False, "untagged filament should have openprinttag=False"
+
+
 def test_wizard_save_matches_persists(db):
     client = _client(db)
     resp = client.post("/api/wizard/matches", json={"decisions": [

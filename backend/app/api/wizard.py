@@ -96,12 +96,14 @@ router = APIRouter()
 
 
 def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
+    opt_uuid_raw = (sm.extra or {}).get(_settings.spoolman_field_openprinttag_uuid)
     return FilamentRef(
         spoolman_filament_id=sm.id,
         name=sm.name,
         vendor=sm.vendor.name if sm.vendor else None,
         color=sm.color_hex,  # display-only ref; bare Spoolman format is fine here
         material=sm.material,
+        openprinttag=bool(decode_extra_value(opt_uuid_raw)),
     )
 
 

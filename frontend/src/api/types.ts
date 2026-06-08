@@ -217,6 +217,8 @@ export interface FilamentRef {
   vendor: string | null
   color: string | null
   material?: string | null
+  /** True when the Spoolman filament has a non-empty openprinttag_uuid extra field. */
+  openprinttag?: boolean
 }
 
 export interface MatchPairRow {
