@@ -689,6 +689,10 @@ export default function OpenTagCleanup() {
   // Per-group collapsed state: group key → collapsed (default: all collapsed)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
+  // Filter toggles
+  const [hideMatched, setHideMatched] = useState(false)
+  const [hideAlreadyTagged, setHideAlreadyTagged] = useState(false)
+
   // Load cache status on mount (instant — no network fetch to FDB)
   useEffect(() => {
     getOpenTagStatus()
@@ -854,8 +858,28 @@ export default function OpenTagCleanup() {
   }
 
   const matches = response?.matches ?? []
-  const withMatch = matches.filter(m => m.confidence >= 0.30)
-  const noMatch = matches.filter(m => m.confidence < 0.30)
+
+  // Apply filter toggles before the withMatch/noMatch split so groups, no-match
+  // details, and count summaries all reflect the active filters.
+  const filteredMatches = useMemo(() => {
+    let list = matches
+    if (hideMatched) {
+      list = list.filter(m => m.opt_uuid == null && m.confidence < 0.30)
+    }
+    if (hideAlreadyTagged) {
+      list = list.filter(m => {
+        const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
+        const activeCandidate = m.candidates?.[candidateIdx] ?? null
+        return getExistingUuid(m, activeCandidate) === ''
+      })
+    }
+    return list
+  }, [matches, hideMatched, hideAlreadyTagged, selectedCandidates])
+
+  const withMatch = filteredMatches.filter(m => m.confidence >= 0.30)
+  const noMatch = filteredMatches.filter(m => m.confidence < 0.30)
+  const filterActive = hideMatched || hideAlreadyTagged
+  const hiddenCount = matches.length - filteredMatches.length
 
   // Grouped + sorted display for the review step
   const displayGroups = useMemo<MatchGroup[]>(() => {
@@ -944,6 +968,11 @@ export default function OpenTagCleanup() {
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-600">
               {withMatch.length} matches found, {noMatch.length} unmatched, {ignoredIds.size} ignored
+              {filterActive && (
+                <span className="ml-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                  {hiddenCount} hidden by filter
+                </span>
+              )}
             </p>
             <button
               type="button"
@@ -1018,6 +1047,27 @@ export default function OpenTagCleanup() {
                 </button>
               </div>
             )}
+            {/* Filter toggles */}
+            <div className={`flex items-center gap-3 ${groupBy === 'none' ? 'ml-auto' : ''}`}>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
+                  checked={hideMatched}
+                  onChange={e => setHideMatched(e.target.checked)}
+                />
+                Hide matched
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
+                  checked={hideAlreadyTagged}
+                  onChange={e => setHideAlreadyTagged(e.target.checked)}
+                />
+                Hide already-tagged
+              </label>
+            </div>
           </div>
 
           {/* Bulk-action bar */}
@@ -1060,7 +1110,7 @@ export default function OpenTagCleanup() {
               onIgnore={handleIgnore}
               onCandidateChange={handleCandidateChange}
               showHeader={groupBy !== 'none'}
-              collapsed={collapsedGroups[group.key] ?? true}
+              collapsed={groupBy === 'none' ? false : (collapsedGroups[group.key] ?? true)}
               onToggleCollapse={() => handleToggleCollapse(group.key)}
               onIgnoreAll={(ignoreAll) => handleIgnoreAll(group, ignoreAll)}
             />
