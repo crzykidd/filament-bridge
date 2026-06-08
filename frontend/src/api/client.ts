@@ -3,6 +3,7 @@ import type {
   AutoSyncResponse,
   BackupExport,
   BackupImportResponse,
+  BackupSpoolmanResponse,
   BulkResolveRequest,
   BulkResolveResponse,
   ConfigResponse,
@@ -149,6 +150,8 @@ export const getSyncLog = (params: SyncLogParams = {}) => {
 export const exportBackup = () => request<BackupExport>('/backup/export')
 export const importBackup = (body: BackupExport) =>
   json<BackupImportResponse>('/backup/import', 'POST', body)
+export const backupSpoolman = () =>
+  request<BackupSpoolmanResponse>('/backup/spoolman', { method: 'POST' })
 
 // ---------------------------------------------------------------------------
 // Wizard

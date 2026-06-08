@@ -243,6 +243,21 @@ class SpoolmanClient:
                     key, status, body,
                 )
 
+    async def trigger_backup(self) -> dict:
+        """POST /api/v1/backup — trigger a server-side backup on the Spoolman instance.
+
+        Spoolman writes the backup archive into its own data volume; the bridge
+        does not receive or store the file.  Returns the JSON response body
+        (typically ``{"path": "/home/user/.local/share/spoolman/backups/..."}``),
+        or ``{}`` if Spoolman returns an empty body.
+        """
+        resp = await self._http.post("/api/v1/backup")
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except Exception:
+            return {}
+
     # ------------------------------------------------------------------
     # Health / connectivity
     # ------------------------------------------------------------------

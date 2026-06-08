@@ -1,6 +1,15 @@
 // Mirrors backend/app/schemas/api.py and backend/app/api/health.py exactly.
 // If a field shape conflicts, the backend wins — fix here, never change the API.
 
+// ---------------------------------------------------------------------------
+// Backup
+// ---------------------------------------------------------------------------
+
+export interface BackupSpoolmanResponse {
+  success: boolean
+  detail: string
+}
+
 export type SourceOfTruth = 'spoolman' | 'filamentdb'
 export type SyncDirection = 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'
 export type SyncDirection2 = 'two_way' | 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { postWizardExecute } from '../../api/client'
 import { DeepLinks } from '../../components/DeepLinks'
+import { BackupSafetyDialog } from '../../components/BackupSafetyDialog'
 import type { WizardExecuteResponse } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -9,8 +10,9 @@ export default function Step6Execute({ prev, tareOverrides }: WizardCtx) {
   const [executing, setExecuting] = useState(false)
   const [result, setResult] = useState<WizardExecuteResponse | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [showBackupDialog, setShowBackupDialog] = useState(false)
 
-  async function handleExecute() {
+  async function runExecute() {
     setExecuting(true)
     setErr(null)
     try {
@@ -21,6 +23,10 @@ export default function Step6Execute({ prev, tareOverrides }: WizardCtx) {
     } finally {
       setExecuting(false)
     }
+  }
+
+  function handleExecute() {
+    setShowBackupDialog(true)
   }
 
   if (result) {
@@ -95,46 +101,55 @@ export default function Step6Execute({ prev, tareOverrides }: WizardCtx) {
   }
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold text-gray-800">Execute initial sync</h2>
-        <p className="text-sm text-gray-500 mt-1">
-          This will write to both Spoolman and Filament DB. Review your choices before proceeding.
-        </p>
-        {tareOverrides.length > 0 && (
+    <>
+      <BackupSafetyDialog
+        open={showBackupDialog}
+        actionLabel="Run initial sync"
+        onCancel={() => setShowBackupDialog(false)}
+        onProceed={() => { setShowBackupDialog(false); void runExecute() }}
+      />
+
+      <div className="space-y-5">
+        <div>
+          <h2 className="text-lg font-semibold text-gray-800">Execute initial sync</h2>
           <p className="text-sm text-gray-500 mt-1">
-            {tareOverrides.length} tare override{tareOverrides.length !== 1 ? 's' : ''} applied.
+            This will write to both Spoolman and Filament DB. Review your choices before proceeding.
           </p>
-        )}
-      </div>
+          {tareOverrides.length > 0 && (
+            <p className="text-sm text-gray-500 mt-1">
+              {tareOverrides.length} tare override{tareOverrides.length !== 1 ? 's' : ''} applied.
+            </p>
+          )}
+        </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded p-4">
-        <p className="text-amber-800 text-sm font-medium">This action writes to both upstream systems and cannot be undone automatically.</p>
-        <label className="flex items-center gap-2 mt-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={confirmed}
-            onChange={e => setConfirmed(e.target.checked)}
-            className="w-4 h-4 rounded border-gray-300 text-indigo-600"
-          />
-          <span className="text-sm text-amber-800">I understand and want to proceed</span>
-        </label>
-      </div>
+        <div className="bg-amber-50 border border-amber-200 rounded p-4">
+          <p className="text-amber-800 text-sm font-medium">This action writes to both upstream systems and cannot be undone automatically.</p>
+          <label className="flex items-center gap-2 mt-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={e => setConfirmed(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-indigo-600"
+            />
+            <span className="text-sm text-amber-800">I understand and want to proceed</span>
+          </label>
+        </div>
 
-      {err && <p className="text-sm text-red-600">{err}</p>}
+        {err && <p className="text-sm text-red-600">{err}</p>}
 
-      <div className="flex justify-between">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
-          ← Back
-        </button>
-        <button
-          onClick={handleExecute}
-          disabled={!confirmed || executing}
-          className="px-6 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-40"
-        >
-          {executing ? 'Executing…' : 'Execute sync'}
-        </button>
+        <div className="flex justify-between">
+          <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+            ← Back
+          </button>
+          <button
+            onClick={handleExecute}
+            disabled={!confirmed || executing}
+            className="px-6 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-40"
+          >
+            {executing ? 'Executing…' : 'Execute sync'}
+          </button>
+        </div>
       </div>
-    </div>
+    </>
   )
 }

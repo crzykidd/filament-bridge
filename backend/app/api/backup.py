@@ -11,7 +11,9 @@ from __future__ import annotations
 import datetime
 import json
 
-from fastapi import APIRouter, Depends
+import httpx
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.config import read_config, set_config_value
@@ -26,6 +28,42 @@ from app.schemas.api import (
 )
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Spoolman backup proxy
+# ---------------------------------------------------------------------------
+
+
+class SpoolmanBackupResponse(BaseModel):
+    """Result of triggering a server-side Spoolman backup."""
+
+    success: bool
+    detail: str
+
+
+@router.post("/backup/spoolman", response_model=SpoolmanBackupResponse)
+async def trigger_spoolman_backup(request: Request) -> SpoolmanBackupResponse:
+    """Proxy POST /api/v1/backup to the connected Spoolman instance.
+
+    Spoolman writes the backup archive into its own data volume; the bridge
+    neither receives nor stores the file.  On success, returns the archive path
+    from the Spoolman response.  On any HTTP or network error, returns
+    ``success=False`` with a readable detail string — never raises a 500.
+    """
+    try:
+        result = await request.app.state.spoolman.trigger_backup()
+        detail = result.get("path") or result.get("message") or "Backup triggered."
+        return SpoolmanBackupResponse(success=True, detail=str(detail))
+    except httpx.HTTPStatusError as exc:
+        return SpoolmanBackupResponse(
+            success=False,
+            detail=f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+        )
+    except httpx.RequestError as exc:
+        return SpoolmanBackupResponse(success=False, detail=f"Connection error: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return SpoolmanBackupResponse(success=False, detail=str(exc))
 
 
 def _decode(raw: str | None):

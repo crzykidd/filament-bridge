@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-07 — Pre-write backup safeguard dialog gates destructive actions
+
+A `BackupSafetyDialog` component (`frontend/src/components/BackupSafetyDialog.tsx`) gates
+three destructive actions before they execute:
+
+1. **Wizard Execute** (`Step6Execute.tsx`) — clicking "Execute sync" opens the dialog; `onProceed` runs `postWizardExecute`.
+2. **OpenTag Apply** (`OpenTagCleanup.tsx`) — clicking "Apply N writes" in the ConfirmStep opens the dialog; `onProceed` runs the apply payload.
+3. **Enable auto-sync** (`Dashboard.tsx`) — only the enable path is gated; disabling runs immediately without a dialog.
+
+**Spoolman backup:** the dialog has a "Back up Spoolman now" button that calls
+`POST /api/backup/spoolman` on the bridge backend. The backend proxies this to Spoolman's
+`POST /api/v1/backup` (via `SpoolmanClient.trigger_backup()`), which writes an archive to
+Spoolman's own data volume. On error the endpoint returns `{ success: false, detail: "…" }`
+— never a 500.
+
+**Filament DB backup:** FDB has no backup API. The dialog shows a copy-pasteable
+`docker exec <mongo-container> mongodump --archive=…` command with a copy button.
+
+**Proceed gate:** the Proceed button is disabled until EITHER the Spoolman backup
+succeeded (HTTP 200, `success: true`) OR the acknowledgment checkbox is checked.
+`docs/spoolman-writes.md` is unchanged — this is a trigger, not a field write.
+
 ## 2026-06-07 — Wizard pre-matches records by filamentdb_id cross-reference before fuzzy matching
 
 `match_filaments` in `backend/app/core/matcher.py` now accepts an optional

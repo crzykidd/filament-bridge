@@ -13,6 +13,7 @@ import {
   postOpenTagApply,
   postOpenTagRefresh,
 } from '../api/client'
+import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type {
   OpenTagApplyRequest,
   OpenTagCacheStatus,
@@ -679,6 +680,7 @@ export default function OpenTagCleanup() {
   const [step, setStep] = useState<Step>('review')
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<{ applied: number; errors: number } | null>(null)
+  const [showBackupDialog, setShowBackupDialog] = useState(false)
 
   // Per-filament field decisions: smId → { fieldName → decision }
   const [fieldDecisions, setFieldDecisions] = useState<Record<number, Record<string, OpenTagFieldDecision>>>({})
@@ -818,7 +820,7 @@ export default function OpenTagCleanup() {
     })
   }, [])
 
-  const handleApply = async () => {
+  const runApply = async () => {
     if (!response) return
     setApplying(true)
     setError(null)
@@ -855,6 +857,10 @@ export default function OpenTagCleanup() {
     } finally {
       setApplying(false)
     }
+  }
+
+  const handleApply = () => {
+    setShowBackupDialog(true)
   }
 
   const matches = response?.matches ?? []
@@ -910,6 +916,13 @@ export default function OpenTagCleanup() {
   }, [withMatch, groupBy, sortBy])
 
   return (
+    <>
+    <BackupSafetyDialog
+      open={showBackupDialog}
+      actionLabel="Apply OpenTag writes"
+      onCancel={() => setShowBackupDialog(false)}
+      onProceed={() => { setShowBackupDialog(false); void runApply() }}
+    />
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-1">OpenTag Cleanup</h1>
       <p className="text-sm text-gray-500 mb-6">
@@ -1165,5 +1178,6 @@ export default function OpenTagCleanup() {
         </div>
       )}
     </div>
+    </>
   )
 }

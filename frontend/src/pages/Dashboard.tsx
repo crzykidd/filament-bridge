@@ -4,6 +4,7 @@ import { getSyncStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/c
 import { usePoll } from '../api/hooks'
 import { SystemStatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
+import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { CycleResultResponse, SyncPreviewEntry } from '../api/types'
 
 function fmt(ts: string | null) {
@@ -59,6 +60,7 @@ export default function Dashboard() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [togglingAuto, setTogglingAuto] = useState(false)
   const [showMatched, setShowMatched] = useState(true)
+  const [showAutoSyncBackupDialog, setShowAutoSyncBackupDialog] = useState(false)
   const navigate = useNavigate()
 
   async function handleManualSync() {
@@ -90,16 +92,34 @@ export default function Dashboard() {
     }
   }
 
-  async function handleAutoSyncToggle() {
-    if (!data) return
+  async function doEnableAutoSync() {
     setTogglingAuto(true)
     try {
-      await setAutoSync({ enabled: !data.auto_sync_enabled })
+      await setAutoSync({ enabled: true })
       void reload()
     } catch (e) {
       console.error(e)
     } finally {
       setTogglingAuto(false)
+    }
+  }
+
+  async function handleAutoSyncToggle() {
+    if (!data) return
+    if (data.auto_sync_enabled) {
+      // Disabling is not gated — run immediately
+      setTogglingAuto(true)
+      try {
+        await setAutoSync({ enabled: false })
+        void reload()
+      } catch (e) {
+        console.error(e)
+      } finally {
+        setTogglingAuto(false)
+      }
+    } else {
+      // Enabling is gated behind the backup safety dialog
+      setShowAutoSyncBackupDialog(true)
     }
   }
 
@@ -121,6 +141,13 @@ export default function Dashboard() {
   const counts = data?.counts ?? {}
 
   return (
+    <>
+    <BackupSafetyDialog
+      open={showAutoSyncBackupDialog}
+      actionLabel="Enable auto-sync"
+      onCancel={() => setShowAutoSyncBackupDialog(false)}
+      onProceed={() => { setShowAutoSyncBackupDialog(false); void doEnableAutoSync() }}
+    />
     <div className="p-8 space-y-6 max-w-4xl">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
@@ -314,5 +341,6 @@ export default function Dashboard() {
         </div>
       )}
     </div>
+    </>
   )
 }
