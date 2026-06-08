@@ -398,7 +398,8 @@ async def test_multicolor_fdb_to_sm_write(db):
     spoolman.update_filament.assert_called_once()
     sm_id, payload = spoolman.update_filament.call_args.args
     assert sm_id == SM_FIL_ID
-    assert payload["color_hex"] == "aa0000"
+    # color_hex must be absent (not sent) for multicolor — Spoolman 422s on both
+    assert "color_hex" not in payload
     assert payload["multi_color_hexes"] == "aa0000,00bb00"
     assert payload["multi_color_direction"] == "longitudinal"
     assert result.updated == 1

@@ -134,15 +134,17 @@ class TestSmMulticolorToFdb:
 
 
 class TestFdbMulticolorToSm:
-    def test_coextruded_synthesizes_primary(self):
+    def test_coextruded_no_color_hex_all_in_multi(self):
+        # color_hex must be None for coextruded; all secondaries go into multi_color_hexes
         sm = fdb_multicolor_to_sm(None, ["#cdde1b", "#68cc16"], [TAG_COEXTRUDED])
-        assert sm["color_hex"] == "cdde1b"
+        assert sm["color_hex"] is None
         assert sm["multi_color_hexes"] == "cdde1b,68cc16"
         assert sm["multi_color_direction"] == "coaxial"
 
-    def test_gradient_primary_plus_rest(self):
+    def test_gradient_no_color_hex_primary_in_multi(self):
+        # color_hex must be None for gradient; primary + secondaries all in multi_color_hexes
         sm = fdb_multicolor_to_sm("#aa0000", ["#00bb00", "#0000cc"], [TAG_GRADIENT])
-        assert sm["color_hex"] == "aa0000"
+        assert sm["color_hex"] is None
         assert sm["multi_color_hexes"] == "aa0000,00bb00,0000cc"
         assert sm["multi_color_direction"] == "longitudinal"
 

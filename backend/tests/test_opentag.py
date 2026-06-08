@@ -2106,28 +2106,28 @@ _OPT_GRADIENT = {
 
 
 def test_opt_to_spoolman_fields_coextruded_sets_direction():
-    """Coextruded OPT → multi_color_direction='coaxial' + sensible color_hex even with empty primary."""
+    """Coextruded OPT → multi_color_direction='coaxial', all hexes in multi_color_hexes, no color_hex."""
     fields = opt_to_spoolman_fields(_OPT_COEXTRUDED)
     assert fields.get("multi_color_direction") == "coaxial"
     assert fields.get("multi_color_hexes") is not None
     assert "FF0000" in fields["multi_color_hexes"] and "00FF00" in fields["multi_color_hexes"]
-    # color_hex must be set (synthesised from first secondary for coextruded)
-    assert fields.get("color_hex") is not None
+    # color_hex must be absent — sending both would cause Spoolman 422
+    assert "color_hex" not in fields
 
 
-def test_opt_to_spoolman_fields_coextruded_empty_primary_synthesises_color_hex():
-    """Empty primary color on coextruded → color_hex derived from first secondary color."""
+def test_opt_to_spoolman_fields_coextruded_no_color_hex():
+    """Coextruded OPT → color_hex is NOT emitted (Spoolman rejects both color_hex + multi_color_hexes)."""
     fields = opt_to_spoolman_fields(_OPT_COEXTRUDED)
-    # fdb_multicolor_to_sm synthesises primary from first secondary for coextruded
-    assert fields["color_hex"] == "FF0000"
+    assert "color_hex" not in fields
 
 
 def test_opt_to_spoolman_fields_gradient_sets_direction():
-    """Gradient OPT → multi_color_direction='longitudinal'."""
+    """Gradient OPT → multi_color_direction='longitudinal', all hexes in multi_color_hexes, no color_hex."""
     fields = opt_to_spoolman_fields(_OPT_GRADIENT)
     assert fields.get("multi_color_direction") == "longitudinal"
     assert "AA0000" in fields.get("multi_color_hexes", "")
-    assert fields.get("color_hex") == "AA0000"
+    # color_hex must be absent — sending both would cause Spoolman 422
+    assert "color_hex" not in fields
 
 
 def test_opt_to_spoolman_fields_gradient_multi_color_hexes_contains_all():
@@ -3944,7 +3944,7 @@ async def test_load_opentag_dataset_does_not_overwrite_existing_secondary_colors
 
 def test_opt_to_spoolman_fields_gradient_yields_all_three_color_fields():
     """A gradient OPT material (gradual_color_change tag + recovered secondaryColors) must
-    produce color_hex, multi_color_hexes, AND multi_color_direction together (no 422)."""
+    produce multi_color_hexes and multi_color_direction (no color_hex — sending both causes 422)."""
     gradient_opt = {
         "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
         "slug": "amolen-pla-silk-gradient",
@@ -3964,8 +3964,8 @@ def test_opt_to_spoolman_fields_gradient_yields_all_three_color_fields():
     }
     fields = opt_to_spoolman_fields(gradient_opt)
 
-    # All three multicolor fields must be present (Spoolman 422s if direction is set without hexes)
-    assert "color_hex" in fields, "color_hex missing"
+    # color_hex must be absent for multicolor — Spoolman 422s when both color_hex + multi_color_hexes set
+    assert "color_hex" not in fields, "color_hex must not be sent for gradient (causes 422)"
     assert "multi_color_hexes" in fields, "multi_color_hexes missing"
     assert "multi_color_direction" in fields, "multi_color_direction missing"
     assert fields["multi_color_direction"] == "longitudinal"

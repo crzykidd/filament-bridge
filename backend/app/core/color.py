@@ -148,15 +148,18 @@ def fdb_multicolor_to_sm(
     """Map Filament DB structured color fields onto Spoolman's shape.
 
     Returns ``{"color_hex", "multi_color_hexes", "multi_color_direction"}``.
-    Spoolman has no null-primary concept, so for coextruded filaments the primary
-    ``color_hex`` is synthesised from the first secondary color.
+    For multicolor filaments (coextruded or gradient), ``color_hex`` is always
+    ``None`` and all colors are placed in ``multi_color_hexes`` (first hex is the
+    primary for gradient; all secondaries for coextruded).  Spoolman rejects a
+    payload that sets both ``color_hex`` and ``multi_color_hexes`` (422).
+    Single-color filaments set ``color_hex`` only.
     """
     sec = [c for c in (to_sm_color(c) for c in (secondary_colors or [])) if c]
     arrangement = arrangement_from_tags(opt_tags)
 
     if arrangement == "coextruded":
         return {
-            "color_hex": sec[0] if sec else None,
+            "color_hex": None,
             "multi_color_hexes": ",".join(sec) if sec else None,
             "multi_color_direction": "coaxial",
         }
@@ -164,7 +167,7 @@ def fdb_multicolor_to_sm(
         primary = to_sm_color(color)
         all_hexes = ([primary] if primary else []) + sec
         return {
-            "color_hex": primary,
+            "color_hex": None,
             "multi_color_hexes": ",".join(all_hexes) if all_hexes else None,
             "multi_color_direction": "longitudinal",
         }

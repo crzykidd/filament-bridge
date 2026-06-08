@@ -1,5 +1,24 @@
 # Decision record
 
+## 2026-06-07 — Spoolman multicolor: `multi_color_hexes` only; `color_hex` never set for multicolor
+
+Spoolman rejects a filament PATCH that sets both `color_hex` and `multi_color_hexes`
+with a 422: "Cannot specify both color_hex and multi_color_hexes".  The correct Spoolman
+multicolor representation is `multi_color_hexes` (comma-separated hex values, first = primary
+for gradient) + `multi_color_direction`, with `color_hex` **unset**.
+
+`fdb_multicolor_to_sm` in `backend/app/core/color.py` was returning `color_hex` in both
+multicolor branches — for coextruded it synthesised the primary from the first secondary,
+and for gradient it repeated the primary.  This caused 422 errors on real filaments (SM #7,
+#147).
+
+**Fix:** both multicolor branches now return `color_hex: None` and put ALL colors in
+`multi_color_hexes` (coextruded: all secondaries; gradient: primary + secondaries).
+Single-color branch is unchanged.  The engine `_sync_multicolor` FDB→SM write omits
+`color_hex` from the PATCH payload when None.  `opt_to_spoolman_fields` (opentag_match.py)
+already guards on None, so the OpenTag cleanup path also no longer sends `color_hex` for
+multicolor.
+
 ## 2026-06-07 — Color-name tokens split on non-alphanumeric; multicolor descriptor noise dropped
 
 `_color_name_tokens` in `backend/app/core/opentag_match.py` previously split the

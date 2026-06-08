@@ -855,11 +855,14 @@ async def _sync_multicolor(
             sm = fdb_multicolor_to_sm(fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags)
             if not dry_run:
                 try:
-                    await spoolman.update_filament(m.spoolman_filament_id, {
-                        "color_hex": sm["color_hex"],
-                        "multi_color_hexes": sm["multi_color_hexes"],
-                        "multi_color_direction": sm["multi_color_direction"],
-                    })
+                    sm_payload: dict = {}
+                    if sm["color_hex"] is not None:
+                        sm_payload["color_hex"] = sm["color_hex"]
+                    if sm["multi_color_hexes"] is not None:
+                        sm_payload["multi_color_hexes"] = sm["multi_color_hexes"]
+                    if sm["multi_color_direction"] is not None:
+                        sm_payload["multi_color_direction"] = sm["multi_color_direction"]
+                    await spoolman.update_filament(m.spoolman_filament_id, sm_payload)
                     _store(fdb_sig_now, fdb_sig_now)  # SM now matches FDB
                     _log(
                         db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
