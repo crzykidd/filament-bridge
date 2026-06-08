@@ -1,5 +1,29 @@
 # Decision record
 
+## 2026-06-08 — multicolor writes always include multi_color_direction (Spoolman 422 fix)
+
+Spoolman rejects a filament PATCH that sets `multi_color_hexes` without also setting
+`multi_color_direction` with a 422: "Multi-color filament must have multi_color_direction set."
+This caused thermochromic OpenTag entries (SM #12/#13 — 2 `secondaryColors`, a
+`temperature_color_change` tag, no coextruded/gradient arrangement tag) to 422 on OpenTag
+apply. These entries are classified `multi_unknown`; the `len(all_hexes) >= 2` branch in
+`opt_to_spoolman_fields` was only setting `multi_color_direction` when `has_arrangement` was
+true, leaving `multi_unknown` entries without a direction.
+
+**Fix:** `opt_to_spoolman_fields` in `backend/app/core/opentag_match.py` now ALWAYS sets
+`multi_color_direction` in the `len >= 2` branch:
+- `gradient` arrangement → `"longitudinal"`
+- `coextruded` arrangement → `"coaxial"`
+- no/unknown arrangement (`multi_unknown`) → `"coaxial"` (safe default; Spoolman just
+  requires *a* direction — coaxial is used for thermochromic and other entries where spatial
+  arrangement is unknown)
+
+`fdb_multicolor_to_sm` in `backend/app/core/color.py` was already safe — both multicolor
+branches always paired `multi_color_hexes` with a direction.
+
+The comment above the color rule in `opt_to_spoolman_fields` was updated to document that
+direction is ALWAYS set for multicolor (defaulting to coaxial for unknown arrangements).
+
 ## 2026-06-08 — Container runs as non-root 1000:1000; /data chowned in image
 
 The bridge image previously ran as root (Docker default). This violates container security

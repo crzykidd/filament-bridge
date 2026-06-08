@@ -198,8 +198,13 @@ def opt_to_spoolman_fields(
 
     # Count-based color rule — Spoolman rejects a lone-hex multi_color_hexes (422).
     #
-    # len >= 2 → multicolor: put all hexes in multi_color_hexes; set direction only when
-    #            the arrangement tag is known (coextruded → coaxial, gradient → longitudinal);
+    # len >= 2 → multicolor: put all hexes in multi_color_hexes; ALWAYS set
+    #            multi_color_direction (Spoolman 422s if multi_color_hexes is set without it):
+    #              coextruded arrangement → "coaxial"
+    #              gradient arrangement  → "longitudinal"
+    #              no/unknown arrangement (multi_unknown) → "coaxial" (safe default; Spoolman
+    #                only requires *a* direction — coaxial is used for thermochromic and other
+    #                unclassified multicolor entries where spatial arrangement is unknown).
     #            NEVER set color_hex alongside multi_color_hexes (Spoolman 422s on both).
     # len == 1 and no arrangement tag → single-color: write color_hex only.
     # len == 1 and arrangement tag → partial multicolor data; emit NO color fields so we
@@ -209,10 +214,13 @@ def opt_to_spoolman_fields(
     #            alone" behaviour for the denormalized FDB feed path).
     if len(all_hexes) >= 2:
         result["multi_color_hexes"] = ",".join(all_hexes)
-        if has_arrangement:
-            result["multi_color_direction"] = (
-                "coaxial" if arrangement == "coextruded" else "longitudinal"
-            )
+        # Always set multi_color_direction — Spoolman requires it whenever multi_color_hexes
+        # is present.  Default to "coaxial" for unknown/no arrangement (multi_unknown).
+        if arrangement == "gradient":
+            result["multi_color_direction"] = "longitudinal"
+        else:
+            # coextruded → coaxial; no/unknown arrangement → coaxial (safe default)
+            result["multi_color_direction"] = "coaxial"
         # color_hex intentionally NOT set — Spoolman rejects both fields together (422).
     elif len(all_hexes) == 1 and not has_arrangement:
         # Single distinct color, no arrangement tag → straightforward single-color write.

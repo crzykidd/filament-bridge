@@ -297,6 +297,86 @@ def test_opt_to_spoolman_fields_secondary_colors():
     assert "FF0000" in fields["multi_color_hexes"]
 
 
+# ---------------------------------------------------------------------------
+# multi_color_direction always set when multi_color_hexes is set (422 guard)
+# ---------------------------------------------------------------------------
+
+
+def test_opt_to_spoolman_fields_multi_unknown_always_has_direction():
+    """multi_unknown entry (2 secondaryColors, non-arrangement tag, no coextruded/gradient)
+    must emit BOTH multi_color_hexes AND multi_color_direction == 'coaxial', and NO color_hex.
+
+    Regression: SM #12/#13 thermochromic PLA had 2 secondaryColors and a
+    'temperature_color_change' tag but no arrangement tag → direction was omitted → Spoolman 422.
+    """
+    opt = {
+        **_OPT_PETG,
+        "color": "#FF0000",
+        "secondaryColors": ["#0000FF", "#00FF00"],
+        "tags": ["temperature_color_change"],  # non-arrangement tag
+        "optTags": [],
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "multi_color_hexes" in fields, "Expected multi_color_hexes for 2+ colors"
+    assert "multi_color_direction" in fields, (
+        "Spoolman 422s when multi_color_hexes is set without multi_color_direction"
+    )
+    assert fields["multi_color_direction"] == "coaxial", (
+        f"Expected coaxial default for multi_unknown, got {fields['multi_color_direction']!r}"
+    )
+    assert "color_hex" not in fields, (
+        "color_hex must NOT be set alongside multi_color_hexes (Spoolman 422)"
+    )
+
+
+def test_opt_to_spoolman_fields_coextruded_sets_coaxial():
+    """Coextruded OPT (tag 'coextruded') with ≥2 colors → multi_color_direction == 'coaxial'."""
+    opt = {
+        **_OPT_PETG,
+        "color": None,
+        "secondaryColors": ["#AA0000", "#0000BB"],
+        "tags": ["coextruded"],
+        "optTags": [],
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "multi_color_hexes" in fields
+    assert fields["multi_color_direction"] == "coaxial"
+    assert "color_hex" not in fields
+
+
+def test_opt_to_spoolman_fields_gradient_sets_longitudinal():
+    """Gradient OPT (tag 'gradual_color_change') with ≥2 colors → multi_color_direction == 'longitudinal'."""
+    opt = {
+        **_OPT_PETG,
+        "color": "#FF0000",
+        "secondaryColors": ["#0000FF"],
+        "tags": ["gradual_color_change"],
+        "optTags": [],
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "multi_color_hexes" in fields
+    assert fields["multi_color_direction"] == "longitudinal"
+    assert "color_hex" not in fields
+
+
+def test_opt_to_spoolman_fields_single_color_unchanged():
+    """len == 1, no arrangement tag → color_hex only; no multi fields."""
+    opt = {**_OPT_PETG, "color": "#CC0000", "secondaryColors": [], "tags": [], "optTags": []}
+    fields = opt_to_spoolman_fields(opt)
+    assert fields["color_hex"] == "CC0000"
+    assert "multi_color_hexes" not in fields
+    assert "multi_color_direction" not in fields
+
+
+def test_opt_to_spoolman_fields_no_color_unchanged():
+    """len == 0 (no color, no secondaries) → no color fields emitted."""
+    opt = {**_OPT_PETG, "color": None, "secondaryColors": [], "tags": [], "optTags": []}
+    fields = opt_to_spoolman_fields(opt)
+    assert "color_hex" not in fields
+    assert "multi_color_hexes" not in fields
+    assert "multi_color_direction" not in fields
+
+
 def test_opt_to_spoolman_fields_material_tags_is_string_not_list():
     """material_tags must be a CSV STRING, not a list — Spoolman text field rejects arrays."""
     fields = opt_to_spoolman_fields(_OPT_PLA_SILK)  # has tags: ["silk"] → id 17
@@ -5103,8 +5183,12 @@ def test_opt_to_spoolman_fields_two_secondaries_coextruded_multi_and_no_color_he
     )
 
 
-def test_opt_to_spoolman_fields_two_colors_no_arrangement_tag_multi_no_direction():
-    """2 distinct hexes (primary + secondary), no arrangement tag → multi_color_hexes, no direction, no color_hex."""
+def test_opt_to_spoolman_fields_two_colors_no_arrangement_tag_multi_with_coaxial_default():
+    """2 distinct hexes (primary + secondary), no arrangement tag → multi_color_hexes + coaxial, no color_hex.
+
+    Spoolman requires multi_color_direction whenever multi_color_hexes is set — omitting it
+    causes a 422.  For multi_unknown (no arrangement tag), 'coaxial' is the safe default.
+    """
     opt = {
         "uuid": "two-color-no-arr-001",
         "slug": "brand-pla-dual-red-green",
@@ -5123,8 +5207,8 @@ def test_opt_to_spoolman_fields_two_colors_no_arrangement_tag_multi_no_direction
     assert "multi_color_hexes" in fields, "multi_color_hexes must be set for 2 distinct hexes"
     assert "FF0000" in fields["multi_color_hexes"]
     assert "00FF00" in fields["multi_color_hexes"]
-    assert "multi_color_direction" not in fields, (
-        "multi_color_direction must NOT be set without an arrangement tag"
+    assert fields.get("multi_color_direction") == "coaxial", (
+        "multi_color_direction must always be set with multi_color_hexes; default coaxial for unknown arrangement"
     )
     assert "color_hex" not in fields, (
         "color_hex must NOT be set alongside multi_color_hexes"
