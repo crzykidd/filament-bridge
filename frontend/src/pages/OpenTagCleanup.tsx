@@ -142,6 +142,83 @@ function candidateLabel(c: OpenTagCandidate): string {
 }
 
 // ---------------------------------------------------------------------------
+// OpenTag stamped-badge helpers
+// ---------------------------------------------------------------------------
+
+/** Normalize a field value for comparison: lowercase + trim, null / "" / "—" → "". */
+function normalizeFieldValue(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  const s = String(v).trim().toLowerCase()
+  if (s === '' || s === '—') return ''
+  return s
+}
+
+const IDENTITY_FIELDS = new Set(['extra.openprinttag_slug', 'extra.openprinttag_uuid'])
+
+/**
+ * Derive the badge state for a filament card.
+ * - existingUuid: the current Spoolman value of extra.openprinttag_uuid (candidate-independent).
+ * - dataDiffers: true when the selected candidate has any non-identity field whose
+ *   normalised spoolman_value ≠ normalised opentag_value.
+ */
+function computeBadgeState(
+  match: OpenTagFilamentMatch,
+  activeCandidate: OpenTagCandidate | null,
+): { existingUuid: string; dataDiffers: boolean } {
+  // existingUuid — find in top-level fields first, then candidate fields.
+  const allFieldSources: OpenTagFieldRow[][] = [match.fields]
+  if (activeCandidate) allFieldSources.push(activeCandidate.fields)
+  let existingUuid = ''
+  for (const rows of allFieldSources) {
+    const uuidRow = rows.find(r => r.field === 'extra.openprinttag_uuid')
+    if (uuidRow !== undefined) {
+      existingUuid = normalizeFieldValue(uuidRow.spoolman_value)
+      break
+    }
+  }
+
+  // dataDiffers — over the active candidate's (or top-level) display fields,
+  // excluding identity fields.
+  const displayRows = activeCandidate ? activeCandidate.fields : match.fields
+  const dataDiffers = displayRows
+    .filter(r => !IDENTITY_FIELDS.has(r.field))
+    .some(
+      r => normalizeFieldValue(r.spoolman_value) !== normalizeFieldValue(r.opentag_value),
+    )
+
+  return { existingUuid, dataDiffers }
+}
+
+/** Small badge shown when the Spoolman filament already carries an OPT uuid. */
+function OpenTagStampedBadge({ existingUuid, dataDiffers }: { existingUuid: string; dataDiffers: boolean }) {
+  if (!existingUuid) return null
+  if (dataDiffers) {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-amber-100 text-amber-700 border-amber-300"
+        title="Tagged in OpenPrintTag — Spoolman data differs from OpenTag"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
+          <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
+        </svg>
+        OPT
+      </span>
+    )
+  }
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-gray-100 text-gray-500 border-gray-200"
+      title="Already tagged in OpenPrintTag — in sync"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
+        <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
+      </svg>
+      OPT
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Per-filament review card
 // ---------------------------------------------------------------------------
 
@@ -184,6 +261,9 @@ function FilamentCard({
     : (match.multicolor_mismatch ?? false)
 
   const hasCandidates = match.candidates && match.candidates.length > 1
+
+  // Badge state — recomputed when activeCandidate changes (candidate switch updates dataDiffers).
+  const { existingUuid, dataDiffers } = computeBadgeState(match, activeCandidate)
 
   return (
     <div className={`border rounded-lg mb-4 ${ignored ? 'opacity-50' : ''}`}>
@@ -241,6 +321,7 @@ function FilamentCard({
               → {match.opt_brand} / {match.opt_name}
             </span>
           )}
+          <OpenTagStampedBadge existingUuid={existingUuid} dataDiffers={dataDiffers} />
           {confidenceBadge(displayConfidence)}
           {(activeCandidate?.opt_slug ?? match.opt_slug) && (
             <span className="text-xs text-gray-400 font-mono">
