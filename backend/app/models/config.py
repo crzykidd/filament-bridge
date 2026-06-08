@@ -20,6 +20,9 @@ _DEFAULTS = {
     "material_properties_conflict_policy": '"manual"',
     # New spool creation direction: two_way = bidirectional (= today's behavior).
     "new_spool_sync_direction": '"two_way"',
+    # Spoolman vendor → OpenTag brand aliases for the OpenTag cleanup matcher.
+    # Empty string = no aliases (default).
+    "opentag_vendor_aliases": '""',
 }
 
 

@@ -339,6 +339,30 @@ def material_family(material: str | None, tag_map: dict[str, int] | None = None)
 
 
 # ---------------------------------------------------------------------------
+# Vendor alias resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_opentag_brand(sm_vendor_name: str | None, aliases: dict[str, str]) -> str:
+    """Map a Spoolman vendor name to its OpenTag brand name via the alias dict.
+
+    The alias dict is keyed by ``normalize_vendor(sm_vendor)``.  If a mapping
+    is found the normalized OpenTag brand is returned; otherwise the normalized
+    SM vendor name is returned unchanged (so the caller can use it as a brand
+    key without further transformation).
+
+    Example::
+
+        aliases = {"prusa": "prusament"}
+        resolve_opentag_brand("Prusa", aliases)    # → "prusament"
+        resolve_opentag_brand("ELEGOO", aliases)   # → "elegoo"
+        resolve_opentag_brand(None, aliases)       # → ""
+    """
+    key = normalize_vendor(sm_vendor_name)
+    return aliases.get(key, key)
+
+
+# ---------------------------------------------------------------------------
 # Scoring helpers
 # ---------------------------------------------------------------------------
 
@@ -503,6 +527,7 @@ def score_candidate(
     sm: SpoolmanFilament,
     opt: dict[str, Any],
     tag_map: dict[str, int] | None = None,
+    aliases: dict[str, str] | None = None,
 ) -> float:
     """Score an OPTMaterial candidate against a SpoolmanFilament.
 
@@ -515,9 +540,16 @@ def score_candidate(
       (finish words stripped BEFORE tokenising so "Transparent Orange" → {orange})
     - Finish tag overlap:    up to +0.15 reward; −0.10 to −0.15 mismatch penalty
     - Color hex proximity:   0.10
+
+    ``aliases`` is the parsed ``opentag_vendor_aliases`` dict
+    (``{normalize_vendor(sm): normalize_vendor(opentag)}``).  When provided,
+    the SM vendor is resolved through the alias map before comparing to the OPT
+    brand so that e.g. "Prusa" scores as a full match against "Prusament".
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
+    if aliases is None:
+        aliases = {}
 
     score = 0.0
 
@@ -533,7 +565,8 @@ def score_candidate(
 
     # ---- Vendor / brand (0.20) ----
     sm_vendor_name = sm.vendor.name if sm.vendor else None
-    sm_vendor = normalize_vendor(sm_vendor_name)
+    # Apply alias resolution so "Prusa" → "prusament" when aliases contain that pair.
+    sm_vendor = resolve_opentag_brand(sm_vendor_name, aliases)
     opt_brand = normalize_vendor(opt.get("brandName"))
     if sm_vendor and opt_brand:
         if sm_vendor == opt_brand:
@@ -577,6 +610,7 @@ def find_best_match(
     sm: SpoolmanFilament,
     materials: list[dict[str, Any]],
     tag_map: dict[str, int] | None = None,
+    aliases: dict[str, str] | None = None,
     *,
     top_n: int = 5,
     min_confidence: float = 0.30,
@@ -594,14 +628,18 @@ def find_best_match(
 
     When no candidate exceeds ``min_confidence`` the best is None.
     ``alternate_scores`` always has the same length as ``alternates``.
+
+    ``aliases`` is forwarded to ``score_candidate`` for vendor-alias resolution.
     """
     if not materials:
         return {"best": None, "confidence": 0.0, "alternates": [], "alternate_scores": []}
+    if aliases is None:
+        aliases = {}
 
     # Defensive: skip any candidate that isn't a dict (guard against shape drift
     # or a malformed cache entry containing a string instead of an OPTMaterial).
     scored = [
-        (score_candidate(sm, opt, tag_map), opt)
+        (score_candidate(sm, opt, tag_map, aliases), opt)
         for opt in materials
         if isinstance(opt, dict)
     ]

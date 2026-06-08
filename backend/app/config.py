@@ -47,6 +47,12 @@ class Settings(BaseSettings):
         "high-speed,hs,dual,tri,rainbow,multicolor,rapid"
     )
 
+    # CSV of "spoolman_vendor=opentag_brand" pairs for OpenTag matching.
+    # Maps Spoolman vendor names to OpenTag brand names so the brand pre-filter
+    # works when the two systems use different names (e.g. "prusa=prusament").
+    # Default empty — no aliases applied.
+    opentag_vendor_aliases: str = ""
+
     # OpenTag extra fields on Spoolman filament entity
     spoolman_field_openprinttag_slug: str = "openprinttag_slug"
     spoolman_field_openprinttag_uuid: str = "openprinttag_uuid"
@@ -65,6 +71,28 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @property
+    def parsed_opentag_vendor_aliases(self) -> dict[str, str]:
+        """Return normalized {sm_vendor: opentag_brand} alias dict.
+
+        Parses ``opentag_vendor_aliases`` (CSV of ``sm=opentag`` pairs) using
+        ``normalize_vendor`` on both sides so casing/whitespace are handled
+        consistently.  Blank entries and entries missing ``=`` are silently
+        ignored.  Duplicates: last one wins.
+        """
+        from app.core.matcher import normalize_vendor
+        result: dict[str, str] = {}
+        for pair in self.opentag_vendor_aliases.split(","):
+            pair = pair.strip()
+            if "=" not in pair:
+                continue
+            sm_raw, opentag_raw = pair.split("=", 1)
+            sm_key = normalize_vendor(sm_raw.strip())
+            opentag_val = normalize_vendor(opentag_raw.strip())
+            if sm_key and opentag_val:
+                result[sm_key] = opentag_val
+        return result
 
     @property
     def parsed_variant_line_keywords(self) -> list[str]:

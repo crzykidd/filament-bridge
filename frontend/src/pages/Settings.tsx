@@ -138,6 +138,7 @@ export default function Settings() {
   const [threshold, setThreshold] = useState('')
   const [precision, setPrecision] = useState<number | null>(null)
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
+  const [vendorAliases, setVendorAliases] = useState<string | null>(null)
 
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -156,6 +157,7 @@ export default function Settings() {
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
   const prec = precision ?? data.weight_precision_decimals
   const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
+  const valiases = vendorAliases ?? data.opentag_vendor_aliases ?? ''
 
   async function handleSave() {
     setSaving(true)
@@ -170,6 +172,7 @@ export default function Settings() {
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
         weight_precision_decimals: prec,
         variant_line_keywords: variantKeywords ?? undefined,
+        opentag_vendor_aliases: vendorAliases ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -318,6 +321,21 @@ export default function Settings() {
           <span className="text-xs text-gray-400">
             Words that mark a distinct variant line, e.g. <code>silk, matte, rapid</code>.
             Filaments whose names contain different keywords won't be grouped together.
+          </span>
+        </div>
+        <div className="flex flex-col gap-1 py-3 border-b border-gray-100">
+          <span className="text-sm font-medium text-gray-700">Manufacturer mappings (Spoolman → OpenTag)</span>
+          <input
+            type="text"
+            value={valiases}
+            onChange={e => setVendorAliases(e.target.value)}
+            placeholder="prusa=prusament, polyterra=polymaker"
+            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <span className="text-xs text-gray-400">
+            Maps Spoolman vendor names to OpenTag brand names for the OpenTag cleanup matcher,
+            e.g. <code>prusa=prusament, polyterra=polymaker</code>. Required when the vendor
+            name in Spoolman differs from the brand name used in OpenTag.
           </span>
         </div>
         <div className="pt-2 flex items-center gap-3">

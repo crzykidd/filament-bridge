@@ -166,6 +166,7 @@ export interface ConfigResponse {
   wizard_completed: boolean
   import_direction: SourceOfTruth | null
   variant_line_keywords: string | null
+  opentag_vendor_aliases: string | null
   weight_sync_direction: SyncDirection2
   weight_conflict_policy: ConflictPolicy
   material_properties_sync_direction: SyncDirection2
@@ -177,6 +178,7 @@ export interface ConfigUpdateRequest {
   sync_weight_threshold_grams?: number | null
   weight_precision_decimals?: number | null
   variant_line_keywords?: string | null
+  opentag_vendor_aliases?: string | null
   weight_sync_direction?: SyncDirection2 | null
   weight_conflict_policy?: ConflictPolicy | null
   material_properties_sync_direction?: SyncDirection2 | null

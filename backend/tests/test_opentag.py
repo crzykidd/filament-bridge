@@ -4372,3 +4372,203 @@ async def test_exact_uuid_match_yields_single_candidate_at_1_0(tmp_path):
 
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# opentag_vendor_aliases: parser, resolve_opentag_brand, and endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_vendor_aliases_basic():
+    """'prusa=prusament, foo = bar' parses to {prusa: prusament, foo: bar}."""
+    from app.api.opentag import _parse_vendor_aliases
+    result = _parse_vendor_aliases("prusa=prusament, foo = bar")
+    assert result == {"prusa": "prusament", "foo": "bar"}
+
+
+def test_parse_vendor_aliases_ignores_blanks_and_no_equals():
+    """Blank entries and entries without '=' are silently ignored."""
+    from app.api.opentag import _parse_vendor_aliases
+    result = _parse_vendor_aliases("prusa=prusament,,notanequals, =empty")
+    assert "prusa" in result
+    assert result["prusa"] == "prusament"
+    # Blank and "notanequals" entries must be absent
+    assert "" not in result
+    assert "notanequals" not in result
+
+
+def test_parse_vendor_aliases_empty_string():
+    """Empty CSV produces an empty dict."""
+    from app.api.opentag import _parse_vendor_aliases
+    assert _parse_vendor_aliases("") == {}
+
+
+def test_resolve_opentag_brand_with_alias():
+    """'Prusa' resolves to 'prusament' when aliases contain that pair."""
+    from app.core.opentag_match import resolve_opentag_brand
+    aliases = {"prusa": "prusament"}
+    assert resolve_opentag_brand("Prusa", aliases) == "prusament"
+
+
+def test_resolve_opentag_brand_unmapped():
+    """An unmapped vendor name is returned as normalize_vendor(name)."""
+    from app.core.opentag_match import resolve_opentag_brand
+    from app.core.matcher import normalize_vendor
+    aliases = {"prusa": "prusament"}
+    result = resolve_opentag_brand("ELEGOO", aliases)
+    assert result == normalize_vendor("ELEGOO")
+
+
+def test_resolve_opentag_brand_none_vendor():
+    """None vendor name returns empty string."""
+    from app.core.opentag_match import resolve_opentag_brand
+    assert resolve_opentag_brand(None, {"prusa": "prusament"}) == ""
+
+
+def test_score_candidate_prusa_with_alias_scores_vendor_match():
+    """With alias prusa=prusament, score_candidate for a 'Prusa' SM filament against a
+    'Prusament' OPT entry awards the full 0.20 vendor component.
+    """
+    _OPT_PRUSAMENT_PLA = {
+        "uuid": "prusament-0000-0000-0000-000000000001",
+        "slug": "prusament-pla-galaxy-silver",
+        "brandName": "Prusament",
+        "name": "PLA Galaxy Silver",
+        "type": "PLA",
+        "abbreviation": "PLA",
+        "tags": [],
+        "color": "#C0C0C0",
+        "secondaryColors": [],
+        "density": 1.24,
+        "nozzleTempMin": 210,
+        "nozzleTempMax": 230,
+        "bedTempMin": 50,
+        "bedTempMax": 60,
+        "completenessScore": 90,
+    }
+
+    aliases = {"prusa": "prusament"}
+
+    sm_prusa = SpoolmanFilament(
+        id=99,
+        name="Galaxy Silver",
+        vendor=SpoolmanVendor(id=7, name="Prusa"),
+        material="PLA",
+        color_hex="C0C0C0",
+        extra={},
+    )
+
+    score_with = score_candidate(sm_prusa, _OPT_PRUSAMENT_PLA, aliases=aliases)
+    score_without = score_candidate(sm_prusa, _OPT_PRUSAMENT_PLA, aliases={})
+
+    # With alias: vendor component should be 0.20 (exact match prusa→prusament == opt brand)
+    # Without alias: "prusa" != "prusament" so vendor component is 0 or partial
+    assert score_with > score_without, (
+        f"Expected alias score ({score_with:.4f}) > no-alias score ({score_without:.4f})"
+    )
+    # The gap should be at least 0.10 (the minimum vendor score contribution difference)
+    # Use round() to avoid floating-point precision issues (e.g. 0.1000 vs 0.1).
+    assert round(score_with - score_without, 6) >= 0.10, (
+        f"Expected vendor component difference >= 0.10 but got {score_with - score_without:.4f}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_matches_endpoint_prusa_alias_finds_prusament_candidates(tmp_path):
+    """With alias prusa=prusament configured, a 'Prusa' SM filament finds Prusament OPT
+    candidates (brand pre-filter uses the resolved brand). Without the alias, it does not.
+    """
+    import datetime as _dt
+    from unittest.mock import patch as _patch
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    _OPT_PRUSAMENT_PLA_SILVER = {
+        "uuid": "prusament-0000-0000-0000-000000000099",
+        "slug": "prusament-pla-galaxy-silver",
+        "brandName": "Prusament",
+        "name": "PLA Galaxy Silver",
+        "type": "PLA",
+        "abbreviation": "PLA",
+        "tags": [],
+        "color": "#C0C0C0",
+        "secondaryColors": [],
+        "density": 1.24,
+        "nozzleTempMin": 210,
+        "nozzleTempMax": 230,
+        "bedTempMin": 50,
+        "bedTempMax": 60,
+        "completenessScore": 90,
+    }
+
+    # Materials in cache: only Prusament entries
+    materials = [_OPT_PRUSAMENT_PLA_SILVER]
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    sm_prusa = SpoolmanFilament(
+        id=55,
+        name="Galaxy Silver",
+        vendor=SpoolmanVendor(id=7, name="Prusa"),
+        material="PLA",
+        color_hex="C0C0C0",
+        extra={},
+    )
+
+    fake_fdb = AsyncMock()
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[sm_prusa])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = fake_sm
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+
+    # Patch get_config_value and SessionLocal to avoid hitting the real SQLite database.
+    mock_session = MagicMock()
+    mock_session.__enter__ = MagicMock(return_value=mock_session)
+    mock_session.__exit__ = MagicMock(return_value=False)
+    mock_session_factory = MagicMock(return_value=mock_session)
+
+    try:
+        # --- With alias: 'Prusa' → 'prusament', should match Prusament candidates ---
+        with (
+            _patch("app.api.opentag.SessionLocal", mock_session_factory),
+            _patch("app.api.config.get_config_value", return_value="prusa=prusament"),
+        ):
+            client = TestClient(test_app, raise_server_exceptions=True)
+            resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = next(m for m in data["matches"] if m["spoolman_filament_id"] == 55)
+        # With alias, the Prusament material should be found
+        assert match["opt_slug"] == "prusament-pla-galaxy-silver", (
+            f"Expected Prusament match with alias, got opt_slug={match['opt_slug']!r}"
+        )
+        assert match["confidence"] > 0.30, (
+            f"Expected confidence > 0.30 with alias, got {match['confidence']}"
+        )
+
+        # --- Without alias: 'Prusa' stays 'prusa', no Prusament brand bucket found ---
+        with (
+            _patch("app.api.opentag.SessionLocal", mock_session_factory),
+            _patch("app.api.config.get_config_value", return_value=""),
+        ):
+            client2 = TestClient(test_app, raise_server_exceptions=True)
+            resp2 = client2.get("/api/openprinttag/matches")
+        assert resp2.status_code == 200, resp2.text
+        data2 = resp2.json()
+        match2 = next(m for m in data2["matches"] if m["spoolman_filament_id"] == 55)
+        # Without alias, no brand bucket for 'prusa' in Prusament-only dataset → no match
+        assert match2["opt_slug"] is None, (
+            f"Expected no match without alias, but got opt_slug={match2['opt_slug']!r}"
+        )
+
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

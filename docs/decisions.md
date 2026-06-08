@@ -1926,3 +1926,30 @@ During SM→FDB import, `_fdb_filament_payload_from_sm` writes the parsed finish
 sentinel key `_sm_finish_ids` in the payload dict. After FDB filament creation (passes 1 and
 2), a new **Pass 2.6** iterates the collected `_finish_ids_by_sm` dict and PATCHes each SM
 filament's `extra.filamentdb_material_tags` so the extra field is populated from first import.
+
+## 2026-06-07 — Settings `opentag_vendor_aliases` maps Spoolman vendor names to OpenTag brand names
+
+The OpenTag matcher brand pre-filter uses `normalize_vendor(brandName)` to build a brand-keyed
+candidate index. When a Spoolman vendor name differs from the OpenTag brand name (e.g. "Prusa"
+in Spoolman vs "Prusament" in OpenTag), `normalize_vendor` treats them as different brands —
+the SM filament's brand key never finds any OpenTag candidates, so the filament always
+no-matches.
+
+**Fix:** `Settings` (runtime config) gains `opentag_vendor_aliases: str` — a CSV of
+`spoolman_vendor=opentag_brand` pairs (e.g. `prusa=prusament, polyterra=polymaker`). Both
+sides are normalised via `normalize_vendor` at parse time. Default empty (no aliases).
+
+**`resolve_opentag_brand(sm_vendor_name, aliases)`** in `backend/app/core/opentag_match.py`:
+`key = normalize_vendor(sm_vendor_name); return aliases.get(key, key)`.
+Returns the mapped OpenTag brand when a key is found, otherwise the normalized SM vendor name
+unchanged.
+
+**Applied in two places in `backend/app/api/opentag.py`:**
+1. Brand pre-filter: `sm_brand_key = resolve_opentag_brand(sm_fil.vendor.name, vendor_aliases)`
+   so the correct brand bucket (e.g. "prusament") is looked up.
+2. `score_candidate` vendor component: `sm_vendor = resolve_opentag_brand(sm_vendor_name, aliases)`
+   so the resolved brand is compared to `opt_brand` — "prusa" now equals "prusament" for scoring.
+
+The aliases are loaded from BridgeConfig on every matches request (with env-default fallback and
+a try/except so existing tests without a real DB are unaffected). The Settings UI ("Manufacturer
+mappings (Spoolman → OpenTag)") writes the CSV to `opentag_vendor_aliases` in BridgeConfig.

@@ -32,9 +32,10 @@ from app.core.opentag_match import (
     opt_color_profile,
     opt_to_spoolman_fields,
     profiles_compatible,
+    resolve_opentag_brand,
     sm_color_profile,
 )
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.schemas.spoolman import decode_extra_value, encode_extra_value
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,25 @@ class OpenTagApplyResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _parse_vendor_aliases(aliases_csv: str) -> dict[str, str]:
+    """Parse a ``spoolman_vendor=opentag_brand`` CSV string into a normalized dict.
+
+    Both sides are passed through ``normalize_vendor`` so casing/whitespace are
+    handled consistently.  Blank entries and entries without ``=`` are ignored.
+    """
+    result: dict[str, str] = {}
+    for pair in aliases_csv.split(","):
+        pair = pair.strip()
+        if "=" not in pair:
+            continue
+        sm_raw, opentag_raw = pair.split("=", 1)
+        sm_key = normalize_vendor(sm_raw.strip())
+        opentag_val = normalize_vendor(opentag_raw.strip())
+        if sm_key and opentag_val:
+            result[sm_key] = opentag_val
+    return result
 
 
 def _current_spoolman_value(sm_filament: Any, field: str) -> Any:
@@ -384,6 +404,15 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         ) from exc
     materials: list[dict[str, Any]] = dataset["materials"]
     tag_map = _settings.parsed_material_tag_ids
+    # Load vendor alias map once — BridgeConfig value overrides the env default.
+    # Wrapped in try/except so tests without a real DB fall back to the env default gracefully.
+    from app.api.config import get_config_value
+    try:
+        with SessionLocal() as _db:
+            aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
+    except Exception:
+        aliases_raw = _settings.opentag_vendor_aliases
+    vendor_aliases: dict[str, str] = _parse_vendor_aliases(aliases_raw)
 
     sm_filaments = await sm.get_filaments()
 
@@ -440,7 +469,11 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             ))
             continue
 
-        sm_brand_key = normalize_vendor(sm_fil.vendor.name if sm_fil.vendor else None)
+        # Resolve the SM vendor name through the alias map before looking up brand candidates.
+        # This allows e.g. "Prusa" to find "Prusament" entries when aliases contain that pair.
+        sm_brand_key = resolve_opentag_brand(
+            sm_fil.vendor.name if sm_fil.vendor else None, vendor_aliases
+        )
         filtered_candidates = materials_by_brand.get(sm_brand_key, [])
 
         # Color-profile pre-filter: only score candidates whose arrangement is
@@ -463,7 +496,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 ) in ("", sm_fam)
             ]
 
-        match_result = find_best_match(sm_fil, filtered_candidates, tag_map)
+        match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases)
         best = match_result["best"]
         confidence = match_result["confidence"]
         alternates = match_result["alternates"]

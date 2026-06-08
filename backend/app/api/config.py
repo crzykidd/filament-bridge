@@ -71,6 +71,7 @@ def _config_response(db: Session) -> ConfigResponse:
         wizard_completed=bool(cfg.get("wizard_completed", False)),
         import_direction=cfg.get("import_direction"),
         variant_line_keywords=cfg.get("variant_line_keywords", _settings.variant_line_keywords),
+        opentag_vendor_aliases=cfg.get("opentag_vendor_aliases", _settings.opentag_vendor_aliases),
         weight_sync_direction=cfg.get("weight_sync_direction", "spoolman_to_filamentdb"),
         weight_conflict_policy=cfg.get("weight_conflict_policy", "manual"),
         material_properties_sync_direction=cfg.get("material_properties_sync_direction", "filamentdb_to_spoolman"),
