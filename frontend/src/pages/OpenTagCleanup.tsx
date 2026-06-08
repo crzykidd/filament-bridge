@@ -375,7 +375,7 @@ function FilamentCard({
       {expanded && !ignored && displayFields.length === 0 && (
         <p className="px-4 py-3 text-sm text-gray-500 italic">
           {displayConfidence < 0.30
-            ? 'No confident match found — ignore or select an alternate below.'
+            ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
             : 'No field differences detected.'}
         </p>
       )}
@@ -515,7 +515,7 @@ function ConfirmStep({
 // ---------------------------------------------------------------------------
 
 type GroupBy = 'none' | 'brand' | 'material'
-type SortBy = 'confidence' | 'brand' | 'material' | 'name'
+type SortBy = 'confidence' | 'brand' | 'material' | 'name' | 'spoolman_id'
 
 interface MatchGroup {
   key: string
@@ -532,6 +532,7 @@ function sortLabel(sortBy: SortBy): string {
   if (sortBy === 'confidence') return 'Confidence (high→low)'
   if (sortBy === 'brand') return 'Brand (A→Z)'
   if (sortBy === 'material') return 'Material (A→Z)'
+  if (sortBy === 'spoolman_id') return 'Spoolman ID (low→high)'
   return 'Name (A→Z)'
 }
 
@@ -556,6 +557,7 @@ function sortMatches(list: OpenTagFilamentMatch[], sortBy: SortBy): OpenTagFilam
       if (am !== bm) return am < bm ? -1 : 1
       return (a.spoolman_name ?? '').toLowerCase() < (b.spoolman_name ?? '').toLowerCase() ? -1 : 1
     }
+    if (sortBy === 'spoolman_id') return a.spoolman_filament_id - b.spoolman_filament_id
     // name
     return (a.spoolman_name ?? '').toLowerCase() < (b.spoolman_name ?? '').toLowerCase() ? -1 : 1
   })
@@ -570,6 +572,20 @@ interface GroupSectionProps {
   onIgnore: (smId: number, ignored: boolean) => void
   onCandidateChange: (smId: number, idx: number, match: OpenTagFilamentMatch) => void
   showHeader: boolean
+  collapsed: boolean
+  onToggleCollapse: () => void
+  onIgnoreAll: (ignoreAll: boolean) => void
+}
+
+/** Derive the existingUuid for a match from its field rows (same logic as computeBadgeState). */
+function getExistingUuid(match: OpenTagFilamentMatch, activeCandidate: OpenTagCandidate | null): string {
+  const sources = [match.fields]
+  if (activeCandidate) sources.push(activeCandidate.fields)
+  for (const rows of sources) {
+    const row = rows.find(r => r.field === 'extra.openprinttag_uuid')
+    if (row !== undefined) return normalizeFieldValue(row.spoolman_value)
+  }
+  return ''
 }
 
 function GroupSection({
@@ -581,23 +597,49 @@ function GroupSection({
   onIgnore,
   onCandidateChange,
   showHeader,
+  collapsed,
+  onToggleCollapse,
+  onIgnoreAll,
 }: GroupSectionProps) {
-  const [collapsed, setCollapsed] = useState(false)
+  // Compute group summary counts
+  const matchedCount = group.matches.filter(m => m.opt_uuid != null || m.confidence > 0).length
+  const noMatchCount = group.matches.filter(m => m.opt_uuid == null).length
+  const taggedCount = group.matches.filter(m => {
+    const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
+    const activeCandidate = m.candidates?.[candidateIdx] ?? null
+    return getExistingUuid(m, activeCandidate) !== ''
+  }).length
+  const total = group.matches.length
+
+  const allIgnored = group.matches.length > 0 && group.matches.every(m => ignoredIds.has(m.spoolman_filament_id))
 
   return (
     <div className="mb-4">
       {showHeader && (
-        <button
-          type="button"
-          className="flex items-center gap-2 w-full text-left px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md mb-2 select-none"
-          onClick={() => setCollapsed(c => !c)}
+        <div
+          className="flex items-center gap-2 w-full px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md mb-2 select-none cursor-pointer"
+          onClick={onToggleCollapse}
         >
           <span className="text-gray-400 text-xs w-3 shrink-0">
-            {collapsed ? '▶' : '▼'}
+            {collapsed ? '▸' : '▾'}
           </span>
           <span className="text-sm font-semibold text-gray-700">{group.key}</span>
-          <span className="text-xs text-gray-400 ml-1">({group.matches.length})</span>
-        </button>
+          <span className="text-xs text-gray-500 ml-1">
+            {matchedCount} matched · {noMatchCount} no-match · {taggedCount} tagged
+            <span className="ml-1 text-gray-400">({total})</span>
+          </span>
+          <button
+            type="button"
+            className={`ml-auto text-xs px-2 py-0.5 rounded border transition-colors ${
+              allIgnored
+                ? 'bg-gray-200 border-gray-400 text-gray-700 hover:bg-gray-300'
+                : 'bg-white border-orange-300 text-orange-600 hover:bg-orange-50'
+            }`}
+            onClick={e => { e.stopPropagation(); onIgnoreAll(!allIgnored) }}
+          >
+            {allIgnored ? 'Unignore all' : 'Ignore all'}
+          </button>
+        </div>
       )}
       {!collapsed && group.matches.map(m => (
         <FilamentCard
@@ -644,6 +686,8 @@ export default function OpenTagCleanup() {
   const [ignoredIds, setIgnoredIds] = useState<Set<number>>(new Set())
   // Per-filament selected candidate index (default 0 = best)
   const [selectedCandidates, setSelectedCandidates] = useState<Record<number, number>>({})
+  // Per-group collapsed state: group key → collapsed (default: all collapsed)
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
   // Load cache status on mount (instant — no network fetch to FDB)
   useEffect(() => {
@@ -754,6 +798,21 @@ export default function OpenTagCleanup() {
     },
     [],
   )
+
+  const handleToggleCollapse = useCallback((groupKey: string) => {
+    setCollapsedGroups(prev => ({ ...prev, [groupKey]: !(prev[groupKey] ?? true) }))
+  }, [])
+
+  const handleIgnoreAll = useCallback((group: MatchGroup, ignoreAll: boolean) => {
+    setIgnoredIds(prev => {
+      const next = new Set(prev)
+      for (const m of group.matches) {
+        if (ignoreAll) next.add(m.spoolman_filament_id)
+        else next.delete(m.spoolman_filament_id)
+      }
+      return next
+    })
+  }, [])
 
   const handleApply = async () => {
     if (!response) return
@@ -917,7 +976,7 @@ export default function OpenTagCleanup() {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500 font-medium">Sort by:</span>
-              {(['confidence', 'brand', 'material', 'name'] as SortBy[]).map(s => (
+              {(['confidence', 'brand', 'material', 'name', 'spoolman_id'] as SortBy[]).map(s => (
                 <button
                   key={s}
                   type="button"
@@ -929,10 +988,36 @@ export default function OpenTagCleanup() {
                   onClick={() => setSortBy(s)}
                   title={sortLabel(s)}
                 >
-                  {s === 'confidence' ? 'Confidence' : s === 'brand' ? 'Brand' : s === 'material' ? 'Material' : 'Name'}
+                  {s === 'confidence' ? 'Confidence' : s === 'brand' ? 'Brand' : s === 'material' ? 'Material' : s === 'spoolman_id' ? 'SM ID' : 'Name'}
                 </button>
               ))}
             </div>
+            {groupBy !== 'none' && (
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                  onClick={() => {
+                    const next: Record<string, boolean> = {}
+                    for (const g of displayGroups) next[g.key] = false
+                    setCollapsedGroups(next)
+                  }}
+                >
+                  Expand all
+                </button>
+                <button
+                  type="button"
+                  className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                  onClick={() => {
+                    const next: Record<string, boolean> = {}
+                    for (const g of displayGroups) next[g.key] = true
+                    setCollapsedGroups(next)
+                  }}
+                >
+                  Collapse all
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Bulk-action bar */}
@@ -975,6 +1060,9 @@ export default function OpenTagCleanup() {
               onIgnore={handleIgnore}
               onCandidateChange={handleCandidateChange}
               showHeader={groupBy !== 'none'}
+              collapsed={collapsedGroups[group.key] ?? true}
+              onToggleCollapse={() => handleToggleCollapse(group.key)}
+              onIgnoreAll={(ignoreAll) => handleIgnoreAll(group, ignoreAll)}
             />
           ))}
 

@@ -104,6 +104,8 @@ class OpenTagFilamentMatch(BaseModel):
     # (no secondaryColors AND no arrangement tag).  Also set on no-match rows
     # when the SM filament is multicolor but no compatible OPT entry was found.
     multicolor_mismatch: bool = False
+    # Human-readable reason why a no-match row has no match.  None on matched rows.
+    no_match_reason: str | None = None
 
 
 class OpenTagMatchesResponse(BaseModel):
@@ -536,11 +538,30 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             # but the SM side was multicolor — signal that to the user).
             no_match += 1
             mismatch = sm_profile != "single"
+            sm_vendor = sm_fil.vendor.name if sm_fil.vendor else None
+            sm_material = sm_fil.material
+
+            # Compute a human-readable explanation for the no-match condition.
+            if sm_brand_key not in materials_by_brand:
+                no_match_reason: str | None = (
+                    f'Manufacturer "{sm_vendor}" not found in OpenTag '
+                    f'(add a mapping in Settings)'
+                )
+            elif not filtered_candidates:
+                no_match_reason = (
+                    f'No {sm_material or "matching"} match for {sm_vendor} in OpenTag'
+                )
+            elif mismatch:
+                no_match_reason = "Spoolman is multicolor; no multicolor OpenTag match"
+            else:
+                best_conf = confidence  # confidence == best_score seen (below threshold)
+                no_match_reason = f"No confident match (best {round(best_conf * 100)}%)"
+
             matches.append(OpenTagFilamentMatch(
                 spoolman_filament_id=sm_fil.id,
                 spoolman_name=sm_fil.name,
-                spoolman_vendor=sm_fil.vendor.name if sm_fil.vendor else None,
-                spoolman_material=sm_fil.material,
+                spoolman_vendor=sm_vendor,
+                spoolman_material=sm_material,
                 spoolman_color_hex=sm_fil.color_hex,
                 opt_uuid=None,
                 opt_slug=None,
@@ -551,6 +572,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 alternates=alternates,
                 candidates=[],
                 multicolor_mismatch=mismatch,
+                no_match_reason=no_match_reason,
             ))
             continue
 

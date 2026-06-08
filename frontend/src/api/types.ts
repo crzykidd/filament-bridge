@@ -580,6 +580,7 @@ export interface OpenTagFilamentMatch {
   candidates: OpenTagCandidate[]
   ignored?: boolean
   multicolor_mismatch?: boolean
+  no_match_reason?: string | null
 }
 
 export interface OpenTagMatchesResponse {

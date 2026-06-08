@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-08 — OpenTag no-match reason taxonomy + group collapse UX
+
+**no_match_reason** on `OpenTagFilamentMatch` (backend field, TS type, UI display):
+Four mutually exclusive cases in priority order — (1) brand key not in `materials_by_brand`
+→ "Manufacturer X not found in OpenTag (add a mapping in Settings)"; (2) brand found but
+`filtered_candidates` empty after color-profile + polymer-family gates → "No X match for Y
+in OpenTag"; (3) candidates were found but SM is multicolor (`sm_profile != "single"`) →
+"Spoolman is multicolor; no multicolor OpenTag match"; (4) candidates scored but none reached
+`min_confidence` → "No confident match (best N%)".  Matched rows always leave the field None.
+Case 3 and 4 are distinguished by `mismatch` before `find_best_match` (not by its return);
+the multicolor gate fires only when `filtered_candidates` is non-empty.
+
+**Group collapse** defaults ALL groups collapsed (keyed by group key in `collapsedGroups`
+state, default `true`).  Expand all / Collapse all buttons iterate `displayGroups`.
+Collapsed header shows "N matched · M no-match · K tagged (total)" summary; "tagged" =
+`existingUuid` non-empty (same logic as `OpenTagStampedBadge`, extracted to `getExistingUuid`).
+
+**Group-level ignore** toggle on each header calls `setIgnoredIds` for all member
+`spoolman_filament_id`s; `stopPropagation` prevents header click from toggling collapse.
+
+**Sort by Spoolman ID**: ascending numeric `a.spoolman_filament_id - b.spoolman_filament_id`.
+
 ## 2026-06-07 — OpenTag cleanup: reviewable Manufacturer field reassigns Spoolman vendor via find-or-create
 
 When the OpenTag cleanup matches a Spoolman filament to an OpenTag material across a vendor
