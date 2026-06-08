@@ -20,7 +20,7 @@ from app.core.matcher import sm_prop_conflicts
 from app.core.weight import DEFAULT_TARE_GRAMS, spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
-from app.schemas.spoolman import SpoolmanFilament, decode_extra_value, encode_extra_value
+from app.schemas.spoolman import SpoolmanFilament, decode_extra_value
 
 logger = logging.getLogger(__name__)
 

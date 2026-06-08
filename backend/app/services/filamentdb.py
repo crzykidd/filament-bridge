@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from app.schemas.filamentdb import FDBFilament, FDBFilamentDetail, FDBSpoolDetail
+from app.schemas.filamentdb import FDBFilament, FDBFilamentDetail
 
 logger = logging.getLogger(__name__)
 

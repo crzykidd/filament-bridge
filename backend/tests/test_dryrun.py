@@ -226,7 +226,6 @@ async def test_already_linked_no_change_skipped(db):
     """Already-linked pair with no weight change → skipped."""
     sm_fil = _sm_filament(1, "PLA")
     sm_sp = _sm_spool(1, sm_fil, remaining=200.0)
-    fdb_fil = _fdb_filament("fdb1", "PLA")
 
     fil_map = FilamentMapping(spoolman_filament_id=1, filamentdb_id="fdb1")
     db.add(fil_map)

@@ -1,6 +1,5 @@
 """Tests for core/differ.py — changeset classification."""
 
-import pytest
 
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping

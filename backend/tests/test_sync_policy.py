@@ -1,7 +1,6 @@
 """Exhaustive unit tests for core/sync_policy.py — pure resolver, no I/O."""
 
 import datetime
-import json
 
 import pytest
 

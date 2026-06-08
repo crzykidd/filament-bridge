@@ -16,9 +16,9 @@ import re
 import unicodedata
 from typing import Any
 
-from app.core.color import TAG_COEXTRUDED, TAG_GRADIENT, arrangement_from_tags, fdb_multicolor_to_sm
+from app.core.color import TAG_COEXTRUDED, TAG_GRADIENT, arrangement_from_tags
 from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, finish_ids_from_text, serialize_material_tags, strip_finish_words
-from app.core.matcher import normalize_name, normalize_vendor
+from app.core.matcher import normalize_vendor
 from app.schemas.spoolman import SpoolmanFilament
 
 

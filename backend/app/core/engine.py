@@ -23,7 +23,6 @@ from sqlalchemy.sql import func
 
 from app.config import settings as _settings
 from app.core.color import (
-    ARRANGEMENT_TAGS,
     apply_finish_tags,
     arrangement_from_tags,
     fdb_multicolor_to_sm,
@@ -36,10 +35,9 @@ from app.core.color import (
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
 from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text, parse_material_tags, serialize_material_tags
-from app.core.matcher import match_filaments
 from app.core.sync_policy import SyncAction, resolve_sync_action
 from app.core.version import MULTICOLOR_MIN_FDB, version_gte
-from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross, weight_changed
+from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross
 from app.models.config import BridgeConfig
 from app.models.conflict import DELETION_FIELD, Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping

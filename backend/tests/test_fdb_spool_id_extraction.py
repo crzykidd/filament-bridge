@@ -17,11 +17,11 @@ from sqlalchemy.pool import StaticPool
 from app.api import config, conflicts, health, mappings, sync, sync_log, wizard
 from app.api.config import set_config_value
 from app.db import Base, get_db
-from app.models.config import BridgeConfig, seed_defaults
+from app.models.config import seed_defaults
 from app.models.mapping import FilamentMapping, SpoolMapping
-from app.models.snapshot import Snapshot
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
+from app.core.engine import run_sync_cycle
 from app.services.filamentdb import extract_created_spool_id
 
 # ---------------------------------------------------------------------------
@@ -256,12 +256,6 @@ def test_wizard_execute_spool_mapping_uses_spool_id_not_filament_id(db):
 # Engine integration — _handle_new_sm_spool stores the spool _id
 # ---------------------------------------------------------------------------
 
-import json as _json
-
-from app.core.engine import run_sync_cycle
-from app.models.mapping import FilamentMapping
-
-
 def _sm_spool_with_extra(spool_id: int, filament_id: int, extra: dict | None = None):
     fil = SpoolmanFilament(id=filament_id, name="PLA", vendor=SpoolmanVendor(id=1, name="ACME"))
     return SpoolmanSpool(
@@ -348,6 +342,6 @@ async def test_engine_new_sm_spool_mapping_uses_spool_id_not_filament_id(db):
     sm_update_call = spoolman.update_spool.await_args
     spool_extra = sm_update_call.args[1]["extra"]
     fdb_spool_xref = spool_extra.get("filamentdb_spool_id")
-    assert fdb_spool_xref == _json.dumps("FDB-SPOOL-ID-abc"), (
+    assert fdb_spool_xref == json.dumps("FDB-SPOOL-ID-abc"), (
         f"Cross-ref extra filamentdb_spool_id must be spool id, got {fdb_spool_xref!r}"
     )

@@ -7,7 +7,7 @@ Covers:
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -21,8 +21,8 @@ from app.api.config import set_config_value
 from app.core.planner import _fdb_filament_payload_from_sm, _plan_spoolman_to_fdb
 from app.core.weight import DEFAULT_TARE_GRAMS
 from app.db import Base, get_db
-from app.models.config import BridgeConfig, seed_defaults
-from app.schemas.filamentdb import FDBFilament, FDBSpool
+from app.models.config import seed_defaults
+from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
 

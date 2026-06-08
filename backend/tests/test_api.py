@@ -1036,7 +1036,7 @@ def test_wizard_execute_idempotent_rerun_no_duplicates(db):
                         filamentdb_spool_id="fdb-spool-1", filament_mapping_id=fm.id))
     db.commit()
 
-    body = client = _client(db, spoolman, filamentdb).post("/api/wizard/execute").json()
+    body = _client(db, spoolman, filamentdb).post("/api/wizard/execute").json()
     assert body["created"] == 0
     assert body["failed"] == 0
     filamentdb.create_spool.assert_not_called()
@@ -2327,10 +2327,13 @@ def test_wizard_weights_excludes_skip_and_undecided(db):
     ])
     db.commit()
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
-    mk_spool = lambda sid, fid: SpoolmanSpool(
-        id=sid, filament=SpoolmanFilament(id=fid, name="PLA", vendor=elegoo),
-        remaining_weight=500.0, archived=False, extra={},
-    )
+
+    def mk_spool(sid, fid):
+        return SpoolmanSpool(
+            id=sid, filament=SpoolmanFilament(id=fid, name="PLA", vendor=elegoo),
+            remaining_weight=500.0, archived=False, extra={},
+        )
+
     spools = [mk_spool(1, 10), mk_spool(2, 11), mk_spool(3, 12)]
     client = _client(db, _fake_spoolman(spools=spools), _fake_filamentdb())
 
@@ -2824,7 +2827,6 @@ def test_wizard_execute_per_group_tare_override_applied_to_all_spools(db):
     assert len(calls) == 2
     for call in calls:
         payload = call.args[1]
-        remaining = spool_11.remaining_weight if call.args[0] != "new-fdb-fil" else spool_12.remaining_weight
         # The override tare of 250 replaces any default
         assert payload["totalWeight"] == pytest.approx(500.0 + 250.0, abs=1) or \
                payload["totalWeight"] == pytest.approx(400.0 + 250.0, abs=1)
@@ -3421,7 +3423,7 @@ async def test_new_spool_two_way_creates_in_both_directions(db):
     filamentdb.update_filament = AsyncMock(return_value=MagicMock())
     filamentdb.log_usage = AsyncMock(return_value={})
 
-    result = await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
+    await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
 
     # SM→FDB: new SM spool creates an FDB spool
     filamentdb.create_spool.assert_awaited()
@@ -3466,7 +3468,7 @@ async def test_new_spool_spoolman_to_filamentdb_only_creates_fdb(db):
     filamentdb.update_filament = AsyncMock(return_value=MagicMock())
     filamentdb.log_usage = AsyncMock(return_value={})
 
-    result = await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
+    await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
 
     # SM→FDB creation fired
     filamentdb.create_spool.assert_awaited()
@@ -3511,7 +3513,7 @@ async def test_new_spool_filamentdb_to_spoolman_only_creates_sm(db):
     filamentdb.update_filament = AsyncMock(return_value=MagicMock())
     filamentdb.log_usage = AsyncMock(return_value={})
 
-    result = await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
+    await run_sync_cycle(db, spoolman, filamentdb, dry_run=False)
 
     # FDB→SM creation fired
     spoolman.create_spool.assert_awaited()
@@ -3764,7 +3766,7 @@ def test_prune_sync_log_all_within_cutoff_deletes_nothing(db):
 def test_update_config_reschedules_when_scheduler_present(db):
     """update_config calls scheduler.reschedule_job when app.state.scheduler is set."""
     from unittest.mock import MagicMock
-    from fastapi import FastAPI, Request
+    from fastapi import FastAPI
 
     mock_scheduler = MagicMock()
     app = FastAPI()

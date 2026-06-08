@@ -10,7 +10,7 @@ from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.models.snapshot import Snapshot
 from app.models.sync_log import SyncLog
-from app.schemas.filamentdb import FDBFilament, FDBSpool, FDBSpoolDetail, FDBUsageEntry
+from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
 CYCLE_ID = "test-cycle-001"
@@ -491,7 +491,6 @@ async def test_multicolor_skipped_when_fdb_too_old(db):
 async def test_fdb_deletion_queues_conflict(db):
     """FDB spool absent from fetch → exactly one deletion conflict queued."""
     sm_spool = _sm_spool(1, 800.0)
-    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
     _add_spool_mapping(db, 1, "fil-1", "spool-1")
     _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
     _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
@@ -1056,7 +1055,6 @@ async def test_weight_newest_wins_picks_newer_side(db):
         extra={},
         last_used="2025-01-01T12:00:00+00:00",  # after old_cap (midnight)
     )
-    fdb_fil = _fdb_filament("fil-1", "spool-1", 1050.0)  # FDB also changed
     # FDB updatedAt set to a time BEFORE SM last_used but also after captured_at
     fdb_fil_with_ts = FDBFilament.model_validate({
         "_id": "fil-1",
@@ -1197,9 +1195,6 @@ async def test_dry_run_multiple_pairs_matched_and_changed(db):
 # ---------------------------------------------------------------------------
 
 
-import json as _json
-
-
 def _sm_spool_with_extra(spool_id: int, filament_id: int, extra: dict | None = None) -> SpoolmanSpool:
     """SM spool for a given filament id, with optional extra fields."""
     fil = SpoolmanFilament(id=filament_id, name="PLA", vendor=SpoolmanVendor(id=1, name="ACME"))
@@ -1231,7 +1226,7 @@ async def test_engine_new_spool_stale_xref_triggers_create(db):
     """Ongoing new-spool detection: a SM spool with a stale filamentdb_spool_id xref
     (pointing at an id not in fdb_spool_index) must trigger FDB spool creation."""
     # SM spool has xref to 'old-fdb-spool' which is NOT in current FDB data.
-    stale_xref = _json.dumps("old-fdb-spool")
+    stale_xref = json.dumps("old-fdb-spool")
     sm_sp = _sm_spool_with_extra(
         501, filament_id=50,
         extra={"filamentdb_spool_id": stale_xref},
@@ -1271,7 +1266,7 @@ async def test_engine_new_spool_live_xref_skips(db):
     SM→FDB path (live xref = already-linked orphan).
     """
     # SM spool has xref to 'live-spool-bbb' which IS in current FDB data.
-    live_xref = _json.dumps("live-spool-bbb")
+    live_xref = json.dumps("live-spool-bbb")
     sm_sp = _sm_spool_with_extra(
         502, filament_id=51,
         extra={"filamentdb_spool_id": live_xref},
@@ -1587,7 +1582,6 @@ async def test_ensure_extra_fields_registers_filament_material_tags_field():
             return spool_field_defs
         return filament_field_defs
 
-    import httpx
     posted_bodies: list[dict] = []
 
     async def fake_post(path: str, *, json: dict) -> MagicMock:
@@ -1600,10 +1594,6 @@ async def test_ensure_extra_fields_registers_filament_material_tags_field():
         return resp
 
     client.get_field_definitions = fake_get_field_definitions
-
-    with patch("app.config.settings") as mock_settings_global, \
-         patch("app.services.spoolman._settings", create=True) as _:
-        pass  # just need the with block to set up patching scope
 
     # Directly patch the _http client and the global settings used inside ensure_extra_fields
     from unittest.mock import patch as _patch, AsyncMock as _AsyncMock
@@ -1638,7 +1628,7 @@ def test_finish_tags_fdb_to_sm_encodes_as_csv_string():
     """
     import json as _json
     from app.core.material_tags import serialize_material_tags
-    from app.schemas.spoolman import encode_extra_value, decode_extra_value
+    from app.schemas.spoolman import encode_extra_value
 
     ids = frozenset({17})
     serialized = serialize_material_tags(ids)
@@ -1671,7 +1661,7 @@ def test_finish_tags_sm_read_parses_csv_string():
 def test_finish_tags_sm_read_parses_legacy_array():
     """The SM read path must tolerate the legacy JSON-array form for backward-compat."""
     from app.core.material_tags import parse_material_tags
-    from app.schemas.spoolman import decode_extra_value, encode_extra_value
+    from app.schemas.spoolman import decode_extra_value
 
     # Legacy encoded form: encode_extra_value([17]) → '"[17]"' would have been wrong
     # but any value already stored as a plain array string "[17]" must still parse
@@ -1771,7 +1761,7 @@ async def test_new_spool_conflict_cleared_when_spool_mapped(db):
 
     with patch("app.core.engine._settings") as mock_settings:
         _default_settings(mock_settings)
-        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-3")
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-3")
 
     # The stale conflict should now be resolved
     still_open = (
@@ -1845,8 +1835,6 @@ async def test_new_spool_conflict_not_cleared_when_spool_still_unmapped(db):
 async def test_new_spool_dry_run_does_not_create_or_resolve(db):
     """dry_run=True: no new_spool conflict is created and no existing conflict is resolved."""
     sm_spool = _sm_spool(spool_id=5, remaining=300.0)
-    spoolman = _fake_spoolman(spools=[sm_spool])
-    fdb_client = _fake_filamentdb(filaments=[])
 
     # Pre-seed an open conflict for spool 5 (unmapped)
     db.add(Conflict(

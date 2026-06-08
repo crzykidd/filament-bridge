@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.core.matcher import normalize_color
-from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, strip_finish_words
+from app.core.material_tags import strip_finish_words
 from app.core.weight import weight_changed
 
 if TYPE_CHECKING:

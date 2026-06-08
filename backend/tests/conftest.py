@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db import Base
-from app.models.config import BridgeConfig, seed_defaults
+from app.models.config import seed_defaults
 from app.models.conflict import Conflict  # noqa: F401  ensure table is created
 from app.models.mapping import FilamentMapping, SpoolMapping  # noqa: F401
 from app.models.snapshot import Snapshot  # noqa: F401

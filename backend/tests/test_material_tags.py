@@ -1,6 +1,5 @@
 """Tests for core/material_tags.py — OpenPrintTag finish-ID helpers."""
 
-import pytest
 
 from app.core.material_tags import (
     DEFAULT_MATERIAL_TAG_IDS,

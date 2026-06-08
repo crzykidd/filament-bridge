@@ -6,9 +6,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -253,12 +250,8 @@ async def test_ensure_extra_fields_registers_opentag_fields():
     client._http.get = AsyncMock(side_effect=lambda url, **kw: _async_field_def_resp(url, _fake_get_fields))
 
     # Directly test the registration logic
-    from app.schemas.spoolman import SpoolmanFieldDef, encode_extra_value
     from app.config import settings as _s
 
-    existing_spool_keys = {
-        "filamentdb_id", "filamentdb_parent_id", "filamentdb_spool_id"
-    }
     existing_filament_keys: set[str] = set()
     runtime_filament_fields = [
         {"key": _s.spoolman_field_filamentdb_material_tags, "name": "m", "field_type": "text"},
@@ -732,7 +725,6 @@ def test_find_best_match_dual_color_slash_returns_correct_combo():
 @pytest.mark.asyncio
 async def test_apply_patches_provided_fields_only():
     """Apply should PATCH SM with only non-keep_mine fields."""
-    from app.api.opentag import OpenTagApplyRequest, OpenTagFilamentDecision, OpenTagFieldDecision
 
     patched_payloads: list[dict] = []
 
@@ -3219,7 +3211,6 @@ async def test_ensure_extra_fields_skips_already_existing_filament_fields():
     """When all filament fields already exist, no POST should be issued for them."""
     from app.services.spoolman import SpoolmanClient
     from app.config import settings as _s
-    from app.schemas.spoolman import SpoolmanFieldDef
 
     post_calls: list[str] = []
 
@@ -3537,7 +3528,6 @@ def test_opt_to_spoolman_fields_name_none_when_absent():
 @pytest.mark.asyncio
 async def test_apply_writes_name_native_when_not_keep_mine():
     """Apply must write 'name' as a native Spoolman field when keep_mine is False."""
-    from app.api.opentag import OpenTagApplyRequest, OpenTagFilamentDecision, OpenTagFieldDecision
 
     patched_payloads: list[dict] = []
 
@@ -3591,8 +3581,7 @@ async def test_apply_slug_uuid_written_exactly_once():
     """slug/uuid must appear exactly once in the SM PATCH extra, even when both
     decision.openprinttag_slug/uuid and field rows carry them.
     """
-    from app.api.opentag import OpenTagApplyRequest, OpenTagFilamentDecision, OpenTagFieldDecision
-    from app.schemas.spoolman import encode_extra_value, decode_extra_value
+    from app.schemas.spoolman import decode_extra_value
     from app.config import settings as _s
 
     patched_payloads: list[dict] = []
@@ -4180,7 +4169,6 @@ async def test_matches_candidates_list_best_first_with_fields(tmp_path):
     candidates[0] is the best match (confidence == match.confidence) and has its
     own fields list and slug/uuid.  Alternates follow at lower confidence.
     """
-    import datetime as _dt
 
     # Three OPT materials from the same brand/material: the SM filament name is
     # "Bronze" so the best match should be OPT_PLA_SILK (bronze name + silk finish).

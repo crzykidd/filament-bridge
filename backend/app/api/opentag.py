@@ -12,18 +12,15 @@ blocked by ad blockers.  The routes use "openprinttag" instead, which is safe.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
 from app.config import settings as _settings
-from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
 from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import (
@@ -35,7 +32,7 @@ from app.core.opentag_match import (
     resolve_opentag_brand,
     sm_color_profile,
 )
-from app.db import SessionLocal, get_db
+from app.db import SessionLocal
 from app.schemas.spoolman import decode_extra_value, encode_extra_value
 
 logger = logging.getLogger(__name__)
