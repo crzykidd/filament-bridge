@@ -188,6 +188,9 @@ class ConfigResponse(BaseModel):
     material_properties_sync_direction: SyncDirection2 = "filamentdb_to_spoolman"
     material_properties_conflict_policy: ConflictPolicy = "manual"
     new_spool_sync_direction: SyncDirection2 = "two_way"
+    # Scheduler settings
+    sync_interval_seconds: int = 120
+    sync_log_retention_days: int = 30
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -201,6 +204,9 @@ class ConfigUpdateRequest(BaseModel):
     material_properties_sync_direction: SyncDirection2 | None = None
     material_properties_conflict_policy: ConflictPolicy | None = None
     new_spool_sync_direction: SyncDirection2 | None = None
+    # Scheduler settings
+    sync_interval_seconds: int | None = Field(default=None, ge=30)
+    sync_log_retention_days: int | None = Field(default=None, ge=0)
 
 
 # ---------------------------------------------------------------------------

@@ -183,6 +183,9 @@ export interface ConfigResponse {
   material_properties_sync_direction: SyncDirection2
   material_properties_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
   new_spool_sync_direction: SyncDirection2
+  // Scheduler settings
+  sync_interval_seconds: number
+  sync_log_retention_days: number
 }
 
 export interface ConfigUpdateRequest {
@@ -195,6 +198,9 @@ export interface ConfigUpdateRequest {
   material_properties_sync_direction?: SyncDirection2 | null
   material_properties_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
   new_spool_sync_direction?: SyncDirection2 | null
+  // Scheduler settings
+  sync_interval_seconds?: number | null
+  sync_log_retention_days?: number | null
 }
 
 // ---------------------------------------------------------------------------

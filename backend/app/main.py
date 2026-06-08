@@ -38,7 +38,7 @@ from app.api import wizard as wizard_router
 from app.config import settings
 from app.core.engine import run_sync_cycle
 from app.db import SessionLocal
-from app.api.config import get_config_value, set_config_value
+from app.api.config import get_config_value, prune_sync_log, set_config_value
 from app.models.config import BridgeConfig, seed_defaults
 from app.services.filamentdb import FilamentDBClient
 from app.services.spoolman import SpoolmanClient
@@ -155,22 +155,39 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 if not enabled:
                     logger.debug("Auto-sync disabled — skipping cycle")
                     return
+                # Prune old sync-log rows before each auto-sync tick.
+                retention_row = db.query(BridgeConfig).filter_by(key="sync_log_retention_days").first()
+                retention_days = int(json.loads(retention_row.value)) if retention_row else 30
+                if retention_days > 0:
+                    pruned = prune_sync_log(db, retention_days)
+                    if pruned:
+                        db.commit()
                 await run_sync_cycle(db, app.state.spoolman, app.state.filamentdb, dry_run=False)
             except Exception as exc:
                 logger.error("Unhandled error in sync job: %s", exc, exc_info=True)
             finally:
                 db.close()
 
+        # Determine the effective interval: DB override takes precedence over env default.
+        from app.api.config import _effective_sync_interval
+        db_for_interval = SessionLocal()
+        try:
+            initial_interval = _effective_sync_interval(db_for_interval)
+        finally:
+            db_for_interval.close()
+
         _scheduler.add_job(
             _sync_job,
             "interval",
-            seconds=settings.sync_interval_seconds,
+            seconds=initial_interval,
             id="sync_cycle",
         )
         _scheduler.start()
+        # Store scheduler on app.state so the config endpoint can reschedule it.
+        app.state.scheduler = _scheduler
         logger.info(
             "Scheduler started — interval=%ds, auto-sync gated by BridgeConfig.auto_sync_enabled",
-            settings.sync_interval_seconds,
+            initial_interval,
         )
         try:
             yield

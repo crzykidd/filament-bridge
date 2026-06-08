@@ -23,6 +23,10 @@ _DEFAULTS = {
     # Spoolman vendor → OpenTag brand aliases for the OpenTag cleanup matcher.
     # Empty string = no aliases (default).
     "opentag_vendor_aliases": '""',
+    # Runtime-configurable sync interval (seconds). 0 = use env-default.
+    "sync_interval_seconds": "0",
+    # Sync-log retention in days. 0 = keep forever.
+    "sync_log_retention_days": "30",
 }
 
 

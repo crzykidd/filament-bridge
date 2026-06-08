@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
-import { getConfig, updateConfig, exportBackup, importBackup } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup } from '../api/client'
 import { useApi } from '../api/hooks'
+import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy } from '../api/types'
 
 // ---------------------------------------------------------------------------
@@ -140,6 +141,13 @@ export default function Settings() {
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
   const [vendorAliases, setVendorAliases] = useState<string | null>(null)
 
+  // Scheduler & Logs state
+  const [syncIntervalMinutes, setSyncIntervalMinutes] = useState<number | null>(null)
+  const [syncLogRetentionDays, setSyncLogRetentionDays] = useState<number | null>(null)
+  const [togglingAutoSync, setTogglingAutoSync] = useState(false)
+  const [autoSyncMsg, setAutoSyncMsg] = useState('')
+  const [showAutoSyncBackupDialog, setShowAutoSyncBackupDialog] = useState(false)
+
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -159,6 +167,45 @@ export default function Settings() {
   const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
   const valiases = vendorAliases ?? data.opentag_vendor_aliases ?? ''
 
+  // Convert stored seconds → minutes for display; fall back to data value
+  const effectiveIntervalMinutes = syncIntervalMinutes ?? Math.round(data.sync_interval_seconds / 60)
+  const effectiveRetentionDays = syncLogRetentionDays ?? data.sync_log_retention_days
+  const showIntervalWarning = effectiveIntervalMinutes > 5
+
+  async function doEnableAutoSync() {
+    setTogglingAutoSync(true)
+    setAutoSyncMsg('')
+    try {
+      await setAutoSync({ enabled: true })
+      setAutoSyncMsg('Auto-sync enabled.')
+      void reload()
+    } catch (e) {
+      setAutoSyncMsg(e instanceof Error ? e.message : 'Error enabling auto-sync.')
+    } finally {
+      setTogglingAutoSync(false)
+    }
+  }
+
+  async function handleAutoSyncToggle() {
+    if (data.auto_sync_enabled) {
+      // Disabling is immediate — no dialog required
+      setTogglingAutoSync(true)
+      setAutoSyncMsg('')
+      try {
+        await setAutoSync({ enabled: false })
+        setAutoSyncMsg('Auto-sync disabled.')
+        void reload()
+      } catch (e) {
+        setAutoSyncMsg(e instanceof Error ? e.message : 'Error disabling auto-sync.')
+      } finally {
+        setTogglingAutoSync(false)
+      }
+    } else {
+      // Enabling is gated behind the backup safety dialog
+      setShowAutoSyncBackupDialog(true)
+    }
+  }
+
   async function handleSave() {
     setSaving(true)
     setSaveMsg('')
@@ -173,6 +220,9 @@ export default function Settings() {
         weight_precision_decimals: prec,
         variant_line_keywords: variantKeywords ?? undefined,
         opentag_vendor_aliases: vendorAliases ?? undefined,
+        // Convert minutes → seconds for the API; only send if user changed it
+        sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
+        sync_log_retention_days: syncLogRetentionDays ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -221,8 +271,95 @@ export default function Settings() {
   }
 
   return (
+    <>
+    <BackupSafetyDialog
+      open={showAutoSyncBackupDialog}
+      actionLabel="Enable auto-sync"
+      onCancel={() => setShowAutoSyncBackupDialog(false)}
+      onProceed={() => { setShowAutoSyncBackupDialog(false); void doEnableAutoSync() }}
+    />
     <div className="p-8 space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+
+      {/* Scheduler & Logs */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-700 mb-1">Scheduler &amp; Logs</h2>
+
+        {/* Auto-sync toggle */}
+        <div className="flex items-center justify-between py-2">
+          <div>
+            <span className="text-sm font-medium text-gray-700">Auto-sync enabled</span>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Requires the setup wizard to be completed first.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleAutoSyncToggle()}
+            disabled={togglingAutoSync}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+              data.auto_sync_enabled ? 'bg-indigo-600' : 'bg-gray-200'
+            }`}
+            aria-pressed={data.auto_sync_enabled}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                data.auto_sync_enabled ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+        {autoSyncMsg && <p className="text-xs text-gray-600">{autoSyncMsg}</p>}
+
+        {/* Sync interval */}
+        <div className="flex flex-col gap-1 py-2 border-t border-gray-100">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700">Sync interval (minutes)</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={effectiveIntervalMinutes}
+              onChange={e => setSyncIntervalMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          </div>
+          {showIntervalWarning && (
+            <p className="text-xs text-amber-600">
+              Longer intervals give both systems more time to change the same record between
+              syncs, raising the chance of merge conflicts.
+            </p>
+          )}
+          <p className="text-xs text-gray-400">
+            Minimum 30 seconds (0.5 min). Takes effect immediately without a restart.
+          </p>
+        </div>
+
+        {/* Sync-log retention */}
+        <div className="flex flex-col gap-1 py-2 border-t border-gray-100">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-gray-700">Sync-log retention (days)</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={effectiveRetentionDays}
+              onChange={e => setSyncLogRetentionDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          </div>
+          <p className="text-xs text-gray-400">
+            Old sync-log rows are pruned at the start of each auto-sync cycle. Set to 0 to keep
+            all entries forever.
+          </p>
+        </div>
+
+        {/* Application logs note */}
+        <p className="text-xs text-gray-400 border-t border-gray-100 pt-3">
+          Application logs go to the container&apos;s stdout — rotation is handled by your Docker
+          logging driver.
+        </p>
+      </div>
 
       {/* Weight sync */}
       <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
@@ -382,5 +519,6 @@ export default function Settings() {
         )}
       </div>
     </div>
+    </>
   )
 }

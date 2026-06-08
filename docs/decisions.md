@@ -1,5 +1,50 @@
 # Decision record
 
+## 2026-06-08 — Sync interval + log retention are runtime-configurable; no in-app log-file rotation
+
+### Runtime sync interval
+
+`BridgeConfig.sync_interval_seconds` (default 0) overrides `Settings.sync_interval_seconds`
+(the `SYNC_INTERVAL_SECONDS` env var) when non-zero.  `_effective_sync_interval()` in
+`backend/app/api/config.py` applies the override and clamps to ≥ 30 s.
+
+At startup, `main.py` reads the DB override once (via `_effective_sync_interval`) to set the
+initial APScheduler job interval.  When `PUT /api/config` receives a `sync_interval_seconds`
+update, the config endpoint calls `scheduler.reschedule_job("sync_cycle", trigger="interval",
+seconds=N)` on `app.state.scheduler` — no restart required.  Tests that don't wire the full
+lifespan set no `app.state.scheduler`, so the reschedule path is silently skipped (no error).
+
+`ConfigResponse` and `ConfigUpdateRequest` now expose `sync_interval_seconds` (ge=30 on
+update) and the UI converts minutes ↔ seconds: value stored in seconds, displayed in minutes.
+
+### Sync-log retention
+
+`BridgeConfig.sync_log_retention_days` (default 30; 0 = keep forever).  `prune_sync_log(db,
+retention_days)` in `backend/app/api/config.py` issues a single `DELETE` for rows older than
+`now - retention_days`.  Called at the start of each auto-sync tick (in `main.py`'s scheduled
+job) and returns the deleted count for logging.  No-op when `retention_days == 0`.
+
+### No in-app log-file rotation
+
+The app logs to stdout only (structured JSON via `_JSONFormatter`); Docker/container runtime
+rotates container logs.  No log-file rotation is implemented in the bridge itself, and no
+`SYNC_LOG_RETENTION_DAYS` env var is added — retention is purely a runtime DB config value.
+
+### Settings UI: "Scheduler & Logs" section
+
+Added to `frontend/src/pages/Settings.tsx` (separate from the main Save flow for auto-sync
+toggle; all other fields save via the existing Save button):
+
+- **Auto-sync enabled** toggle: enabling is gated behind `BackupSafetyDialog` (same as
+  Dashboard); disabling runs immediately.  Calls `POST /api/sync/auto` — not part of the
+  config PUT.
+- **Sync interval (minutes)**: number input (min 1); converts min ↔ sec for the API; shows
+  an amber warning when interval > 5 minutes ("Longer intervals … raising the chance of merge
+  conflicts").
+- **Sync-log retention (days)**: number input (0 = keep forever).
+- **Stdout note**: "Application logs go to the container's stdout — rotation is handled by
+  your Docker logging driver."
+
 ## 2026-06-07 — new_spool conflicts: dedup + auto-resolve on map
 
 Two bugs caused `new_spool` conflicts to pile up and go stale after a spool was mapped:

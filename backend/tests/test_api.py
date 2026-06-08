@@ -3463,3 +3463,168 @@ def test_config_old_sot_fields_rejected_on_update(db):
     body = resp.json()
     assert "weight_source_of_truth" not in body
     assert "new_spool_source_of_truth" not in body
+
+
+# ---------------------------------------------------------------------------
+# Scheduler + sync-log retention settings
+# ---------------------------------------------------------------------------
+
+
+def test_config_sync_interval_seconds_defaults_to_env(db):
+    """Without a DB override, sync_interval_seconds reflects the env default (120)."""
+    body = _client(db).get("/api/config").json()
+    # env default in conftest is 120
+    assert body["sync_interval_seconds"] == 120
+
+
+def test_config_sync_interval_round_trips(db):
+    """sync_interval_seconds round-trips through PUT/GET and is clamped to ≥ 30."""
+    client = _client(db)
+
+    resp = client.put("/api/config", json={"sync_interval_seconds": 300})
+    assert resp.status_code == 200
+    assert resp.json()["sync_interval_seconds"] == 300
+
+    # Confirm GET returns the new value too
+    body = client.get("/api/config").json()
+    assert body["sync_interval_seconds"] == 300
+
+
+def test_config_sync_interval_clamped_to_minimum(db):
+    """sync_interval_seconds < 30 is rejected by the schema validator (ge=30)."""
+    client = _client(db)
+    resp = client.put("/api/config", json={"sync_interval_seconds": 10})
+    assert resp.status_code == 422
+
+
+def test_config_sync_log_retention_days_defaults_to_30(db):
+    """sync_log_retention_days defaults to 30."""
+    body = _client(db).get("/api/config").json()
+    assert body["sync_log_retention_days"] == 30
+
+
+def test_config_sync_log_retention_days_round_trips(db):
+    """sync_log_retention_days round-trips; 0 (keep forever) is valid."""
+    client = _client(db)
+
+    resp = client.put("/api/config", json={"sync_log_retention_days": 7})
+    assert resp.status_code == 200
+    assert resp.json()["sync_log_retention_days"] == 7
+
+    resp = client.put("/api/config", json={"sync_log_retention_days": 0})
+    assert resp.status_code == 200
+    assert resp.json()["sync_log_retention_days"] == 0
+
+
+def test_config_sync_log_retention_days_negative_rejected(db):
+    """sync_log_retention_days < 0 is rejected."""
+    client = _client(db)
+    resp = client.put("/api/config", json={"sync_log_retention_days": -1})
+    assert resp.status_code == 422
+
+
+def test_config_auto_sync_enabled_round_trips(db):
+    """auto_sync_enabled is read back in ConfigResponse."""
+    set_config_value(db, "wizard_completed", True)
+    db.commit()
+    client = _client(db)
+
+    # Start disabled
+    body = client.get("/api/config").json()
+    assert body["auto_sync_enabled"] is False
+
+    # Enable via the sync/auto endpoint and verify config reflects it
+    resp = client.post("/api/sync/auto", json={"enabled": True})
+    assert resp.status_code == 200
+    body = client.get("/api/config").json()
+    assert body["auto_sync_enabled"] is True
+
+
+def test_prune_sync_log_deletes_old_rows(db):
+    """prune_sync_log removes rows older than the cutoff and leaves newer ones."""
+    import datetime
+    from app.api.config import prune_sync_log
+
+    now = datetime.datetime.utcnow()
+    old_ts = now - datetime.timedelta(days=40)
+    new_ts = now - datetime.timedelta(days=5)
+
+    db.add(SyncLog(cycle_id="old", direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool", spoolman_id=1,
+                   timestamp=old_ts))
+    db.add(SyncLog(cycle_id="new", direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool", spoolman_id=2,
+                   timestamp=new_ts))
+    db.commit()
+
+    deleted = prune_sync_log(db, retention_days=30)
+    db.commit()
+
+    assert deleted == 1
+    remaining = db.query(SyncLog).all()
+    assert len(remaining) == 1
+    assert remaining[0].cycle_id == "new"
+
+
+def test_prune_sync_log_noop_when_zero(db):
+    """prune_sync_log is a no-op when retention_days=0 (keep forever)."""
+    import datetime
+    from app.api.config import prune_sync_log
+
+    old_ts = datetime.datetime.utcnow() - datetime.timedelta(days=365)
+    db.add(SyncLog(cycle_id="c1", direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool", spoolman_id=1,
+                   timestamp=old_ts))
+    db.commit()
+
+    deleted = prune_sync_log(db, retention_days=0)
+    assert deleted == 0
+    assert db.query(SyncLog).count() == 1
+
+
+def test_prune_sync_log_all_within_cutoff_deletes_nothing(db):
+    """prune_sync_log leaves rows that are within the retention window untouched."""
+    import datetime
+    from app.api.config import prune_sync_log
+
+    recent_ts = datetime.datetime.utcnow() - datetime.timedelta(days=2)
+    db.add(SyncLog(cycle_id="c1", direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool", spoolman_id=1,
+                   timestamp=recent_ts))
+    db.commit()
+
+    deleted = prune_sync_log(db, retention_days=30)
+    assert deleted == 0
+    assert db.query(SyncLog).count() == 1
+
+
+def test_update_config_reschedules_when_scheduler_present(db):
+    """update_config calls scheduler.reschedule_job when app.state.scheduler is set."""
+    from unittest.mock import MagicMock
+    from fastapi import FastAPI, Request
+
+    mock_scheduler = MagicMock()
+    app = FastAPI()
+    app.state.scheduler = mock_scheduler
+    for mod in _ROUTERS:
+        app.include_router(mod.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = _fake_spoolman()
+    app.state.filamentdb = _fake_filamentdb()
+    client = TestClient(app)
+
+    resp = client.put("/api/config", json={"sync_interval_seconds": 180})
+    assert resp.status_code == 200
+    assert resp.json()["sync_interval_seconds"] == 180
+    mock_scheduler.reschedule_job.assert_called_once_with(
+        "sync_cycle", trigger="interval", seconds=180
+    )
+
+
+def test_update_config_no_reschedule_when_scheduler_absent(db):
+    """update_config does not fail when app.state has no scheduler (e.g. in tests)."""
+    client = _client(db)
+    # No app.state.scheduler set — should not raise
+    resp = client.put("/api/config", json={"sync_interval_seconds": 60})
+    assert resp.status_code == 200
+    assert resp.json()["sync_interval_seconds"] == 60
