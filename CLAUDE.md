@@ -202,7 +202,13 @@ filament-bridge/
 | `FIELD_MAPPINGS` | No | — | Comma-separated `fdb_field=spoolman_field` pairs |
 | `FIELD_MAPPING_EXCLUDES` | No | — | Comma-separated field names to exclude from auto-match |
 | `VARIANT_LINE_KEYWORDS` | No | (seed list) | Comma-separated words marking distinct variant lines (e.g. `silk,matte,rapid`). Filaments whose names match different keywords won't be grouped together. Overridable at runtime via Settings. |
-| `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications |
+| `SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS` | No | `filamentdb_material_tags` | Spoolman filament-level extra field storing finish-tag IDs (JSON list of ints) |
+| `MATERIAL_TAG_IDS` | No | (seed list) | CSV of `keyword=id` pairs overriding the default keyword→OpenPrintTag-ID map for finish detection. Empty = use seed defaults from `core/material_tags.py`. |
+| `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenTag brand pre-filter (e.g. `prusa=prusament`). Normalised on both sides; blank = no aliases. Overridable at runtime via Settings. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag material slug |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
+| `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
+| `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications (declared; not yet implemented) |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |
 

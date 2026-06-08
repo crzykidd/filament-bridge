@@ -78,7 +78,9 @@ Only the fields the user confirmed (not marked "keep mine") are written.
 
 | Entity | Op | Field(s) | Trigger |
 |---|---|---|---|
-| Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes` (any subset) | User confirmed in the review/confirm UI |
+| Filament | update | `name` | User confirmed the reviewable name field (defaults to the OpenTag material name) |
+| Filament | update | `vendor` → `vendor_id` | User confirmed the Manufacturer field; resolved via find-or-create (`_ensure_vendor`: `get_vendors` + `create_vendor`). **This is the only OpenTag path that may CREATE a new Spoolman vendor.** |
+| Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes`, `multi_color_direction` (any subset) | User confirmed in the review/confirm UI |
 | Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
 | Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |
 
@@ -90,6 +92,12 @@ bag (scoped exception — see `docs/decisions.md`).
 
 `location`, `lot_nr`, `archived`, `comment`, and **per-spool `price`** (cost write-back
 targets the filament price only). The bridge never deletes Spoolman records.
+
+**The bridge never sets both `color_hex` and `multi_color_hexes` on the same Spoolman
+filament in a single PATCH.** Spoolman returns 422 if both are present simultaneously.
+Multicolor writes use `multi_color_hexes` + `multi_color_direction` only; single-color
+writes use `color_hex` only. This applies to both the ongoing sync passes and the OpenTag
+apply endpoint.
 
 ## Notes
 
