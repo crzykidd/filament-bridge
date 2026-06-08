@@ -1703,3 +1703,187 @@ def test_finish_tags_snapshot_sig_stable_after_round_trip():
     assert recovered_sig == original_sig, (
         f"Snapshot sig changed after round-trip: {original_sig!r} → {recovered_sig!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# new_spool conflict lifecycle — dedup + clear-on-map (fix 2026-06-07)
+# ---------------------------------------------------------------------------
+
+def _default_settings(mock_settings):
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+@pytest.mark.asyncio
+async def test_new_spool_conflict_dedup_sm_side(db):
+    """Two non-dry-run cycles for the same unmapped SM spool produce exactly ONE open conflict."""
+    sm_spool = _sm_spool(spool_id=1, remaining=500.0)  # no filament mapping
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _default_settings(mock_settings)
+        # First cycle — should create the conflict
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-1")
+        # Second cycle — should NOT create a duplicate
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-2")
+
+    open_conflicts = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.entity_type == "spool",
+            Conflict.field_name == "new_spool",
+            Conflict.spoolman_id == 1,
+        )
+        .all()
+    )
+    assert len(open_conflicts) == 1, (
+        f"Expected exactly 1 open new_spool conflict for SM spool 1, got {len(open_conflicts)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_spool_conflict_cleared_when_spool_mapped(db):
+    """An open new_spool conflict for spool X is auto-resolved after a SpoolMapping for X exists."""
+    sm_spool = _sm_spool(spool_id=1, remaining=500.0)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 700.0)
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    # Seed an open new_spool conflict for SM spool 1 (pre-existing stale conflict)
+    db.add(Conflict(
+        entity_type="spool",
+        field_name="new_spool",
+        spoolman_id=1,
+        spoolman_value='"Spoolman spool 1 has no FDB filament match"',
+    ))
+    db.flush()
+
+    # Now add a SpoolMapping for that spool (simulates wizard completing after the conflict was filed)
+    _add_spool_mapping(db, sm_id=1, fdb_fil="fil-1", fdb_spool="spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 500.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 700.0})
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _default_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-3")
+
+    # The stale conflict should now be resolved
+    still_open = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.entity_type == "spool",
+            Conflict.field_name == "new_spool",
+            Conflict.spoolman_id == 1,
+        )
+        .first()
+    )
+    assert still_open is None, "Stale new_spool conflict for mapped spool 1 should have been auto-resolved"
+
+    resolved = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.isnot(None),
+            Conflict.entity_type == "spool",
+            Conflict.field_name == "new_spool",
+            Conflict.spoolman_id == 1,
+        )
+        .first()
+    )
+    assert resolved is not None
+    assert resolved.resolution == "resolved_mapped"
+
+
+@pytest.mark.asyncio
+async def test_new_spool_conflict_not_cleared_when_spool_still_unmapped(db):
+    """A new_spool conflict for a spool with no mapping is NOT auto-resolved."""
+    sm_spool_unmapped = _sm_spool(spool_id=99, remaining=400.0)
+    sm_spool_mapped = _sm_spool(spool_id=1, remaining=500.0)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 700.0)
+
+    # Only spool 1 is mapped; spool 99 is not
+    _add_spool_mapping(db, sm_id=1, fdb_fil="fil-1", fdb_spool="spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 500.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 700.0})
+
+    # Pre-seed an open conflict for the UNMAPPED spool 99
+    db.add(Conflict(
+        entity_type="spool",
+        field_name="new_spool",
+        spoolman_id=99,
+        spoolman_value='"Spoolman spool 99 has no FDB filament match"',
+    ))
+    db.flush()
+
+    spoolman = _fake_spoolman(spools=[sm_spool_mapped, sm_spool_unmapped])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _default_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-4")
+
+    still_open = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.entity_type == "spool",
+            Conflict.field_name == "new_spool",
+            Conflict.spoolman_id == 99,
+        )
+        .first()
+    )
+    assert still_open is not None, "new_spool conflict for still-unmapped spool 99 must NOT be cleared"
+
+
+@pytest.mark.asyncio
+async def test_new_spool_dry_run_does_not_create_or_resolve(db):
+    """dry_run=True: no new_spool conflict is created and no existing conflict is resolved."""
+    sm_spool = _sm_spool(spool_id=5, remaining=300.0)
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    # Pre-seed an open conflict for spool 5 (unmapped)
+    db.add(Conflict(
+        entity_type="spool",
+        field_name="new_spool",
+        spoolman_id=5,
+        spoolman_value='"Spoolman spool 5 has no FDB filament match"',
+    ))
+    db.flush()
+
+    # Add a mapping for spool 5 — in non-dry-run this WOULD resolve it
+    fdb_fil = _fdb_filament("fil-5", "spool-5", 600.0)
+    _add_spool_mapping(db, sm_id=5, fdb_fil="fil-5", fdb_spool="spool-5")
+    _store_snapshot(db, "spoolman", "spool", "5", {"remaining_weight": 300.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-5", {"totalWeight": 600.0})
+
+    spoolman2 = _fake_spoolman(spools=[sm_spool])
+    fdb_client2 = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _default_settings(mock_settings)
+        await run_sync_cycle(db, spoolman2, fdb_client2, dry_run=True, cycle_id="cycle-5")
+
+    # The conflict should still be open (dry_run must not mutate DB)
+    still_open = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.entity_type == "spool",
+            Conflict.field_name == "new_spool",
+            Conflict.spoolman_id == 5,
+        )
+        .first()
+    )
+    assert still_open is not None, "dry_run must not resolve existing conflicts"
+
+    # Also confirm no NEW conflicts were created (the spool is mapped now, so the
+    # new-spool detection path won't even be reached — but ensure no extras)
+    all_conflicts = db.query(Conflict).filter(Conflict.spoolman_id == 5).count()
+    assert all_conflicts == 1, f"dry_run must not create new conflict rows (found {all_conflicts})"

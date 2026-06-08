@@ -1,5 +1,22 @@
 # Decision record
 
+## 2026-06-07 — new_spool conflicts: dedup + auto-resolve on map
+
+Two bugs caused `new_spool` conflicts to pile up and go stale after a spool was mapped:
+
+1. **No dedup.** `_handle_new_sm_spool` and `_handle_new_fdb_spool` called `_queue_conflict`
+   unconditionally every cycle, creating a duplicate `new_spool` row each run. Fixed by
+   adding an `_has_open_conflict` guard (keyed on `spoolman_id` for the SM side, on
+   `filamentdb_spool_id` for the FDB side) before each `_queue_conflict` call — mirrors the
+   existing pattern used by the field-conflict passes.
+2. **Stale conflicts never cleared.** Once a spool mapping existed, the old open `new_spool`
+   conflict was never resolved. Fixed by adding a clear-on-map pass in `run_sync_cycle`
+   immediately after `mapped_sm_spool_ids` / `mapped_fdb_spool_ids` are built (non-dry-run
+   only): any open `new_spool` conflict whose `spoolman_id` is in `mapped_sm_spool_ids` or
+   whose `filamentdb_spool_id` is in `mapped_fdb_spool_ids` is resolved with
+   `resolution="resolved_mapped"`. Covers both wizard-created and engine-created mappings.
+   Deletion-conflict (`DELETION_FIELD`) behavior is unchanged.
+
 ## 2026-06-07 — Pre-write backup safeguard dialog gates destructive actions
 
 A `BackupSafetyDialog` component (`frontend/src/components/BackupSafetyDialog.tsx`) gates

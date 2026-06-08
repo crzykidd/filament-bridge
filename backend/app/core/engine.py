@@ -1377,11 +1377,12 @@ async def _handle_new_sm_spool(
     if filament_mapping is None:
         # No filament mapping — queue as conflict for user resolution
         if not dry_run:
-            _queue_conflict(
-                db, cycle_id, "spool", "new_spool",
-                spoolman_id=sm_spool.id,
-                spoolman_value=f"Spoolman spool {sm_spool.id} has no FDB filament match",
-            )
+            if not _has_open_conflict(db, "spool", "new_spool", spoolman_id=sm_spool.id):
+                _queue_conflict(
+                    db, cycle_id, "spool", "new_spool",
+                    spoolman_id=sm_spool.id,
+                    spoolman_value=f"Spoolman spool {sm_spool.id} has no FDB filament match",
+                )
         else:
             result.preview.append({
                 "action": "conflict",
@@ -1493,12 +1494,13 @@ async def _handle_new_fdb_spool(
 
     if filament_mapping is None:
         if not dry_run:
-            _queue_conflict(
-                db, cycle_id, "spool", "new_spool",
-                fdb_filament_id=fdb_filament.id,
-                fdb_spool_id=fdb_spool.id,
-                filamentdb_value=f"FDB spool {fdb_spool.id} has no Spoolman filament match",
-            )
+            if not _has_open_conflict(db, "spool", "new_spool", fdb_spool_id=fdb_spool.id):
+                _queue_conflict(
+                    db, cycle_id, "spool", "new_spool",
+                    fdb_filament_id=fdb_filament.id,
+                    fdb_spool_id=fdb_spool.id,
+                    filamentdb_value=f"FDB spool {fdb_spool.id} has no Spoolman filament match",
+                )
         else:
             result.preview.append({
                 "action": "conflict",
@@ -1644,6 +1646,35 @@ async def run_sync_cycle(
 
     mapped_sm_spool_ids: set[int] = {m.spoolman_spool_id for m in spool_mappings}
     mapped_fdb_spool_ids: set[str] = {m.filamentdb_spool_id for m in spool_mappings}
+
+    # ---- Clear stale new_spool conflicts for now-mapped spools ----
+    # A spool may have accumulated open new_spool conflicts before it was mapped
+    # (e.g. via the wizard). Auto-resolve them now so the queue stays clean.
+    if not dry_run and (mapped_sm_spool_ids or mapped_fdb_spool_ids):
+        _now = datetime.datetime.now(datetime.timezone.utc)
+        stale_conflicts = (
+            db.query(Conflict)
+            .filter(
+                Conflict.resolved_at.is_(None),
+                Conflict.entity_type == "spool",
+                Conflict.field_name == "new_spool",
+            )
+            .all()
+        )
+        for stale in stale_conflicts:
+            if (
+                (stale.spoolman_id is not None and stale.spoolman_id in mapped_sm_spool_ids)
+                or (stale.filamentdb_spool_id is not None and stale.filamentdb_spool_id in mapped_fdb_spool_ids)
+            ):
+                stale.resolved_at = _now
+                stale.resolution = "resolved_mapped"
+                _log(
+                    db, cycle_id, "auto", "info", "spool",
+                    spoolman_id=stale.spoolman_id,
+                    fdb_spool_id=stale.filamentdb_spool_id,
+                    field_name="new_spool",
+                    error_message="auto-resolved stale new_spool conflict (spool is now mapped)",
+                )
 
     filament_mappings_by_sm: dict[int, FilamentMapping] = {
         m.spoolman_filament_id: m for m in filament_mappings
