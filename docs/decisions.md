@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-07 — Wizard pre-matches records by filamentdb_id cross-reference before fuzzy matching
+
+`match_filaments` in `backend/app/core/matcher.py` now accepts an optional
+`xref_by_sm_filament: dict[int, str] | None = None` parameter.  When provided,
+a first pass runs before the fuzzy key pass: for each SM filament whose id maps
+to an existing FDB filament id, both sides are immediately matched at confidence
+1.0 and consumed so they cannot appear in fuzzy or unmatched buckets.  A stale
+xref (FDB id not present in the current FDB list) falls through unchanged to fuzzy
+or unmatched.  Passing `None` (default) preserves the original behaviour.
+
+`wizard_matches` in `backend/app/api/wizard.py` builds this map by fetching all
+Spoolman spools and extracting the `filamentdb_id` extra field (using
+`_settings.spoolman_field_filamentdb_id` for the key and `decode_extra_value` to
+decode the JSON-encoded string).  Archived spools and spools without a filament are
+skipped; one xref per SM filament id is kept (first non-empty wins).  The resulting
+map is passed to `match_filaments`.
+
+This makes the wizard idempotent on re-run: already-linked records — including
+multicolor filaments whose SM `color_hex` is `None` while FDB has an explicit color
+(e.g. SM #86 → FDB `6a260f0ebba9189cd60f81de`) — are recognized as matched instead
+of being shown as unmatched.
+
 ## 2026-06-08 — Single-hex OpenTag entries use color_hex; multi_color_hexes requires ≥2
 
 Spoolman rejects a filament PATCH where `multi_color_hexes` contains only one color with a

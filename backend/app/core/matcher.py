@@ -207,8 +207,16 @@ def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> lis
 def match_filaments(
     spoolman_filaments: list[SpoolmanFilament],
     fdb_filaments: list[FDBFilament],
+    xref_by_sm_filament: dict[int, str] | None = None,
 ) -> MatchResult:
     """Match Spoolman filaments to FDB filaments by vendor+name+color.
+
+    When ``xref_by_sm_filament`` is provided, a pre-match pass runs first:
+    any SM filament whose entry in the map resolves to an existing FDB filament
+    id is immediately matched at confidence 1.0, and both sides are consumed so
+    they are excluded from the fuzzy pass and from unmatched_*.  A stale xref
+    (FDB id no longer present) falls through to the fuzzy pass unchanged.
+    Pass ``None`` (default) to get the original fuzzy-only behaviour.
 
     Returns three buckets:
       matched    — 1-to-1 high-confidence pairs
@@ -217,14 +225,37 @@ def match_filaments(
     """
     result = MatchResult()
 
+    fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}
+    matched_fdb_ids: set[str] = set()
+    consumed_sm_ids: set[int] = set()
+
+    # Pre-match pass: resolve existing cross-references before fuzzy matching.
+    if xref_by_sm_filament:
+        for sm in spoolman_filaments:
+            fdb_id = xref_by_sm_filament.get(sm.id)
+            if not fdb_id:
+                continue
+            fdb = fdb_by_id.get(fdb_id)
+            if fdb is None:
+                # Stale xref — FDB record absent; let it fall through to fuzzy/unmatched.
+                continue
+            if fdb.id in matched_fdb_ids:
+                # Already claimed by an earlier xref (shouldn't happen in practice).
+                continue
+            matched_fdb_ids.add(fdb.id)
+            consumed_sm_ids.add(sm.id)
+            result.matched.append(MatchedPair(sm, fdb, confidence=1.0))
+
     fdb_index: dict[tuple, list[FDBFilament]] = {}
     for fdb in fdb_filaments:
+        if fdb.id in matched_fdb_ids:
+            continue  # already consumed by xref pass
         k = _key(fdb.vendor, fdb.name, fdb.color)
         fdb_index.setdefault(k, []).append(fdb)
 
-    matched_fdb_ids: set[str] = set()
-
     for sm in spoolman_filaments:
+        if sm.id in consumed_sm_ids:
+            continue  # already consumed by xref pass
         vendor = sm.vendor.name if sm.vendor else None
         k = _key(vendor, sm.name, sm.color_hex)
         candidates = [f for f in fdb_index.get(k, []) if f.id not in matched_fdb_ids]

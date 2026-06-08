@@ -83,7 +83,7 @@ from app.schemas.api import (
     WizardWeightsResponse,
 )
 from app.schemas.filamentdb import FDBFilament, FDBSpool
-from app.schemas.spoolman import SpoolmanFilament, encode_extra_value
+from app.schemas.spoolman import SpoolmanFilament, decode_extra_value, encode_extra_value
 from app.services.filamentdb import extract_created_spool_id
 
 logger = logging.getLogger(__name__)
@@ -233,7 +233,26 @@ def wizard_direction(payload: WizardDirectionRequest, db: Session = Depends(get_
 async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> WizardMatchesResponse:
     sm_filaments = await request.app.state.spoolman.get_filaments()
     fdb_filaments = await request.app.state.filamentdb.get_filaments()
-    mr = match_filaments(sm_filaments, fdb_filaments)
+
+    # Build xref map from non-archived Spoolman spools: {sm_filament_id: fdb_filament_id}.
+    # Uses the filamentdb_id extra field on each spool so already-linked records are
+    # recognized even when fuzzy key matching would fail (e.g. multicolor color_hex=None).
+    xref_by_sm_filament: dict[int, str] = {}
+    sm_spools = await request.app.state.spoolman.get_spools()
+    fdb_id_field = _settings.spoolman_field_filamentdb_id
+    for spool in sm_spools:
+        if spool.archived:
+            continue
+        if spool.filament is None:
+            continue
+        raw = (spool.extra or {}).get(fdb_id_field)
+        fdb_id = decode_extra_value(raw)
+        if not fdb_id or not isinstance(fdb_id, str):
+            continue
+        # One xref per filament id is sufficient; first non-empty wins.
+        xref_by_sm_filament.setdefault(spool.filament.id, fdb_id)
+
+    mr = match_filaments(sm_filaments, fdb_filaments, xref_by_sm_filament=xref_by_sm_filament or None)
 
     matched = [
         MatchPairRow(

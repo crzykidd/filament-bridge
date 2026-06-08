@@ -125,6 +125,139 @@ class TestMatchFilaments:
 
 
 # ---------------------------------------------------------------------------
+# xref pre-matching (xref_by_sm_filament parameter)
+# ---------------------------------------------------------------------------
+
+
+class TestMatchFilamentsXref:
+    """Tests for the xref pre-match pass in match_filaments."""
+
+    def test_xref_match_wins_even_when_fuzzy_would_miss(self):
+        """SM filament with a valid xref is matched even when fuzzy key wouldn't match.
+
+        Mirrors the SM #86 multicolor case: SM color_hex is None, FDB color is
+        '#000000', so the fuzzy keys differ — but the xref links them correctly.
+        """
+        # SM has no color_hex (multicolor); FDB has an explicit color.
+        sm = SpoolmanFilament(
+            id=86,
+            name="PLA Silk Shiny Gradient Black & Shiny Red Gold",
+            vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+            color_hex=None,  # multicolor — fuzzy key would be ("elegoo", "...", "")
+        )
+        fdb = _fdb_filament(
+            "6a260f0ebba9189cd60f81de",
+            "ELEGOO",
+            "PLA Silk Shiny Gradient Black & Shiny Red Gold",
+            "#000000",  # FDB has a primary color — fuzzy key differs from SM
+        )
+        xref = {86: "6a260f0ebba9189cd60f81de"}
+
+        result = match_filaments([sm], [fdb], xref_by_sm_filament=xref)
+
+        assert len(result.matched) == 1
+        assert result.matched[0].spoolman_filament.id == 86
+        assert result.matched[0].fdb_filament.id == "6a260f0ebba9189cd60f81de"
+        assert result.matched[0].confidence == 1.0
+        assert not result.unmatched_spoolman
+        assert not result.unmatched_fdb
+
+    def test_xref_match_excludes_matched_fdb_from_unmatched(self):
+        """The xref-matched FDB filament must not appear in unmatched_fdb."""
+        sm = _sm_filament(10, "Bambu", "PLA Matte", "aabbcc")
+        fdb = _fdb_filament("fdb123", "Bambu", "PLA Matte", "#totally_different")
+        xref = {10: "fdb123"}
+
+        result = match_filaments([sm], [fdb], xref_by_sm_filament=xref)
+
+        assert len(result.matched) == 1
+        assert not result.unmatched_fdb
+
+    def test_stale_xref_falls_through_to_unmatched(self):
+        """A xref pointing at a FDB id that no longer exists falls through to unmatched_spoolman."""
+        sm = _sm_filament(20, "Prusa", "PLA", "ff0000")
+        # FDB list is empty — the referenced id doesn't exist
+        xref = {20: "nonexistent_fdb_id"}
+
+        result = match_filaments([sm], [], xref_by_sm_filament=xref)
+
+        assert not result.matched
+        assert len(result.unmatched_spoolman) == 1
+        assert result.unmatched_spoolman[0].id == 20
+
+    def test_stale_xref_falls_through_to_fuzzy_when_key_matches(self):
+        """A stale xref (FDB id absent) still allows fuzzy matching to succeed."""
+        sm = _sm_filament(30, "ELEGOO", "PLA", "ff0000")
+        fdb = _fdb_filament("real_fdb_id", "elegoo", "pla", "ff0000")
+        # Xref points to a different, non-existent FDB id
+        xref = {30: "stale_id_not_in_fdb_list"}
+
+        result = match_filaments([sm], [fdb], xref_by_sm_filament=xref)
+
+        assert len(result.matched) == 1
+        assert result.matched[0].fdb_filament.id == "real_fdb_id"
+        assert not result.unmatched_spoolman
+        assert not result.unmatched_fdb
+
+    def test_none_xref_identical_to_no_xref(self):
+        """xref_by_sm_filament=None gives identical results to omitting the parameter."""
+        sm = [_sm_filament(1, "ELEGOO", "Rapid PLA+", "ff0000")]
+        fdb = [_fdb_filament("aaa", "elegoo", "rapid pla+", "ff0000")]
+
+        result_none = match_filaments(sm, fdb, xref_by_sm_filament=None)
+        result_default = match_filaments(sm, fdb)
+
+        assert len(result_none.matched) == len(result_default.matched) == 1
+        assert not result_none.unmatched_spoolman
+        assert not result_none.unmatched_fdb
+
+    def test_empty_xref_dict_identical_to_no_xref(self):
+        """An empty xref dict gives the same result as None (no xref pass runs)."""
+        sm = [_sm_filament(1, "ELEGOO", "Rapid PLA+", "ff0000")]
+        fdb = [_fdb_filament("aaa", "elegoo", "rapid pla+", "ff0000")]
+
+        result_empty = match_filaments(sm, fdb, xref_by_sm_filament={})
+        result_default = match_filaments(sm, fdb)
+
+        assert len(result_empty.matched) == len(result_default.matched) == 1
+
+    def test_xref_and_fuzzy_coexist(self):
+        """Mixed scenario: one SM via xref, another via fuzzy, one unmatched each."""
+        sm_xref = SpoolmanFilament(
+            id=100,
+            name="Some Multicolor Filament",
+            vendor=SpoolmanVendor(id=1, name="Vendor"),
+            color_hex=None,
+        )
+        sm_fuzzy = _sm_filament(101, "Hatchbox", "PLA", "00ff00")
+        sm_unmatched = _sm_filament(102, "UnknownBrand", "ABS", "000000")
+
+        fdb_xref = _fdb_filament("xref_fdb", "Vendor", "Some Multicolor Filament", "#111111")
+        fdb_fuzzy = _fdb_filament("fuzzy_fdb", "hatchbox", "pla", "00ff00")
+        fdb_unmatched = _fdb_filament("unmatched_fdb", "OtherBrand", "TPU", "ffffff")
+
+        xref = {100: "xref_fdb"}
+
+        result = match_filaments(
+            [sm_xref, sm_fuzzy, sm_unmatched],
+            [fdb_xref, fdb_fuzzy, fdb_unmatched],
+            xref_by_sm_filament=xref,
+        )
+
+        matched_sm_ids = {p.spoolman_filament.id for p in result.matched}
+        matched_fdb_ids = {p.fdb_filament.id for p in result.matched}
+
+        assert 100 in matched_sm_ids  # xref match
+        assert "xref_fdb" in matched_fdb_ids
+        assert 101 in matched_sm_ids  # fuzzy match
+        assert "fuzzy_fdb" in matched_fdb_ids
+        assert len(result.unmatched_spoolman) == 1
+        assert result.unmatched_spoolman[0].id == 102
+        assert len(result.unmatched_fdb) == 1
+        assert result.unmatched_fdb[0].id == "unmatched_fdb"
+
+
+# ---------------------------------------------------------------------------
 # extract_finish_line
 # ---------------------------------------------------------------------------
 
