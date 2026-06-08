@@ -396,8 +396,14 @@ def _color_name_tokens(
     for keyword in sorted(tag_map.keys(), key=len, reverse=True):
         text = re.sub(r'\b' + re.escape(keyword) + r'\b', ' ', text, flags=re.IGNORECASE)
 
-    # Tokenize what remains
-    tokens = {t for t in text.split() if len(t) > 1}
+    # Tokenize on any non-alphanumeric run so "/" "-" "&" etc. separate tokens
+    # (e.g. "Green/Purple" → {"green","purple"}; not one token "green/purple").
+    raw_tokens = re.split(r"[^a-z0-9]+", text.lower())
+
+    # Drop generic multicolor-descriptor noise tokens that appear across all
+    # dual/tri candidates and would otherwise keep every variant tied.
+    _NOISE = {"color", "dual", "tri", "multi", "multicolor", "tricolor", "dualcolor"}
+    tokens = {t for t in raw_tokens if len(t) > 1 and t not in _NOISE}
     return tokens
 
 

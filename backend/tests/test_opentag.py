@@ -573,6 +573,158 @@ def test_disjoint_color_name_contributes_zero_name_weight():
 
 
 # ---------------------------------------------------------------------------
+# Color-name tokenization: non-alphanumeric split + noise-token removal
+# ---------------------------------------------------------------------------
+
+# OPT materials for the dual-color tie-breaking scenario (AMOLEN Matte PLA)
+_OPT_AMOLEN_GREEN_PURPLE = {
+    "uuid": "amolen-0000-0000-0000-000000000001",
+    "slug": "amolen-pla-matte-dual-green-purple",
+    "brandName": "AMOLEN",
+    "name": "PLA Matte Dual Color Green Purple",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": ["matte", "coextruded"],
+    "color": "#006400",
+    "secondaryColors": ["800080"],
+    "density": 1.24,
+    "nozzleTempMin": 190,
+    "nozzleTempMax": 220,
+    "bedTempMin": 45,
+    "bedTempMax": 60,
+    "completenessScore": 80,
+}
+
+_OPT_AMOLEN_BLUE_PINK = {
+    "uuid": "amolen-0000-0000-0000-000000000002",
+    "slug": "amolen-pla-matte-dual-blue-pink",
+    "brandName": "AMOLEN",
+    "name": "PLA Matte Dual Color Blue Pink",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": ["matte", "coextruded"],
+    "color": "#0000FF",
+    "secondaryColors": ["FFC0CB"],
+    "density": 1.24,
+    "nozzleTempMin": 190,
+    "nozzleTempMax": 220,
+    "bedTempMin": 45,
+    "bedTempMax": 60,
+    "completenessScore": 80,
+}
+
+_OPT_AMOLEN_BROWN_WHITE = {
+    "uuid": "amolen-0000-0000-0000-000000000003",
+    "slug": "amolen-pla-matte-dual-brown-white",
+    "brandName": "AMOLEN",
+    "name": "PLA Matte Dual Color Brown White",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": ["matte", "coextruded"],
+    "color": "#8B4513",
+    "secondaryColors": ["FFFFFF"],
+    "density": 1.24,
+    "nozzleTempMin": 190,
+    "nozzleTempMax": 220,
+    "bedTempMin": 45,
+    "bedTempMax": 60,
+    "completenessScore": 80,
+}
+
+
+def test_color_name_tokens_slash_separated_dual_color():
+    """'Green/Purple' must tokenize to {'green','purple'}, not {'green/purple'}.
+
+    Root-cause regression: whitespace-only split left 'Green/Purple' as a single
+    token that never matched the OPT space-separated 'Green Purple'.
+    """
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens(
+        "Matte PLA Dual Color Green/Purple", "AMOLEN", "PLA", DEFAULT_MATERIAL_TAG_IDS
+    )
+    assert toks == {"green", "purple"}, (
+        f"Expected {{'green','purple'}}, got {toks!r}"
+    )
+
+
+def test_color_name_tokens_space_separated_dual_color():
+    """OPT-side 'PLA Matte Dual Color Green Purple' → {'green','purple'} (no vendor arg)."""
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens(
+        "PLA Matte Dual Color Green Purple", None, "PLA", DEFAULT_MATERIAL_TAG_IDS
+    )
+    assert toks == {"green", "purple"}, (
+        f"Expected {{'green','purple'}}, got {toks!r}"
+    )
+
+
+def test_color_name_tokens_single_color_unaffected():
+    """Single-color names are unchanged by the new tokenization ('Orange' → {'orange'})."""
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens("Orange", "Hatchbox", "PLA", DEFAULT_MATERIAL_TAG_IDS)
+    assert toks == {"orange"}, f"Expected {{'orange'}}, got {toks!r}"
+
+
+def test_color_name_tokens_descriptor_only_returns_empty():
+    """A name with only descriptor tokens ('Dual Color') → empty set (neutral, no crash)."""
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+    toks = _color_name_tokens("Dual Color", "AMOLEN", "PLA", DEFAULT_MATERIAL_TAG_IDS)
+    assert toks == set(), f"Expected empty set, got {toks!r}"
+
+
+def test_dual_color_slash_sm_scores_higher_than_different_combo():
+    """SM 'Matte PLA Dual Color Green/Purple' scores strictly higher against the
+    OPT 'Green Purple' candidate than against 'Blue Pink' or 'Brown White' of the
+    same brand+material — the correct color combo is preferred, not tied.
+    """
+    sm_green_purple = SpoolmanFilament(
+        id=147,
+        name="Matte PLA Dual Color Green/Purple",
+        vendor=SpoolmanVendor(id=5, name="AMOLEN"),
+        material="PLA",
+        color_hex="006400",
+        multi_color_hexes="006400,800080",
+        multi_color_direction="coaxial",
+        extra={},
+    )
+    score_gp = score_candidate(sm_green_purple, _OPT_AMOLEN_GREEN_PURPLE)
+    score_bp = score_candidate(sm_green_purple, _OPT_AMOLEN_BLUE_PINK)
+    score_bw = score_candidate(sm_green_purple, _OPT_AMOLEN_BROWN_WHITE)
+
+    assert score_gp > score_bp, (
+        f"Green/Purple ({score_gp:.4f}) should beat Blue Pink ({score_bp:.4f})"
+    )
+    assert score_gp > score_bw, (
+        f"Green/Purple ({score_gp:.4f}) should beat Brown White ({score_bw:.4f})"
+    )
+
+
+def test_find_best_match_dual_color_slash_returns_correct_combo():
+    """find_best_match for SM 'Green/Purple' must return the 'Green Purple' OPT candidate
+    as best (ranks #1), not 'Blue Pink' or 'Brown White'.
+    """
+    sm_green_purple = SpoolmanFilament(
+        id=147,
+        name="Matte PLA Dual Color Green/Purple",
+        vendor=SpoolmanVendor(id=5, name="AMOLEN"),
+        material="PLA",
+        color_hex="006400",
+        multi_color_hexes="006400,800080",
+        multi_color_direction="coaxial",
+        extra={},
+    )
+    result = find_best_match(
+        sm_green_purple,
+        [_OPT_AMOLEN_GREEN_PURPLE, _OPT_AMOLEN_BLUE_PINK, _OPT_AMOLEN_BROWN_WHITE],
+        min_confidence=0.0,
+    )
+    assert result["best"] is not None
+    assert result["best"]["slug"] == "amolen-pla-matte-dual-green-purple", (
+        f"Expected 'amolen-pla-matte-dual-green-purple', got '{result['best']['slug']}'"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase 3: Apply endpoint — PATCH only provided fields, skip ignored
 # ---------------------------------------------------------------------------
 

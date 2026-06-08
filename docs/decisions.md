@@ -1,5 +1,26 @@
 # Decision record
 
+## 2026-06-07 — Color-name tokens split on non-alphanumeric; multicolor descriptor noise dropped
+
+`_color_name_tokens` in `backend/app/core/opentag_match.py` previously split the
+color-name residual on whitespace only, so "Green/Purple" became the single token
+`green/purple` and never matched the OPT space-separated "Green Purple".  All of a
+brand's dual-color variants therefore tied at the same confidence (intersection
+contained only the descriptor words `dual`, `color`, etc.).
+
+**Fix 1 — tokenize on `[^a-z0-9]+`** so `/`, `-`, `&`, and other punctuation all act
+as token separators (e.g. "Green/Purple" → `{"green","purple"}`).
+
+**Fix 2 — drop a small explicit NOISE set** (`color`, `dual`, `tri`, `multi`,
+`multicolor`, `tricolor`, `dualcolor`) that are structural descriptors appearing on
+every dual/tri candidate and contribute nothing to discriminating the correct color combo.
+After both fixes, SM "Matte PLA Dual Color Green/Purple" → `{"green","purple"}` and OPT
+"PLA Matte Dual Color Green Purple" → `{"green","purple"}` → Jaccard 1.0, while
+"Blue Pink" → `{"blue","pink"}` → Jaccard 0.0 → correct combo ranked first.
+
+`_name_similarity` is unchanged; the empty-set → 0.5 neutral path still applies when
+stripping leaves no color tokens (e.g. a name containing only descriptor words).
+
 ## 2026-06-07 — OpenTag cleanup lets the user pick from best + top-5 alternates; each candidate carries its own field comparison
 
 The matches endpoint now returns a structured `candidates` list on every `OpenTagFilamentMatch`.
