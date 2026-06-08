@@ -121,6 +121,21 @@ function StatusPill({ status }: { status: RowStatus }) {
   )
 }
 
+function OptBadge() {
+  return (
+    <span
+      title="OpenPrintTag tagged"
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-gray-100 text-gray-500 border-gray-200 shrink-0"
+    >
+      {/* tag glyph */}
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+        <path fillRule="evenodd" d="M4.5 2A2.5 2.5 0 0 0 2 4.5v2.379a2.5 2.5 0 0 0 .732 1.767l5.622 5.622a2.5 2.5 0 0 0 3.536 0l2.378-2.378a2.5 2.5 0 0 0 0-3.536L8.646 2.732A2.5 2.5 0 0 0 6.879 2H4.5ZM5.25 5.5a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" clipRule="evenodd" />
+      </svg>
+      OPT
+    </span>
+  )
+}
+
 // ── MemberRow ──────────────────────────────────────────────────────────────────
 
 interface MRProps {
@@ -145,6 +160,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           {row.smId != null && (
             <span className="text-xs text-gray-400">SM #{row.smId}</span>
           )}
+          {row.sm?.openprinttag && <OptBadge />}
           <DeepLinks spoolmanFilamentId={row.sm?.spoolman_filament_id} />
         </div>
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
@@ -178,6 +194,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           {row.smId != null && (
             <span className="text-xs text-gray-400">SM #{row.smId}</span>
           )}
+          {row.sm?.openprinttag && <OptBadge />}
           <DeepLinks spoolmanFilamentId={smId} />
         </div>
         <span className="text-xs text-gray-400 italic pt-0.5">
@@ -226,6 +243,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           {row.smId != null && (
             <span className="text-xs text-gray-400">SM #{row.smId}</span>
           )}
+          {row.sm?.openprinttag && <OptBadge />}
           <DeepLinks spoolmanFilamentId={smId} />
         </div>
         <span className="text-xs text-gray-400 italic pt-0.5">Pick a match ↓</span>
