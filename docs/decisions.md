@@ -1,5 +1,65 @@
 # Decision record
 
+## 2026-06-07 — Renamed to Bulk Import Wizard; ongoing SoT removed from wizard step; never_import_empties global setting
+
+### Wizard renamed to "Bulk Import Wizard"
+
+The "Initial Sync Wizard" is re-runnable any time (the execute path is idempotent — already-linked
+records are skipped). The name "initial sync" was misleading for subsequent runs. All nav and heading
+references now say "Bulk Import Wizard". The route (`/wizard`) and step paths are unchanged.
+
+No hard "wizard already completed" block was implemented — the wizard is always accessible.
+
+### Ongoing source-of-truth section removed from Step 2
+
+`Step2Direction.tsx` previously contained a full "Ongoing source of truth" section (Weight / Material
+properties / New spools) with Spoolman / Filament DB toggle buttons. These fields were already dead
+(the ongoing sync engine reads `weight_sync_direction`, `material_properties_sync_direction`, etc. from
+Settings, not from wizard state). The wizard `POST /wizard/direction` handler translated the binary
+SoT choices into the new direction+policy keys, but that translation is now bypassed entirely.
+
+**Removed:** `weight_source_of_truth`, `material_properties_source_of_truth`, `new_spool_source_of_truth`
+from `WizardDirectionRequest` (backend schema) and `WizardDirectionRequest` (TS type). The wizard
+direction POST now only persists `import_direction` (1 key → `persisted: 1`). Step 2 heading changed
+from "Sync direction & source of truth" to "Import direction". A one-line note in the step tells users
+where ongoing-sync and empty-spool settings live (Settings page).
+
+Tests updated: `test_wizard_direction_persists_choices`, `test_wizard_direction_persists_new_direction_keys`,
+`test_wizard_direction_filamentdb_sot_maps_to_fdb_direction` all reflect the simplified behavior.
+
+### never_import_empties replaces the per-run "Include empty spools" checkbox
+
+The per-run "Include empty / depleted spools" checkbox in Step 2 was confusing: users set it once per
+wizard run and then forgot about it. Empty-spool import behaviour is a site preference, not a
+per-import decision.
+
+**Backend config:** `never_import_empties` (default `false`) added to:
+- `BridgeConfig._DEFAULTS` seed → `"false"` (existing installs get the new default without migration)
+- `ConfigResponse.never_import_empties: bool = False`
+- `ConfigUpdateRequest.never_import_empties: bool | None = None`
+- `_config_response()` in `api/config.py` reads the key
+- `PUT /api/config` accepts and persists the value
+
+**Wizard execute + preview:** `wizard_execute`, `wizard_preview`, and `wizard_variances` now read
+`never_import_empties` from BridgeConfig and derive `include_empty = not never_import_empties`.
+The `_plan_spoolman_to_fdb` planner's `include_empty_spools` parameter is unchanged — only the call
+sites changed. The old `wizard_include_empty_spools` key is abandoned (no migration needed; it was
+never exposed in the config API or Settings UI).
+
+**Settings UI:** "Never import empties" toggle added to the "New spools" section in `Settings.tsx`.
+Label: "Empty/depleted spools are skipped on import; the filament definition is still imported."
+Saved via the main Save button (same as all other config fields).
+
+**Preview (StepNPreview.tsx):** the `empty_active` flag section fetches config via `useApi(getConfig)`
+and labels the section dynamically:
+- `never_import_empties=false` → "Empty/depleted spools (will be imported)" with blue badge (info)
+- `never_import_empties=true` → "Empty/depleted spools (skipped — 'Never import empties' is on)" with
+  amber badge (flag)
+
+No `NEVER_IMPORT_EMPTIES` environment variable is added — this is a runtime DB config value only
+(consistent with other runtime settings like `sync_interval_seconds` and `never_import_empties` is a
+user preference not an infrastructure setting).
+
 ## 2026-06-08 — Sync interval + log retention are runtime-configurable; no in-app log-file rotation
 
 ### Runtime sync interval

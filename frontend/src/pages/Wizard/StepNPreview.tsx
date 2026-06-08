@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { getWizardPreview } from '../../api/client'
+import { getWizardPreview, getConfig } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import type { PlannedWrite } from '../../api/types'
@@ -15,12 +15,15 @@ const FLAG_LABELS: Record<FlagKey, string> = {
   variant_group: 'Variant groups',
 }
 
-function emptyActiveLabel(includeEmpty: boolean): string {
-  return includeEmpty ? 'Empty active spools (will be imported)' : 'Empty active spools (skipped by setting)'
+function emptyActiveLabel(neverImportEmpties: boolean): string {
+  return neverImportEmpties
+    ? "Empty/depleted spools (skipped — 'Never import empties' is on)"
+    : 'Empty/depleted spools (will be imported)'
 }
 
 export default function StepNPreview({ next, prev }: WizardCtx) {
   const { data, loading, error } = useApi(getWizardPreview)
+  const { data: config } = useApi(getConfig)
   const [open, setOpen] = useState<Set<FlagKey>>(new Set())
   const [plannedWritesFilter, setPlannedWritesFilter] = useState<PlannedWritesFilter>('all')
 
@@ -132,20 +135,25 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
         </div>
       </FlagSection>
 
-      {/* Empty active — badge color is informational (blue) when toggle=false, amber when toggle=true */}
+      {/* Empty active — badge color is informational (blue) when never_import_empties=true (spools skipped),
+          amber when never_import_empties=false (spools will be imported) */}
       <FlagSection
         flagKey="empty_active"
-        label={emptyActiveLabel(data.include_empty_spools)}
+        label={emptyActiveLabel(config?.never_import_empties ?? false)}
         count={data.flag_counts.empty_active}
         open={open.has('empty_active')}
         onToggle={() => toggle('empty_active')}
-        infoOnly={!data.include_empty_spools}
+        infoOnly={config?.never_import_empties ?? false}
       >
         <div className="divide-y divide-gray-100">
-          {!data.include_empty_spools && (
+          {(config?.never_import_empties ?? false) && (
+            <p className="px-4 py-2 text-xs text-amber-600">
+              These spools are excluded from the import ("Never import empties" is on in Settings).
+            </p>
+          )}
+          {!(config?.never_import_empties ?? false) && (
             <p className="px-4 py-2 text-xs text-blue-600">
-              These spools are excluded from the import (toggle "Include empty / depleted spools"
-              on the Direction step to import them).
+              These spools will be imported. Turn on "Never import empties" in Settings to skip them.
             </p>
           )}
           {data.empty_active.map((e, i) => (

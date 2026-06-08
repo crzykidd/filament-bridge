@@ -7,33 +7,8 @@ type SOT = SourceOfTruth
 
 export default function Step2Direction({ next, prev }: WizardCtx) {
   const [direction, setDirection] = useState<SOT>('spoolman')
-  const [weightSot, setWeightSot] = useState<SOT>('spoolman')
-  const [matSot, setMatSot] = useState<SOT>('filamentdb')
-  const [newSpoolSot, setNewSpoolSot] = useState<SOT>('spoolman')
-  const [includeEmpty, setIncludeEmpty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-
-  function SotPicker({ label, value, onChange }: { label: string; value: SOT; onChange: (v: SOT) => void }) {
-    return (
-      <div className="flex items-center justify-between py-2">
-        <span className="text-sm text-gray-700">{label}</span>
-        <div className="flex gap-2">
-          {(['spoolman', 'filamentdb'] as SOT[]).map(opt => (
-            <button
-              key={opt}
-              onClick={() => onChange(opt)}
-              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                value === opt ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {opt === 'spoolman' ? 'Spoolman' : 'Filament DB'}
-            </button>
-          ))}
-        </div>
-      </div>
-    )
-  }
 
   async function handleSave() {
     setSaving(true)
@@ -41,10 +16,6 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
     try {
       await postWizardDirection({
         import_direction: direction,
-        weight_source_of_truth: weightSot,
-        material_properties_source_of_truth: matSot,
-        new_spool_source_of_truth: newSpoolSot,
-        include_empty_spools: includeEmpty,
       })
       next()
     } catch (e) {
@@ -57,9 +28,9 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-800">Sync direction & source of truth</h2>
+        <h2 className="text-lg font-semibold text-gray-800">Import direction</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Choose which system's data wins during the initial import.
+          Choose which system's data is imported into the other during this run.
         </p>
       </div>
 
@@ -86,31 +57,12 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-5 divide-y divide-gray-100">
-        <p className="text-sm font-semibold text-gray-700 pb-2">Ongoing source of truth</p>
-        <SotPicker label="Weight" value={weightSot} onChange={setWeightSot} />
-        <SotPicker label="Material properties" value={matSot} onChange={setMatSot} />
-        <SotPicker label="New spools" value={newSpoolSot} onChange={setNewSpoolSot} />
-      </div>
-
-      <div className="bg-white rounded-lg border border-gray-200 p-5">
-        <p className="text-sm font-semibold text-gray-700 mb-3">Spool import options</p>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={includeEmpty}
-            onChange={e => setIncludeEmpty(e.target.checked)}
-            className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-          />
-          <div>
-            <p className="text-sm font-medium text-gray-800">Include empty / depleted spools</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              When off (default), spool records with 0 g remaining are skipped. The filament/color
-              definition is still imported — only the empty inventory record is excluded.
-            </p>
-          </div>
-        </label>
-      </div>
+      <p className="text-sm text-gray-500">
+        Ongoing source-of-truth settings (weight, material properties, new spools) are
+        configured in <strong>Settings</strong> and apply to all future sync cycles.
+        Empty/depleted spool behaviour is also controlled by the "Never import empties"
+        toggle in Settings.
+      </p>
 
       {err && <p className="text-sm text-red-600">{err}</p>}
 

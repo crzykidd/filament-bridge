@@ -191,6 +191,8 @@ class ConfigResponse(BaseModel):
     # Scheduler settings
     sync_interval_seconds: int = 120
     sync_log_retention_days: int = 30
+    # Import behaviour
+    never_import_empties: bool = False
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -207,6 +209,8 @@ class ConfigUpdateRequest(BaseModel):
     # Scheduler settings
     sync_interval_seconds: int | None = Field(default=None, ge=30)
     sync_log_retention_days: int | None = Field(default=None, ge=0)
+    # Import behaviour
+    never_import_empties: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +227,6 @@ class WizardConnectivityResponse(BaseModel):
 
 class WizardDirectionRequest(BaseModel):
     import_direction: SourceOfTruth
-    weight_source_of_truth: SourceOfTruth | None = None
-    material_properties_source_of_truth: SourceOfTruth | None = None
-    new_spool_source_of_truth: SourceOfTruth | None = None
-    include_empty_spools: bool | None = None
 
 
 class WizardDirectionResponse(BaseModel):

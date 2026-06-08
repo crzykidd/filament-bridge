@@ -60,7 +60,7 @@ export function WizardShell() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Initial Sync Wizard</h1>
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">Bulk Import Wizard</h1>
       <Stepper current={step} />
       <Routes>
         <Route index element={<Navigate to="connectivity" replace />} />

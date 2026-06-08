@@ -9,7 +9,7 @@ const NAV_ITEMS = [
   { to: '/conflicts', label: 'Conflicts', exact: false },
   { to: '/sync-log', label: 'Sync Log', exact: false },
   { to: '/settings', label: 'Settings', exact: false },
-  { to: '/wizard', label: 'Wizard', exact: false },
+  { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
   { to: '/opentag-cleanup', label: 'OpenTag Cleanup', exact: false },
 ]
 

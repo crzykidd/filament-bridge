@@ -140,6 +140,7 @@ export default function Settings() {
   const [precision, setPrecision] = useState<number | null>(null)
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
   const [vendorAliases, setVendorAliases] = useState<string | null>(null)
+  const [neverImportEmpties, setNeverImportEmpties] = useState<boolean | null>(null)
 
   // Scheduler & Logs state
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState<number | null>(null)
@@ -166,6 +167,7 @@ export default function Settings() {
   const prec = precision ?? data.weight_precision_decimals
   const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
   const valiases = vendorAliases ?? data.opentag_vendor_aliases ?? ''
+  const neverEmpties = neverImportEmpties ?? data.never_import_empties
 
   // Convert stored seconds → minutes for display; fall back to data value
   const effectiveIntervalMinutes = syncIntervalMinutes ?? Math.round(data.sync_interval_seconds / 60)
@@ -223,6 +225,7 @@ export default function Settings() {
         // Convert minutes → seconds for the API; only send if user changed it
         sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
+        never_import_empties: neverImportEmpties ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -418,6 +421,28 @@ export default function Settings() {
           value={nsDir}
           onChange={v => setNewSpoolDir(v)}
         />
+        <div className="flex items-start justify-between py-3 border-t border-gray-100">
+          <div>
+            <span className="text-sm font-medium text-gray-700">Never import empties</span>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Empty/depleted spools are skipped on import; the filament definition is still imported.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setNeverImportEmpties(!neverEmpties)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ml-4 mt-0.5 ${
+              neverEmpties ? 'bg-indigo-600' : 'bg-gray-200'
+            }`}
+            aria-pressed={neverEmpties}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                neverEmpties ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {/* Other settings */}

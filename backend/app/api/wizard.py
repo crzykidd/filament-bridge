@@ -183,8 +183,10 @@ async def wizard_connectivity(request: Request) -> WizardConnectivityResponse:
 @router.get("/wizard/direction", response_model=WizardDirectionResponse)
 def wizard_get_direction(db: Session = Depends(get_db)) -> WizardDirectionResponse:
     direction = get_config_value(db, "import_direction", None)
-    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
-    return WizardDirectionResponse(import_direction=direction, include_empty_spools=include_empty)
+    # include_empty_spools is derived from the global never_import_empties setting
+    # (inverted: never_import_empties=True means include_empty=False).
+    never_import_empties = bool(get_config_value(db, "never_import_empties", False))
+    return WizardDirectionResponse(import_direction=direction, include_empty_spools=not never_import_empties)
 
 
 def _sot_to_direction(sot: str) -> str:
@@ -201,27 +203,6 @@ def wizard_direction(payload: WizardDirectionRequest, db: Session = Depends(get_
     persisted = 0
     set_config_value(db, "import_direction", payload.import_direction)
     persisted += 1
-
-    # Translate per-category wizard selections into the new direction+policy keys.
-    # The wizard's binary choice (spoolman/filamentdb) maps to a one-way direction.
-    # A richer wizard UI with full direction+policy is a later nicety.
-    if payload.weight_source_of_truth is not None:
-        set_config_value(db, "weight_sync_direction", _sot_to_direction(payload.weight_source_of_truth))
-        set_config_value(db, "weight_conflict_policy", "manual")
-        persisted += 2
-
-    if payload.material_properties_source_of_truth is not None:
-        set_config_value(db, "material_properties_sync_direction", _sot_to_direction(payload.material_properties_source_of_truth))
-        set_config_value(db, "material_properties_conflict_policy", "manual")
-        persisted += 2
-
-    if payload.new_spool_source_of_truth is not None:
-        set_config_value(db, "new_spool_sync_direction", _sot_to_direction(payload.new_spool_source_of_truth))
-        persisted += 1
-
-    if payload.include_empty_spools is not None:
-        set_config_value(db, "wizard_include_empty_spools", payload.include_empty_spools)
-        persisted += 1
     db.commit()
     return WizardDecisionAck(persisted=persisted)
 
@@ -502,7 +483,8 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
         return VariancesResponse(direction="filamentdb")
 
     included = _included_sm_ids(db)
-    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    never_import_empties = bool(get_config_value(db, "never_import_empties", False))
+    include_empty = not never_import_empties
     variant_keywords = _resolve_variant_keywords(db)
     sm_filaments: list[SpoolmanFilament] = await request.app.state.spoolman.get_filaments()
     sm_spools = await request.app.state.spoolman.get_spools()
@@ -1601,7 +1583,8 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     decisions_by_sm = {d["spoolman_filament_id"]: d for d in match_decisions}
     sm_variant_decisions = get_config_value(db, "wizard_sm_variant_decisions", []) or []
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
-    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    never_import_empties = bool(get_config_value(db, "never_import_empties", False))
+    include_empty = not never_import_empties
     # Phase 4: load reconcile decisions for the planned-writes summary
     reconcile_decisions_raw = get_config_value(db, "wizard_variances_reconcile", []) or []
     reconcile_by_master_preview = _build_reconcile_by_master(reconcile_decisions_raw)
@@ -1713,7 +1696,8 @@ async def wizard_execute(
     sm_variant_decisions = get_config_value(db, "wizard_sm_variant_decisions", []) or []
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
     attach_parent_for_sm = _build_attach_parent_for_sm(sm_variant_decisions)
-    include_empty = bool(get_config_value(db, "wizard_include_empty_spools", False))
+    never_import_empties = bool(get_config_value(db, "never_import_empties", False))
+    include_empty = not never_import_empties
 
     # Phase 3: load reconcile decisions
     reconcile_decisions_raw = get_config_value(db, "wizard_variances_reconcile", []) or []

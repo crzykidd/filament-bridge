@@ -186,6 +186,8 @@ export interface ConfigResponse {
   // Scheduler settings
   sync_interval_seconds: number
   sync_log_retention_days: number
+  // Import behaviour
+  never_import_empties: boolean
 }
 
 export interface ConfigUpdateRequest {
@@ -201,6 +203,8 @@ export interface ConfigUpdateRequest {
   // Scheduler settings
   sync_interval_seconds?: number | null
   sync_log_retention_days?: number | null
+  // Import behaviour
+  never_import_empties?: boolean | null
 }
 
 // ---------------------------------------------------------------------------
@@ -216,10 +220,6 @@ export interface WizardConnectivityResponse {
 
 export interface WizardDirectionRequest {
   import_direction: SourceOfTruth
-  weight_source_of_truth?: SourceOfTruth | null
-  material_properties_source_of_truth?: SourceOfTruth | null
-  new_spool_source_of_truth?: SourceOfTruth | null
-  include_empty_spools?: boolean | null
 }
 
 export interface WizardDirectionResponse {

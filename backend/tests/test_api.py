@@ -580,22 +580,114 @@ def test_config_sync_direction_fields_round_trip(db):
 
 
 # ---------------------------------------------------------------------------
+# never_import_empties — config round-trip + wizard execute behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_never_import_empties_default_false(db):
+    """never_import_empties defaults to false and round-trips via PUT /api/config."""
+    client = _client(db)
+    body = client.get("/api/config").json()
+    assert body["never_import_empties"] is False
+
+    resp = client.put("/api/config", json={"never_import_empties": True})
+    assert resp.status_code == 200
+    assert resp.json()["never_import_empties"] is True
+
+    resp2 = client.put("/api/config", json={"never_import_empties": False})
+    assert resp2.status_code == 200
+    assert resp2.json()["never_import_empties"] is False
+
+
+def test_wizard_execute_skips_empty_spool_when_never_import_empties_on(db):
+    """When never_import_empties=True, an empty spool (remaining=0) is excluded from
+    the plan entirely — the filament is still imported, and only the full spool is created."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "never_import_empties", True)
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    sm_filament = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))
+    full_spool = SpoolmanSpool(
+        id=1, filament=sm_filament, remaining_weight=500.0, archived=False, extra={},
+    )
+    empty_spool = SpoolmanSpool(
+        id=2, filament=sm_filament, remaining_weight=0.0, archived=False, extra={},
+    )
+    spoolman = _fake_spoolman(filaments=[sm_filament], spools=[full_spool, empty_spool])
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+    # Filament created once (filament def always imported)
+    filamentdb.create_filament.assert_awaited_once()
+    # Only the full spool is created; the empty spool is excluded from the plan
+    assert filamentdb.create_spool.await_count == 1
+    created_spools = [r for r in body["records"] if r["entity_type"] == "spool" and r["action"] == "created"]
+    assert len(created_spools) == 1
+    assert created_spools[0]["spoolman_spool_id"] == 1
+    # Empty spool (id=2) has no record at all — excluded from plan
+    all_spool_records = [r for r in body["records"] if r["entity_type"] == "spool"]
+    spool_ids_in_records = {r["spoolman_spool_id"] for r in all_spool_records}
+    assert 2 not in spool_ids_in_records
+
+
+def test_wizard_execute_imports_empty_spool_when_never_import_empties_off(db):
+    """When never_import_empties=False (default), empty spools are imported normally."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "never_import_empties", False)
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    sm_filament = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))
+    full_spool = SpoolmanSpool(
+        id=1, filament=sm_filament, remaining_weight=500.0, archived=False, extra={},
+    )
+    empty_spool = SpoolmanSpool(
+        id=2, filament=sm_filament, remaining_weight=0.0, archived=False, extra={},
+    )
+    spoolman = _fake_spoolman(filaments=[sm_filament], spools=[full_spool, empty_spool])
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+    # Both spools should be created
+    assert filamentdb.create_spool.await_count == 2
+    skipped_spools = [r for r in body["records"] if r["entity_type"] == "spool" and r["action"] == "skipped"]
+    assert len(skipped_spools) == 0
+
+
+def test_wizard_direction_save_works_without_sot_fields(db):
+    """Wizard direction POST succeeds with only import_direction (no *_source_of_truth fields)."""
+    client = _client(db)
+    resp = client.post("/api/wizard/direction", json={"import_direction": "spoolman"})
+    assert resp.status_code == 200
+    assert resp.json()["persisted"] == 1
+    assert client.get("/api/config").json()["import_direction"] == "spoolman"
+
+
+# ---------------------------------------------------------------------------
 # Wizard (FR-1 … FR-6)
 # ---------------------------------------------------------------------------
 
 
 def test_wizard_direction_persists_choices(db):
+    """Wizard direction POST persists import_direction; extra fields are ignored."""
     client = _client(db)
     resp = client.post("/api/wizard/direction", json={
         "import_direction": "filamentdb",
-        "weight_source_of_truth": "filamentdb",
     })
     assert resp.status_code == 200
     cfg = client.get("/api/config").json()
     assert cfg["import_direction"] == "filamentdb"
-    # wizard direction now persists the new direction keys, not old SoT keys
-    assert cfg["weight_sync_direction"] == "filamentdb_to_spoolman"
-    assert cfg["weight_conflict_policy"] == "manual"
     # wizard not flipped complete by this phase
     assert cfg["wizard_completed"] is False
 
@@ -2467,9 +2559,10 @@ def test_wizard_variances_tare_only_diff_does_not_suggest_exclude(db):
 # ---------------------------------------------------------------------------
 
 
-def test_wizard_variances_empty_spool_excluded_when_toggle_off(db):
-    """D4: when wizard_include_empty_spools=False (default), zero-weight spools absent from spool_ids."""
+def test_wizard_variances_empty_spool_excluded_when_never_import_empties_on(db):
+    """D4: when never_import_empties=True, zero-weight spools are absent from spool_ids."""
     set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "never_import_empties", True)
     set_config_value(db, "wizard_match_decisions",
                      [{"spoolman_filament_id": 10, "action": "create"}])
     db.commit()
@@ -2483,14 +2576,34 @@ def test_wizard_variances_empty_spool_excluded_when_toggle_off(db):
     body = client.get("/api/wizard/variances").json()
     spool_ids = body["ungrouped"][0]["spool_ids"]
     assert 1 in spool_ids
-    assert 2 not in spool_ids  # empty spool excluded by default
+    assert 2 not in spool_ids  # empty spool excluded when never_import_empties is on
 
 
-def test_wizard_execute_empty_spool_skipped_when_toggle_off(db):
-    """D4: when toggle=False, empty spool creates are skipped but the filament IS created."""
+def test_wizard_variances_empty_spool_included_when_never_import_empties_off(db):
+    """D4: when never_import_empties=False (default), zero-weight spools appear in spool_ids."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "never_import_empties", False)
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_fil = SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA")
+    full_spool = SpoolmanSpool(id=1, filament=sm_fil, remaining_weight=200.0, archived=False, extra={})
+    empty_spool = SpoolmanSpool(id=2, filament=sm_fil, remaining_weight=0.0, archived=False, extra={})
+    client = _client(db, _fake_spoolman(filaments=[sm_fil], spools=[full_spool, empty_spool]),
+                     _fake_filamentdb())
+
+    body = client.get("/api/wizard/variances").json()
+    spool_ids = body["ungrouped"][0]["spool_ids"]
+    assert 1 in spool_ids
+    assert 2 in spool_ids  # empty spool included when never_import_empties is off
+
+
+def test_wizard_execute_empty_spool_skipped_when_never_import_empties_on(db):
+    """D4: when never_import_empties=True, empty spool creates are excluded but the filament IS created."""
     from unittest.mock import AsyncMock, MagicMock
     set_config_value(db, "import_direction", "spoolman")
-    set_config_value(db, "wizard_include_empty_spools", False)
+    set_config_value(db, "never_import_empties", True)
     set_config_value(db, "wizard_match_decisions",
                      [{"spoolman_filament_id": 10, "action": "create"}])
     db.commit()
@@ -3379,44 +3492,30 @@ def test_migrate_new_spool_sync_direction_is_idempotent(db):
 # ---------------------------------------------------------------------------
 
 
-def test_wizard_direction_persists_new_direction_keys(db):
-    """POST /wizard/direction translates per-category SoT choices to new direction+policy keys."""
+def test_wizard_direction_persists_import_direction_only(db):
+    """POST /wizard/direction only persists import_direction; ongoing sync settings
+    are configured via Settings (PUT /api/config), not the wizard direction step."""
     client = _client(db)
     resp = client.post("/api/wizard/direction", json={
         "import_direction": "spoolman",
-        "weight_source_of_truth": "spoolman",
-        "material_properties_source_of_truth": "filamentdb",
-        "new_spool_source_of_truth": "spoolman",
     })
     assert resp.status_code == 200
+    assert resp.json()["persisted"] == 1
 
     from app.api.config import get_config_value
-    # New direction keys persisted
-    assert get_config_value(db, "weight_sync_direction") == "spoolman_to_filamentdb"
-    assert get_config_value(db, "weight_conflict_policy") == "manual"
-    assert get_config_value(db, "material_properties_sync_direction") == "filamentdb_to_spoolman"
-    assert get_config_value(db, "material_properties_conflict_policy") == "manual"
-    assert get_config_value(db, "new_spool_sync_direction") == "spoolman_to_filamentdb"
-    # Old SoT keys NOT written by wizard direction handler
-    from app.api.config import read_config
-    cfg = read_config(db)
-    # weight_source_of_truth still holds the seeded default (never set by wizard direction)
-    # but the wizard handler no longer writes it — only the migration/seed can set it
-    # Verify the wizard did NOT overwrite it with the submitted value explicitly
-    assert get_config_value(db, "weight_sync_direction") == "spoolman_to_filamentdb"
+    assert get_config_value(db, "import_direction") == "spoolman"
+    # Ongoing-sync direction keys are NOT written by the wizard direction handler
+    # (they retain their seeded defaults)
+    assert get_config_value(db, "weight_sync_direction") == "spoolman_to_filamentdb"  # seeded default
 
 
-def test_wizard_direction_filamentdb_sot_maps_to_fdb_direction(db):
-    """filamentdb choice → filamentdb_to_spoolman direction."""
+def test_wizard_direction_filamentdb_sets_import_direction(db):
+    """Wizard direction POST with filamentdb sets import_direction=filamentdb."""
     client = _client(db)
-    client.post("/api/wizard/direction", json={
-        "import_direction": "filamentdb",
-        "weight_source_of_truth": "filamentdb",
-        "new_spool_source_of_truth": "filamentdb",
-    })
+    resp = client.post("/api/wizard/direction", json={"import_direction": "filamentdb"})
+    assert resp.status_code == 200
     from app.api.config import get_config_value
-    assert get_config_value(db, "weight_sync_direction") == "filamentdb_to_spoolman"
-    assert get_config_value(db, "new_spool_sync_direction") == "filamentdb_to_spoolman"
+    assert get_config_value(db, "import_direction") == "filamentdb"
 
 
 # ---------------------------------------------------------------------------

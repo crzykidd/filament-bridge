@@ -27,6 +27,10 @@ _DEFAULTS = {
     "sync_interval_seconds": "0",
     # Sync-log retention in days. 0 = keep forever.
     "sync_log_retention_days": "30",
+    # When true, the wizard import skips creating FDB spool records for spools
+    # whose remaining net weight is 0 (empty/depleted). The filament definition
+    # is still imported; only the empty spool inventory record is excluded.
+    "never_import_empties": "false",
 }
 
 
