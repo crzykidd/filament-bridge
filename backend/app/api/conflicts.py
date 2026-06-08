@@ -73,8 +73,18 @@ def _conflict_identity(db: Session, c: Conflict) -> dict:
     Returns a dict with label/vendor/name/color_hex/material.
     Tolerates a missing snapshot: returns an id-based label with null fields.
     """
+    _empty = {
+        "label": None,
+        "vendor": None,
+        "name": None,
+        "color_hex": None,
+        "multi_color_hexes": None,
+        "multi_color_direction": None,
+        "material": None,
+    }
+
     if c.spoolman_id is None:
-        return {"label": None, "vendor": None, "name": None, "color_hex": None, "material": None}
+        return _empty
 
     if c.entity_type == "spool":
         snap_row = (
@@ -83,19 +93,15 @@ def _conflict_identity(db: Session, c: Conflict) -> dict:
             .first()
         )
         if snap_row is None:
-            return {
-                "label": f"SM #{c.spoolman_id}",
-                "vendor": None,
-                "name": None,
-                "color_hex": None,
-                "material": None,
-            }
+            return {**_empty, "label": f"SM #{c.spoolman_id}"}
         snap = json.loads(snap_row.data)
         filament = snap.get("filament") or {}
         vendor_obj = filament.get("vendor") if isinstance(filament.get("vendor"), dict) else {}
         vendor_name = (vendor_obj or {}).get("name")
         name = filament.get("name")
         color_hex = filament.get("color_hex")
+        multi_color_hexes = filament.get("multi_color_hexes")
+        multi_color_direction = filament.get("multi_color_direction")
         material = filament.get("material")
     else:
         # entity_type == "filament"
@@ -105,18 +111,14 @@ def _conflict_identity(db: Session, c: Conflict) -> dict:
             .first()
         )
         if snap_row is None:
-            return {
-                "label": f"SM #{c.spoolman_id}",
-                "vendor": None,
-                "name": None,
-                "color_hex": None,
-                "material": None,
-            }
+            return {**_empty, "label": f"SM #{c.spoolman_id}"}
         snap = json.loads(snap_row.data)
         vendor_obj = snap.get("vendor") if isinstance(snap.get("vendor"), dict) else {}
         vendor_name = (vendor_obj or {}).get("name")
         name = snap.get("name")
         color_hex = snap.get("color_hex")
+        multi_color_hexes = snap.get("multi_color_hexes")
+        multi_color_direction = snap.get("multi_color_direction")
         material = snap.get("material")
 
     parts = [p for p in (vendor_name, name) if p]
@@ -126,13 +128,17 @@ def _conflict_identity(db: Session, c: Conflict) -> dict:
         "vendor": vendor_name,
         "name": name,
         "color_hex": color_hex,
+        "multi_color_hexes": multi_color_hexes,
+        "multi_color_direction": multi_color_direction,
         "material": material,
     }
 
 
 def _to_response(c: Conflict, db: Session | None = None) -> ConflictResponse:
     identity = _conflict_identity(db, c) if db is not None else {
-        "label": None, "vendor": None, "name": None, "color_hex": None, "material": None,
+        "label": None, "vendor": None, "name": None,
+        "color_hex": None, "multi_color_hexes": None, "multi_color_direction": None,
+        "material": None,
     }
     return ConflictResponse(
         id=c.id,

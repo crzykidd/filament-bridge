@@ -1,73 +1,13 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { getConflicts, resolveConflict, bulkResolveConflicts } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
+import { ColorDisplay } from '../components/ColorDisplay'
 import type { ConflictResponse } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
 type Resolution = 'spoolman' | 'filamentdb' | 'manual'
-
-// ---------------------------------------------------------------------------
-// Color swatch (ported from StepVariances.tsx)
-// ---------------------------------------------------------------------------
-
-function ColorSwatch({ hex }: { hex: string | null | undefined }) {
-  if (!hex) return null
-  return (
-    <span
-      className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0"
-      style={{ backgroundColor: hex.startsWith('#') ? hex : `#${hex}` }}
-      title={hex}
-    />
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Identity header — shown at the top of every conflict card
-// ---------------------------------------------------------------------------
-
-function ConflictIdentityHeader({ conflict }: { conflict: ConflictResponse }) {
-  const { label, vendor: _vendor, color_hex, material, spoolman_id, filamentdb_filament_id, filamentdb_spool_id } = conflict
-  return (
-    <div className="flex items-center gap-2 flex-wrap pb-2 border-b border-gray-100 mb-2">
-      <ColorSwatch hex={color_hex} />
-      <span className="font-semibold text-gray-800 text-sm">{label ?? `SM #${spoolman_id}`}</span>
-      {material && (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
-          {material}
-        </span>
-      )}
-      {color_hex && (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-500">
-          {color_hex.startsWith('#') ? color_hex : `#${color_hex}`}
-        </span>
-      )}
-      {spoolman_id != null && (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-emerald-50 text-emerald-700">
-          SM #{spoolman_id}
-        </span>
-      )}
-      {filamentdb_filament_id && (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-blue-50 text-blue-700">
-          FDB fil {filamentdb_filament_id}
-        </span>
-      )}
-      {filamentdb_spool_id && (
-        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs bg-blue-50 text-blue-600">
-          FDB spool {filamentdb_spool_id}
-        </span>
-      )}
-    </div>
-  )
-}
-
-function ValueDisplay({ value }: { value: unknown }) {
-  if (value == null) return <span className="text-gray-400">—</span>
-  const s = typeof value === 'object' ? JSON.stringify(value) : String(value)
-  return <span className="font-mono text-xs">{s}</span>
-}
-
-const DELETION_FIELD = '__record_deleted__'
+type SortKey = 'detected' | 'type' | 'label'
 
 // ---------------------------------------------------------------------------
 // Conflict type classification
@@ -84,7 +24,18 @@ const TYPE_LABELS: Record<ConflictType, string> = {
   property: 'Property',
 }
 
+const TYPE_BADGE_COLORS: Record<ConflictType, string> = {
+  deleted: 'bg-red-100 text-red-700',
+  new_spool_sm: 'bg-emerald-100 text-emerald-700',
+  new_spool_fdb: 'bg-blue-100 text-blue-700',
+  weight: 'bg-amber-100 text-amber-700',
+  multicolor: 'bg-purple-100 text-purple-700',
+  property: 'bg-gray-100 text-gray-600',
+}
+
 const TYPE_ORDER: ConflictType[] = ['deleted', 'new_spool_sm', 'new_spool_fdb', 'weight', 'multicolor', 'property']
+
+const DELETION_FIELD = '__record_deleted__'
 
 function classifyConflict(c: ConflictResponse): ConflictType {
   if (c.field_name === DELETION_FIELD) return 'deleted'
@@ -94,6 +45,10 @@ function classifyConflict(c: ConflictResponse): ConflictType {
   return 'property'
 }
 
+function isNewSpool(c: ConflictResponse): boolean {
+  return c.field_name === 'new_spool'
+}
+
 function deletedSideLabel(conflict: ConflictResponse): string {
   const descriptor = (conflict.spoolman_value ?? conflict.filamentdb_value) as { deleted_side?: string } | null
   if (descriptor?.deleted_side === 'filamentdb') return 'Filament DB'
@@ -101,13 +56,28 @@ function deletedSideLabel(conflict: ConflictResponse): string {
   return 'one side'
 }
 
-function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onResolved: () => void }) {
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function ValueDisplay({ value }: { value: unknown }) {
+  if (value == null) return <span className="text-gray-400">—</span>
+  const s = typeof value === 'object' ? JSON.stringify(value) : String(value)
+  return <span className="font-mono text-xs">{s}</span>
+}
+
+/**
+ * The expanded resolve / detail body — rendered inside a CollapsibleConflict
+ * when expanded.
+ */
+function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; onResolved: () => void }) {
   const [resolution, setResolution] = useState<Resolution>('spoolman')
   const [manualValue, setManualValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const isDeletion = conflict.field_name === DELETION_FIELD
+  const newSpool = isNewSpool(conflict)
 
   async function submit(overrideResolution?: Resolution) {
     const res = overrideResolution ?? resolution
@@ -127,28 +97,9 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
-      <ConflictIdentityHeader conflict={conflict} />
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <span className="text-xs text-gray-500 uppercase tracking-wide">{conflict.entity_type}</span>
-          <h3 className="font-medium text-gray-900">
-            {isDeletion ? 'Record deleted upstream' : conflict.field_name}
-          </h3>
-          <p className="text-xs text-gray-400 mt-0.5">Detected {formatLocal(conflict.detected_at)}</p>
-        </div>
-        <DeepLinks
-          filamentdbFilamentId={conflict.filamentdb_filament_id}
-          spoolmanSpoolId={conflict.spoolman_id}
-        />
-      </div>
-
-      {isDeletion ? (
-        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
-          This record was deleted in <strong>{deletedSideLabel(conflict)}</strong>. Removing the
-          mapping will drop the pair from Synced Records. The deleted record will not be recreated.
-        </div>
-      ) : (
+    <div className="border-t border-gray-100 mt-0 px-4 pb-4 pt-3 space-y-3">
+      {/* Values grid (not shown for deletion or new_spool) */}
+      {!isDeletion && !newSpool && (
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div className="bg-emerald-50 rounded p-3">
             <p className="text-xs font-medium text-emerald-700 mb-1">Spoolman value</p>
@@ -161,6 +112,21 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
         </div>
       )}
 
+      {isDeletion && (
+        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
+          This record was deleted in <strong>{deletedSideLabel(conflict)}</strong>. Removing the
+          mapping will drop the pair from Synced Records. The deleted record will not be recreated.
+        </div>
+      )}
+
+      {newSpool && (
+        <p className="text-sm text-gray-500">
+          Dismisses this notice — create the record via the{' '}
+          <span className="font-medium text-gray-700">Bulk Import Wizard</span>.
+        </p>
+      )}
+
+      {/* Action row */}
       {isDeletion ? (
         <div className="flex items-center gap-2">
           <button
@@ -169,6 +135,16 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
             className="px-4 py-1.5 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
           >
             {submitting ? 'Removing…' : 'Remove mapping'}
+          </button>
+        </div>
+      ) : newSpool ? (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => submit('spoolman')}
+            disabled={submitting}
+            className="px-4 py-1.5 bg-gray-600 text-white rounded text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
+          >
+            {submitting ? 'Dismissing…' : 'Dismiss'}
           </button>
         </div>
       ) : (
@@ -209,6 +185,113 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
   )
 }
 
+/**
+ * Compact single-row conflict card with expand/collapse.
+ */
+function CollapsibleConflict({
+  conflict,
+  expanded,
+  onToggle,
+  onResolved,
+  tab,
+  selected,
+  onSelect,
+}: {
+  conflict: ConflictResponse
+  expanded: boolean
+  onToggle: () => void
+  onResolved: () => void
+  tab: 'open' | 'resolved'
+  selected: boolean
+  onSelect: () => void
+}) {
+  const type = classifyConflict(conflict)
+  const fieldLabel = conflict.field_name === DELETION_FIELD ? 'Record deleted' : conflict.field_name
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      {/* Compact summary row */}
+      <div
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 select-none"
+        onClick={onToggle}
+      >
+        {/* Checkbox (open tab only, stop propagation so click doesn't expand) */}
+        {tab === 'open' && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onClick={e => e.stopPropagation()}
+            onChange={onSelect}
+            className="h-4 w-4 rounded border-gray-300 text-indigo-600 shrink-0"
+          />
+        )}
+
+        {/* Type badge */}
+        <span className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${TYPE_BADGE_COLORS[type]}`}>
+          {TYPE_LABELS[type]}
+        </span>
+
+        {/* Color swatch */}
+        <ColorDisplay
+          colorHex={conflict.color_hex}
+          multiColorHexes={conflict.multi_color_hexes}
+          multiColorDirection={conflict.multi_color_direction}
+          showLabel={false}
+        />
+
+        {/* Identity label */}
+        <span className="flex-1 text-sm font-medium text-gray-800 truncate min-w-0">
+          {conflict.label ?? `SM #${conflict.spoolman_id}`}
+        </span>
+
+        {/* Field / entity */}
+        <span className="shrink-0 text-xs text-gray-400 hidden sm:block">{conflict.entity_type}</span>
+        <span className="shrink-0 text-xs font-mono text-gray-500 hidden md:block">{fieldLabel}</span>
+
+        {/* Detected time */}
+        <span className="shrink-0 text-xs text-gray-400 hidden lg:block">
+          {formatLocal(conflict.detected_at)}
+        </span>
+
+        {/* Deep links (stop click so expanding doesn't fight the link) */}
+        <span onClick={e => e.stopPropagation()}>
+          <DeepLinks
+            filamentdbFilamentId={conflict.filamentdb_filament_id}
+            spoolmanSpoolId={conflict.spoolman_id}
+          />
+        </span>
+
+        {/* Resolved badge (resolved tab only) */}
+        {tab === 'resolved' && conflict.resolution && (
+          <span className="shrink-0 text-xs text-gray-400">via {conflict.resolution}</span>
+        )}
+
+        {/* Caret */}
+        <span className={`shrink-0 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}>
+          ▾
+        </span>
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && tab === 'open' && (
+        <ConflictDetail conflict={conflict} onResolved={onResolved} />
+      )}
+      {expanded && tab === 'resolved' && (
+        <div className="border-t border-gray-100 px-4 py-3 text-sm text-gray-500 space-y-1">
+          <p>Resolved {formatLocal(conflict.resolved_at)} via <strong>{conflict.resolution}</strong></p>
+          {conflict.resolved_value != null && (
+            <p>Recorded value: <ValueDisplay value={conflict.resolved_value} /></p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
 export default function Conflicts() {
   const [tab, setTab] = useState<'open' | 'resolved'>('open')
   const { data, loading, error, reload } = useApi(() => getConflicts(tab), [tab])
@@ -217,6 +300,8 @@ export default function Conflicts() {
   const [bulkRes, setBulkRes] = useState<Resolution>('spoolman')
   const [bulking, setBulking] = useState(false)
   const [typeFilter, setTypeFilter] = useState<ConflictType | 'all'>('all')
+  const [sortKey, setSortKey] = useState<SortKey>('detected')
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
   const allRows: ConflictResponse[] = data ?? []
 
@@ -231,8 +316,41 @@ export default function Conflicts() {
       ? 'all'
       : typeFilter
 
-  const rows: ConflictResponse[] =
+  const filtered: ConflictResponse[] =
     activeFilter === 'all' ? allRows : allRows.filter(c => classifyConflict(c) === activeFilter)
+
+  const rows: ConflictResponse[] = useMemo(() => {
+    const copy = [...filtered]
+    if (sortKey === 'detected') {
+      copy.sort((a, b) => b.detected_at.localeCompare(a.detected_at))
+    } else if (sortKey === 'type') {
+      copy.sort((a, b) => TYPE_ORDER.indexOf(classifyConflict(a)) - TYPE_ORDER.indexOf(classifyConflict(b)))
+    } else if (sortKey === 'label') {
+      copy.sort((a, b) => {
+        const la = (a.label ?? `SM #${a.spoolman_id}`).toLowerCase()
+        const lb = (b.label ?? `SM #${b.spoolman_id}`).toLowerCase()
+        return la.localeCompare(lb)
+      })
+    }
+    return copy
+  }, [filtered, sortKey])
+
+  function toggleExpand(id: number) {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function expandAll() {
+    setExpandedIds(new Set(rows.map(r => r.id)))
+  }
+
+  function collapseAll() {
+    setExpandedIds(new Set())
+  }
 
   async function handleBulk() {
     if (selected.length === 0) return
@@ -254,13 +372,14 @@ export default function Conflicts() {
 
   return (
     <div className="p-8 space-y-5">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Conflicts</h1>
         <div className="flex gap-2">
           {(['open', 'resolved'] as const).map(t => (
             <button
               key={t}
-              onClick={() => { setTab(t); setSelected([]) }}
+              onClick={() => { setTab(t); setSelected([]); setExpandedIds(new Set()) }}
               className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
                 tab === t ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
@@ -271,37 +390,93 @@ export default function Conflicts() {
         </div>
       </div>
 
+      {/* Info banner — explain what Resolve does */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800 space-y-1">
+        <p>
+          <strong>Resolving a conflict records your choice and removes it from the queue</strong> — it does
+          not write to Spoolman or Filament DB (upstream apply is a planned follow-up). Deletion conflicts
+          remove the bridge mapping only.
+        </p>
+      </div>
+
       {loading && <p className="text-gray-500">Loading…</p>}
       {error && <p className="text-red-600">{error}</p>}
 
-      {!loading && !error && allRows.length > 0 && typeCounts.length > 1 && (
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => { setTypeFilter('all'); setSelected([]) }}
-            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              activeFilter === 'all'
-                ? 'bg-gray-800 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            All ({allRows.length})
-          </button>
-          {typeCounts.map(({ type, label, count }) => (
-            <button
-              key={type}
-              onClick={() => { setTypeFilter(type); setSelected([]) }}
-              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                activeFilter === type
-                  ? 'bg-gray-800 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {label} ({count})
-            </button>
-          ))}
+      {/* Filter bar + Sort + Expand controls */}
+      {!loading && !error && allRows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {typeCounts.length > 1 && (
+            <>
+              <button
+                onClick={() => { setTypeFilter('all'); setSelected([]) }}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                  activeFilter === 'all'
+                    ? 'bg-gray-800 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                All ({allRows.length})
+              </button>
+              {typeCounts.map(({ type, label, count }) => (
+                <button
+                  key={type}
+                  onClick={() => { setTypeFilter(type); setSelected([]) }}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    activeFilter === type
+                      ? 'bg-gray-800 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {label} ({count})
+                </button>
+              ))}
+              <span className="w-px h-5 bg-gray-200 mx-1" />
+            </>
+          )}
+
+          {/* Sort control */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500">Sort:</span>
+            {([
+              ['detected', 'Newest'],
+              ['type', 'Type'],
+              ['label', 'Label'],
+            ] as [SortKey, string][]).map(([key, lbl]) => (
+              <button
+                key={key}
+                onClick={() => setSortKey(key)}
+                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                  sortKey === key
+                    ? 'bg-indigo-100 text-indigo-700'
+                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                }`}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+
+          {rows.length > 1 && (
+            <>
+              <span className="w-px h-5 bg-gray-200 mx-1" />
+              <button
+                onClick={expandAll}
+                className="px-2.5 py-1 rounded text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200"
+              >
+                Expand all
+              </button>
+              <button
+                onClick={collapseAll}
+                className="px-2.5 py-1 rounded text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200"
+              >
+                Collapse all
+              </button>
+            </>
+          )}
         </div>
       )}
 
+      {/* Bulk resolve bar */}
       {tab === 'open' && selected.length > 0 && (
         <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded p-3">
           <span className="text-sm text-indigo-700">{selected.length} selected</span>
@@ -324,6 +499,7 @@ export default function Conflicts() {
         </div>
       )}
 
+      {/* Empty state */}
       {!loading && !error && rows.length === 0 && (
         <p className="text-gray-500">
           {activeFilter === 'all'
@@ -332,40 +508,19 @@ export default function Conflicts() {
         </p>
       )}
 
-      <div className="space-y-3">
+      {/* Conflict rows */}
+      <div className="space-y-2">
         {rows.map(c => (
-          <div key={c.id} className="flex gap-3">
-            {tab === 'open' && (
-              <input
-                type="checkbox"
-                checked={selected.includes(c.id)}
-                onChange={() => toggleSelect(c.id)}
-                className="mt-5 h-4 w-4 rounded border-gray-300 text-indigo-600"
-              />
-            )}
-            <div className="flex-1">
-              {tab === 'open'
-                ? <ResolveRow conflict={c} onResolved={reload} />
-                : (
-                  <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-2">
-                    <ConflictIdentityHeader conflict={c} />
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-xs text-gray-500 uppercase">{c.entity_type}</span>
-                        <h3 className="font-medium text-gray-900">{c.field_name}</h3>
-                        <p className="text-xs text-gray-400">
-                          Resolved {formatLocal(c.resolved_at)} via {c.resolution}
-                        </p>
-                      </div>
-                      <DeepLinks
-                        filamentdbFilamentId={c.filamentdb_filament_id}
-                        spoolmanSpoolId={c.spoolman_id}
-                      />
-                    </div>
-                  </div>
-                )}
-            </div>
-          </div>
+          <CollapsibleConflict
+            key={c.id}
+            conflict={c}
+            expanded={expandedIds.has(c.id)}
+            onToggle={() => toggleExpand(c.id)}
+            onResolved={reload}
+            tab={tab}
+            selected={selected.includes(c.id)}
+            onSelect={() => toggleSelect(c.id)}
+          />
         ))}
       </div>
     </div>

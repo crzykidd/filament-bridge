@@ -119,6 +119,8 @@ export interface ConflictResponse {
   vendor: string | null
   name: string | null
   color_hex: string | null
+  multi_color_hexes: string | null
+  multi_color_direction: string | null
   material: string | null
 }
 
@@ -537,6 +539,10 @@ export interface SyncLogResponse {
   total: number
   limit: number
   offset: number
+}
+
+export interface SyncLogDeleteResponse {
+  deleted: number
 }
 
 // ---------------------------------------------------------------------------

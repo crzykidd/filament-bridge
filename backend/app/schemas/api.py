@@ -121,6 +121,8 @@ class ConflictResponse(BaseModel):
     vendor: str | None = None
     name: str | None = None
     color_hex: str | None = None
+    multi_color_hexes: str | None = None
+    multi_color_direction: str | None = None
     material: str | None = None
 
 
@@ -604,3 +606,7 @@ class SyncLogResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SyncLogDeleteResponse(BaseModel):
+    deleted: int
