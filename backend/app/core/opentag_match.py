@@ -582,13 +582,15 @@ def find_best_match(
         {
             "best": OPTMaterial dict | None,
             "confidence": float,
-            "alternates": [OPTMaterial dict, ...],   # top_n excluding best
+            "alternates": [OPTMaterial dict, ...],      # top_n excluding best
+            "alternate_scores": [float, ...],           # score for each alternate
         }
 
     When no candidate exceeds ``min_confidence`` the best is None.
+    ``alternate_scores`` always has the same length as ``alternates``.
     """
     if not materials:
-        return {"best": None, "confidence": 0.0, "alternates": []}
+        return {"best": None, "confidence": 0.0, "alternates": [], "alternate_scores": []}
 
     # Defensive: skip any candidate that isn't a dict (guard against shape drift
     # or a malformed cache entry containing a string instead of an OPTMaterial).
@@ -598,22 +600,25 @@ def find_best_match(
         if isinstance(opt, dict)
     ]
     if not scored:
-        return {"best": None, "confidence": 0.0, "alternates": []}
+        return {"best": None, "confidence": 0.0, "alternates": [], "alternate_scores": []}
     scored.sort(key=lambda x: x[0], reverse=True)
 
     top = scored[:top_n + 1]
     best_score, best_opt = top[0]
 
     if best_score < min_confidence:
+        alts = top[:top_n]
         return {
             "best": None,
             "confidence": best_score,
-            "alternates": [o for _, o in top[:top_n]],
+            "alternates": [o for _, o in alts],
+            "alternate_scores": [s for s, _ in alts],
         }
 
-    alternates = [o for _, o in top[1:top_n + 1]]
+    alts = top[1:top_n + 1]
     return {
         "best": best_opt,
         "confidence": best_score,
-        "alternates": alternates,
+        "alternates": [o for _, o in alts],
+        "alternate_scores": [s for s, _ in alts],
     }

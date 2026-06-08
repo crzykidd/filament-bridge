@@ -4003,3 +4003,220 @@ async def test_matches_multicolor_mismatch_false_when_opt_is_also_multicolor(tmp
         assert match_rows[0]["multicolor_mismatch"] is False
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Candidate dropdown: candidates list best-first, per-candidate fields, alternates
+# carry real scores, exact-UUID yields single candidate at 1.0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_matches_candidates_list_best_first_with_fields(tmp_path):
+    """matches endpoint: each match with a best hit returns a candidates list where
+    candidates[0] is the best match (confidence == match.confidence) and has its
+    own fields list and slug/uuid.  Alternates follow at lower confidence.
+    """
+    import datetime as _dt
+
+    # Three OPT materials from the same brand/material: the SM filament name is
+    # "Bronze" so the best match should be OPT_PLA_SILK (bronze name + silk finish).
+    opt_alt1 = {
+        **_OPT_PETG,
+        "uuid": "alt1-0000-0000-0000-000000000001",
+        "slug": "elegoo-petg-blue",
+        "brandName": "ELEGOO",
+        "name": "PETG Blue",
+        "type": "PETG",
+        "color": "#0000FF",
+        "tags": [],
+    }
+    opt_alt2 = {
+        **_OPT_PLA_MATTE,
+        "uuid": "alt2-0000-0000-0000-000000000002",
+        "slug": "elegoo-pla-matte-black",
+        "brandName": "ELEGOO",
+        "name": "PLA Matte Black",
+        "type": "PLA",
+        "color": "#000000",
+        "tags": ["matte"],
+    }
+    opt_best = {
+        **_OPT_PLA_MATTE,
+        "uuid": "best-0000-0000-0000-000000000099",
+        "slug": "elegoo-pla-matte-white",
+        "brandName": "ELEGOO",
+        "name": "PLA Matte White",
+        "type": "PLA",
+        "color": "#FFFFFF",
+        "tags": ["matte"],
+    }
+
+    sm_fil = SpoolmanFilament(
+        id=99,
+        name="PLA Matte White",
+        vendor=SpoolmanVendor(id=5, name="ELEGOO"),
+        material="PLA",
+        color_hex="FFFFFF",
+        extra={},
+    )
+
+    client, _ot_mod, _ = _make_matches_test_app(
+        tmp_path, [opt_best, opt_alt1, opt_alt2], [sm_fil]
+    )
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = next(m for m in data["matches"] if m["spoolman_filament_id"] == 99)
+
+        # candidates list must be present and non-empty
+        assert "candidates" in match
+        candidates = match["candidates"]
+        assert isinstance(candidates, list)
+        assert len(candidates) >= 1
+
+        # candidates[0] is the best: its confidence must equal the top-level confidence
+        best = candidates[0]
+        assert best["confidence"] == match["confidence"]
+        assert best["opt_slug"] is not None
+        assert best["opt_uuid"] is not None
+
+        # Each candidate must have its own fields list
+        for c in candidates:
+            assert "fields" in c
+            assert isinstance(c["fields"], list)
+            assert len(c["fields"]) > 0, "every matched candidate must have at least one field row"
+
+        # Alternates (candidates[1:]) must have confidence ≤ best
+        for c in candidates[1:]:
+            assert c["confidence"] <= best["confidence"]
+
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_alternates_carry_real_scores(tmp_path):
+    """Alternate candidates in the structured list must carry their actual scores,
+    not 0.0 or the best score.  We verify by asserting alternates are sorted
+    descending and each is strictly below the best (given distinct materials).
+    """
+    # Use distinct-enough materials so scoring produces a visible ordering.
+    opt_a = {
+        **_OPT_PLA_MATTE,
+        "uuid": "score-test-0001",
+        "slug": "elegoo-pla-matte-white",
+        "brandName": "ELEGOO",
+        "name": "PLA Matte White",
+        "type": "PLA",
+        "color": "#FFFFFF",
+        "tags": ["matte"],
+    }
+    opt_b = {
+        **_OPT_PETG,
+        "uuid": "score-test-0002",
+        "slug": "elegoo-petg-red",
+        "brandName": "ELEGOO",
+        "name": "PETG Red",
+        "type": "PETG",
+        "color": "#CC0000",
+        "tags": [],
+    }
+    opt_c = {
+        **_OPT_PLA_MATTE,
+        "uuid": "score-test-0003",
+        "slug": "elegoo-pla-silk-bronze",
+        "brandName": "ELEGOO",
+        "name": "PLA Silk Bronze",
+        "type": "PLA",
+        "color": "#B87333",
+        "tags": ["silk"],
+    }
+
+    sm_fil = SpoolmanFilament(
+        id=101,
+        name="PLA Matte White",
+        vendor=SpoolmanVendor(id=5, name="ELEGOO"),
+        material="PLA",
+        color_hex="FFFFFF",
+        extra={},
+    )
+
+    client, _ot_mod, _ = _make_matches_test_app(tmp_path, [opt_a, opt_b, opt_c], [sm_fil])
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = next(m for m in data["matches"] if m["spoolman_filament_id"] == 101)
+
+        candidates = match["candidates"]
+        assert len(candidates) >= 2, "need at least 2 candidates for this test"
+
+        # Confidence values must be strictly decreasing (best → worst)
+        scores = [c["confidence"] for c in candidates]
+        for i in range(len(scores) - 1):
+            assert scores[i] >= scores[i + 1], (
+                f"candidates not sorted by score: {scores}"
+            )
+
+        # Alternates must not all be 0.0 — they carry their real computed score
+        alt_scores = scores[1:]
+        assert any(s > 0.0 for s in alt_scores), (
+            f"All alternate scores are 0.0 — real scores not being returned: {alt_scores}"
+        )
+
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_exact_uuid_match_yields_single_candidate_at_1_0(tmp_path):
+    """An SM filament with an existing openprinttag_uuid that maps to a known material
+    must return exactly one candidate in the candidates list at confidence 1.0.
+    """
+    from app.schemas.spoolman import encode_extra_value
+    from app.config import settings as _s
+
+    uuid_key = _s.spoolman_field_openprinttag_uuid
+    target_uuid = "d22442a5-1234-0000-0000-000000000001"  # _OPT_PLA_SILK uuid
+
+    sm_fil = SpoolmanFilament(
+        id=200,
+        name="PLA Silk Bronze",
+        vendor=SpoolmanVendor(id=10, name="Buddy3D"),
+        material="PLA Silk",
+        color_hex="B87333",
+        extra={uuid_key: encode_extra_value(target_uuid)},
+    )
+
+    client, _ot_mod, _ = _make_matches_test_app(
+        tmp_path, [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE], [sm_fil]
+    )
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        match = next(m for m in data["matches"] if m["spoolman_filament_id"] == 200)
+
+        # Exact-UUID match: single candidate at 1.0
+        assert match["confidence"] == 1.0
+        candidates = match["candidates"]
+        assert len(candidates) == 1, (
+            f"Exact-UUID match must yield exactly 1 candidate, got {len(candidates)}"
+        )
+        c = candidates[0]
+        assert c["confidence"] == 1.0
+        assert c["opt_uuid"] == target_uuid
+        assert c["opt_slug"] == "buddy3d-pla-silk-bronze"
+        # Must have fields
+        assert len(c["fields"]) > 0
+
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir

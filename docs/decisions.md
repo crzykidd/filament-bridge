@@ -1,5 +1,28 @@
 # Decision record
 
+## 2026-06-07 — OpenTag cleanup lets the user pick from best + top-5 alternates; each candidate carries its own field comparison
+
+The matches endpoint now returns a structured `candidates` list on every `OpenTagFilamentMatch`.
+`candidates[0]` is the best match; `candidates[1..5]` are the top alternates in descending
+score order.  Each `OpenTagCandidate` carries `opt_uuid`, `opt_slug`, `opt_brand`, `opt_name`,
+`opt_color_hex`, `confidence`, `multicolor_mismatch`, and a full `fields: list[OpenTagFieldRow]`
+built by running `_build_field_rows(sm_fil, opt_to_spoolman_fields(candidate, tag_map))` for
+that specific candidate — so every candidate shows a real Spoolman-vs-OpenTag comparison for
+its own values.
+
+`find_best_match` in `opentag_match.py` now also returns `alternate_scores: list[float]`
+alongside `alternates`, so the endpoint can pair each alternate material with its score and
+build a full `OpenTagCandidate` (including a non-zero confidence) rather than defaulting to 0.
+
+On the frontend, a per-filament dropdown appears in the card header whenever `candidates.length > 1`.
+Each option is labeled `"{brand} · {name} (confidence%)"` with a color swatch.  Selecting an
+alternate resets that filament's field decisions to the new candidate's default OPT values and
+records the selection index.  The `handleApply` and `ConfirmStep` paths both read the selected
+candidate's `opt_slug`/`opt_uuid` for the identity write, and use the selected candidate's
+`fields` as the authoritative field list.  The "ignore match" control is unchanged (per filament,
+ignores regardless of which candidate is selected).  Exact-UUID matches return a single candidate
+at confidence 1.0 (no dropdown).
+
 ## 2026-06-07 — OpenTag secondary_colors recovered from raw tarball; multicolor mismatch flag
 
 ### Problem

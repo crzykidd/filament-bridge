@@ -69,6 +69,18 @@ class OpenTagFieldRow(BaseModel):
     suggested_value: Any
 
 
+class OpenTagCandidate(BaseModel):
+    """One candidate match for a Spoolman filament — best or alternate."""
+    opt_uuid: str | None
+    opt_slug: str | None
+    opt_brand: str | None
+    opt_name: str | None
+    opt_color_hex: str | None
+    confidence: float
+    multicolor_mismatch: bool = False
+    fields: list[OpenTagFieldRow]
+
+
 class OpenTagFilamentMatch(BaseModel):
     """Comparison entry for one Spoolman filament."""
     spoolman_filament_id: int
@@ -82,7 +94,10 @@ class OpenTagFilamentMatch(BaseModel):
     opt_name: str | None
     confidence: float
     fields: list[OpenTagFieldRow]
-    alternates: list[dict[str, Any]]  # top alternate OPTMaterial dicts
+    alternates: list[dict[str, Any]]  # top alternate OPTMaterial dicts (kept for compat)
+    # Structured candidates list: candidates[0] is the best match, followed by up to 5
+    # alternates.  Each carries its own per-field comparison and identity (slug/uuid).
+    candidates: list[OpenTagCandidate] = []
     ignored: bool = False
     # True when SM filament is multicolor but the matched OPT entry is NOT
     # (no secondaryColors AND no arrangement tag).  Also set on no-match rows
@@ -174,6 +189,34 @@ def _build_field_rows(
             suggested_value=opt_value,
         ))
     return rows
+
+
+def _build_candidate(
+    sm_fil: Any,
+    material: dict[str, Any],
+    confidence: float,
+    tag_map: dict[str, Any],
+) -> OpenTagCandidate:
+    """Build an OpenTagCandidate from a material dict for a given SM filament.
+
+    Computes the per-field comparison (SM current vs this candidate's OPT values),
+    the multicolor_mismatch flag, and assembles the identity fields.
+    """
+    opt_fields = opt_to_spoolman_fields(material, tag_map)
+    field_rows = _build_field_rows(sm_fil, opt_fields)
+    opt_profile = opt_color_profile(material, tag_map)
+    sm_profile = sm_color_profile(sm_fil)
+    mismatch = sm_profile != "single" and opt_profile == "single"
+    return OpenTagCandidate(
+        opt_uuid=material.get("uuid"),
+        opt_slug=material.get("slug"),
+        opt_brand=material.get("brandName"),
+        opt_name=material.get("name"),
+        opt_color_hex=material.get("color"),
+        confidence=confidence,
+        multicolor_mismatch=mismatch,
+        fields=field_rows,
+    )
 
 
 def _build_sm_patch(
@@ -377,13 +420,8 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         if existing_uuid and existing_uuid in by_uuid:
             best = by_uuid[existing_uuid]
             confidence = 1.0
-            alternates: list[dict[str, Any]] = []
             matched += 1
-            opt_fields = opt_to_spoolman_fields(best, tag_map)
-            field_rows = _build_field_rows(sm_fil, opt_fields)
-            _sm_profile = sm_color_profile(sm_fil)
-            _opt_profile = opt_color_profile(best, tag_map)
-            _mismatch = _sm_profile != "single" and _opt_profile == "single"
+            best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
             matches.append(OpenTagFilamentMatch(
                 spoolman_filament_id=sm_fil.id,
                 spoolman_name=sm_fil.name,
@@ -395,20 +433,21 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 opt_brand=best.get("brandName"),
                 opt_name=best.get("name"),
                 confidence=confidence,
-                fields=field_rows,
-                alternates=alternates,
-                multicolor_mismatch=_mismatch,
+                fields=best_candidate.fields,
+                alternates=[],
+                candidates=[best_candidate],
+                multicolor_mismatch=best_candidate.multicolor_mismatch,
             ))
             continue
 
         sm_brand_key = normalize_vendor(sm_fil.vendor.name if sm_fil.vendor else None)
-        candidates = materials_by_brand.get(sm_brand_key, [])
+        filtered_candidates = materials_by_brand.get(sm_brand_key, [])
 
         # Color-profile pre-filter: only score candidates whose arrangement is
         # compatible with the SM filament's arrangement (single/coextruded/gradient).
         sm_profile = sm_color_profile(sm_fil)
-        candidates = [
-            c for c in candidates
+        filtered_candidates = [
+            c for c in filtered_candidates
             if isinstance(c, dict) and profiles_compatible(sm_profile, opt_color_profile(c, tag_map))
         ]
 
@@ -417,17 +456,18 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         # material (unknown SM material → don't gate, score all candidates).
         sm_fam = material_family(sm_fil.material, tag_map)
         if sm_fam:
-            candidates = [
-                c for c in candidates
+            filtered_candidates = [
+                c for c in filtered_candidates
                 if material_family(
                     c.get("type") or c.get("abbreviation") or "", tag_map
                 ) in ("", sm_fam)
             ]
 
-        match_result = find_best_match(sm_fil, candidates, tag_map)
+        match_result = find_best_match(sm_fil, filtered_candidates, tag_map)
         best = match_result["best"]
         confidence = match_result["confidence"]
         alternates = match_result["alternates"]
+        alternate_scores = match_result["alternate_scores"]
 
         if best is None:
             # Include low-confidence / no-match filaments with empty field rows.
@@ -449,18 +489,21 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 confidence=confidence,
                 fields=[],
                 alternates=alternates,
+                candidates=[],
                 multicolor_mismatch=mismatch,
             ))
             continue
 
         matched += 1
-        opt_fields = opt_to_spoolman_fields(best, tag_map)
-        field_rows = _build_field_rows(sm_fil, opt_fields)
 
         # multicolor_mismatch: SM is multicolor but the matched OPT entry is NOT
         # (no secondaryColors AND no arrangement tag).
-        opt_profile = opt_color_profile(best, tag_map)
-        mismatch = sm_profile != "single" and opt_profile == "single"
+        best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+
+        # Build structured candidates list: best first, then up to 5 alternates.
+        structured_candidates: list[OpenTagCandidate] = [best_candidate]
+        for alt_mat, alt_score in zip(alternates, alternate_scores):
+            structured_candidates.append(_build_candidate(sm_fil, alt_mat, alt_score, tag_map))
 
         matches.append(OpenTagFilamentMatch(
             spoolman_filament_id=sm_fil.id,
@@ -473,9 +516,10 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             opt_brand=best.get("brandName"),
             opt_name=best.get("name"),
             confidence=confidence,
-            fields=field_rows,
+            fields=best_candidate.fields,
             alternates=alternates,
-            multicolor_mismatch=mismatch,
+            candidates=structured_candidates,
+            multicolor_mismatch=best_candidate.multicolor_mismatch,
         ))
 
     logger.info("opentag matches: %d matched, %d no-match", matched, no_match)

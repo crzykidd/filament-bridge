@@ -16,6 +16,7 @@ import {
 import type {
   OpenTagApplyRequest,
   OpenTagCacheStatus,
+  OpenTagCandidate,
   OpenTagDatasetMeta,
   OpenTagFieldDecision,
   OpenTagFieldRow,
@@ -132,6 +133,15 @@ function FieldReviewRow({ row, decision, onChange }: FieldRowProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Candidate dropdown option label
+// ---------------------------------------------------------------------------
+
+function candidateLabel(c: OpenTagCandidate): string {
+  const pct = Math.round(c.confidence * 100)
+  return `${c.opt_brand ?? '?'} · ${c.opt_name ?? '?'}  (${pct}%)`
+}
+
+// ---------------------------------------------------------------------------
 // Per-filament review card
 // ---------------------------------------------------------------------------
 
@@ -141,10 +151,39 @@ interface FilamentCardProps {
   onFieldChange: (field: string, updated: OpenTagFieldDecision) => void
   onIgnore: (ignored: boolean) => void
   ignored: boolean
+  selectedCandidateIdx: number
+  onCandidateChange: (idx: number) => void
 }
 
-function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: FilamentCardProps) {
+function FilamentCard({
+  match,
+  decisions,
+  onFieldChange,
+  onIgnore,
+  ignored,
+  selectedCandidateIdx,
+  onCandidateChange,
+}: FilamentCardProps) {
   const [expanded, setExpanded] = useState(true)
+
+  // Active candidate: use structured candidates[selectedCandidateIdx] when available,
+  // otherwise fall back to the top-level match fields (backward-compat / no-match rows).
+  const activeCandidateIdx = Math.min(
+    selectedCandidateIdx,
+    Math.max(0, (match.candidates?.length ?? 1) - 1),
+  )
+  const activeCandidate: OpenTagCandidate | null =
+    match.candidates && match.candidates.length > 0
+      ? match.candidates[activeCandidateIdx]
+      : null
+
+  const displayFields = activeCandidate ? activeCandidate.fields : match.fields
+  const displayConfidence = activeCandidate ? activeCandidate.confidence : match.confidence
+  const displayMulticolorMismatch = activeCandidate
+    ? activeCandidate.multicolor_mismatch
+    : (match.multicolor_mismatch ?? false)
+
+  const hasCandidates = match.candidates && match.candidates.length > 1
 
   return (
     <div className={`border rounded-lg mb-4 ${ignored ? 'opacity-50' : ''}`}>
@@ -164,7 +203,7 @@ function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: Fi
             </span>
           )}
           <span className="text-xs text-gray-400">SM #{match.spoolman_filament_id}</span>
-          {match.multicolor_mismatch && (
+          {displayMulticolorMismatch && (
             <span
               className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium"
               title="Spoolman has multicolor data but the matched OpenTag entry is single-color"
@@ -174,14 +213,42 @@ function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: Fi
           )}
         </div>
         <div className="flex items-center gap-2">
-          {match.opt_brand && (
+          {/* Candidate dropdown — shown when there are multiple candidates */}
+          {hasCandidates && (
+            <select
+              className="text-xs border border-indigo-200 rounded px-1 py-0.5 bg-white text-indigo-700 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              value={activeCandidateIdx}
+              onClick={e => e.stopPropagation()}
+              onChange={e => {
+                e.stopPropagation()
+                onCandidateChange(Number(e.target.value))
+              }}
+            >
+              {match.candidates!.map((c, i) => (
+                <option key={c.opt_uuid ?? c.opt_slug ?? i} value={i}>
+                  {i === 0 ? '★ ' : ''}{candidateLabel(c)}
+                </option>
+              ))}
+            </select>
+          )}
+          {!hasCandidates && activeCandidate && (
+            <span className="text-xs text-indigo-600">
+              → {activeCandidate.opt_brand} / {activeCandidate.opt_name}
+            </span>
+          )}
+          {!hasCandidates && !activeCandidate && match.opt_brand && (
             <span className="text-xs text-indigo-600">
               → {match.opt_brand} / {match.opt_name}
             </span>
           )}
-          {confidenceBadge(match.confidence)}
-          {match.opt_slug && (
-            <span className="text-xs text-gray-400 font-mono">{match.opt_slug}</span>
+          {confidenceBadge(displayConfidence)}
+          {(activeCandidate?.opt_slug ?? match.opt_slug) && (
+            <span className="text-xs text-gray-400 font-mono">
+              {activeCandidate?.opt_slug ?? match.opt_slug}
+            </span>
+          )}
+          {activeCandidate?.opt_color_hex && (
+            <ColorSwatch hex={activeCandidate.opt_color_hex} />
           )}
           <button
             type="button"
@@ -198,7 +265,7 @@ function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: Fi
         </div>
       </div>
 
-      {expanded && !ignored && match.fields.length > 0 && (
+      {expanded && !ignored && displayFields.length > 0 && (
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm divide-y divide-gray-200">
             <thead>
@@ -211,7 +278,7 @@ function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: Fi
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {match.fields.map(row => (
+              {displayFields.map(row => (
                 <FieldReviewRow
                   key={row.field}
                   row={row}
@@ -224,9 +291,9 @@ function FilamentCard({ match, decisions, onFieldChange, onIgnore, ignored }: Fi
         </div>
       )}
 
-      {expanded && !ignored && match.fields.length === 0 && (
+      {expanded && !ignored && displayFields.length === 0 && (
         <p className="px-4 py-3 text-sm text-gray-500 italic">
-          {match.confidence < 0.30
+          {displayConfidence < 0.30
             ? 'No confident match found — ignore or select an alternate below.'
             : 'No field differences detected.'}
         </p>
@@ -251,6 +318,7 @@ function ConfirmStep({
   matches,
   fieldDecisions,
   ignoredIds,
+  selectedCandidates,
   onApply,
   onBack,
   applying,
@@ -258,6 +326,7 @@ function ConfirmStep({
   matches: OpenTagFilamentMatch[]
   fieldDecisions: Record<number, Record<string, OpenTagFieldDecision>>
   ignoredIds: Set<number>
+  selectedCandidates: Record<number, number>
   onApply: () => void
   onBack: () => void
   applying: boolean
@@ -267,7 +336,9 @@ function ConfirmStep({
     for (const m of matches) {
       if (ignoredIds.has(m.spoolman_filament_id)) continue
       const decisions = fieldDecisions[m.spoolman_filament_id] ?? {}
-      for (const row of m.fields) {
+      const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
+      const activeFields = m.candidates?.[candidateIdx]?.fields ?? m.fields
+      for (const row of activeFields) {
         const d = decisions[row.field] ?? { field: row.field, value: row.opentag_value, keep_mine: false }
         if (d.keep_mine || d.value === null || d.value === undefined) continue
         result.push({
@@ -282,7 +353,7 @@ function ConfirmStep({
       // No explicit push here — _build_field_rows on the backend includes them as rows.
     }
     return result
-  }, [matches, fieldDecisions, ignoredIds])
+  }, [matches, fieldDecisions, ignoredIds, selectedCandidates])
 
   const byFilament = useMemo(() => {
     const groups: Record<number, { name: string; writes: PendingWrite[] }> = {}
@@ -413,12 +484,23 @@ interface GroupSectionProps {
   group: MatchGroup
   fieldDecisions: Record<number, Record<string, OpenTagFieldDecision>>
   ignoredIds: Set<number>
+  selectedCandidates: Record<number, number>
   onFieldChange: (smId: number, field: string, updated: OpenTagFieldDecision) => void
   onIgnore: (smId: number, ignored: boolean) => void
+  onCandidateChange: (smId: number, idx: number, match: OpenTagFilamentMatch) => void
   showHeader: boolean
 }
 
-function GroupSection({ group, fieldDecisions, ignoredIds, onFieldChange, onIgnore, showHeader }: GroupSectionProps) {
+function GroupSection({
+  group,
+  fieldDecisions,
+  ignoredIds,
+  selectedCandidates,
+  onFieldChange,
+  onIgnore,
+  onCandidateChange,
+  showHeader,
+}: GroupSectionProps) {
   const [collapsed, setCollapsed] = useState(false)
 
   return (
@@ -444,6 +526,8 @@ function GroupSection({ group, fieldDecisions, ignoredIds, onFieldChange, onIgno
           onFieldChange={(field, updated) => onFieldChange(m.spoolman_filament_id, field, updated)}
           onIgnore={ignored => onIgnore(m.spoolman_filament_id, ignored)}
           ignored={ignoredIds.has(m.spoolman_filament_id)}
+          selectedCandidateIdx={selectedCandidates[m.spoolman_filament_id] ?? 0}
+          onCandidateChange={(idx) => onCandidateChange(m.spoolman_filament_id, idx, m)}
         />
       ))}
     </div>
@@ -477,6 +561,8 @@ export default function OpenTagCleanup() {
   const [fieldDecisions, setFieldDecisions] = useState<Record<number, Record<string, OpenTagFieldDecision>>>({})
   // Ignored filament IDs
   const [ignoredIds, setIgnoredIds] = useState<Set<number>>(new Set())
+  // Per-filament selected candidate index (default 0 = best)
+  const [selectedCandidates, setSelectedCandidates] = useState<Record<number, number>>({})
 
   // Load cache status on mount (instant — no network fetch to FDB)
   useEffect(() => {
@@ -508,6 +594,8 @@ export default function OpenTagCleanup() {
       }
     }
     setFieldDecisions(initial)
+    // Reset candidate selections — new data means start from best (index 0)
+    setSelectedCandidates({})
   }, [])
 
   // Run the full load: optionally refresh dataset first, then fetch matches.
@@ -570,6 +658,22 @@ export default function OpenTagCleanup() {
     })
   }, [])
 
+  // When the user picks a different candidate, reset that filament's field decisions
+  // to the new candidate's default OPT values and record the selection.
+  const handleCandidateChange = useCallback(
+    (smId: number, idx: number, match: OpenTagFilamentMatch) => {
+      setSelectedCandidates(prev => ({ ...prev, [smId]: idx }))
+      const candidate = match.candidates?.[idx]
+      if (!candidate) return
+      const newDecisions: Record<string, OpenTagFieldDecision> = {}
+      for (const row of candidate.fields) {
+        newDecisions[row.field] = { field: row.field, value: row.opentag_value, keep_mine: false }
+      }
+      setFieldDecisions(prev => ({ ...prev, [smId]: newDecisions }))
+    },
+    [],
+  )
+
   const handleApply = async () => {
     if (!response) return
     setApplying(true)
@@ -579,17 +683,23 @@ export default function OpenTagCleanup() {
         if (ignoredIds.has(m.spoolman_filament_id)) {
           return { spoolman_filament_id: m.spoolman_filament_id, ignored: true, fields: [] }
         }
+        // Use selected candidate for identity (slug/uuid) and active fields
+        const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
+        const activeCandidate = m.candidates?.[candidateIdx] ?? null
+        const activeFields = activeCandidate ? activeCandidate.fields : m.fields
         const dMap = fieldDecisions[m.spoolman_filament_id] ?? {}
-        const fields: OpenTagFieldDecision[] = m.fields.map(row => {
+        const fields: OpenTagFieldDecision[] = activeFields.map(row => {
           const d = dMap[row.field] ?? { field: row.field, value: row.opentag_value, keep_mine: false }
           return d
         })
+        const slug = activeCandidate?.opt_slug ?? m.opt_slug ?? undefined
+        const uuid = activeCandidate?.opt_uuid ?? m.opt_uuid ?? undefined
         return {
           spoolman_filament_id: m.spoolman_filament_id,
           ignored: false,
           fields,
-          openprinttag_slug: m.opt_slug ?? undefined,
-          openprinttag_uuid: m.opt_uuid ?? undefined,
+          openprinttag_slug: slug,
+          openprinttag_uuid: uuid,
         }
       })
       const req: OpenTagApplyRequest = { decisions }
@@ -779,8 +889,10 @@ export default function OpenTagCleanup() {
               group={group}
               fieldDecisions={fieldDecisions}
               ignoredIds={ignoredIds}
+              selectedCandidates={selectedCandidates}
               onFieldChange={handleFieldChange}
               onIgnore={handleIgnore}
+              onCandidateChange={handleCandidateChange}
               showHeader={groupBy !== 'none'}
             />
           ))}
@@ -807,6 +919,7 @@ export default function OpenTagCleanup() {
           matches={matches}
           fieldDecisions={fieldDecisions}
           ignoredIds={ignoredIds}
+          selectedCandidates={selectedCandidates}
           onApply={handleApply}
           onBack={() => setStep('review')}
           applying={applying}

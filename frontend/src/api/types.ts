@@ -551,6 +551,17 @@ export interface OpenTagFieldRow {
   suggested_value: unknown
 }
 
+export interface OpenTagCandidate {
+  opt_uuid: string | null
+  opt_slug: string | null
+  opt_brand: string | null
+  opt_name: string | null
+  opt_color_hex: string | null
+  confidence: number
+  multicolor_mismatch: boolean
+  fields: OpenTagFieldRow[]
+}
+
 export interface OpenTagFilamentMatch {
   spoolman_filament_id: number
   spoolman_name: string
@@ -564,6 +575,7 @@ export interface OpenTagFilamentMatch {
   confidence: number
   fields: OpenTagFieldRow[]
   alternates: Record<string, unknown>[]
+  candidates: OpenTagCandidate[]
   ignored?: boolean
   multicolor_mismatch?: boolean
 }
