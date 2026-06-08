@@ -10,6 +10,11 @@ export interface BackupSpoolmanResponse {
   detail: string
 }
 
+export interface BackupFilamentDbResponse {
+  success: boolean
+  detail: string
+}
+
 export type SourceOfTruth = 'spoolman' | 'filamentdb'
 export type SyncDirection = 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'
 export type SyncDirection2 = 'two_way' | 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'

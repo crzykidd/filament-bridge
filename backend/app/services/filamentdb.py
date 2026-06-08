@@ -263,6 +263,28 @@ class FilamentDBClient:
         put_resp.raise_for_status()
 
     # ------------------------------------------------------------------
+    # Backup
+    # ------------------------------------------------------------------
+
+    async def get_snapshot(self) -> dict:
+        """GET /api/snapshot — download a full Filament DB JSON snapshot.
+
+        Returns the raw snapshot dict: ``{version, createdAt, collections}``.
+        The snapshot includes all collections (filaments, nozzles, printers,
+        locations, print history, catalogs, tombstones) at schema v4.
+
+        Restore via ``POST /api/snapshot`` (destructive — not exposed by the bridge).
+
+        Uses a generous 300 s timeout because the snapshot can be large (full DB dump).
+        """
+        resp = await self._http.get(
+            "/api/snapshot",
+            timeout=httpx.Timeout(300.0),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
     # Health / connectivity
     # ------------------------------------------------------------------
 

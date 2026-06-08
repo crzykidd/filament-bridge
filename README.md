@@ -40,13 +40,23 @@ Make sure Spoolman's data volume is itself persisted/copied — the backup file 
 
 ### Filament DB
 
-Filament DB has no backup API — it uses MongoDB. Back up at the database level:
+Filament DB exposes `GET /api/snapshot` — a full JSON backup of all collections (filaments, spools, locations, print history, catalogs, tombstones). Restore with `POST /api/snapshot` (destructive).
+
+**One-click via the bridge:** the pre-write safety dialog has a "Back up Filament DB now" button that calls the bridge's `POST /api/backup/filamentdb` endpoint, which downloads the snapshot and saves it to the bridge's data volume (`DATA_DIR/backups/filamentdb-snapshot-<timestamp>.json`).
+
+**Curl:**
+
+```bash
+curl http://<fdb-host>:3000/api/snapshot -o fdb-snapshot.json
+```
+
+**Secondary option — raw MongoDB backup:**
 
 ```bash
 docker exec <mongo-container> mongodump --archive=/data/db/fdb-$(date +%F).archive
 ```
 
-Or snapshot the Mongo volume / use your MongoDB host's native backup tooling. Note: `GET /api/spools/export-csv` is a spools CSV export only — it is **not** a full backup.
+Or snapshot the Mongo volume / use your MongoDB host's native backup tooling.
 
 ### filament-bridge
 

@@ -137,12 +137,32 @@ three destructive actions before they execute:
 Spoolman's own data volume. On error the endpoint returns `{ success: false, detail: "…" }`
 — never a 500.
 
-**Filament DB backup:** FDB has no backup API. The dialog shows a copy-pasteable
-`docker exec <mongo-container> mongodump --archive=…` command with a copy button.
+**Filament DB backup:** FDB DOES have a backup API: `GET /api/snapshot` returns a full JSON
+backup (`{version, createdAt, collections}` — filaments, nozzles, printers, locations, print
+history, catalogs, tombstones; schema v4). The dialog has a "Back up Filament DB now" button
+that calls `POST /api/backup/filamentdb` on the bridge backend. The backend fetches the FDB
+snapshot and writes it to `DATA_DIR/backups/filamentdb-snapshot-<UTC-timestamp>.json`. Because
+FDB delivers the snapshot to the caller (unlike Spoolman which writes to its own volume), the
+bridge persists it in its own data volume. The mongodump command is retained as a secondary
+"raw MongoDB" option in a small note.
 
-**Proceed gate:** the Proceed button is disabled until EITHER the Spoolman backup
-succeeded (HTTP 200, `success: true`) OR the acknowledgment checkbox is checked.
+**Proceed gate:** the Proceed button is disabled until EITHER backup succeeded (Spoolman OR
+Filament DB; HTTP 200, `success: true`) OR the acknowledgment checkbox is checked.
 `docs/spoolman-writes.md` is unchanged — this is a trigger, not a field write.
+
+## 2026-06-08 — Filament DB backup API correction
+
+Earlier documentation (README and docs) incorrectly stated that Filament DB has no backup
+API and recommended only `mongodump`. Filament DB exposes `GET /api/snapshot` for a full
+JSON backup and `POST /api/snapshot` for restore. The bridge now uses this:
+
+- `FilamentDBClient.get_snapshot()` in `backend/app/services/filamentdb.py` calls
+  `GET /api/snapshot` with a 300 s timeout (snapshot can be large).
+- `POST /api/backup/filamentdb` in `backend/app/api/backup.py` fetches the snapshot, creates
+  `DATA_DIR/backups/` if missing, and writes `filamentdb-snapshot-<UTC-ts>.json`.
+- The pre-write `BackupSafetyDialog` now shows a "Back up Filament DB now" button alongside
+  the existing Spoolman button.
+- README Backups section and `docs/prd.md` FR-24 updated accordingly.
 
 ## 2026-06-07 — Wizard pre-matches records by filamentdb_id cross-reference before fuzzy matching
 

@@ -315,6 +315,9 @@ A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag
 - Does NOT include data from Filament DB or Spoolman themselves — only the bridge's own state
 - Useful for: migrating the bridge to a new host, recovering from a corrupted SQLite database, or resetting and re-importing after a configuration change
 - Backup file is versioned with a schema version for forward compatibility; import is idempotent
+- **Upstream backup proxies (pre-write safety dialog):**
+  - `POST /api/backup/spoolman` — proxies to Spoolman's `POST /api/v1/backup`; Spoolman writes the archive to its own data volume
+  - `POST /api/backup/filamentdb` — fetches Filament DB's `GET /api/snapshot` (full JSON backup: filaments, locations, print history, catalogs, tombstones) and writes it to `DATA_DIR/backups/filamentdb-snapshot-<timestamp>.json`; the bridge's data volume must be mounted for the file to survive a restart. Note: unlike Spoolman, FDB delivers the snapshot to the caller rather than writing it internally, so the bridge stores it.
 
 #### FR-25: Configuration-only export *(Not implemented — folded into full backup)*
 - Originally planned as a separate config-only export; folded into `GET /api/backup/export` which includes config in the full dump

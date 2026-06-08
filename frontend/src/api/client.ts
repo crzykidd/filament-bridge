@@ -2,6 +2,7 @@ import type {
   AutoSyncRequest,
   AutoSyncResponse,
   BackupExport,
+  BackupFilamentDbResponse,
   BackupImportResponse,
   BackupSpoolmanResponse,
   BulkResolveRequest,
@@ -157,6 +158,8 @@ export const importBackup = (body: BackupExport) =>
   json<BackupImportResponse>('/backup/import', 'POST', body)
 export const backupSpoolman = () =>
   request<BackupSpoolmanResponse>('/backup/spoolman', { method: 'POST' })
+export const backupFilamentDb = () =>
+  request<BackupFilamentDbResponse>('/backup/filamentdb', { method: 'POST' })
 
 // ---------------------------------------------------------------------------
 // Wizard
