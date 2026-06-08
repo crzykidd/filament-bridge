@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { getSyncLog } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
+import { formatLocal } from '../utils/datetime'
 
 const PAGE_SIZE = 50
 
@@ -83,7 +84,7 @@ export default function SyncLog() {
                 {items.map(entry => (
                   <tr key={entry.id} className={`hover:bg-gray-50 ${entry.action === 'error' ? 'bg-red-50' : ''}`}>
                     <td className="px-4 py-2 text-gray-500 whitespace-nowrap text-xs">
-                      {new Date(entry.timestamp).toLocaleString()}
+                      {formatLocal(entry.timestamp)}
                     </td>
                     <td className="px-4 py-2 text-gray-600 text-xs whitespace-nowrap">
                       {entry.direction === 'spoolman_to_filamentdb' ? 'SM → FDB' : 'FDB → SM'}

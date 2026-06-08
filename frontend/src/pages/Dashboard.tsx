@@ -6,11 +6,7 @@ import { SystemStatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { CycleResultResponse, SyncPreviewEntry } from '../api/types'
-
-function fmt(ts: string | null) {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString()
-}
+import { formatLocal } from '../utils/datetime'
 
 function PreviewRow({ entry, muted = false }: { entry: SyncPreviewEntry; muted?: boolean }) {
   return (
@@ -181,11 +177,11 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-gray-500">Last sync</span>
-            <p className="font-medium">{fmt(data?.last_sync_at ?? null)}</p>
+            <p className="font-medium">{formatLocal(data?.last_sync_at)}</p>
           </div>
           <div>
             <span className="text-gray-500">Next sync</span>
-            <p className="font-medium">{fmt(data?.next_sync_at ?? null)}</p>
+            <p className="font-medium">{formatLocal(data?.next_sync_at)}</p>
           </div>
         </div>
 

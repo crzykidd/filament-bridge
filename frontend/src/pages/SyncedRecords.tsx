@@ -4,6 +4,7 @@ import { useApi } from '../api/hooks'
 import { StatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
 import type { MappingRow, MappingStatus } from '../api/types'
+import { formatLocal } from '../utils/datetime'
 
 const STATUS_OPTIONS: Array<{ value: MappingStatus | ''; label: string }> = [
   { value: '', label: 'All' },
@@ -12,11 +13,6 @@ const STATUS_OPTIONS: Array<{ value: MappingStatus | ''; label: string }> = [
   { value: 'conflict', label: 'Conflict' },
   { value: 'unlinked', label: 'Unlinked' },
 ]
-
-function fmt(ts: string | null) {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleString()
-}
 
 function fmtWeight(w: number | null, suffix: string) {
   if (w == null) return '—'
@@ -97,7 +93,7 @@ export default function SyncedRecords() {
                   <td className="px-4 py-3 text-gray-600">{fmtWeight(row.spoolman_weight, '(net)')}</td>
                   <td className="px-4 py-3 text-gray-600">{fmtWeight(row.filamentdb_weight, '(gross)')}</td>
                   <td className="px-4 py-3"><StatusBadge status={row.status} /></td>
-                  <td className="px-4 py-3 text-gray-500">{fmt(row.last_synced)}</td>
+                  <td className="px-4 py-3 text-gray-500">{formatLocal(row.last_synced)}</td>
                   <td className="px-4 py-3">
                     <DeepLinks
                       filamentdbFilamentId={row.filamentdb_filament_id}

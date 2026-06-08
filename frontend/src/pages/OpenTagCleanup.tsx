@@ -25,6 +25,7 @@ import type {
   OpenTagFilamentMatch,
   OpenTagMatchesResponse,
 } from '../api/types'
+import { parseUtc } from '../utils/datetime'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,7 +33,7 @@ import type {
 
 function formatAge(fetchedAt: string | null): string {
   if (!fetchedAt) return 'never'
-  const d = new Date(fetchedAt)
+  const d = parseUtc(fetchedAt)
   const diffMs = Date.now() - d.getTime()
   const h = Math.floor(diffMs / 3_600_000)
   const m = Math.floor((diffMs % 3_600_000) / 60_000)

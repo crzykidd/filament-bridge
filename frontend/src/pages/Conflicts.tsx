@@ -3,6 +3,7 @@ import { getConflicts, resolveConflict, bulkResolveConflicts } from '../api/clie
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
 import type { ConflictResponse } from '../api/types'
+import { formatLocal } from '../utils/datetime'
 
 type Resolution = 'spoolman' | 'filamentdb' | 'manual'
 
@@ -134,7 +135,7 @@ function ResolveRow({ conflict, onResolved }: { conflict: ConflictResponse; onRe
           <h3 className="font-medium text-gray-900">
             {isDeletion ? 'Record deleted upstream' : conflict.field_name}
           </h3>
-          <p className="text-xs text-gray-400 mt-0.5">Detected {new Date(conflict.detected_at).toLocaleString()}</p>
+          <p className="text-xs text-gray-400 mt-0.5">Detected {formatLocal(conflict.detected_at)}</p>
         </div>
         <DeepLinks
           filamentdbFilamentId={conflict.filamentdb_filament_id}
@@ -353,7 +354,7 @@ export default function Conflicts() {
                         <span className="text-xs text-gray-500 uppercase">{c.entity_type}</span>
                         <h3 className="font-medium text-gray-900">{c.field_name}</h3>
                         <p className="text-xs text-gray-400">
-                          Resolved {c.resolved_at ? new Date(c.resolved_at).toLocaleString() : '—'} via {c.resolution}
+                          Resolved {formatLocal(c.resolved_at)} via {c.resolution}
                         </p>
                       </div>
                       <DeepLinks
