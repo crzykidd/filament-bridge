@@ -10,6 +10,25 @@ initial default used before any runtime edit has been made.
 
 ---
 
+## Permissions
+
+The container process runs as **uid 1000 / gid 1000** (user `app`). The `/data` directory is
+pre-owned by 1000:1000 in the image.
+
+- **Named volume** (default — `bridge-data:/data`): nothing extra required; Docker inherits the
+  image ownership on first creation.
+- **Bind mount** (e.g. `./data:/data`): the host directory must be owned by 1000:1000:
+  ```bash
+  chown -R 1000:1000 ./data
+  ```
+- **Upgrading from a root-owned volume** (pre-1000:1000 image): run a one-time chown or
+  recreate the volume:
+  ```bash
+  docker run --rm -v bridge-data:/data busybox chown -R 1000:1000 /data
+  ```
+
+---
+
 ## Core / Connection
 
 | Variable | Required | Default | Description |

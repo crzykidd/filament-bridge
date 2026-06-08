@@ -24,6 +24,14 @@ COPY --from=frontend-builder /build/dist ./static/
 # Runtime config
 ENV DATA_DIR=/data
 ENV PYTHONPATH=/app/backend
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Create non-root user and own /app and /data
+RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin app \
+    && mkdir -p /data && chown -R 1000:1000 /data \
+    && chown -R 1000:1000 /app
+
+USER 1000:1000
 
 EXPOSE 8090
 

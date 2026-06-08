@@ -168,6 +168,23 @@ volumes:
 
 ---
 
+## Permissions
+
+The container runs as **uid 1000 / gid 1000** (user `app`). The `/data` directory is pre-owned by 1000:1000 in the image so named volumes are writable automatically.
+
+- **Named volume** (the default — `bridge-data:/data`): nothing extra to do; Docker inherits the image's ownership on first creation.
+- **Bind mount** (e.g. `./data:/data`): the host directory must be owned by 1000:1000 before starting the container:
+  ```bash
+  chown -R 1000:1000 ./data
+  ```
+- **Upgrading from a root-owned volume** (prior versions ran as root): the existing `/data` volume is owned by root and the bridge will fail to write to it. Run a one-time `chown` inside the old volume, or recreate the volume (losing existing state):
+  ```bash
+  # One-time chown inside the existing volume
+  docker run --rm -v bridge-data:/data busybox chown -R 1000:1000 /data
+  ```
+
+---
+
 ## Prerequisites
 
 - **Filament DB** — any recent version. Structured multicolor/gradient sync requires Filament DB ≥ 1.33.0; the bridge gates that feature automatically.

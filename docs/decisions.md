@@ -1,5 +1,32 @@
 # Decision record
 
+## 2026-06-08 — Container runs as non-root 1000:1000; /data chowned in image
+
+The bridge image previously ran as root (Docker default). This violates container security
+best practices and means the service runs with unnecessary privilege.
+
+**Change:** the runtime stage of the Dockerfile now:
+1. Creates group `app` (gid 1000) and user `app` (uid 1000, no login shell).
+2. `chown -R 1000:1000 /data` so the pre-created `/data` directory is writable by the
+   process; named volumes mounted at `/data` inherit this ownership on first creation and
+   require no host-side action.
+3. `chown -R 1000:1000 /app` so Python can write any runtime artifacts under the workdir.
+4. Sets `ENV PYTHONDONTWRITEBYTECODE=1` (belt-and-suspenders; avoids `.pyc` writes entirely).
+5. `USER 1000:1000` before `CMD`; pip install stays as root (above the USER line) so
+   packages are installed to `/usr/local` world-readable.
+
+`user: "1000:1000"` is also explicit in both `docker-compose.yml` and `docker-compose.dev.yml`
+so the intent is visible in compose config output.
+
+**Bind mounts / pre-existing volumes:** host bind-mount directories and pre-existing named
+volumes that were created when the container ran as root are owned by root and must be
+chowned once before upgrading:
+```bash
+docker run --rm -v bridge-data:/data busybox chown -R 1000:1000 /data
+```
+Or recreate the volume (losing existing state). Documented in README.md and
+docs/configuration.md.
+
 ## 2026-06-08 — docker-compose.yml ships bridge-only; full dev stack moved to docker-compose.dev.yml
 
 `docker-compose.yml` previously bundled `filament-db`, `mongo`, and `spoolman` alongside the

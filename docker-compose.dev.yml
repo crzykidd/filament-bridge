@@ -5,6 +5,7 @@ services:
     build: .
     ports:
       - "8090:8090"
+    user: "1000:1000"
     volumes:
       - bridge-data:/data
     environment:
