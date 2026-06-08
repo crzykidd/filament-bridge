@@ -158,6 +158,37 @@ class TestFdbMulticolorToSm:
         assert sm["multi_color_hexes"] is None
         assert sm["multi_color_direction"] is None
 
+    def test_coextruded_one_secondary_falls_back_to_single(self):
+        """coextruded arrangement + only 1 secondary → falls back to single-color.
+
+        Spoolman requires ≥2 colors in multi_color_hexes — a one-secondary coextruded
+        entry must never emit a single-hex multi_color_hexes (would 422).
+        """
+        sm = fdb_multicolor_to_sm(None, ["#963877"], [TAG_COEXTRUDED])
+        # Must NOT produce a one-hex multi_color_hexes
+        assert sm["multi_color_hexes"] is None, (
+            "multi_color_hexes must be None for a single-secondary (< 2 hexes)"
+        )
+        assert sm["multi_color_direction"] is None
+        # The lone hex should surface as color_hex
+        assert sm["color_hex"] == "963877", (
+            f"Expected color_hex='963877' as single fallback, got {sm['color_hex']!r}"
+        )
+
+    def test_gradient_one_secondary_plus_primary_two_hexes_ok(self):
+        """gradient + 1 secondary + primary = 2 hexes total → stays multi."""
+        sm = fdb_multicolor_to_sm("#ff0000", ["#00ff00"], [TAG_GRADIENT])
+        assert sm["color_hex"] is None
+        assert sm["multi_color_hexes"] == "ff0000,00ff00"
+        assert sm["multi_color_direction"] == "longitudinal"
+
+    def test_gradient_no_secondary_only_primary_falls_back_to_single(self):
+        """gradient + primary but no secondaries → only 1 hex → falls back to single."""
+        sm = fdb_multicolor_to_sm("#aa0000", [], [TAG_GRADIENT])
+        assert sm["multi_color_hexes"] is None
+        assert sm["multi_color_direction"] is None
+        assert sm["color_hex"] == "aa0000"
+
 
 # ---------------------------------------------------------------------------
 # multicolor_signature — system-agnostic, round-trip stable

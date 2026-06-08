@@ -158,18 +158,38 @@ def fdb_multicolor_to_sm(
     arrangement = arrangement_from_tags(opt_tags)
 
     if arrangement == "coextruded":
+        # Spoolman requires ≥ 2 colors in multi_color_hexes — fall back to single when
+        # we only have one hex (or none) so we never emit an invalid one-hex CSV.
+        if len(sec) >= 2:
+            return {
+                "color_hex": None,
+                "multi_color_hexes": ",".join(sec),
+                "multi_color_direction": "coaxial",
+            }
+        # < 2 secondaries — treat as single (use primary if available, else first secondary)
+        single_hex = to_sm_color(color) or (sec[0] if sec else None)
         return {
-            "color_hex": None,
-            "multi_color_hexes": ",".join(sec) if sec else None,
-            "multi_color_direction": "coaxial",
+            "color_hex": single_hex,
+            "multi_color_hexes": None,
+            "multi_color_direction": None,
         }
     if arrangement == "gradient":
         primary = to_sm_color(color)
         all_hexes = ([primary] if primary else []) + sec
+        # Spoolman requires ≥ 2 colors in multi_color_hexes — fall back to single when
+        # the assembled list has fewer than 2 distinct values.
+        if len(all_hexes) >= 2:
+            return {
+                "color_hex": None,
+                "multi_color_hexes": ",".join(all_hexes),
+                "multi_color_direction": "longitudinal",
+            }
+        # < 2 hexes — treat as single
+        single_hex = all_hexes[0] if all_hexes else None
         return {
-            "color_hex": None,
-            "multi_color_hexes": ",".join(all_hexes) if all_hexes else None,
-            "multi_color_direction": "longitudinal",
+            "color_hex": single_hex,
+            "multi_color_hexes": None,
+            "multi_color_direction": None,
         }
     return {
         "color_hex": to_sm_color(color),

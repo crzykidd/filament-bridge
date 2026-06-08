@@ -1,5 +1,31 @@
 # Decision record
 
+## 2026-06-08 — Single-hex OpenTag entries use color_hex; multi_color_hexes requires ≥2
+
+Spoolman rejects a filament PATCH where `multi_color_hexes` contains only one color with a
+422: "Must specify at least two colors in multi_color_hexes".  A thermochromic or other
+one-color OpenTag entry (e.g. "Temperature Color Change PLA" with one `secondary_color` and
+no `primary_color`) must therefore be written as `color_hex`, never as `multi_color_hexes`.
+
+**Count-based color rule** (implemented in `opt_to_spoolman_fields` in
+`backend/app/core/opentag_match.py` and guarded in `fdb_multicolor_to_sm` in
+`backend/app/core/color.py`):
+
+1. Collect `all_hexes` = primary (if present) + secondaries, normalised and de-duplicated.
+2. `len >= 2` → `multi_color_hexes`; direction only when arrangement tag present; no `color_hex`.
+3. `len == 1` and no arrangement tag → `color_hex` (single-color write).
+4. `len == 1` and arrangement tag → emit NO color fields (leave Spoolman's existing
+   `multi_color_hexes` untouched; writing a lone `color_hex` would 422 against it).
+5. `len == 0` → no color fields.
+
+`fdb_multicolor_to_sm` (the engine FDB→SM sync path) applies the same guard: coextruded or
+gradient with fewer than 2 assembled hexes falls back to `color_hex` (or None), never emits
+a one-hex `multi_color_hexes`.
+
+`opt_color_profile` was also updated: a no-arrangement-tag entry with fewer than 2
+`secondaryColors` is classified as `"single"` (not `"multi_unknown"`), since a one-color
+entry cannot produce a valid multicolor Spoolman record.
+
 ## 2026-06-08 — OpenTag no-match reason taxonomy + group collapse UX
 
 **no_match_reason** on `OpenTagFilamentMatch` (backend field, TS type, UI display):

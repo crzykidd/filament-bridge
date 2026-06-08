@@ -88,8 +88,10 @@ def opt_color_profile(opt: dict[str, Any], tag_map: dict[str, int] | None = None
         return _PROFILE_GRADIENT
 
     # No arrangement tag — fall back to secondaryColors to distinguish single vs multi_unknown.
+    # An entry with fewer than 2 distinct secondaryColors is treated as single-color even if
+    # the secondaryColors list is non-empty (e.g. thermochromic / one-color OPT entries).
     secondary: list = opt.get("secondaryColors") or []
-    if secondary:
+    if len(secondary) >= 2:
         return _PROFILE_MULTI_UNKNOWN
     return _PROFILE_SINGLE
 
@@ -182,42 +184,47 @@ def opt_to_spoolman_fields(
         opt_tags_int.append(TAG_GRADIENT)
 
     arrangement = arrangement_from_tags(opt_tags_int)
+    has_arrangement = arrangement in ("coextruded", "gradient")
 
-    if secondary:
-        # Multicolor: delegate to fdb_multicolor_to_sm for coextruded/gradient so SM↔FDB
-        # stays consistent (handles empty primary for coextruded, builds correct hex CSV).
-        # For multi_unknown (secondaries present but no arrangement tag), fdb_multicolor_to_sm
-        # would drop the secondaries (solid fallback), so we handle that case directly.
-        if arrangement in ("coextruded", "gradient"):
-            sm_color = fdb_multicolor_to_sm(opt_color, secondary, opt_tags_int)
-            if sm_color["color_hex"] is not None:
-                result["color_hex"] = sm_color["color_hex"].upper()
-            if sm_color["multi_color_hexes"] is not None:
-                result["multi_color_hexes"] = sm_color["multi_color_hexes"].upper()
-            if sm_color["multi_color_direction"] is not None:
-                result["multi_color_direction"] = sm_color["multi_color_direction"]
-        else:
-            # multi_unknown: preserve primary + secondary hexes; no direction
-            if opt_color:
-                result["color_hex"] = opt_color.lstrip("#").upper()
-            all_hexes = []
-            if opt_color:
-                all_hexes.append(opt_color.lstrip("#").upper())
-            all_hexes.extend(c.lstrip("#").upper() for c in secondary if c)
-            if all_hexes:
-                result["multi_color_hexes"] = ",".join(all_hexes)
-    elif arrangement in ("coextruded", "gradient"):
-        # secondaryColors is empty (FDB's denormalized feed) but arrangement tag IS present.
-        # Emit NO multi_color_* fields — Spoolman already has the correct hexes + direction
-        # (that's how the match was found), and Spoolman rejects multi_color_direction when
-        # multi_color_hexes is absent (→ 422).  Leave existing multicolor data untouched.
-        # Map primary color if present, but do not touch any multi_color_* fields.
-        if opt_color:
-            result["color_hex"] = opt_color.lstrip("#").upper()
-    else:
-        # Single-color: map primary color directly
-        if opt_color:
-            result["color_hex"] = opt_color.lstrip("#").upper()
+    # Build the de-duplicated, order-preserving hex list: primary first, then secondaries.
+    # Normalise to bare uppercase hex (no leading '#'); skip empty/falsy values.
+    _seen: set[str] = set()
+    all_hexes: list[str] = []
+    for raw in ([opt_color] if opt_color else []) + list(secondary):
+        h = raw.lstrip("#").upper() if raw else ""
+        if h and h not in _seen:
+            _seen.add(h)
+            all_hexes.append(h)
+
+    # Count-based color rule — Spoolman rejects a lone-hex multi_color_hexes (422).
+    #
+    # len >= 2 → multicolor: put all hexes in multi_color_hexes; set direction only when
+    #            the arrangement tag is known (coextruded → coaxial, gradient → longitudinal);
+    #            NEVER set color_hex alongside multi_color_hexes (Spoolman 422s on both).
+    # len == 1 and no arrangement tag → single-color: write color_hex only.
+    # len == 1 and arrangement tag → partial multicolor data; emit NO color fields so we
+    #            don't overwrite Spoolman's existing multi_color_hexes with a lone color_hex.
+    # len == 0 → no color info; emit NO color fields (preserves the existing
+    #            "arrangement tag but empty secondaryColors → leave Spoolman's multicolor
+    #            alone" behaviour for the denormalized FDB feed path).
+    if len(all_hexes) >= 2:
+        result["multi_color_hexes"] = ",".join(all_hexes)
+        if has_arrangement:
+            result["multi_color_direction"] = (
+                "coaxial" if arrangement == "coextruded" else "longitudinal"
+            )
+        # color_hex intentionally NOT set — Spoolman rejects both fields together (422).
+    elif len(all_hexes) == 1 and not has_arrangement:
+        # Single distinct color, no arrangement tag → straightforward single-color write.
+        # This is the thermochromic / one-secondary case (e.g. SM #21).
+        result["color_hex"] = all_hexes[0]
+    elif len(all_hexes) == 1 and has_arrangement:
+        # Only one hex but the entry claims to be multicolor (arrangement tag present).
+        # We lack the full hex set — emit no color fields to avoid overwriting Spoolman's
+        # existing multi_color_hexes with a lone color_hex (which Spoolman would reject
+        # when multi_color_hexes is already set, or would lose the multicolor data entirely).
+        pass
+    # else len == 0: no color info — emit nothing; Spoolman's existing values are preserved.
 
     # Density
     density = opt.get("density")

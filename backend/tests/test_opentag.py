@@ -2439,14 +2439,15 @@ def test_coaxial_sm_matches_coextruded_opt_with_empty_secondary(tmp_path):
         _ot_mod._settings.data_dir = original_data_dir
 
 
-def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_no_multicolor_fields():
+def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_no_color_fields():
     """When OPT has 'coextruded' tag but empty secondaryColors, opt_to_spoolman_fields must
-    emit NEITHER multi_color_hexes NOR multi_color_direction.
+    emit NEITHER multi_color_hexes NOR multi_color_direction NOR color_hex.
 
-    Spoolman rejects a PATCH that contains multi_color_direction without multi_color_hexes
-    (→ 422).  The SM filament already carries the correct arrangement from its own data (that
-    is how it was matched), so the apply has nothing new to contribute for multicolor fields.
-    Native fields (material, density, finish tags, color_hex) are still emitted normally.
+    With only one hex available and an arrangement tag present, writing color_hex would
+    cause Spoolman to 422 if the filament already has multi_color_hexes set.  The SM
+    filament already carries the correct arrangement from its own data, so the apply has
+    nothing new to contribute for any color field when we only have a lone primary hex.
+    Native non-color fields (material, density, finish tags) are still emitted normally.
     """
     opt = {
         "uuid": "test-coext-empty",
@@ -2472,16 +2473,23 @@ def test_opt_to_spoolman_fields_empty_secondary_with_coextruded_tag_no_multicolo
         "multi_color_direction must not be written when secondaryColors is empty "
         "(Spoolman rejects direction without hexes → 422)"
     )
-    # Native fields are still present
+    # Must NOT set color_hex — Spoolman 422s color_hex alongside existing multi_color_hexes
+    assert "color_hex" not in fields, (
+        "color_hex must not be written when arrangement tag is present but secondaryColors "
+        "is empty (count-based rule: 1 hex + arrangement → no color fields)"
+    )
+    # Native non-color fields are still present
     assert fields.get("material") == "PLA"
     assert fields.get("density") == 1.24
-    assert fields.get("color_hex") == "2A1A5E"
 
 
-def test_opt_to_spoolman_fields_gradient_tag_empty_secondary_no_multicolor_fields():
-    """Gradient tag + empty secondaryColors → neither multi_color_direction nor multi_color_hexes.
+def test_opt_to_spoolman_fields_gradient_tag_empty_secondary_no_color_fields():
+    """Gradient tag + empty secondaryColors → no multi_color_direction, no multi_color_hexes,
+    and no color_hex.
 
-    Same 422-avoidance rule: longitudinal direction without hexes is rejected by Spoolman.
+    Same 422-avoidance rule: longitudinal direction without hexes is rejected by Spoolman,
+    and a lone color_hex would 422 against an existing multi_color_hexes.  With exactly one
+    hex available and an arrangement tag, emit NO color fields.
     """
     opt = {
         "uuid": "test-grad-empty",
@@ -2504,8 +2512,11 @@ def test_opt_to_spoolman_fields_gradient_tag_empty_secondary_no_multicolor_field
     assert "multi_color_hexes" not in fields, (
         "multi_color_hexes must not be written when OPT secondaryColors is empty (gradient case)"
     )
-    # color_hex is still emitted from the primary color
-    assert fields.get("color_hex") == "0000FF"
+    # color_hex must also be absent — writing it would 422 against an existing multi_color_hexes
+    assert "color_hex" not in fields, (
+        "color_hex must not be written when arrangement tag is present but secondaryColors "
+        "is empty (count-based rule: 1 hex + arrangement → no color fields)"
+    )
 
 
 def test_opt_to_spoolman_fields_with_secondaries_still_sets_both_multicolor_fields():
@@ -5035,3 +5046,171 @@ async def test_no_match_reason_is_none_on_matched_rows(tmp_path):
         assert match["no_match_reason"] is None
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Fix: count-based color rule — single-hex must be color_hex, not multi_color_hexes
+# (thermochromic / one-secondary / SM #21 regression)
+# ---------------------------------------------------------------------------
+
+
+def test_opt_to_spoolman_fields_thermochromic_single_secondary_no_arrangement():
+    """Thermochromic case (SM #21): one secondary_color, no primary, no arrangement tag.
+
+    opt_to_spoolman_fields must set color_hex to the secondary hex and emit NO
+    multi_color_hexes / multi_color_direction — Spoolman rejects a one-hex multi_color_hexes
+    with 422 "Must specify at least two colors in multi_color_hexes".
+    """
+    opt = {
+        "uuid": "thermochromic-pla-purple-red-001",
+        "slug": "brand-pla-temperature-purple-red",
+        "brandName": "SomeBrand",
+        "name": "Temperature Color Change PLA Purple to Red",
+        "type": "PLA",
+        "tags": ["temperature_color_change"],  # NOT an arrangement tag
+        "color": None,           # no primary color
+        "secondaryColors": ["#963877"],  # one secondary only — the hex that caused 422
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    # Must emit color_hex (not multi_color_hexes) for a lone hex
+    assert fields.get("color_hex") == "963877", (
+        f"Expected color_hex='963877' for thermochromic single-secondary, got {fields.get('color_hex')!r}"
+    )
+    assert "multi_color_hexes" not in fields, (
+        "multi_color_hexes must not be set for a single-secondary, no-arrangement-tag entry "
+        "(Spoolman requires ≥2 colors → would 422)"
+    )
+    assert "multi_color_direction" not in fields, (
+        "multi_color_direction must not be set without multi_color_hexes"
+    )
+
+
+def test_opt_to_spoolman_fields_two_secondaries_coextruded_multi_and_no_color_hex():
+    """2 secondaries + coextruded tag → multi_color_hexes (2 hexes) + coaxial, NO color_hex."""
+    opt = {
+        "uuid": "coext-two-sec-001",
+        "slug": "brand-pla-coextruded-red-blue",
+        "brandName": "SomeBrand",
+        "name": "PLA Coextruded Red Blue",
+        "type": "PLA",
+        "tags": ["coextruded"],
+        "color": None,
+        "secondaryColors": ["#FF0000", "#0000FF"],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "multi_color_hexes" in fields, "multi_color_hexes must be set for 2+ hexes"
+    assert "FF0000" in fields["multi_color_hexes"]
+    assert "0000FF" in fields["multi_color_hexes"]
+    assert fields.get("multi_color_direction") == "coaxial"
+    assert "color_hex" not in fields, (
+        "color_hex must NOT be set alongside multi_color_hexes — Spoolman 422s on both"
+    )
+
+
+def test_opt_to_spoolman_fields_two_colors_no_arrangement_tag_multi_no_direction():
+    """2 distinct hexes (primary + secondary), no arrangement tag → multi_color_hexes, no direction, no color_hex."""
+    opt = {
+        "uuid": "two-color-no-arr-001",
+        "slug": "brand-pla-dual-red-green",
+        "brandName": "SomeBrand",
+        "name": "PLA Dual Red Green",
+        "type": "PLA",
+        "tags": [],
+        "color": "#FF0000",
+        "secondaryColors": ["#00FF00"],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "multi_color_hexes" in fields, "multi_color_hexes must be set for 2 distinct hexes"
+    assert "FF0000" in fields["multi_color_hexes"]
+    assert "00FF00" in fields["multi_color_hexes"]
+    assert "multi_color_direction" not in fields, (
+        "multi_color_direction must NOT be set without an arrangement tag"
+    )
+    assert "color_hex" not in fields, (
+        "color_hex must NOT be set alongside multi_color_hexes"
+    )
+
+
+def test_opt_to_spoolman_fields_one_hex_coextruded_no_color_fields():
+    """1 hex + coextruded tag → emit NO color fields at all (leave Spoolman's existing data)."""
+    opt = {
+        "uuid": "one-hex-coext-001",
+        "slug": "brand-pla-coext-partial",
+        "brandName": "SomeBrand",
+        "name": "PLA Coextruded Partial",
+        "type": "PLA",
+        "tags": ["coextruded"],
+        "color": "#AA1122",
+        "secondaryColors": [],  # only primary — no secondaries
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert "color_hex" not in fields, (
+        "color_hex must NOT be set when arrangement tag is present with only 1 hex"
+    )
+    assert "multi_color_hexes" not in fields, (
+        "multi_color_hexes must NOT be set with only 1 hex"
+    )
+
+
+def test_opt_to_spoolman_fields_single_primary_no_secondaries_no_arrangement():
+    """Single primary only, no secondaries, no arrangement tag → color_hex set, no multi fields."""
+    opt = {
+        "uuid": "single-primary-001",
+        "slug": "brand-pla-red",
+        "brandName": "SomeBrand",
+        "name": "PLA Red",
+        "type": "PLA",
+        "tags": [],
+        "color": "#CC0000",
+        "secondaryColors": [],
+        "optTags": [],
+        "density": 1.24,
+        "nozzleTempMax": 220,
+        "bedTempMax": 60,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert fields.get("color_hex") == "CC0000", (
+        f"Expected color_hex='CC0000', got {fields.get('color_hex')!r}"
+    )
+    assert "multi_color_hexes" not in fields
+    assert "multi_color_direction" not in fields
+
+
+def test_opt_color_profile_one_secondary_no_arrangement_is_single():
+    """opt_color_profile: one secondaryColor with no arrangement tag → 'single', NOT 'multi_unknown'.
+
+    A one-color entry (thermochromic / one-secondary) is treated as single-color — it cannot
+    produce a valid multi_color_hexes (Spoolman requires ≥2).
+    """
+    opt = {
+        "uuid": "one-sec-no-arr-001",
+        "slug": "brand-pla-thermo",
+        "brandName": "SomeBrand",
+        "name": "Temperature Color Change PLA",
+        "type": "PLA",
+        "tags": ["temperature_color_change"],
+        "color": None,
+        "secondaryColors": ["#963877"],  # exactly one secondary
+        "optTags": [],
+        "density": 1.24,
+    }
+    result = opt_color_profile(opt)
+    assert result == "single", (
+        f"Expected 'single' for one-secondary no-arrangement entry, got {result!r}"
+    )
