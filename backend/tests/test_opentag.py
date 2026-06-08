@@ -4572,3 +4572,344 @@ async def test_matches_endpoint_prusa_alias_finds_prusament_candidates(tmp_path)
 
     finally:
         _ot_mod._settings.data_dir = original_data_dir
+
+
+# ---------------------------------------------------------------------------
+# Vendor reassignment field — reviewable "Manufacturer" row
+# ---------------------------------------------------------------------------
+
+# OPT material with brandName "Prusament" (different from SM vendor "Prusa")
+_OPT_PRUSAMENT_PLA_ORANGE = {
+    "uuid": "prusament-1111-0000-0000-000000000001",
+    "slug": "prusament-pla-orange",
+    "brandName": "Prusament",
+    "name": "PLA Orange",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "#FF6B00",
+    "secondaryColors": [],
+    "density": 1.24,
+    "nozzleTempMin": 210,
+    "nozzleTempMax": 230,
+    "bedTempMin": 50,
+    "bedTempMax": 60,
+    "completenessScore": 85,
+}
+
+
+def test_opt_to_spoolman_fields_includes_vendor_brand():
+    """opt_to_spoolman_fields must include a 'vendor' key with the OPT brandName."""
+    fields = opt_to_spoolman_fields(_OPT_PRUSAMENT_PLA_ORANGE)
+    assert "vendor" in fields
+    assert fields["vendor"] == "Prusament"
+
+
+def test_build_field_rows_vendor_row_present_when_names_differ():
+    """When SM vendor name differs from OPT brand (via alias), vendor row must be included."""
+    from app.api.opentag import _build_field_rows
+
+    # SM filament with vendor "Prusa"; OPT brand "Prusament" — names differ after normalization
+    sm = _sm_fil(sm_id=55, vendor="Prusa", material="PLA", color_hex="FF6B00")
+    opt_fields = opt_to_spoolman_fields(_OPT_PRUSAMENT_PLA_ORANGE)
+
+    rows = _build_field_rows(sm, opt_fields)
+    vendor_rows = [r for r in rows if r.field == "vendor"]
+
+    assert len(vendor_rows) == 1, "Expected exactly one vendor field row"
+    vendor_row = vendor_rows[0]
+    assert vendor_row.spoolman_value == "Prusa"
+    assert vendor_row.opentag_value == "Prusament"
+    assert vendor_row.suggested_value == "Prusament"
+
+
+def test_build_field_rows_vendor_row_absent_when_names_same():
+    """When SM vendor and OPT brand normalize to the same value, the vendor row is omitted."""
+    from app.api.opentag import _build_field_rows
+
+    # SM vendor "Prusament" matches OPT brandName "Prusament" exactly — no change needed
+    sm = _sm_fil(sm_id=10, vendor="Prusament", material="PLA", color_hex="FF6B00")
+    opt_fields = opt_to_spoolman_fields(_OPT_PRUSAMENT_PLA_ORANGE)
+
+    rows = _build_field_rows(sm, opt_fields)
+    vendor_rows = [r for r in rows if r.field == "vendor"]
+
+    assert len(vendor_rows) == 0, "Vendor row should be absent when vendor names match"
+
+
+def test_build_field_rows_vendor_row_absent_when_normalized_match():
+    """normalize_vendor equality (case-insensitive) suppresses the vendor row."""
+    from app.api.opentag import _build_field_rows
+
+    # SM vendor "PRUSAMENT" vs OPT "Prusament" — differ only in case → normalize to same
+    sm = _sm_fil(sm_id=11, vendor="PRUSAMENT", material="PLA", color_hex="FF6B00")
+    opt_fields = opt_to_spoolman_fields(_OPT_PRUSAMENT_PLA_ORANGE)
+
+    rows = _build_field_rows(sm, opt_fields)
+    vendor_rows = [r for r in rows if r.field == "vendor"]
+
+    assert len(vendor_rows) == 0, (
+        "Vendor row must be absent when only casing differs (normalize_vendor matches)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Apply: vendor find-or-create reassignment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_vendor_resolves_existing_no_duplicate():
+    """Apply: when the chosen vendor already exists in Spoolman, no duplicate is created.
+
+    The filament PATCH must include vendor_id from the existing vendor; create_vendor
+    must NOT be called.
+    """
+    patched_payloads: list[tuple] = []
+
+    async def _fake_patch(fil_id, payload):
+        patched_payloads.append((fil_id, payload))
+        # Return a minimal SpoolmanFilament-shaped dict
+        from app.schemas.spoolman import SpoolmanFilament as _SF
+        return MagicMock(spec=_SF)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import SpoolmanVendor as _SV
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_fake_patch)
+    fake_sm.create_vendor = AsyncMock()
+    # Existing vendors: id=7 "Prusament"
+    fake_sm.get_vendors = AsyncMock(return_value=[
+        _SV(id=7, name="Prusament"),
+    ])
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 55,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": None,
+                "openprinttag_uuid": None,
+                "fields": [
+                    # vendor field decision — choose "Prusament"
+                    {"field": "vendor", "value": "Prusament", "keep_mine": False},
+                    {"field": "material", "value": "PLA", "keep_mine": False},
+                ],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+    assert data["errors"] == 0
+
+    # create_vendor must NOT have been called (Prusament already exists)
+    fake_sm.create_vendor.assert_not_called()
+
+    # PATCH must include vendor_id=7
+    assert len(patched_payloads) == 1
+    _, payload = patched_payloads[0]
+    assert payload.get("vendor_id") == 7, (
+        f"Expected vendor_id=7 in PATCH, got payload={payload!r}"
+    )
+
+    # 'vendor' must appear in fields_written
+    result = data["results"][0]
+    assert "vendor" in result["fields_written"]
+
+
+@pytest.mark.asyncio
+async def test_apply_vendor_creates_when_missing():
+    """Apply: when the chosen vendor does NOT exist, it is created once and vendor_id used."""
+    patched_payloads: list[tuple] = []
+
+    async def _fake_patch(fil_id, payload):
+        patched_payloads.append((fil_id, payload))
+        from app.schemas.spoolman import SpoolmanFilament as _SF
+        return MagicMock(spec=_SF)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import SpoolmanVendor as _SV
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_fake_patch)
+    # No existing vendors
+    fake_sm.get_vendors = AsyncMock(return_value=[])
+    # create_vendor returns a new vendor with id=42
+    fake_sm.create_vendor = AsyncMock(return_value=_SV(id=42, name="Prusament"))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 55,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": None,
+                "openprinttag_uuid": None,
+                "fields": [
+                    {"field": "vendor", "value": "Prusament", "keep_mine": False},
+                    {"field": "material", "value": "PLA", "keep_mine": False},
+                ],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+
+    # create_vendor called exactly once
+    fake_sm.create_vendor.assert_called_once_with({"name": "Prusament"})
+
+    # PATCH must include vendor_id=42
+    assert len(patched_payloads) == 1
+    _, payload = patched_payloads[0]
+    assert payload.get("vendor_id") == 42
+
+    result = data["results"][0]
+    assert "vendor" in result["fields_written"]
+
+
+@pytest.mark.asyncio
+async def test_apply_vendor_keep_mine_leaves_vendor_untouched():
+    """Apply: when the vendor field has keep_mine=True, vendor is not changed."""
+    patched_payloads: list[tuple] = []
+
+    async def _fake_patch(fil_id, payload):
+        patched_payloads.append((fil_id, payload))
+        from app.schemas.spoolman import SpoolmanFilament as _SF
+        return MagicMock(spec=_SF)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import SpoolmanVendor as _SV
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_fake_patch)
+    fake_sm.get_vendors = AsyncMock(return_value=[_SV(id=7, name="Prusament")])
+    fake_sm.create_vendor = AsyncMock()
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 55,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": None,
+                "openprinttag_uuid": None,
+                "fields": [
+                    # vendor: keep_mine=True → skip
+                    {"field": "vendor", "value": "Prusament", "keep_mine": True},
+                    {"field": "material", "value": "PLA", "keep_mine": False},
+                ],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+
+    # create_vendor NOT called (keep_mine skips vendor entirely)
+    fake_sm.create_vendor.assert_not_called()
+
+    # vendor_id must NOT be in the PATCH payload
+    assert len(patched_payloads) == 1
+    _, payload = patched_payloads[0]
+    assert "vendor_id" not in payload, (
+        f"vendor_id must not appear in PATCH when keep_mine=True, got payload={payload!r}"
+    )
+
+    result = data["results"][0]
+    assert "vendor" not in result["fields_written"]
+
+
+@pytest.mark.asyncio
+async def test_apply_vendor_no_duplicate_when_name_appears_twice_in_same_run():
+    """Apply: when two decisions in the same run share the same vendor name, create_vendor
+    is called at most once (the second decision hits the cached id).
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import SpoolmanVendor as _SV
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(return_value=MagicMock())
+    fake_sm.get_vendors = AsyncMock(return_value=[])
+    # Returns a new vendor on first call
+    fake_sm.create_vendor = AsyncMock(return_value=_SV(id=99, name="Prusament"))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 10,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": None,
+                "openprinttag_uuid": None,
+                "fields": [{"field": "vendor", "value": "Prusament", "keep_mine": False}],
+            },
+            {
+                "spoolman_filament_id": 11,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": None,
+                "openprinttag_uuid": None,
+                "fields": [{"field": "vendor", "value": "Prusament", "keep_mine": False}],
+            },
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 2
+
+    # create_vendor must have been called exactly once (cached on second decision)
+    assert fake_sm.create_vendor.call_count == 1, (
+        f"create_vendor should be called once, was called {fake_sm.create_vendor.call_count} times"
+    )

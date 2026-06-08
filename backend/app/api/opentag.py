@@ -176,11 +176,18 @@ def _parse_vendor_aliases(aliases_csv: str) -> dict[str, str]:
 
 
 def _current_spoolman_value(sm_filament: Any, field: str) -> Any:
-    """Extract the current value of a Spoolman field (including extra.* fields)."""
+    """Extract the current value of a Spoolman field (including extra.* fields).
+
+    The special ``vendor`` field returns the filament's current vendor name
+    (``sm_filament.vendor.name``) rather than a direct attribute lookup, because
+    ``vendor`` on a SpoolmanFilament is a nested object, not a scalar.
+    """
     if field.startswith("extra."):
         key = field[len("extra."):]
         raw = sm_filament.extra.get(key)
         return decode_extra_value(raw)
+    if field == "vendor":
+        return sm_filament.vendor.name if sm_filament.vendor else None
     return getattr(sm_filament, field, None)
 
 
@@ -198,10 +205,20 @@ def _build_field_rows(
     shows any existing identity), NOT excluded. The frontend must NOT push them
     separately — they flow through the generic field-rows path. _build_sm_patch
     deduplicates them if decision.openprinttag_slug/uuid also sets them.
+
+    The ``vendor`` field is ONLY included when the Spoolman vendor name and the
+    OpenTag brand name differ after ``normalize_vendor`` normalization.  When they
+    match (same-vendor match, no alias involved) the row is omitted — there is
+    nothing to change.
     """
     rows = []
     for field, opt_value in opt_fields.items():
         sm_value = _current_spoolman_value(sm_filament, field)
+        if field == "vendor":
+            # Only show the vendor row when there is an actual name difference
+            # (e.g. Spoolman "Prusa" vs OpenTag "Prusament" via alias).
+            if normalize_vendor(sm_value) == normalize_vendor(opt_value):
+                continue
         rows.append(OpenTagFieldRow(
             field=field,
             spoolman_value=sm_value,
@@ -241,22 +258,32 @@ def _build_candidate(
 
 def _build_sm_patch(
     decision: OpenTagFilamentDecision,
-) -> tuple[dict[str, Any], dict[str, str]]:
-    """Build the Spoolman PATCH payload and FDB settings keys from a filament decision.
+) -> tuple[dict[str, Any], dict[str, str], str | None]:
+    """Build the Spoolman PATCH payload, FDB settings keys, and optional vendor name.
 
-    Returns (patch_payload, fdb_settings_keys):
-    - patch_payload: dict ready to PATCH SM filament (native fields + extra)
+    Returns (patch_payload, fdb_settings_keys, vendor_name):
+    - patch_payload: dict ready to PATCH SM filament (native fields + extra).
+      The ``vendor`` field is NEVER put here — it is a relation (vendor_id) that
+      requires a find-or-create resolution step in the caller.
     - fdb_settings_keys: {"openprinttag_slug": ..., "openprinttag_uuid": ...}
       — only keys that are non-None
+    - vendor_name: the chosen vendor NAME string when the vendor field decision is
+      non-keep_mine and non-null; None otherwise.  The caller must resolve this to a
+      vendor_id via find-or-create and include vendor_id in the filament PATCH.
     """
     native: dict[str, Any] = {}
     extra: dict[str, Any] = {}
     fdb_keys: dict[str, str] = {}
+    vendor_name: str | None = None
 
     for fd in decision.fields:
         if fd.keep_mine:
             continue
         if fd.value is None:
+            continue
+        if fd.field == "vendor":
+            # vendor is a relation — extract the name; caller resolves to vendor_id
+            vendor_name = str(fd.value)
             continue
         if fd.field.startswith("extra."):
             key = fd.field[len("extra."):]
@@ -286,7 +313,7 @@ def _build_sm_patch(
             native["extra"][uuid_field] = encode_extra_value(decision.openprinttag_uuid)
         fdb_keys["openprinttag_uuid"] = decision.openprinttag_uuid
 
-    return native, fdb_keys
+    return native, fdb_keys, vendor_name
 
 
 # ---------------------------------------------------------------------------
@@ -595,6 +622,33 @@ async def opentag_apply(
             f"Could not ensure the OpenTag extra fields exist in Spoolman: {exc}",
         ) from exc
 
+    # Build vendor index once per apply call (normalized name → vendor_id).
+    # New vendors created during this run are cached here to avoid duplicates.
+    try:
+        existing_vendors = await sm.get_vendors()
+    except Exception:
+        existing_vendors = []
+    vendor_id_by_norm: dict[str, int] = {
+        normalize_vendor(v.name): v.id for v in existing_vendors
+    }
+
+    async def _ensure_vendor(name: str) -> int | None:
+        """Resolve a vendor name to a Spoolman vendor_id, creating it if missing.
+
+        Uses normalized comparison so "Prusament" and "prusament" map to the same
+        entry.  New vendors are cached in ``vendor_id_by_norm`` within this apply
+        call so no duplicate is created even if the same name appears multiple times.
+        """
+        norm = normalize_vendor(name)
+        if not norm:
+            return None
+        if norm in vendor_id_by_norm:
+            return vendor_id_by_norm[norm]
+        created = await sm.create_vendor({"name": name})
+        vendor_id_by_norm[norm] = created.id
+        logger.info("opentag apply: created Spoolman vendor %r (id=%d)", name, created.id)
+        return created.id
+
     results: list[OpenTagApplyFilamentResult] = []
     applied = 0
     ignored = 0
@@ -609,17 +663,27 @@ async def opentag_apply(
             ))
             continue
 
-        patch, fdb_keys = _build_sm_patch(decision)
+        patch, fdb_keys, vendor_name = _build_sm_patch(decision)
         fields_written: list[str] = []
         fdb_settings_updated = False
 
         try:
+            # Resolve vendor find-or-create and add vendor_id to the PATCH payload.
+            if vendor_name:
+                vendor_id = await _ensure_vendor(vendor_name)
+                if vendor_id is not None:
+                    patch["vendor_id"] = vendor_id
+
             if patch:
                 await sm.update_filament(decision.spoolman_filament_id, patch)
                 # Track written fields for the response
                 for fd in decision.fields:
                     if not fd.keep_mine and fd.value is not None:
                         fields_written.append(fd.field)
+                if vendor_name and "vendor_id" in patch:
+                    # Ensure "vendor" appears exactly once in fields_written
+                    if "vendor" not in fields_written:
+                        fields_written.append("vendor")
                 if decision.openprinttag_slug:
                     fields_written.append(f"extra.{_settings.spoolman_field_openprinttag_slug}")
                 if decision.openprinttag_uuid:

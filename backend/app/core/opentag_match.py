@@ -241,6 +241,14 @@ def opt_to_spoolman_fields(
     if opt_name is not None:
         result["name"] = opt_name
 
+    # Vendor/brand — reviewable field; the OpenTag brand name.
+    # Callers (_build_field_rows in opentag.py) only include this row when the
+    # Spoolman vendor name differs from the OpenTag brand (normalized comparison).
+    # _build_sm_patch extracts it separately (vendor is a relation, not a scalar).
+    opt_brand = opt.get("brandName")
+    if opt_brand is not None:
+        result["vendor"] = opt_brand
+
     # Identity fields → extra
     slug = opt.get("slug")
     if slug:

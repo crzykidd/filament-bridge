@@ -1,5 +1,34 @@
 # Decision record
 
+## 2026-06-07 — OpenTag cleanup: reviewable Manufacturer field reassigns Spoolman vendor via find-or-create
+
+When the OpenTag cleanup matches a Spoolman filament to an OpenTag material across a vendor
+name difference (e.g. via the `prusa=prusament` alias, or any case where the normalized SM
+vendor name differs from the normalized OPT brand name), the review UI now shows a
+**Manufacturer** field row (field key `"vendor"`) so the user can standardize the Spoolman
+filament's vendor to match the OpenTag brand — or keep their current value.
+
+**Surface (matches endpoint):**
+`opt_to_spoolman_fields` in `backend/app/core/opentag_match.py` now includes
+`result["vendor"] = opt.get("brandName")`.  `_build_field_rows` in
+`backend/app/api/opentag.py` handles `"vendor"` specially via `_current_spoolman_value`
+(`sm_filament.vendor.name`), and **only includes the row when
+`normalize_vendor(sm_value) != normalize_vendor(opt_value)`** — omitting it when both sides
+already agree (no alias or same-vendor match).
+
+**Apply (vendor find-or-create reassignment):**
+`_build_sm_patch` extracts the `vendor` field decision as a separate `vendor_name` string
+(not included in the native PATCH dict, because vendor is a relation — `vendor_id`, not a
+scalar).  In `opentag_apply`, a per-apply-call vendor index is built once from
+`sm.get_vendors()`, keyed by `normalize_vendor(v.name)`.  `_ensure_vendor(name)` resolves
+the chosen name to an existing `vendor_id` via normalized lookup, or calls
+`sm.create_vendor({"name": name})` and caches the new id — ensuring no duplicate is
+created even if the same vendor name appears in multiple decisions within the same apply
+run.  `vendor_id` is then included in the filament PATCH payload alongside native/extra
+fields.  `"vendor"` is reported in `fields_written`.
+
+**No changes to the existing keep-mine, ignore, or other field mechanics.**
+
 ## 2026-06-07 — Spoolman multicolor: `multi_color_hexes` only; `color_hex` never set for multicolor
 
 Spoolman rejects a filament PATCH that sets both `color_hex` and `multi_color_hexes`
