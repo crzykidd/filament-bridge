@@ -26,13 +26,20 @@ ENV DATA_DIR=/data
 ENV PYTHONPATH=/app/backend
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Install gosu for privilege drop in entrypoint
+RUN apt-get update && apt-get install -y --no-install-recommends gosu \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user and own /app and /data
 RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin app \
     && mkdir -p /data && chown -R 1000:1000 /data \
     && chown -R 1000:1000 /app
 
-USER 1000:1000
+# Entrypoint chowns /data then drops to PUID:PGID (default 1000:1000) via gosu
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8090
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]

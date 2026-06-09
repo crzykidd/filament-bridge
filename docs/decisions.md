@@ -24,32 +24,39 @@ branches always paired `multi_color_hexes` with a direction.
 The comment above the color rule in `opt_to_spoolman_fields` was updated to document that
 direction is ALWAYS set for multicolor (defaulting to coaxial for unknown arrangements).
 
-## 2026-06-08 — Container runs as non-root 1000:1000; /data chowned in image
+## 2026-06-08 — Entrypoint chown-then-gosu drop replaces static USER directive
 
-The bridge image previously ran as root (Docker default). This violates container security
-best practices and means the service runs with unnecessary privilege.
+The `USER 1000:1000` Dockerfile directive approach broke when users upgraded from a
+root-owned `bridge-data` volume: the container process (uid 1000) could not write to
+root-owned `/data`, producing `sqlite3.OperationalError: attempt to write a readonly
+database` at startup.
 
-**Change:** the runtime stage of the Dockerfile now:
-1. Creates group `app` (gid 1000) and user `app` (uid 1000, no login shell).
-2. `chown -R 1000:1000 /data` so the pre-created `/data` directory is writable by the
-   process; named volumes mounted at `/data` inherit this ownership on first creation and
-   require no host-side action.
-3. `chown -R 1000:1000 /app` so Python can write any runtime artifacts under the workdir.
-4. Sets `ENV PYTHONDONTWRITEBYTECODE=1` (belt-and-suspenders; avoids `.pyc` writes entirely).
-5. `USER 1000:1000` before `CMD`; pip install stays as root (above the USER line) so
-   packages are installed to `/usr/local` world-readable.
+**Change:** replaced the static `USER` directive with the standard entrypoint privilege-drop
+pattern:
 
-`user: "1000:1000"` is also explicit in both `docker-compose.yml` and `docker-compose.dev.yml`
-so the intent is visible in compose config output.
+1. `gosu` is installed in the runtime image (`apt-get install -y --no-install-recommends gosu`).
+2. `docker-entrypoint.sh` (POSIX `sh`, copied to `/usr/local/bin/`) runs as root:
+   - Reads `PUID` / `PGID` (default `1000`).
+   - `mkdir -p "${DATA_DIR:-/data}"` and `chown -R "${PUID}:${PGID}" "${DATA_DIR:-/data}"` with
+     `|| true` so a read-only or odd FS never prevents startup.
+   - If running as root: `exec gosu "${PUID}:${PGID}" "$@"` — drops to the target uid and
+     execs the app with no remaining root capability.
+   - If already non-root (e.g. if someone re-adds `user:` to compose): `exec "$@"` directly.
+3. `USER 1000:1000` and `user: "1000:1000"` are removed from the Dockerfile and both compose
+   files; the entrypoint is the single authority on runtime uid/gid.
+4. The `groupadd` / `useradd` / `chown /app` / `mkdir /data` steps remain so fresh volumes
+   start correctly and `/app` is still owned by the app user.
 
-**Bind mounts / pre-existing volumes:** host bind-mount directories and pre-existing named
-volumes that were created when the container ran as root are owned by root and must be
-chowned once before upgrading:
-```bash
-docker run --rm -v bridge-data:/data busybox chown -R 1000:1000 /data
-```
-Or recreate the volume (losing existing state). Documented in README.md and
-docs/configuration.md.
+**Result:** the app always runs as uid 1000:1000 (or `PUID:PGID`); pre-existing root-owned
+volumes are corrected automatically on every container start; no manual chown is ever needed.
+Documented in README.md and docs/configuration.md.
+
+## 2026-06-08 — Container runs as non-root 1000:1000; /data chowned in image (superseded)
+
+The original approach (same date) used `USER 1000:1000` in the Dockerfile and explicit
+`user: "1000:1000"` in both compose files, with a documented one-time chown step for
+pre-existing root-owned volumes. This was superseded by the entrypoint chown-then-gosu
+pattern above, which handles pre-existing root-owned volumes automatically.
 
 ## 2026-06-08 — docker-compose.yml ships bridge-only; full dev stack moved to docker-compose.dev.yml
 

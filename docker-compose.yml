@@ -7,7 +7,6 @@ services:
     image: ghcr.io/hyiger/filament-bridge:latest
     ports:
       - "8090:8090"
-    user: "1000:1000"
     volumes:
       - bridge-data:/data        # REQUIRED — persists the SQLite state database
     environment:

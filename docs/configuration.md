@@ -12,20 +12,25 @@ initial default used before any runtime edit has been made.
 
 ## Permissions
 
-The container process runs as **uid 1000 / gid 1000** (user `app`). The `/data` directory is
-pre-owned by 1000:1000 in the image.
+The container starts as root, automatically `chown`s `/data` to the runtime user, then drops
+privileges to **uid 1000 / gid 1000** (user `app`) via `gosu`. No manual `chown` is ever
+needed — pre-existing root-owned volumes are corrected automatically on start.
 
-- **Named volume** (default — `bridge-data:/data`): nothing extra required; Docker inherits the
-  image ownership on first creation.
-- **Bind mount** (e.g. `./data:/data`): the host directory must be owned by 1000:1000:
-  ```bash
-  chown -R 1000:1000 ./data
-  ```
-- **Upgrading from a root-owned volume** (pre-1000:1000 image): run a one-time chown or
-  recreate the volume:
-  ```bash
-  docker run --rm -v bridge-data:/data busybox chown -R 1000:1000 /data
-  ```
+Override the runtime uid/gid with `PUID` / `PGID` environment variables if your host uses a
+different uid:
+
+| Variable | Default | Description |
+|---|---|---|
+| `PUID` | `1000` | User ID the app process runs as after the entrypoint drops privileges. |
+| `PGID` | `1000` | Group ID the app process runs as after the entrypoint drops privileges. |
+
+- **Named volume** (default — `bridge-data:/data`): nothing extra required; the entrypoint
+  fixes ownership on every start.
+- **Bind mount** (e.g. `./data:/data`): ownership is corrected automatically on every start —
+  no pre-chown needed.
+- **Upgrading from a root-owned volume** (prior versions set `user: "1000:1000"` in compose
+  and required a manual chown): the entrypoint handles this automatically — no one-time chown
+  step is needed.
 
 ---
 

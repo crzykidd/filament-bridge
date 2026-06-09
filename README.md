@@ -170,18 +170,19 @@ volumes:
 
 ## Permissions
 
-The container runs as **uid 1000 / gid 1000** (user `app`). The `/data` directory is pre-owned by 1000:1000 in the image so named volumes are writable automatically.
+The container starts as root, automatically `chown`s `/data` to the runtime user, then drops privileges to **uid 1000 / gid 1000** (user `app`) via `gosu`. No manual `chown` is ever needed — pre-existing root-owned volumes are corrected automatically on start.
 
-- **Named volume** (the default — `bridge-data:/data`): nothing extra to do; Docker inherits the image's ownership on first creation.
-- **Bind mount** (e.g. `./data:/data`): the host directory must be owned by 1000:1000 before starting the container:
-  ```bash
-  chown -R 1000:1000 ./data
-  ```
-- **Upgrading from a root-owned volume** (prior versions ran as root): the existing `/data` volume is owned by root and the bridge will fail to write to it. Run a one-time `chown` inside the old volume, or recreate the volume (losing existing state):
-  ```bash
-  # One-time chown inside the existing volume
-  docker run --rm -v bridge-data:/data busybox chown -R 1000:1000 /data
-  ```
+Override the runtime uid/gid with `PUID` / `PGID` environment variables if your host uses a different uid:
+
+```yaml
+environment:
+  PUID: "1001"
+  PGID: "1001"
+```
+
+- **Named volume** (the default — `bridge-data:/data`): nothing extra required; the entrypoint fixes ownership on every start.
+- **Bind mount** (e.g. `./data:/data`): ownership is also corrected automatically — no pre-chown needed.
+- **Upgrading from a root-owned volume** (prior versions set `user: "1000:1000"` in compose and required a manual chown): the entrypoint handles this automatically — no one-time chown step is needed.
 
 ---
 
