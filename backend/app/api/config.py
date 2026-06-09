@@ -26,7 +26,7 @@ from app.config import settings as _settings
 from app.db import get_db
 from app.models.config import BridgeConfig
 from app.models.sync_log import SyncLog
-from app.schemas.api import ConfigResponse, ConfigUpdateRequest
+from app.schemas.api import ConfigResponse, ConfigUpdateRequest, VariantParentMode
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,7 @@ def _config_response(db: Session) -> ConfigResponse:
         sync_log_retention_days=int(cfg.get("sync_log_retention_days", 30)),
         never_import_empties=bool(cfg.get("never_import_empties", False)),
         debug_mode=bool(cfg.get("debug_mode", False)),
+        variant_parent_mode=cfg.get("variant_parent_mode", "unset") or "unset",
     )
 
 

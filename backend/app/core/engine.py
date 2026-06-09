@@ -1674,11 +1674,25 @@ async def run_sync_cycle(
                     error_message="auto-resolved stale new_spool conflict (spool is now mapped)",
                 )
 
+    # Synthetic parents (is_synthetic_parent=True) have no Spoolman counterpart.
+    # Exclude them from both lookup dicts so the engine never tries to sync them.
+    # They are tracked solely for bridge-side parent relationship bookkeeping.
     filament_mappings_by_sm: dict[int, FilamentMapping] = {
-        m.spoolman_filament_id: m for m in filament_mappings
+        m.spoolman_filament_id: m
+        for m in filament_mappings
+        if not getattr(m, "is_synthetic_parent", False) and m.spoolman_filament_id is not None
     }
     filament_mappings_by_fdb: dict[str, FilamentMapping] = {
-        m.filamentdb_id: m for m in filament_mappings
+        m.filamentdb_id: m
+        for m in filament_mappings
+        if not getattr(m, "is_synthetic_parent", False)
+    }
+    # Set of FDB filament ids that are bridge-owned synthetic container parents.
+    # Used to guard the new-FDB-spool detection path.
+    _synthetic_parent_fdb_ids: set[str] = {
+        m.filamentdb_id
+        for m in filament_mappings
+        if getattr(m, "is_synthetic_parent", False)
     }
 
     # ---- Resolve field mappings (FR-11) ----
@@ -2079,6 +2093,30 @@ async def run_sync_cycle(
 
     if new_spool_direction in ("two_way", "filamentdb_to_spoolman"):
         for fdb_f in fdb_filaments_all:
+            # Synthetic container parents have no Spoolman counterpart.  A spool
+            # on a synthetic parent is a user error (should be on a color variant).
+            # Warn via the sync log and skip — never invent a Spoolman filament for it.
+            if fdb_f.id in _synthetic_parent_fdb_ids:
+                for fdb_spool in fdb_f.spools:
+                    if fdb_spool.id in mapped_fdb_spool_ids:
+                        continue
+                    logger.warning(
+                        "Cycle %s: spool %s is on synthetic container parent FDB filament %s "
+                        "(%s) — move it to a color variant. Skipping.",
+                        cycle_id, fdb_spool.id, fdb_f.id, fdb_f.name,
+                    )
+                    if not dry_run:
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "skip", "spool",
+                            fdb_filament_id=fdb_f.id,
+                            fdb_spool_id=fdb_spool.id,
+                            error_message=(
+                                f"spool on container parent {fdb_f.name!r} — "
+                                "move it to a color variant"
+                            ),
+                        )
+                    result.skipped += 1
+                continue
             for fdb_spool in fdb_f.spools:
                 if fdb_spool.id in mapped_fdb_spool_ids:
                     continue
@@ -2144,6 +2182,9 @@ async def _sync_opentag_identity(
     uuid_field = _settings.spoolman_field_openprinttag_uuid
 
     for m in filament_mappings:
+        # Synthetic container parents have no Spoolman counterpart — skip.
+        if getattr(m, "is_synthetic_parent", False):
+            continue
         sm_fil = sm_filaments.get(m.spoolman_filament_id)
         if sm_fil is None:
             continue

@@ -11,6 +11,12 @@ GitHub release.
 
 ### Added
 
+- **Generic container parent mode** — new `variant_parent_mode` setting (`unset` / `promote_color`
+  / `generic_container`) for the Bulk Import Wizard (Spoolman → Filament DB). In
+  `generic_container` mode the wizard synthesises a colorless, bridge-owned FDB container parent
+  for every cluster (including single-color clusters); every imported color becomes a child
+  variant. The container has no Spoolman counterpart and never participates in sync. The wizard
+  is gated on a chosen mode (no silent default). See `docs/variant-parent-mode.md`.
 - **Pre-write backup safeguard** — `BackupSafetyDialog` gates three destructive actions
   (Wizard Execute, OpenTag Apply, Enable auto-sync): one-click Spoolman backup
   (`POST /api/backup/spoolman`) and one-click Filament DB backup (`GET /api/snapshot`

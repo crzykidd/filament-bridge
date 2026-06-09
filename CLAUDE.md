@@ -242,6 +242,7 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `debug_mode` | `false` | Enables `POST /api/debug/clear-spoolman-fdb-refs` and `POST /api/debug/reset-bridge-state` (403 when off) |
 | `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
+| `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
 
 ## Important technical details
 

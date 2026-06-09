@@ -134,6 +134,10 @@ def _fresh_db():
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, autocommit=False, autoflush=False)()
     seed_defaults(session)
+    # Default to "promote_color" so wizard preview/execute tests do not hit the
+    # variant_parent_mode == "unset" gate.
+    set_config_value(session, "variant_parent_mode", "promote_color")
+    session.commit()
     return session
 
 

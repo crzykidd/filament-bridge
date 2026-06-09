@@ -1,5 +1,69 @@
 # Decision record
 
+## 2026-06-08 — Generic container parent mode for Bulk Import Wizard
+
+### Feature summary
+
+`variant_parent_mode` is a new `BridgeConfig` key (`"unset"` / `"promote_color"` /
+`"generic_container"`) that controls how the wizard structures the Filament DB parent/variant
+hierarchy when importing from Spoolman. The wizard is now **gated** on a non-`unset` choice:
+`GET /wizard/preview` and `POST /wizard/execute` return `409 variant_parent_mode_unset` when
+the import direction is Spoolman and the mode is still `"unset"`. This prevents silent imports
+using an implicit default the user never chose.
+
+### Why `unset` instead of a hard default
+
+Making the gate an explicit `"unset"` state (rather than silently defaulting to
+`"promote_color"`) forces a one-time deliberate choice. Existing installs that already ran the
+wizard before this setting was added continue to work — their mappings are valid regardless;
+only _new_ wizard runs are gated.
+
+### Synthetic container parent — bridge ownership model
+
+In `generic_container` mode, the wizard creates a **colorless FDB-only parent** for every
+cluster (including single-color clusters). The container:
+
+- Has `spoolman_filament_id = NULL` in `FilamentMapping` (no Spoolman counterpart).
+- Has `is_synthetic_parent = True` in `FilamentMapping` — a flag that marks it as
+  bridge-owned metadata.
+- Is excluded from `filament_mappings_by_sm`, `filament_mappings_by_fdb`, and
+  `_sync_opentag_identity` in the engine so it never participates in sync, never generates
+  conflicts, and never appears as an orphan.
+- If a spool is placed directly on a container parent in FDB (user error), the engine logs a
+  warning and skips it.
+
+### Why nullable `spoolman_filament_id` is safe under UNIQUE
+
+SQLite (and SQL standard) allows multiple NULLs in a UNIQUE column — `NULL != NULL`.
+Alembic migration `a1b2c3d4e5f6` uses `batch_alter_table(recreate="always")` to rebuild the
+table in SQLite (which doesn't support ALTER COLUMN natively).
+
+### Idempotency
+
+On re-run, the wizard recovers the existing container's FDB id by:
+1. Checking the Spoolman spool's `filamentdb_parent_id` extra field for a value matching a
+   known synthetic parent `filamentdb_id`.
+2. Falling back to `FilamentMapping` rows where `filamentdb_parent_id` points to a synthetic
+   parent id.
+
+Already-linked SM filaments skip Phase A of the planner and are excluded from the new-container
+pre-pass (their `resolved=True` / `action="skip"` item is included in the cluster so the
+container is found/re-confirmed, but no duplicate container is created).
+
+### Container naming collision prevention
+
+The lookup key for existing synthetic containers uses the full cluster tuple
+`(vendor_norm, material_norm, finish_norm)` — the same key as variant-cluster assignment —
+not the display-name string. Two clusters that normalize to the same display name but differ
+by vendor, material, or finish are treated as distinct containers.
+
+### FDB v1.35.2 / issue #597
+
+Filament DB v1.35.2 fixed parent-swatch rendering for colorless parents (GitHub issue #597).
+Both modes render cleanly in modern FDB. `generic_container` is a pure organizational
+preference — it is NOT a rendering workaround. This rationale is documented in
+`docs/variant-parent-mode.md` so users understand the scope of the choice.
+
 ## 2026-06-08 — Browser-local timestamp rendering (`d22cad8`)
 
 All timestamps in the UI are rendered in the browser's local timezone.

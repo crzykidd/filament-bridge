@@ -27,6 +27,9 @@ MappingStatus = Literal["in_sync", "pending", "conflict", "unlinked"]
 SyncDirection2 = Literal["two_way", "spoolman_to_filamentdb", "filamentdb_to_spoolman"]
 ConflictPolicy = Literal["manual", "spoolman_wins", "filamentdb_wins", "newest_wins"]
 
+# Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction).
+VariantParentMode = Literal["unset", "promote_color", "generic_container"]
+
 # Backup envelope schema version — bump when the export shape changes.
 BACKUP_SCHEMA_VERSION = 1
 
@@ -201,6 +204,9 @@ class ConfigResponse(BaseModel):
     never_import_empties: bool = False
     # Debug mode — exposes /api/debug/* reset endpoints when true
     debug_mode: bool = False
+    # Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction).
+    # "unset" means the user has not yet chosen; wizard is gated until chosen.
+    variant_parent_mode: VariantParentMode = "unset"
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -221,6 +227,8 @@ class ConfigUpdateRequest(BaseModel):
     never_import_empties: bool | None = None
     # Debug mode
     debug_mode: bool | None = None
+    # Variant parent mode
+    variant_parent_mode: VariantParentMode | None = None
 
 
 # ---------------------------------------------------------------------------

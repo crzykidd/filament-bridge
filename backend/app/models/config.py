@@ -35,6 +35,14 @@ _DEFAULTS = {
     # re-testing (clear Spoolman FDB xrefs; reset bridge local state).
     # Off by default; never enable in production.
     "debug_mode": "false",
+    # Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction).
+    # "unset"            — user has not chosen; wizard is gated until a choice is made.
+    # "promote_color"    — existing behaviour: one color becomes the FDB parent.
+    # "generic_container"— a colorless bridge-owned container is created for every
+    #                       cluster (even single-color); all colors are children.
+    # Default "unset" so both fresh installs and existing installs require an explicit
+    # choice — there is no silent fallback.
+    "variant_parent_mode": '"unset"',
 }
 
 

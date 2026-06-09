@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
-import type { SyncDirection2, ConflictPolicy } from '../api/types'
+import type { SyncDirection2, ConflictPolicy, VariantParentMode } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -154,6 +154,9 @@ export default function Settings() {
   const [importMsg, setImportMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Variant parent mode state
+  const [variantParentMode, setVariantParentModeState] = useState<VariantParentMode | null>(null)
+
   // Debug mode state
   const [debugMode, setDebugModeState] = useState<boolean | null>(null)
   const [togglingDebugMode, setTogglingDebugMode] = useState(false)
@@ -183,6 +186,7 @@ export default function Settings() {
   const effectiveRetentionDays = syncLogRetentionDays ?? data.sync_log_retention_days
   const showIntervalWarning = effectiveIntervalMinutes > 5
 
+  const effectiveVariantParentMode = variantParentMode ?? data.variant_parent_mode
   const effectiveDebugMode = debugMode ?? data.debug_mode
 
   async function handleDebugModeToggle() {
@@ -293,6 +297,7 @@ export default function Settings() {
         sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
         never_import_empties: neverImportEmpties ?? undefined,
+        variant_parent_mode: variantParentMode ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -516,6 +521,55 @@ export default function Settings() {
             />
           </button>
         </div>
+      </div>
+
+      {/* Variant parent mode */}
+      <div className={`bg-white rounded-lg border p-5 space-y-3 ${effectiveVariantParentMode === 'unset' ? 'border-amber-400' : 'border-gray-200'}`}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-700">Variant parent mode</h2>
+          {effectiveVariantParentMode === 'unset' && (
+            <span className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-300 rounded px-2 py-0.5">
+              Choose a mode before running the wizard
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-gray-500">
+          Controls how the Bulk Import Wizard builds the parent/variant structure in Filament DB
+          from flat Spoolman filaments.{' '}
+          <a href="/docs/variant-parent-mode" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
+            Read the details
+          </a>
+        </p>
+        <div className="space-y-2">
+          {(['promote_color', 'generic_container'] as const).map(mode => (
+            <label key={mode} className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="variant_parent_mode"
+                value={mode}
+                checked={effectiveVariantParentMode === mode}
+                onChange={() => setVariantParentModeState(mode)}
+                className="mt-0.5 h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+              />
+              <div>
+                <span className="text-sm font-medium text-gray-700">
+                  {mode === 'promote_color' ? 'Promote a color to parent' : 'Generic container parent'}
+                </span>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {mode === 'promote_color'
+                    ? 'One color is promoted as the Filament DB parent; the others become variants. Matches the wizard\'s original behavior.'
+                    : 'A colorless container is created for every group (even single-color). All colors are variants under it. Uniform structure — every color is always a child.'}
+                </p>
+              </div>
+            </label>
+          ))}
+        </div>
+        {effectiveVariantParentMode === 'unset' && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+            The Bulk Import Wizard (Spoolman &rarr; Filament DB direction) will not run until you
+            choose a mode and save.
+          </p>
+        )}
       </div>
 
       {/* Other settings */}

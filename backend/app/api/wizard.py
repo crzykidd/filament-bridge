@@ -63,6 +63,7 @@ from app.schemas.api import (
     VariancesResponse,
     VariantGroupPreviewEntry,
     VariantGroupRow,
+    VariantParentMode,
     VariantPropConflict,
     WeightPreviewRow,
     WizardConnectivityResponse,
@@ -138,6 +139,42 @@ def _sm_filament_tare(sm: SpoolmanFilament) -> tuple[float, str]:
     if sm.spool_weight is not None:
         return (sm.spool_weight, "spoolman")
     return (DEFAULT_TARE_GRAMS, "default")
+
+
+def _resolve_variant_parent_mode(db: Session) -> VariantParentMode:
+    """Return the effective variant_parent_mode from BridgeConfig."""
+    raw = get_config_value(db, "variant_parent_mode", "unset") or "unset"
+    if raw in ("promote_color", "generic_container"):
+        return raw  # type: ignore[return-value]
+    return "unset"
+
+
+def _container_display_name(
+    sm_members: list[SpoolmanFilament],
+    variant_keywords: list[str],
+) -> str:
+    """Derive a display name for a generic container parent from its cluster members.
+
+    Uses the first member (arbitrary; naming is deterministic once the cluster is
+    stable) to extract vendor + material + finish line — the same combination
+    that the cluster key groups on.  E.g.:
+      "ELEGOO" + "PLA" + "" → "ELEGOO PLA"
+      "Prusament" + "PLA" + "silk" → "Prusament PLA Silk"
+    """
+    if not sm_members:
+        return "Filament"
+    rep = sm_members[0]
+    vendor = rep.vendor.name if rep.vendor else None
+    material = rep.material or _DEFAULT_FDB_MATERIAL
+    finish = extract_finish_line(rep.name or "", rep.material, keywords=variant_keywords)
+    parts = []
+    if vendor:
+        parts.append(vendor)
+    parts.append(material)
+    if finish:
+        # Capitalize for display (finish comes from normalized lower)
+        parts.append(finish.title())
+    return " ".join(parts)
 
 
 def _vendor_hint(sm_vendor: str | None, fdb_vendor: str | None) -> str | None:
@@ -844,12 +881,20 @@ async def _execute_spoolman_to_fdb(
     reconcile_by_master: dict[int, list[dict]] | None = None,
     precision: int = 2,
     include_empty_spools: bool = True,
+    variant_parent_mode: str = "promote_color",
+    variant_keywords: list[str] | None = None,
 ) -> None:
     """Import direction "spoolman": seed Filament DB from Spoolman.
 
     Delegates the decision/planning phase to _plan_spoolman_to_fdb (no writes),
     then executes each plan item in two passes so variant parentId is injected
     after the master filament is created/resolved.
+
+    When variant_parent_mode == "generic_container", a colorless container parent
+    is synthesised for every cluster (including single-color clusters).  The
+    container is bridge-owned (spoolman_filament_id = NULL, is_synthetic_parent=True)
+    and never participates in sync.  When variant_parent_mode == "promote_color",
+    existing behavior (one color promoted to parent) applies unchanged.
     """
     plan = _plan_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
@@ -860,8 +905,139 @@ async def _execute_spoolman_to_fdb(
     fdb_field_name = _settings.filamentdb_spoolman_id_field
     fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}
     fil_map_by_sm: dict[int, FilamentMapping] = {
-        m.spoolman_filament_id: m for m in db.query(FilamentMapping).all()
+        m.spoolman_filament_id: m
+        for m in db.query(FilamentMapping).filter_by(is_synthetic_parent=False).all()
+        if m.spoolman_filament_id is not None
     }
+
+    # ---- generic_container pre-pass: synthesise container parents ----
+    # When variant_parent_mode == "generic_container", we build a colorless FDB
+    # container for every cluster (including size-1).  The container has no
+    # Spoolman counterpart.  Each SM filament in the cluster is then forced to
+    # attach to that container (overrides promote_color master logic entirely for
+    # included SM filaments).
+    if variant_parent_mode == "generic_container":
+        attach_parent_for_sm = dict(attach_parent_for_sm)  # don't mutate caller's dict
+        kw = variant_keywords or []
+
+        # Build cluster map: cluster_key → [sm_filament, ...] for included, resolved items
+        _clusters_gc: dict[tuple, list[SpoolmanFilament]] = {}
+        for item in plan.filament_items:
+            if not item.resolved:
+                continue  # skip/error items don't need a container
+            key = sm_variant_cluster_key(item.sm_filament, keywords=kw)
+            _clusters_gc.setdefault(key, []).append(item.sm_filament)
+
+        # Load synthetic parent mappings keyed by filamentdb_id for lookup.
+        # The lookup key is the cluster name + vendor for collision-safety; we use
+        # the full cluster tuple (vendor_norm, material_norm, finish_norm) as the key.
+        synthetic_maps = db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
+        # Re-derive cluster key from the children's filamentdb_parent_id pointing to the
+        # synthetic parent.  We look up by filamentdb_id since that is what was stored.
+        _synth_fdb_ids: set[str] = {m.filamentdb_id for m in synthetic_maps}
+
+        # Additionally, recover synthetic parent FDB ids from Spoolman children's
+        # filamentdb_parent_id extra field (handles state-reset / re-run scenarios).
+        _sm_by_id: dict[int, SpoolmanFilament] = {f.id: f for f in sm_filaments}
+        _fdb_parent_id_field = _settings.spoolman_field_filamentdb_parent_id
+
+        for cluster_key, members in _clusters_gc.items():
+            if not members:
+                continue
+
+            display_name = _container_display_name(members, kw)
+            vendor_name = members[0].vendor.name if members[0].vendor else None
+
+            # --- Idempotency: find existing synthetic parent for this cluster ---
+            # Primary: look for a synthetic FilamentMapping whose filamentdb_id is
+            # referenced as filamentdb_parent_id by any SM child (from SM extra field).
+            existing_fdb_parent_id: str | None = None
+
+            # 1. Check extra-field references on SM spools for any member
+            all_sm_ids_for_cluster = {m.id for m in members}
+            for sm_spool in sm_spools:
+                if getattr(sm_spool, 'archived', False):
+                    continue
+                if sm_spool.filament is None:
+                    continue
+                if sm_spool.filament.id not in all_sm_ids_for_cluster:
+                    continue
+                parent_raw = (sm_spool.extra or {}).get(_fdb_parent_id_field)
+                pid = decode_extra_value(parent_raw)
+                if pid and isinstance(pid, str) and pid in _synth_fdb_ids:
+                    existing_fdb_parent_id = pid
+                    break
+
+            # 2. Fallback: check synthetic mapping rows whose filamentdb_id appears as
+            # filamentdb_parent_id on any existing FilamentMapping for a cluster member.
+            if existing_fdb_parent_id is None:
+                member_sm_ids = {m.id for m in members}
+                for fm in db.query(FilamentMapping).all():
+                    if fm.spoolman_filament_id in member_sm_ids and fm.filamentdb_parent_id:
+                        if fm.filamentdb_parent_id in _synth_fdb_ids:
+                            existing_fdb_parent_id = fm.filamentdb_parent_id
+                            break
+
+            # 3. Use the existing FDB id (either found above or re-register below).
+            if existing_fdb_parent_id:
+                # Ensure the synthetic FilamentMapping row exists (re-create if lost).
+                existing_row = db.query(FilamentMapping).filter_by(
+                    filamentdb_id=existing_fdb_parent_id, is_synthetic_parent=True,
+                ).first()
+                if existing_row is None:
+                    db.add(FilamentMapping(
+                        spoolman_filament_id=None,
+                        filamentdb_id=existing_fdb_parent_id,
+                        filamentdb_parent_id=None,
+                        is_synthetic_parent=True,
+                    ))
+                    db.flush()
+                container_fdb_id = existing_fdb_parent_id
+            else:
+                # Create the colorless container in FDB.
+                container_payload: dict = {
+                    "name": display_name,
+                    "type": (members[0].material or _DEFAULT_FDB_MATERIAL),
+                }
+                if vendor_name:
+                    container_payload["vendor"] = vendor_name
+                # Explicitly no color (colorless container) — send color: null.
+                container_payload["color"] = None
+                # Filter out None values but keep color: None explicitly
+                container_payload_clean = {
+                    k: v for k, v in container_payload.items()
+                    if v is not None or k == "color"
+                }
+                try:
+                    created_container = await filamentdb.create_filament(container_payload_clean)
+                    container_fdb_id = created_container.id
+                    fdb_by_id[container_fdb_id] = created_container
+                    res.add(
+                        db, "filament", "created",
+                        fdb_filament_id=container_fdb_id,
+                        detail=f"synthetic container parent: {display_name}",
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "wizard execute %s: create container parent failed for cluster %s: %s",
+                        res.cycle_id, cluster_key, exc,
+                    )
+                    res.add(db, "filament", "failed", error=str(exc),
+                            detail=f"failed to create container: {display_name}")
+                    continue  # skip setting parent for this cluster
+                # Record the synthetic FilamentMapping.
+                db.add(FilamentMapping(
+                    spoolman_filament_id=None,
+                    filamentdb_id=container_fdb_id,
+                    filamentdb_parent_id=None,
+                    is_synthetic_parent=True,
+                ))
+                _synth_fdb_ids.add(container_fdb_id)
+                db.flush()
+
+            # Assign all cluster members to attach to this container.
+            for m in members:
+                attach_parent_for_sm[m.id] = container_fdb_id
     just_created_fdb_ids: set[str] = set()
     # master_sm_id → fdb_id; populated during Pass 1 so Pass 2 can resolve parentId
     master_map: dict[int, str] = {}
@@ -1574,6 +1750,15 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     sync_direction = (
         "spoolman_to_filamentdb" if import_direction == "spoolman" else "filamentdb_to_spoolman"
     )
+
+    # Gate: spoolman→FDB direction requires a chosen variant_parent_mode.
+    if import_direction == "spoolman":
+        mode = _resolve_variant_parent_mode(db)
+        if mode == "unset":
+            raise api_error(
+                409, "variant_parent_mode_unset",
+                "Choose a variant parent mode in Settings before previewing or executing the wizard.",
+            )
     precision: int = int(get_config_value(db, "weight_precision_decimals", 2))
 
     match_decisions = get_config_value(db, "wizard_match_decisions", []) or []
@@ -1679,6 +1864,16 @@ async def wizard_execute(
     sync_direction = (
         "spoolman_to_filamentdb" if import_direction == "spoolman" else "filamentdb_to_spoolman"
     )
+
+    # Gate: spoolman→FDB direction requires a chosen variant_parent_mode.
+    if import_direction == "spoolman":
+        mode = _resolve_variant_parent_mode(db)
+        if mode == "unset":
+            raise api_error(
+                409, "variant_parent_mode_unset",
+                "Choose a variant parent mode in Settings before executing the wizard.",
+            )
+
     res = _ExecResult(cycle_id=cycle_id, direction=sync_direction)
 
     overrides = payload.tare_overrides if payload else []
@@ -1731,6 +1926,8 @@ async def wizard_execute(
         )
 
     if import_direction == "spoolman":
+        exec_variant_mode = _resolve_variant_parent_mode(db)
+        exec_variant_keywords = _resolve_variant_keywords(db)
         await _execute_spoolman_to_fdb(
             db, res, spoolman, filamentdb,
             sm_filaments, sm_spools, fdb_filaments,
@@ -1738,6 +1935,8 @@ async def wizard_execute(
             reconcile_by_master=reconcile_by_master,
             precision=precision,
             include_empty_spools=include_empty,
+            variant_parent_mode=exec_variant_mode,
+            variant_keywords=exec_variant_keywords,
         )
     else:
         await _execute_fdb_to_spoolman(

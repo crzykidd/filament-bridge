@@ -20,6 +20,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.config import set_config_value
 from app.db import Base
 from app.models.config import seed_defaults
 from app.models.conflict import Conflict  # noqa: F401  ensure table is created
@@ -59,5 +60,10 @@ def db() -> Session:
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
     session = SessionLocal()
     seed_defaults(session)
+    # Default to "promote_color" in tests so existing wizard-execute tests do not
+    # hit the variant_parent_mode == "unset" gate.  Tests that specifically verify
+    # the gate or test "generic_container" behavior set the mode explicitly.
+    set_config_value(session, "variant_parent_mode", "promote_color")
+    session.commit()
     yield session
     session.close()

@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -9,9 +9,16 @@ class FilamentMapping(Base):
     __tablename__ = "filament_mappings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    spoolman_filament_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    # NULL for synthetic container parents (generic_container mode): SQLite allows
+    # multiple NULLs under a UNIQUE constraint, so the uniqueness invariant holds
+    # for all real (non-null) Spoolman filament ids.
+    spoolman_filament_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     filamentdb_id: Mapped[str] = mapped_column(String(24), nullable=False)
     filamentdb_parent_id: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    # True when this mapping represents a bridge-owned synthetic container parent
+    # (created in generic_container variant_parent_mode).  Synthetic parents have
+    # spoolman_filament_id = NULL and are excluded from sync/orphan detection.
+    is_synthetic_parent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[object] = mapped_column(DateTime, nullable=False, default=func.now())
     updated_at: Mapped[object] = mapped_column(
         DateTime, nullable=False, default=func.now(), onupdate=func.now()

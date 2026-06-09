@@ -20,6 +20,7 @@ export type SyncDirection = 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'
 export type SyncDirection2 = 'two_way' | 'spoolman_to_filamentdb' | 'filamentdb_to_spoolman'
 export type ConflictPolicy = 'manual' | 'spoolman_wins' | 'filamentdb_wins' | 'newest_wins'
 export type MappingStatus = 'in_sync' | 'pending' | 'conflict' | 'unlinked'
+export type VariantParentMode = 'unset' | 'promote_color' | 'generic_container'
 
 // ---------------------------------------------------------------------------
 // Health
@@ -201,6 +202,8 @@ export interface ConfigResponse {
   never_import_empties: boolean
   // Debug mode — exposes /api/debug/* reset endpoints when true
   debug_mode: boolean
+  // Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction)
+  variant_parent_mode: VariantParentMode
 }
 
 export interface ConfigUpdateRequest {
@@ -220,6 +223,8 @@ export interface ConfigUpdateRequest {
   never_import_empties?: boolean | null
   // Debug mode
   debug_mode?: boolean | null
+  // Variant parent mode
+  variant_parent_mode?: VariantParentMode | null
 }
 
 // ---------------------------------------------------------------------------
