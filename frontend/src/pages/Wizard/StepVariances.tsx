@@ -173,6 +173,10 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
 
+  // P2.6: sort control for groups and standalone sections
+  type VariancesSortKey = 'vendor' | 'material'
+  const [sortBy, setSortBy] = useState<VariancesSortKey>('vendor')
+
   // Lookup map: all filament data by SM id (static from API response)
   const allFilamentData = useMemo(() => {
     const map = new Map<number, VariancesFilament>()
@@ -467,6 +471,20 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
     )
   }
 
+  // Shared action bar — rendered at top and bottom
+  const actionBar = (
+    <div className="flex justify-between">
+      <button onClick={prev}
+        className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        ← Back
+      </button>
+      <button onClick={handleSave} disabled={saving}
+        className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+        {saving ? 'Saving…' : 'Save & Next →'}
+      </button>
+    </div>
+  )
+
   return (
     <div className="space-y-5">
       <div>
@@ -476,11 +494,43 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
         </p>
       </div>
 
+      {/* Top action bar */}
+      {actionBar}
+
+      {/* P2.6: Sort control */}
+      {(data.groups.length > 0 || data.ungrouped.length > 0) && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500">Sort by:</span>
+          {(['vendor', 'material'] as const).map(key => (
+            <button
+              key={key}
+              onClick={() => setSortBy(key)}
+              className={`px-2.5 py-1 text-xs rounded-full border font-medium transition-colors ${
+                sortBy === key
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+              }`}
+            >
+              {key === 'vendor' ? 'Brand A→Z' : 'Material A→Z'}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Variant groups */}
       {data.groups.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-sm font-medium text-gray-700">Variant groups</h3>
-          {data.groups.map((group: VariancesGroupRow, groupIdx: number) => {
+          {/* Sorted index array so original groupIdx stays valid for state keying */}
+          {[...data.groups.keys()]
+            .sort((a, b) => {
+              const ga = data.groups[a], gb = data.groups[b]
+              const va = sortBy === 'vendor' ? (ga.vendor ?? '') : (ga.material ?? '')
+              const vb = sortBy === 'vendor' ? (gb.vendor ?? '') : (gb.material ?? '')
+              return va.toLowerCase() < vb.toLowerCase() ? -1 : va.toLowerCase() > vb.toLowerCase() ? 1 : 0
+            })
+            .map((groupIdx) => {
+          const group = data.groups[groupIdx]
             const masterId = masters[groupIdx]
             const membership = groupMembership[groupIdx]
             if (membership.size === 0) return null  // group dissolved — all members moved/ignored
@@ -873,7 +923,13 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             <p className="text-xs text-gray-500">Select one more to enable grouping.</p>
           )}
           <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-            {effectiveUngrouped.map(f => {
+            {[...effectiveUngrouped]
+              .sort((a, b) => {
+                const va = sortBy === 'vendor' ? (a.ref.vendor ?? '') : (a.material ?? '')
+                const vb = sortBy === 'vendor' ? (b.ref.vendor ?? '') : (b.material ?? '')
+                return va.toLowerCase() < vb.toLowerCase() ? -1 : va.toLowerCase() > vb.toLowerCase() ? 1 : 0
+              })
+              .map(f => {
               const smId = f.ref.spoolman_filament_id!
               const isIgnoring = ignoringId === smId
               return (
@@ -1063,16 +1119,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       {ignoreErr && <p className="text-sm text-red-600">Ignore failed: {ignoreErr}</p>}
       {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
 
-      <div className="flex justify-between">
-        <button onClick={prev}
-          className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
-          ← Back
-        </button>
-        <button onClick={handleSave} disabled={saving}
-          className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save & Next →'}
-        </button>
-      </div>
+      {/* Bottom action bar */}
+      {actionBar}
     </div>
   )
 }

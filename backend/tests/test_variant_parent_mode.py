@@ -211,7 +211,7 @@ def test_wizard_execute_generic_container_single_color_creates_container_and_var
     # Container: no color, no parentId
     container_calls = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     assert len(container_calls) == 1, f"expected 1 container, got {create_calls}"
-    assert container_calls[0].get("name") == "ELEGOO PLA"
+    assert container_calls[0].get("name") == "ELEGOO PLA Master"
 
     # Child: has parentId pointing to container
     child_calls = [c for c in create_calls if "parentId" in c]
@@ -320,8 +320,8 @@ def test_wizard_execute_generic_container_carries_shared_finish_tags(db):
     containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     assert len(containers) == 1
     container = containers[0]
-    # Name carries the finish line, and optTags carries the shared Silk id (17).
-    assert container.get("name") == "ELEGOO PLA Silk"
+    # Name carries the finish line (no double Silk), and optTags carries the shared Silk id (17).
+    assert container.get("name") == "ELEGOO PLA Silk Master"
     assert container.get("optTags") == [17]
 
 
@@ -368,12 +368,12 @@ def test_wizard_execute_generic_container_two_separate_clusters_two_containers(d
     synth_rows = db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
     assert len(synth_rows) == 2
 
-    # Container names should be the two cluster display names
+    # Container names should be the two cluster display names (with Master suffix)
     containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     assert len(containers) == 2
     container_names = {c["name"] for c in containers}
-    assert "ELEGOO PLA" in container_names
-    assert "ELEGOO PETG" in container_names
+    assert "ELEGOO PLA Master" in container_names
+    assert "ELEGOO PETG Master" in container_names
 
 
 # ---------------------------------------------------------------------------
@@ -565,3 +565,222 @@ def test_config_put_rejects_invalid_variant_parent_mode(db):
     client = _client(db)
     resp = client.put("/api/config", json={"variant_parent_mode": "not_a_valid_mode"})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 7. P0.1 — No double finish word in container name
+# ---------------------------------------------------------------------------
+
+
+def test_container_name_no_double_silk(db):
+    """P0.1: container name is 'ELEGOO PLA Silk Master', not 'ELEGOO PLA Silk Silk Master'.
+
+    When rep.material is 'PLA Silk', strip_finish_words must remove 'Silk' from the
+    material before composing, so the extracted finish ('silk') is appended only once.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+
+    # material field is 'PLA Silk' (as Spoolman sometimes stores it)
+    sm_filaments = [
+        SpoolmanFilament(
+            id=10, name="PLA Silk Red",
+            vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+            material="PLA Silk",
+        ),
+        SpoolmanFilament(
+            id=11, name="PLA Silk Blue",
+            vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+            material="PLA Silk",
+        ),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    create_calls: list[dict] = []
+    call_counter = 0
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
+    assert len(containers) == 1, f"expected 1 container, got {create_calls}"
+    name = containers[0].get("name")
+    # Must not contain 'Silk Silk'
+    assert "Silk Silk" not in name, f"double finish word in container name: {name!r}"
+    assert name == "ELEGOO PLA Silk Master", f"unexpected container name: {name!r}"
+
+
+# ---------------------------------------------------------------------------
+# 8. P0.3 — Patch optTags onto a pre-existing container on re-run
+# ---------------------------------------------------------------------------
+
+
+def test_container_reuse_patches_opt_tags(db):
+    """P0.3: re-running with a pre-existing container patches missing optTags onto it.
+
+    Simulates a prior run that created the container without optTags (e.g. created before
+    the finish-tag logic was added).  The re-run should PATCH optTags onto the container.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+
+    sm_filaments = [
+        _sm_filament(10, "PLA Silk Red"),
+        _sm_filament(11, "PLA Silk Blue"),
+    ]
+
+    from app.schemas.spoolman import encode_extra_value
+    from app.config import settings as _settings
+
+    # Simulate prior run: synthetic parent exists, children have parent xref on their spools
+    db.add(FilamentMapping(
+        spoolman_filament_id=None,
+        filamentdb_id="prior-silk-container",
+        filamentdb_parent_id=None,
+        is_synthetic_parent=True,
+    ))
+    db.commit()
+
+    # The SM spools carry the parent xref pointing to the pre-existing container
+    spool10 = SpoolmanSpool(
+        id=100, filament=sm_filaments[0], remaining_weight=500.0, archived=False,
+        extra={
+            _settings.spoolman_field_filamentdb_parent_id: encode_extra_value("prior-silk-container"),
+        },
+    )
+    spool11 = SpoolmanSpool(
+        id=101, filament=sm_filaments[1], remaining_weight=300.0, archived=False,
+        extra={
+            _settings.spoolman_field_filamentdb_parent_id: encode_extra_value("prior-silk-container"),
+        },
+    )
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[spool10, spool11])
+
+    # The pre-existing FDB container has no optTags (created in an older run)
+    existing_container = MagicMock()
+    existing_container.id = "prior-silk-container"
+    existing_container.optTags = []  # no tags yet
+
+    filamentdb = _fake_filamentdb()
+    # fdb_by_id lookup: return the existing container when fetched
+    from unittest.mock import MagicMock as MM
+    filamentdb.get_filaments = AsyncMock(return_value=[
+        FDBFilament.model_validate({
+            "_id": "prior-silk-container", "name": "ELEGOO PLA Silk",
+            "spools": [], "optTags": [],
+        })
+    ])
+
+    update_calls: list[tuple] = []
+
+    async def _update(fdb_id, payload):
+        update_calls.append((fdb_id, dict(payload)))
+        return MagicMock(id=fdb_id)
+
+    filamentdb.update_filament = AsyncMock(side_effect=_update)
+
+    # Already-linked SM filaments from prior run should be in match decisions as 'skip' or 'create'
+    # The planner will detect them via FilamentMapping rows so they'd be skipped.
+    # Add FM rows to simulate prior-run children
+    db.add(FilamentMapping(
+        spoolman_filament_id=10, filamentdb_id="prior-red-fdb",
+        filamentdb_parent_id="prior-silk-container", is_synthetic_parent=False,
+    ))
+    db.add(FilamentMapping(
+        spoolman_filament_id=11, filamentdb_id="prior-blue-fdb",
+        filamentdb_parent_id="prior-silk-container", is_synthetic_parent=False,
+    ))
+    db.commit()
+
+    client = _client(db, spoolman, filamentdb)
+    body = client.post("/api/wizard/execute").json()
+
+    # No failures expected
+    assert body["failed"] == 0
+
+    # update_filament should have been called on the container with optTags including silk (17)
+    opt_tag_updates = [
+        (fid, p) for fid, p in update_calls
+        if fid == "prior-silk-container" and "optTags" in p
+    ]
+    assert len(opt_tag_updates) >= 1, (
+        f"expected optTags patch on container, got update_calls={update_calls}"
+    )
+    assert 17 in opt_tag_updates[0][1]["optTags"], (
+        f"Silk tag (17) missing from optTags patch: {opt_tag_updates[0][1]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. P1.1 — Resilient execution: 409 on create does not abort the batch
+# ---------------------------------------------------------------------------
+
+
+def test_execute_409_on_filament_create_does_not_abort_batch(db):
+    """P1.1: a 409 from FDB on filament create is recorded as 'failed' but the batch continues.
+
+    Two filaments: the first triggers a 409 (name collision), the second succeeds.
+    Total failed=1, created>=1 (the second filament + its container).
+    """
+    import httpx
+
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 20, "action": "create"},
+    ])
+    db.commit()
+
+    # Two separate clusters (different materials) → two containers
+    sm_filaments = [
+        _sm_filament(10, "PLA Red", material="PLA"),
+        _sm_filament(20, "PETG Blue", material="PETG"),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    call_counter = 0
+    create_calls: list[dict] = []
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        # First container create → 409 (simulates name collision on the container)
+        if call_counter == 1:
+            response = httpx.Response(409, json={"detail": "Duplicate key error"})
+            raise httpx.HTTPStatusError("409 conflict", request=MagicMock(), response=response)
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+
+    # First cluster bombed (container 409) → 1 failed
+    assert body["failed"] >= 1
+    # Second cluster should have proceeded (container + child created)
+    assert body["created"] >= 2  # at least second container + second child
+    # Overall response is 200 (not a fatal error)
+    assert "records" in body

@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import uuid
 
+import httpx
+
 from fastapi import APIRouter, Body, Depends, Request
 from sqlalchemy.orm import Session
 
@@ -25,7 +27,7 @@ from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
-from app.core.material_tags import finish_ids_from_text
+from app.core.material_tags import finish_ids_from_text, strip_finish_words
 from app.core.matcher import (
     extract_finish_line,
     match_filaments,
@@ -89,6 +91,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _is_409(exc: Exception) -> bool:
+    """Return True when *exc* is an httpx HTTP 409 Conflict response."""
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response.status_code == 409
+    )
+
 # ---------------------------------------------------------------------------
 # Ref builders
 # ---------------------------------------------------------------------------
@@ -150,6 +160,11 @@ def _resolve_variant_parent_mode(db: Session) -> VariantParentMode:
     return "unset"
 
 
+# Suffix appended to the generic container name so the container never collides
+# with its own color children.  E.g. "TTYT3d PLA Silk Master".
+_CONTAINER_MASTER_SUFFIX = " Master"
+
+
 def _container_display_name(
     sm_members: list[SpoolmanFilament],
     variant_keywords: list[str],
@@ -157,25 +172,34 @@ def _container_display_name(
     """Derive a display name for a generic container parent from its cluster members.
 
     Uses the first member (arbitrary; naming is deterministic once the cluster is
-    stable) to extract vendor + material + finish line — the same combination
-    that the cluster key groups on.  E.g.:
-      "ELEGOO" + "PLA" + "" → "ELEGOO PLA"
-      "Prusament" + "PLA" + "silk" → "Prusament PLA Silk"
+    stable) to extract vendor + stripped-material + finish line — the same combination
+    that the cluster key groups on.  Appends a "Master" suffix so the container name
+    never collides with its own color children.
+
+    E.g.:
+      "ELEGOO" + "PLA" + "" → "ELEGOO PLA Master"
+      "Prusament" + "PLA Silk" + "silk" → "Prusament PLA Silk Master"
+        (material is stripped of the finish word before re-appending it once)
     """
     if not sm_members:
-        return "Filament"
+        return "Filament Master"
     rep = sm_members[0]
     vendor = rep.vendor.name if rep.vendor else None
-    material = rep.material or _DEFAULT_FDB_MATERIAL
+    raw_material = rep.material or _DEFAULT_FDB_MATERIAL
     finish = extract_finish_line(rep.name or "", rep.material, keywords=variant_keywords)
+    # Strip finish keywords from the material string before composing so we don't
+    # produce duplicates like "PLA Silk Silk".  strip_finish_words uses the full
+    # tag map; pass it the configured map so user overrides are honoured.
+    tag_map = _settings.parsed_material_tag_ids
+    base_material = strip_finish_words(raw_material, tag_map)
     parts = []
     if vendor:
         parts.append(vendor)
-    parts.append(material)
+    parts.append(base_material)
     if finish:
         # Capitalize for display (finish comes from normalized lower)
         parts.append(finish.title())
-    return " ".join(parts)
+    return " ".join(parts) + _CONTAINER_MASTER_SUFFIX
 
 
 def _vendor_hint(sm_vendor: str | None, fdb_vendor: str | None) -> str | None:
@@ -994,6 +1018,38 @@ async def _execute_spoolman_to_fdb(
                     ))
                     db.flush()
                 container_fdb_id = existing_fdb_parent_id
+
+                # P0.3 — patch optTags onto a pre-existing container if it's missing them.
+                # Compute the shared finish IDs across all cluster members the same way as
+                # the create path, then merge with whatever the container already has.
+                _tag_map_reuse = _settings.parsed_material_tag_ids
+                _member_finishes_reuse = [
+                    finish_ids_from_text(m.name, m.material, _tag_map_reuse) for m in members
+                ]
+                _shared_ids_reuse = (
+                    set.intersection(*_member_finishes_reuse) if _member_finishes_reuse else set()
+                )
+                if _shared_ids_reuse:
+                    existing_container = fdb_by_id.get(existing_fdb_parent_id)
+                    existing_opt_tags: set[int] = set(
+                        (existing_container.optTags or []) if existing_container else []
+                    )
+                    new_tags = existing_opt_tags | _shared_ids_reuse
+                    if new_tags != existing_opt_tags:
+                        try:
+                            await filamentdb.update_filament(
+                                existing_fdb_parent_id,
+                                {"optTags": sorted(new_tags)},
+                            )
+                            logger.info(
+                                "wizard execute %s: patched optTags %s onto existing container %s",
+                                res.cycle_id, sorted(new_tags), existing_fdb_parent_id,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "wizard execute %s: optTags patch on container %s failed: %s",
+                                res.cycle_id, existing_fdb_parent_id, exc,
+                            )
             else:
                 # Create the colorless container in FDB.
                 container_payload: dict = {
@@ -1034,11 +1090,19 @@ async def _execute_spoolman_to_fdb(
                         detail=f"synthetic container parent: {display_name}",
                     )
                 except Exception as exc:
-                    logger.error(
-                        "wizard execute %s: create container parent failed for cluster %s: %s",
-                        res.cycle_id, cluster_key, exc,
-                    )
-                    res.add(db, "filament", "failed", error=str(exc),
+                    if _is_409(exc):
+                        err_msg = f"name collision: {display_name}"
+                        logger.warning(
+                            "wizard execute %s: 409 creating container '%s' (cluster %s) — skipping cluster",
+                            res.cycle_id, display_name, cluster_key,
+                        )
+                    else:
+                        err_msg = str(exc)
+                        logger.error(
+                            "wizard execute %s: create container parent failed for cluster %s: %s",
+                            res.cycle_id, cluster_key, exc,
+                        )
+                    res.add(db, "filament", "failed", error=err_msg,
                             detail=f"failed to create container: {display_name}")
                     continue  # skip setting parent for this cluster
                 # Record the synthetic FilamentMapping.
@@ -1114,11 +1178,19 @@ async def _execute_spoolman_to_fdb(
                 res.add(db, "filament", "created",
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
-                logger.error("wizard execute %s: create FDB filament failed (SM %s): %s",
-                             res.cycle_id, item.sm_filament.id, exc)
-                res.add(db, "filament", "failed", error=str(exc),
+                if _is_409(exc):
+                    err_msg = f"name collision: {payload.get('name', '?')}"
+                    logger.warning(
+                        "wizard execute %s: 409 creating FDB filament (SM %s, name '%s') — skipping",
+                        res.cycle_id, item.sm_filament.id, payload.get("name"),
+                    )
+                else:
+                    err_msg = str(exc)
+                    logger.error("wizard execute %s: create FDB filament failed (SM %s): %s",
+                                 res.cycle_id, item.sm_filament.id, exc)
+                res.add(db, "filament", "failed", error=err_msg,
                         sm_filament_id=item.sm_filament.id)
-                item.error = str(exc)
+                item.error = err_msg
         if item.fdb_id and not item.error:
             # D3: for attach groups, master_map points to the existing FDB parent (not the created id)
             # so Pass 2 variants also receive parentId = existing_fdb_parent_id
@@ -1167,11 +1239,19 @@ async def _execute_spoolman_to_fdb(
                 res.add(db, "filament", "created",
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
-                logger.error("wizard execute %s: create FDB variant failed (SM %s): %s",
-                             res.cycle_id, item.sm_filament.id, exc)
-                res.add(db, "filament", "failed", error=str(exc),
+                if _is_409(exc):
+                    err_msg = f"name collision: {payload.get('name', '?')}"
+                    logger.warning(
+                        "wizard execute %s: 409 creating FDB variant (SM %s, name '%s') — skipping",
+                        res.cycle_id, item.sm_filament.id, payload.get("name"),
+                    )
+                else:
+                    err_msg = str(exc)
+                    logger.error("wizard execute %s: create FDB variant failed (SM %s): %s",
+                                 res.cycle_id, item.sm_filament.id, exc)
+                res.add(db, "filament", "failed", error=err_msg,
                         sm_filament_id=item.sm_filament.id)
-                item.error = str(exc)
+                item.error = err_msg
 
     # ---- Pass 2.5: Spoolman write-backs (Phase 3 reconcile) ----
     # For each SM filament in a group that has reconcile decisions, PATCH it with the canonical
@@ -1698,7 +1778,9 @@ def _compute_planned_writes(
         sm_spool = si.sm_spool
         sm_fil = getattr(sm_spool, "filament", None)
         fil_name = sm_fil.name if sm_fil else f"SM filament #{getattr(sm_fil, 'id', '?')}"
-        label = f"{fil_name} — Spool #{sm_spool.id}"
+        vendor_name = (sm_fil.vendor.name if sm_fil and sm_fil.vendor else None)
+        vendor_suffix = f" ({vendor_name})" if vendor_name else ""
+        label = f"{fil_name}{vendor_suffix} — Spool #{sm_spool.id}"
         planned_writes.append(PlannedWrite(
             system="filamentdb",
             entity_type="spool",

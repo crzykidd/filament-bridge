@@ -94,9 +94,35 @@ in.
 
 ---
 
+## Container naming and the "Master" suffix
+
+The container name follows the pattern `{vendor} {base_material} {finish} Master`:
+
+- `base_material` is the material string with finish keywords stripped (via
+  `strip_finish_words`) so that a Spoolman filament with `material = "PLA Silk"`
+  produces "ELEGOO PLA Silk Master", not "ELEGOO PLA Silk Silk Master".
+- The `" Master"` suffix is always appended so the container name never collides
+  with its own color children (e.g. "ELEGOO PLA Silk Red"). The suffix is a
+  named constant `_CONTAINER_MASTER_SUFFIX` in `api/wizard.py`.
+
 ## Container naming collision prevention
 
 The lookup key for existing synthetic containers uses the full cluster tuple
 `(vendor_norm, material_norm, finish_norm)`, not just the display name string.
 Two clusters that normalize to the same display name but differ by vendor,
 material, or finish are treated as distinct containers.
+
+If the "… Master" name still collides with an existing FDB filament (e.g. you
+have a record named "ELEGOO PLA Silk Master" from a prior manual import), the
+Preview step will show it as a name collision with a "Fix variant mapping" link
+(to return to the Variances step and adjust grouping). A 409 on execute is
+caught per-record and recorded as a failure — it does not abort the rest of the
+batch.
+
+## optTags on container parents (re-runs)
+
+When a pre-existing container is reused on re-run, the wizard computes the
+shared finish tags (intersection across members) and PATCHes `optTags` onto the
+container if any are missing. This brings containers created before the finish-tag
+logic up to date without requiring a full reset. Already-present unrelated tags
+are preserved (merge, not clobber).

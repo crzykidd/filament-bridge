@@ -453,6 +453,28 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   const actionable = sorted.filter(r => r.status !== 'unmatched_fdb')
   const tableTri = triState(actionable.map(r => isIncluded(r, decisions)))
 
+  // Shared action bar — rendered at top and bottom
+  const actionBar = (
+    <div className="flex justify-between items-center">
+      <button onClick={prev}
+        className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        ← Back
+      </button>
+      <div className="flex items-center gap-3">
+        <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
+          className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2">
+          {rescanning
+            ? <><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />Rescanning…</>
+            : '↻ Rescan'}
+        </button>
+        <button onClick={handleSave} disabled={saving}
+          className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save & Next →'}
+        </button>
+      </div>
+    </div>
+  )
+
   return (
     <div className="space-y-4">
       <div>
@@ -461,6 +483,9 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
           Review auto-matched pairs, resolve ambiguous matches, and decide what to do with unmatched items.
         </p>
       </div>
+
+      {/* Top action bar */}
+      {actionBar}
 
       {/* Toolbar */}
       <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
@@ -641,24 +666,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
 
       {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
 
-      <div className="flex justify-between items-center">
-        <button onClick={prev}
-          className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
-          ← Back
-        </button>
-        <div className="flex items-center gap-3">
-          <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
-            className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2">
-            {rescanning
-              ? <><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />Rescanning…</>
-              : '↻ Rescan'}
-          </button>
-          <button onClick={handleSave} disabled={saving}
-            className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-            {saving ? 'Saving…' : 'Save & Next →'}
-          </button>
-        </div>
-      </div>
+      {/* Bottom action bar */}
+      {actionBar}
     </div>
   )
 }

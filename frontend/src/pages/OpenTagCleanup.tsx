@@ -14,6 +14,7 @@ import {
   postOpenTagRefresh,
 } from '../api/client'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
+import { DeepLinks } from '../components/DeepLinks'
 import type {
   OpenTagApplyRequest,
   OpenTagCacheStatus,
@@ -99,7 +100,7 @@ function FieldReviewRow({ row, decision, onChange }: FieldRowProps) {
       </td>
       <td className="px-3 py-2">
         {decision.keep_mine ? (
-          <span className="text-xs text-gray-400 italic">keeping mine</span>
+          <span className="text-xs text-gray-600 italic">keeping mine</span>
         ) : (
           <div className="flex items-center gap-1">
             {isColor && <ColorSwatch hex={colorHex} />}
@@ -284,7 +285,7 @@ function FilamentCard({
               {match.spoolman_material}
             </span>
           )}
-          <span className="text-xs text-gray-400">SM #{match.spoolman_filament_id}</span>
+          <DeepLinks spoolmanFilamentId={match.spoolman_filament_id} />
           {displayMulticolorMismatch && (
             <span
               className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium"
@@ -326,7 +327,7 @@ function FilamentCard({
           <OpenTagStampedBadge existingUuid={existingUuid} dataDiffers={dataDiffers} />
           {confidenceBadge(displayConfidence)}
           {(activeCandidate?.opt_slug ?? match.opt_slug) && (
-            <span className="text-xs text-gray-400 font-mono">
+            <span className="text-xs text-gray-600 font-mono">
               {activeCandidate?.opt_slug ?? match.opt_slug}
             </span>
           )}
@@ -628,7 +629,7 @@ function GroupSection({
           <span className="text-sm font-semibold text-gray-700">{group.key}</span>
           <span className="text-xs text-gray-500 ml-1">
             {matchedCount} matched · {noMatchCount} no-match · {taggedCount} tagged
-            <span className="ml-1 text-gray-400">({total})</span>
+            <span className="ml-1 text-gray-500">({total})</span>
           </span>
           <button
             type="button"
@@ -951,14 +952,26 @@ export default function OpenTagCleanup() {
             {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
           </span>
         )}
-        <button
-          type="button"
-          className="ml-auto px-3 py-1 text-sm border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50 disabled:opacity-50"
-          onClick={handleRefresh}
-          disabled={working}
-        >
-          {working ? 'Working…' : 'Refresh dataset'}
-        </button>
+        <div className="ml-auto flex gap-2">
+          <button
+            type="button"
+            className="px-3 py-1 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50 disabled:opacity-50"
+            onClick={() => runLoad(true)}
+            disabled={working}
+            title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
+          >
+            {working ? 'Working…' : 'Reprocess records'}
+          </button>
+          <button
+            type="button"
+            className="px-3 py-1 text-sm border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50 disabled:opacity-50"
+            onClick={handleRefresh}
+            disabled={working}
+            title="Re-download the OpenTag dataset from Filament DB, then reprocess"
+          >
+            {working ? 'Working…' : 'Refresh dataset'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -1137,7 +1150,7 @@ export default function OpenTagCleanup() {
               </summary>
               <div className="mt-2 space-y-1 pl-4">
                 {noMatch.map(m => (
-                  <div key={m.spoolman_filament_id} className="text-sm text-gray-400">
+                  <div key={m.spoolman_filament_id} className="text-sm text-gray-600">
                     {m.spoolman_name} ({m.spoolman_vendor}) — {Math.round(m.confidence * 100)}%
                   </div>
                 ))}

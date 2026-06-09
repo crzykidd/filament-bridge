@@ -1,5 +1,42 @@
 # Decision record
 
+## 2026-06-08 — Container naming "Master" suffix + resilient 409 execute
+
+### P0.1 — Strip finish word from material before composing container name
+
+`_container_display_name` now calls `strip_finish_words(material, tag_map)` before composing
+the display name. This prevents "PLA Silk Silk Master" when `rep.material = "PLA Silk"` — the
+finish word is already in the material, and was being appended a second time from
+`extract_finish_line`. `planner.py` already does this with `base_type = strip_finish_words(...)`.
+
+### P0.2 — " Master" suffix on container names (decided: always append)
+
+The container parent name always ends with `_CONTAINER_MASTER_SUFFIX = " Master"` (e.g.
+"ELEGOO PLA Silk Master"). Rationale: without the suffix, the container name is the same prefix
+as each child (e.g. "ELEGOO PLA Silk" vs "ELEGOO PLA Silk Red"), and Filament DB's global
+uniqueness constraint for `name` makes it trivial to produce a collision if the user happens to
+have a filament already named "ELEGOO PLA Silk". The suffix makes the container namespace
+distinct. The constant is in `api/wizard.py` so it's easy to change later without grep.
+
+If the "… Master" name still collides (pre-existing record), the Preview step surfaces it as a
+name collision with an actionable "Fix variant mapping" link. A 409 on execute is now per-record
+(P1.1), so a container collision does not abort the rest of the batch.
+
+### P0.3 — optTags patch on container reuse
+
+On re-run with a pre-existing container, the wizard computes the intersection of finish tags
+across all cluster members and PATCHes them onto the container if any are missing. The merge
+preserves existing unrelated tags. This is idempotent and non-fatal (errors are logged as
+warnings). It brings containers created before the finish-tag logic current without a full reset.
+
+### P1.1 — Resilient 409 on filament/container create
+
+Each `create_filament` call in `_execute_spoolman_to_fdb` (container pre-pass, Pass 1 masters,
+Pass 2 variants) is now individually wrapped to detect `httpx.HTTPStatusError` with
+`response.status_code == 409`. A 409 is recorded as `failed` with detail
+`"name collision: <name>"` and the batch continues. This avoids the "bomb out on second filament"
+failure mode seen in live testing. The `_is_409(exc)` helper is the single detection point.
+
 ## 2026-06-08 — Generic container parent mode for Bulk Import Wizard
 
 ### Feature summary

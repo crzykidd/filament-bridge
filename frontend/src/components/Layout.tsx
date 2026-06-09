@@ -8,7 +8,6 @@ const NAV_ITEMS = [
   { to: '/synced-records', label: 'Synced Records', exact: false },
   { to: '/conflicts', label: 'Conflicts', exact: false },
   { to: '/sync-log', label: 'Sync Log', exact: false },
-  { to: '/settings', label: 'Settings', exact: false },
   { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
   { to: '/opentag-cleanup', label: 'OpenTag Cleanup', exact: false },
 ]
@@ -65,6 +64,12 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
+        {/* Settings pinned at bottom, visually separated */}
+        <div className="px-2 pb-2 border-t border-indigo-700 pt-2">
+          <NavLink to="/settings" end={false} className={navClass}>
+            Settings
+          </NavLink>
+        </div>
         <div className="px-4 py-3 border-t border-indigo-700 flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${statusDot}`} />
           <span className="text-indigo-200 text-xs">

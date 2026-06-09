@@ -635,7 +635,7 @@ def find_best_match(
     tag_map: dict[str, int] | None = None,
     aliases: dict[str, str] | None = None,
     *,
-    top_n: int = 5,
+    top_n: int = 10,
     min_confidence: float = 0.30,
 ) -> dict[str, Any]:
     """Find the best matching OPTMaterial for a SpoolmanFilament.

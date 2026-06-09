@@ -11,6 +11,43 @@ GitHub release.
 
 ### Added
 
+- **Wizard top action bar** — primary Back/Next/Save action buttons now appear at both the top
+  and bottom of each long wizard step (Matches, Variances, Preview) so users don't have to scroll
+  to the bottom to proceed.
+- **Variances sort control** — segmented Brand A→Z / Material A→Z sort buttons above the
+  auto-groups, standalone, and manually-grouped sections in the Variances step.
+- **OpenTag "Reprocess records" button** — new button on the OpenTag Cleanup dataset-status banner
+  re-scans Spoolman and recomputes matches against the current cached dataset without re-downloading
+  it; useful for iterating after correcting Spoolman names.
+- **OpenTag SM filament deep link** — SM filament ID in the OpenTag Cleanup card header is now a
+  clickable `DeepLinks` component (links to `{spoolmanUrl}/filament/show/{id}`).
+- **OpenTag 10-candidate dropdown** — raised the alternate-candidate cap from 5 to 10 so the
+  candidate selector shows up to 10 choices.
+- **Actionable name-collision rows in Preview** — each collision entry now shows an explanatory
+  warning and a "Fix variant mapping" button that navigates back to the Variances step.
+- **Vendor in planned-writes spool rows** — spool rows in the Preview planned-writes list now
+  include the vendor/manufacturer name in the label.
+- **Settings pinned to sidebar bottom** — Settings link is now visually separated at the bottom
+  of the sidebar navigation.
+
+### Fixed
+
+- **P0.1 Double finish word in container name** — `_container_display_name` now calls
+  `strip_finish_words` on the raw `material` field before composing the container name, so a
+  Spoolman filament with `material = "PLA Silk"` produces "ELEGOO PLA Silk Master" rather than
+  "ELEGOO PLA Silk Silk Master".
+- **P0.2 Container "Master" suffix** — generic-container parents now always have " Master"
+  appended (e.g. "ELEGOO PLA Silk Master") so the container name can never collide with its own
+  color-variant children. The suffix is a named constant `_CONTAINER_MASTER_SUFFIX`.
+- **P0.3 optTags on container reuse** — when a pre-existing container is reused on re-run, the
+  wizard now PATCHes the shared finish tags (Silk / Matte / CF / …) onto the container if any are
+  missing. Existing unrelated tags are preserved (merge, not clobber).
+- **P1.1 Resilient 409 on filament create** — a 409 Conflict from Filament DB during container or
+  child filament creation is now caught per-record (not per-batch). The record is marked as
+  `failed` with detail `"name collision: <name>"`; the rest of the batch continues unaffected.
+
+### Generic container parent mode
+
 - **Generic container parent mode** — new `variant_parent_mode` setting (`unset` / `promote_color`
   / `generic_container`) for the Bulk Import Wizard (Spoolman → Filament DB). In
   `generic_container` mode the wizard synthesises a colorless, bridge-owned FDB container parent

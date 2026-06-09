@@ -21,7 +21,7 @@ function emptyActiveLabel(neverImportEmpties: boolean): string {
     : 'Empty/depleted spools (will be imported)'
 }
 
-export default function StepNPreview({ next, prev }: WizardCtx) {
+export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
   const { data, loading, error } = useApi(getWizardPreview)
   const { data: config } = useApi(getConfig)
   const [open, setOpen] = useState<Set<FlagKey>>(new Set())
@@ -48,6 +48,18 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
 
   const isSpoolmanImport = data.direction === 'spoolman_to_filamentdb'
 
+  // Shared action bar — rendered at top and bottom of this long step
+  const actionBar = (
+    <div className="flex justify-between">
+      <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        ← Back
+      </button>
+      <button onClick={next} className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
+        Next →
+      </button>
+    </div>
+  )
+
   return (
     <div className="space-y-5">
       <div>
@@ -56,6 +68,9 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
           A read-only preview of what the initial sync would do. Nothing is written to either system.
         </p>
       </div>
+
+      {/* Top action bar */}
+      {actionBar}
 
       {!isSpoolmanImport && (
         <div className="bg-gray-50 border border-gray-200 rounded p-4 text-sm text-gray-600">
@@ -90,12 +105,12 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
         ))}
       </div>
 
-      {/* Non-blocking notice about future decision UI */}
+      {/* Non-blocking notice about flagged items */}
       <div className="bg-amber-50 border border-amber-200 rounded p-4">
         <p className="text-amber-800 text-sm">
-          The flagged items below need a human decision before they can be reconciled. Surfacing
-          them here is read-only — resolving them will arrive in a later release. You can still
-          proceed to Execute; flagged items are handled per-record there.
+          The flagged items below need attention before executing. Name collisions will be recorded
+          as individual failures per-record (the rest of the batch continues). Fix variant groupings
+          or proceed to Execute to handle them per-record.
         </p>
       </div>
 
@@ -108,27 +123,42 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
       >
         <div className="divide-y divide-gray-100">
           {data.name_collisions.map((c, i) => (
-            <div key={i} className="px-4 py-2 text-sm flex items-center justify-between gap-3">
-              <div>
-                <span className="font-medium text-gray-800">{c.normalized_name}</span>
-                <span className="ml-2 text-xs text-gray-500">
-                  SM filament{c.sm_filament_ids.length !== 1 ? 's' : ''}: {c.sm_filament_ids.join(', ')}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                {c.vs_existing && (
-                  <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
-                    vs existing
+            <div key={i} className="px-4 py-3 text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="font-medium text-gray-800">{c.normalized_name}</span>
+                  <span className="ml-2 text-xs text-gray-500">
+                    SM filament{c.sm_filament_ids.length !== 1 ? 's' : ''}: {c.sm_filament_ids.join(', ')}
                   </span>
-                )}
-                {c.intra_batch && (
-                  <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">
-                    intra-batch
-                  </span>
-                )}
-                {c.existing_fdb_filament_id && (
-                  <DeepLinks filamentdbFilamentId={c.existing_fdb_filament_id} />
-                )}
+                  <p className="mt-0.5 text-xs text-amber-700">
+                    {c.vs_existing
+                      ? 'This name already exists in Filament DB — the create will fail with a 409. Go back to Variances to fix grouping, or this record will be skipped.'
+                      : 'Two items in this batch share the same name — only one will be created.'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {c.vs_existing && (
+                    <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                      vs existing
+                    </span>
+                  )}
+                  {c.intra_batch && (
+                    <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">
+                      intra-batch
+                    </span>
+                  )}
+                  {c.existing_fdb_filament_id && (
+                    <DeepLinks filamentdbFilamentId={c.existing_fdb_filament_id} />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => goTo(3)}
+                    className="px-2 py-0.5 text-xs rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 whitespace-nowrap"
+                    title="Return to Variances step to fix variant grouping"
+                  >
+                    Fix variant mapping
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -253,14 +283,8 @@ export default function StepNPreview({ next, prev }: WizardCtx) {
         </div>
       )}
 
-      <div className="flex justify-between">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
-          ← Back
-        </button>
-        <button onClick={next} className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
-          Next →
-        </button>
-      </div>
+      {/* Bottom action bar */}
+      {actionBar}
     </div>
   )
 }
