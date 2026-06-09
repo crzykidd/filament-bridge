@@ -208,6 +208,9 @@ class ConfigResponse(BaseModel):
     # Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction).
     # "unset" means the user has not yet chosen; wizard is gated until chosen.
     variant_parent_mode: VariantParentMode = "unset"
+    # Marker appended to generic-container parent names (default "(Master)").
+    # Empty string = no marker (containers get no suffix).
+    container_parent_marker: str = "(Master)"
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -231,6 +234,8 @@ class ConfigUpdateRequest(BaseModel):
     debug_mode: bool | None = None
     # Variant parent mode
     variant_parent_mode: VariantParentMode | None = None
+    # Container parent marker (empty string = no suffix)
+    container_parent_marker: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +271,9 @@ class FilamentRef(BaseModel):
     # True when the Spoolman filament has a non-empty openprinttag_uuid extra field.
     # Always False for FDB-only refs (no SM side).
     openprinttag: bool = False
+    # True when this FDB ref is a synthetic container parent (bridge-owned, no SM counterpart).
+    # Used in the Matches step to show a "Master / Parent" badge instead of "Unmatched (FDB)".
+    is_master_container: bool = False
 
 
 class MatchPairRow(BaseModel):
@@ -516,6 +524,13 @@ class NameCollisionEntry(BaseModel):
     vs_existing: bool  # clashes with an already-existing FDB filament
     intra_batch: bool  # multiple incoming SM filaments share this normalized name
     existing_fdb_filament_id: str | None = None
+    # True when this collision is on a synthetic container parent name.
+    # Container collisions render an editable rename box + skip control in Preview.
+    is_container_collision: bool = False
+    # The cluster key string for this container collision (used to persist override).
+    cluster_key: str | None = None
+    # The proposed container name (before any user override).
+    proposed_name: str | None = None
 
 
 class EmptyActiveEntry(BaseModel):
@@ -570,6 +585,24 @@ class PlannedWrite(BaseModel):
     fields: list[PlannedWriteField] = Field(default_factory=list)
 
 
+class ContainerNameOverride(BaseModel):
+    """A per-cluster container-name override (or skip) from the Preview rename UI.
+
+    ``cluster_key`` is the str-representation of the cluster tuple
+    (vendor_norm, material_norm, finish_norm).  The execute path looks up
+    this key and replaces the generated container name with ``name_override``
+    (or skips the cluster when ``skip`` is True).
+    """
+
+    cluster_key: str  # str(cluster_tuple) from sm_variant_cluster_key
+    name_override: str | None = None  # new container name; None when skip=True
+    skip: bool = False  # True = skip this cluster (don't create a container)
+
+
+class ContainerNameOverridesRequest(BaseModel):
+    overrides: list[ContainerNameOverride]
+
+
 class WizardPreviewResponse(BaseModel):
     direction: SyncDirection
     plan_rows: list[WizardExecuteRecord]
@@ -582,6 +615,8 @@ class WizardPreviewResponse(BaseModel):
     include_empty_spools: bool = False
     # Phase 4: structured write summary for the pre-flight review
     planned_writes: list[PlannedWrite] = Field(default_factory=list)
+    # Saved container-name overrides (populated from persisted wizard_container_name_overrides)
+    container_name_overrides: list[ContainerNameOverride] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

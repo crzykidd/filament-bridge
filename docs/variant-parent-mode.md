@@ -94,30 +94,46 @@ in.
 
 ---
 
-## Container naming and the "Master" suffix
+## Container naming and the configurable marker
 
-The container name follows the pattern `{vendor} {base_material} {finish} Master`:
+The container name follows the pattern `{vendor} {base_material} {finish} {marker}`:
 
 - `base_material` is the material string with finish keywords stripped (via
   `strip_finish_words`) so that a Spoolman filament with `material = "PLA Silk"`
-  produces "ELEGOO PLA Silk Master", not "ELEGOO PLA Silk Silk Master".
-- The `" Master"` suffix is always appended so the container name never collides
-  with its own color children (e.g. "ELEGOO PLA Silk Red"). The suffix is a
-  named constant `_CONTAINER_MASTER_SUFFIX` in `api/wizard.py`.
+  produces "ELEGOO PLA Silk (Master)", not "ELEGOO PLA Silk Silk (Master)".
+- The **marker** (default `(Master)`) is appended after a space when non-empty,
+  so the container name visually separates from its color children. Example:
+  "ELEGOO PLA (Master)" vs children "ELEGOO PLA Red", "ELEGOO PLA Blue".
+- Set the env var `CONTAINER_PARENT_MARKER` to change the default, or adjust it
+  at runtime in **Settings → Variant parent mode** (visible only when
+  `generic_container` is selected): uncheck the "Append a marker" checkbox to
+  disable the suffix entirely, or type a custom string in the text box.
+- **Changing the marker does not rename existing containers.** A re-run with a
+  different marker will not find the old container via the idempotency lookup and
+  will attempt to create a new one under the new name. The resilient-409 backstop
+  and the per-cluster collision rename/skip UI (see below) cover any collision.
 
-## Container naming collision prevention
+## Container naming collision prevention and editable rename
 
 The lookup key for existing synthetic containers uses the full cluster tuple
 `(vendor_norm, material_norm, finish_norm)`, not just the display name string.
 Two clusters that normalize to the same display name but differ by vendor,
 material, or finish are treated as distinct containers.
 
-If the "… Master" name still collides with an existing FDB filament (e.g. you
-have a record named "ELEGOO PLA Silk Master" from a prior manual import), the
-Preview step will show it as a name collision with a "Fix variant mapping" link
-(to return to the Variances step and adjust grouping). A 409 on execute is
-caught per-record and recorded as a failure — it does not abort the rest of the
-batch.
+If the proposed container name collides with an existing FDB record (or another
+container in the same batch), the **Preview step** now renders an editable text
+box pre-filled with the proposed name, plus a **"Skip cluster"** control:
+
+- **Rename** — type a new unique name and save; the override persists in
+  `BridgeConfig` (`wizard_container_name_overrides`) and is used at execute
+  time instead of the generated name.
+- **Skip cluster** — suppresses both the container and all its member filaments
+  in execute (no orphan records are created). Persists in the same override key.
+
+This rename/skip flow works regardless of the marker setting — if you disabled
+the marker and "ELEGOO PLA" still collides, the same editable-name UI appears.
+The resilient-409 backstop (per-record failure, batch continues) remains as a
+safety net for any collision that slips through to execute.
 
 ## optTags on container parents (re-runs)
 

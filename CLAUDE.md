@@ -229,6 +229,7 @@ filament-bridge/
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag material slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
+| `CONTAINER_PARENT_MARKER` | No | `(Master)` | String appended (after a space) to generic-container parent names in the wizard. Empty string = no suffix. Overridable at runtime via Settings. |
 | `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications (declared; not yet implemented) |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |
@@ -246,6 +247,7 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
 | `opentag_vendor_aliases` | env fallback (`""`) | CSV of `sm=opentag` vendor alias pairs for the OpenTag matcher brand pre-filter. |
 | `opentag_color_keywords` | env fallback (`""`) | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher. Merged on top of `DEFAULT_COLOR_KEYWORDS` seed. |
+| `container_parent_marker` | env fallback (`"(Master)"`) | String appended to generic-container parent names (e.g. "ELEGOO PLA (Master)"). Empty = no suffix. Shown in Settings when `generic_container` mode is active. |
 
 ## Important technical details
 

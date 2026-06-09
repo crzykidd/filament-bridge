@@ -211,7 +211,7 @@ def test_wizard_execute_generic_container_single_color_creates_container_and_var
     # Container: no color, no parentId
     container_calls = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     assert len(container_calls) == 1, f"expected 1 container, got {create_calls}"
-    assert container_calls[0].get("name") == "ELEGOO PLA Master"
+    assert container_calls[0].get("name") == "ELEGOO PLA (Master)"
 
     # Child: has parentId pointing to container
     child_calls = [c for c in create_calls if "parentId" in c]
@@ -321,7 +321,7 @@ def test_wizard_execute_generic_container_carries_shared_finish_tags(db):
     assert len(containers) == 1
     container = containers[0]
     # Name carries the finish line (no double Silk), and optTags carries the shared Silk id (17).
-    assert container.get("name") == "ELEGOO PLA Silk Master"
+    assert container.get("name") == "ELEGOO PLA Silk (Master)"
     assert container.get("optTags") == [17]
 
 
@@ -368,12 +368,12 @@ def test_wizard_execute_generic_container_two_separate_clusters_two_containers(d
     synth_rows = db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
     assert len(synth_rows) == 2
 
-    # Container names should be the two cluster display names (with Master suffix)
+    # Container names should be the two cluster display names (with (Master) suffix)
     containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     assert len(containers) == 2
     container_names = {c["name"] for c in containers}
-    assert "ELEGOO PLA Master" in container_names
-    assert "ELEGOO PETG Master" in container_names
+    assert "ELEGOO PLA (Master)" in container_names
+    assert "ELEGOO PETG (Master)" in container_names
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +573,7 @@ def test_config_put_rejects_invalid_variant_parent_mode(db):
 
 
 def test_container_name_no_double_silk(db):
-    """P0.1: container name is 'ELEGOO PLA Silk Master', not 'ELEGOO PLA Silk Silk Master'.
+    """P0.1: container name is 'ELEGOO PLA Silk (Master)', not 'ELEGOO PLA Silk Silk (Master)'.
 
     When rep.material is 'PLA Silk', strip_finish_words must remove 'Silk' from the
     material before composing, so the extracted finish ('silk') is appended only once.
@@ -622,7 +622,7 @@ def test_container_name_no_double_silk(db):
     name = containers[0].get("name")
     # Must not contain 'Silk Silk'
     assert "Silk Silk" not in name, f"double finish word in container name: {name!r}"
-    assert name == "ELEGOO PLA Silk Master", f"unexpected container name: {name!r}"
+    assert name == "ELEGOO PLA Silk (Master)", f"unexpected container name: {name!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -784,3 +784,194 @@ def test_execute_409_on_filament_create_does_not_abort_batch(db):
     assert body["created"] >= 2  # at least second container + second child
     # Overall response is 200 (not a fatal error)
     assert "records" in body
+
+
+# ---------------------------------------------------------------------------
+# 10. container_parent_marker — configurable suffix (Items 1+5)
+# ---------------------------------------------------------------------------
+
+
+def test_empty_marker_yields_no_suffix(db):
+    """When container_parent_marker is set to '' execute creates containers without suffix."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "container_parent_marker", "")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+
+    sm_filaments = [
+        _sm_filament(10, "PLA Red"),
+        _sm_filament(11, "PLA Blue"),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    create_calls: list[dict] = []
+    call_counter = 0
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
+    assert len(containers) == 1
+    name = containers[0].get("name")
+    # No suffix appended when marker is empty
+    assert name == "ELEGOO PLA", f"unexpected container name with empty marker: {name!r}"
+    assert "(Master)" not in name
+    assert "Master" not in name
+
+
+def test_container_name_override_applied_at_execute(db):
+    """Item 4: a saved container_name_override renames the container at execute time."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+
+    sm_filaments = [
+        _sm_filament(10, "PLA Red"),
+        _sm_filament(11, "PLA Blue"),
+    ]
+    # The cluster key is (normalized_vendor, normalized_material, finish) — for ELEGOO PLA with no
+    # finish, normalize_vendor("ELEGOO")="elegoo", normalize_name("PLA")="pla", finish="".
+    cluster_key_str = "('elegoo', 'pla', '')"
+    set_config_value(db, "wizard_container_name_overrides", {
+        cluster_key_str: {
+            "cluster_key": cluster_key_str,
+            "name_override": "My Custom Container",
+            "skip": False,
+        }
+    })
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    create_calls: list[dict] = []
+    call_counter = 0
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
+    assert len(containers) == 1
+    name = containers[0].get("name")
+    assert name == "My Custom Container", f"override not applied: {name!r}"
+
+
+def test_container_name_override_skip_omits_cluster(db):
+    """Item 4: a saved override with skip=True causes the entire cluster to be omitted."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+        {"spoolman_filament_id": 20, "action": "create"},
+    ])
+
+    # Two clusters: ELEGOO PLA (skip=True) and ELEGOO PETG (no skip)
+    sm_filaments = [
+        _sm_filament(10, "PLA Red", material="PLA"),
+        _sm_filament(11, "PLA Blue", material="PLA"),
+        _sm_filament(20, "PETG Black", material="PETG"),
+    ]
+
+    # normalize_vendor("ELEGOO")="elegoo", normalize_name("PLA")="pla", finish="".
+    pla_cluster_key_str = "('elegoo', 'pla', '')"
+    set_config_value(db, "wizard_container_name_overrides", {
+        pla_cluster_key_str: {
+            "cluster_key": pla_cluster_key_str,
+            "name_override": None,
+            "skip": True,
+        }
+    })
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    create_calls: list[dict] = []
+    call_counter = 0
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    # PLA cluster skipped entirely, PETG cluster should proceed
+    containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
+    container_names = {c["name"] for c in containers}
+    # PLA container must NOT be created
+    assert all("PLA" not in n for n in container_names), (
+        f"PLA cluster should have been skipped but got containers: {container_names}"
+    )
+    # PETG container should be created
+    assert any("PETG" in n for n in container_names), (
+        f"PETG cluster should have been created but got containers: {container_names}"
+    )
+
+
+def test_preview_container_name_overrides_endpoint(db):
+    """Item 4: POST /wizard/container-name-overrides persists and is returned by GET /wizard/preview."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+    ])
+    db.commit()
+
+    sm_filaments = [_sm_filament(10, "PLA Red")]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    client = _client(db, spoolman, _fake_filamentdb())
+
+    # normalize_vendor("ELEGOO")="elegoo", normalize_name("PLA")="pla", finish="".
+    cluster_key_str = "('elegoo', 'pla', '')"
+    payload = {
+        "overrides": [
+            {
+                "cluster_key": cluster_key_str,
+                "name_override": "Renamed Container",
+                "skip": False,
+            }
+        ]
+    }
+    resp = client.post("/api/wizard/container-name-overrides", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["persisted"] == 1
+
+    # Verify the override is stored and returned by preview
+    preview_resp = client.get("/api/wizard/preview")
+    assert preview_resp.status_code == 200
+    preview = preview_resp.json()
+    saved_overrides = preview.get("container_name_overrides", [])
+    matching = [o for o in saved_overrides if o["cluster_key"] == cluster_key_str]
+    assert len(matching) == 1
+    assert matching[0]["name_override"] == "Renamed Container"

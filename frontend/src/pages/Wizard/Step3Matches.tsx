@@ -8,7 +8,7 @@ import type { WizardCtx } from './index'
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
-type RowStatus = 'matched' | 'unmatched_sm' | 'ambiguous' | 'unmatched_fdb'
+type RowStatus = 'matched' | 'unmatched_sm' | 'ambiguous' | 'unmatched_fdb' | 'master_fdb'
 type GroupDim = 'status' | 'material' | 'vendor'
 type SortDir = 'asc' | 'desc'
 type SortCol = 'name' | 'vendor' | 'material' | 'status' | 'confidence'
@@ -31,19 +31,21 @@ const STATUS_LABEL: Record<RowStatus, string> = {
   ambiguous: 'Ambiguous',
   unmatched_sm: 'Unmatched (SM)',
   unmatched_fdb: 'Unmatched (FDB)',
+  master_fdb: 'Master / Parent',
 }
 const STATUS_ORDER: Record<RowStatus, number> = {
-  matched: 0, ambiguous: 1, unmatched_sm: 2, unmatched_fdb: 3,
+  matched: 0, ambiguous: 1, unmatched_sm: 2, unmatched_fdb: 3, master_fdb: 4,
 }
 const STATUS_COLOR: Record<RowStatus, string> = {
   matched: 'bg-green-100 text-green-700',
   ambiguous: 'bg-yellow-100 text-yellow-700',
   unmatched_sm: 'bg-gray-100 text-gray-600',
   unmatched_fdb: 'bg-blue-100 text-blue-600',
+  master_fdb: 'bg-purple-100 text-purple-700',
 }
 const STATUS_HDR_BG: Record<RowStatus, string> = {
   matched: 'bg-green-50', ambiguous: 'bg-yellow-50',
-  unmatched_sm: 'bg-gray-50', unmatched_fdb: 'bg-gray-50',
+  unmatched_sm: 'bg-gray-50', unmatched_fdb: 'bg-gray-50', master_fdb: 'bg-purple-50',
 }
 
 // Shared grid template — must match in header, filter row, and member rows.
@@ -71,7 +73,7 @@ function sortVal(r: FlatRow, col: SortCol): string | number {
 }
 
 function isIncluded(r: FlatRow, decisions: Record<number, MatchDecision>): boolean {
-  if (r.status === 'unmatched_fdb' || r.smId == null) return false
+  if (r.status === 'unmatched_fdb' || r.status === 'master_fdb' || r.smId == null) return false
   const d = decisions[r.smId]
   if (r.status === 'matched') return (d?.action ?? 'link') !== 'skip'
   if (r.status === 'unmatched_sm') return (d?.action ?? 'create') !== 'skip'
@@ -206,7 +208,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
     )
   }
 
-  if (row.status === 'unmatched_fdb') {
+  if (row.status === 'unmatched_fdb' || row.status === 'master_fdb') {
     return (
       <div className={`${G} py-3 items-start`}>
         <div />
@@ -214,9 +216,12 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <FTag f={row.fdb} side="fdb" />
           <DeepLinks filamentdbFilamentId={row.fdb?.filamentdb_filament_id} />
+          {row.status === 'master_fdb' && (
+            <span className="text-xs text-gray-400 italic">bridge-owned parent</span>
+          )}
         </div>
         <span className="text-xs text-gray-500 pt-0.5">{rMaterial(row) || '—'}</span>
-        <div>{showStatus && <StatusPill status="unmatched_fdb" />}</div>
+        <div>{showStatus && <StatusPill status={row.status} />}</div>
       </div>
     )
   }
@@ -339,7 +344,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
       sm: s, fdb: null, confidence: null, vendorDedup: null, candidates: [],
     })
     for (const f of data.unmatched_filamentdb) rows.push({
-      status: 'unmatched_fdb', smId: null, fdbId: f.filamentdb_filament_id,
+      status: f.is_master_container ? 'master_fdb' : 'unmatched_fdb',
+      smId: null, fdbId: f.filamentdb_filament_id,
       sm: null, fdb: f, confidence: null, vendorDedup: null, candidates: [],
     })
     return rows
@@ -401,7 +407,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     setDecisions(d => {
       const n = { ...d }
       for (const r of rows) {
-        if (r.status === 'unmatched_fdb' || r.smId == null) continue
+        if (r.status === 'unmatched_fdb' || r.status === 'master_fdb' || r.smId == null) continue
         const id = r.smId
         if (r.status === 'matched') {
           n[id] = include
@@ -532,6 +538,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
               <option value="ambiguous">Ambiguous</option>
               <option value="unmatched_sm">Unmatched (SM)</option>
               <option value="unmatched_fdb">Unmatched (FDB)</option>
+              <option value="master_fdb">Master / Parent</option>
             </select>
           </label>
 
@@ -547,13 +554,20 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
           </label>
 
           {/* Summary stats */}
-          <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 shrink-0">
-            <span>Total <span className="font-semibold text-gray-700">{allRows.length}</span></span>
-            <span className="text-green-600">✓ {data.matched.length}</span>
-            {data.ambiguous.length > 0 && <span className="text-yellow-600">? {data.ambiguous.length}</span>}
-            {data.unmatched_spoolman.length > 0 && <span>+SM {data.unmatched_spoolman.length}</span>}
-            {data.unmatched_filamentdb.length > 0 && <span>+FDB {data.unmatched_filamentdb.length}</span>}
-          </div>
+          {(() => {
+            const masterCount = allRows.filter(r => r.status === 'master_fdb').length
+            const unmatchedFdbCount = allRows.filter(r => r.status === 'unmatched_fdb').length
+            return (
+              <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 shrink-0">
+                <span>Total <span className="font-semibold text-gray-700">{allRows.length}</span></span>
+                <span className="text-green-600">✓ {data.matched.length}</span>
+                {data.ambiguous.length > 0 && <span className="text-yellow-600">? {data.ambiguous.length}</span>}
+                {data.unmatched_spoolman.length > 0 && <span>+SM {data.unmatched_spoolman.length}</span>}
+                {unmatchedFdbCount > 0 && <span>+FDB {unmatchedFdbCount}</span>}
+                {masterCount > 0 && <span className="text-purple-600">♦ {masterCount} parent</span>}
+              </div>
+            )
+          })()}
         </div>
 
         <div className="flex items-center gap-2 text-xs">

@@ -122,6 +122,7 @@ def _config_response(db: Session) -> ConfigResponse:
         never_import_empties=bool(cfg.get("never_import_empties", False)),
         debug_mode=bool(cfg.get("debug_mode", False)),
         variant_parent_mode=cfg.get("variant_parent_mode", "unset") or "unset",
+        container_parent_marker=str(cfg.get("container_parent_marker", _settings.container_parent_marker)),
     )
 
 

@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { getWizardPreview, getConfig } from '../../api/client'
+import { useState, useEffect } from 'react'
+import { getWizardPreview, getConfig, postWizardContainerNameOverrides } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
-import type { PlannedWrite } from '../../api/types'
+import type { PlannedWrite, ContainerNameOverride, NameCollisionEntry } from '../../api/types'
 import type { WizardCtx } from './index'
 
 type FlagKey = 'name_collision' | 'empty_active' | 'default_tare' | 'variant_group'
@@ -27,6 +27,21 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
   const [open, setOpen] = useState<Set<FlagKey>>(new Set())
   const [plannedWritesFilter, setPlannedWritesFilter] = useState<PlannedWritesFilter>('all')
 
+  // Container name overrides: cluster_key → {name_override, skip}
+  // Hydrated from the backend's saved state on load; updated inline.
+  const [containerOverrides, setContainerOverrides] = useState<Record<string, ContainerNameOverride>>({})
+  const [savingOverrides, setSavingOverrides] = useState(false)
+
+  // Hydrate containerOverrides from backend when data loads
+  useEffect(() => {
+    if (!data) return
+    const saved: Record<string, ContainerNameOverride> = {}
+    for (const o of data.container_name_overrides ?? []) {
+      saved[o.cluster_key] = o
+    }
+    setContainerOverrides(saved)
+  }, [data])
+
   function toggle(key: FlagKey) {
     setOpen(s => {
       const n = new Set(s)
@@ -47,6 +62,19 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
   const matchedSpools = matched.filter(r => r.entity_type === 'spool').length
 
   const isSpoolmanImport = data.direction === 'spoolman_to_filamentdb'
+
+  async function saveContainerOverride(override: ContainerNameOverride) {
+    setSavingOverrides(true)
+    try {
+      const updated = { ...containerOverrides, [override.cluster_key]: override }
+      setContainerOverrides(updated)
+      await postWizardContainerNameOverrides({ overrides: Object.values(updated) })
+    } catch (e) {
+      console.error('Error saving container override:', e)
+    } finally {
+      setSavingOverrides(false)
+    }
+  }
 
   // Shared action bar — rendered at top and bottom of this long step
   const actionBar = (
@@ -123,44 +151,14 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
       >
         <div className="divide-y divide-gray-100">
           {data.name_collisions.map((c, i) => (
-            <div key={i} className="px-4 py-3 text-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <span className="font-medium text-gray-800">{c.normalized_name}</span>
-                  <span className="ml-2 text-xs text-gray-500">
-                    SM filament{c.sm_filament_ids.length !== 1 ? 's' : ''}: {c.sm_filament_ids.join(', ')}
-                  </span>
-                  <p className="mt-0.5 text-xs text-amber-700">
-                    {c.vs_existing
-                      ? 'This name already exists in Filament DB — the create will fail with a 409. Go back to Variances to fix grouping, or this record will be skipped.'
-                      : 'Two items in this batch share the same name — only one will be created.'}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {c.vs_existing && (
-                    <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
-                      vs existing
-                    </span>
-                  )}
-                  {c.intra_batch && (
-                    <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">
-                      intra-batch
-                    </span>
-                  )}
-                  {c.existing_fdb_filament_id && (
-                    <DeepLinks filamentdbFilamentId={c.existing_fdb_filament_id} />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => goTo(3)}
-                    className="px-2 py-0.5 text-xs rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 whitespace-nowrap"
-                    title="Return to Variances step to fix variant grouping"
-                  >
-                    Fix variant mapping
-                  </button>
-                </div>
-              </div>
-            </div>
+            <CollisionRow
+              key={i}
+              collision={c}
+              override={c.cluster_key ? containerOverrides[c.cluster_key] : undefined}
+              saving={savingOverrides}
+              onSaveOverride={saveContainerOverride}
+              goTo={goTo}
+            />
           ))}
         </div>
       </FlagSection>
@@ -285,6 +283,176 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
 
       {/* Bottom action bar */}
       {actionBar}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Container-collision row with editable rename/skip (item 4)
+// ---------------------------------------------------------------------------
+
+function CollisionRow({
+  collision,
+  override,
+  saving,
+  onSaveOverride,
+  goTo,
+}: {
+  collision: NameCollisionEntry
+  override: ContainerNameOverride | undefined
+  saving: boolean
+  onSaveOverride: (o: ContainerNameOverride) => void
+  goTo: (step: number) => void
+}) {
+  const [nameEdit, setNameEdit] = useState(
+    override?.name_override ?? collision.proposed_name ?? collision.normalized_name
+  )
+  const skipped = override?.skip ?? false
+
+  // For container collisions: show editable rename + skip
+  if (collision.is_container_collision && collision.cluster_key) {
+    const clusterKey = collision.cluster_key
+    // Check if the edited name still collides vs existing
+    const stillCollides = collision.vs_existing && nameEdit.trim() === (collision.proposed_name ?? collision.normalized_name)
+
+    return (
+      <div className="px-4 py-3 text-sm">
+        <div className="flex items-start gap-2 mb-2">
+          <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 shrink-0 mt-0.5">
+            Container
+          </span>
+          <div className="min-w-0">
+            <span className="font-medium text-gray-800">
+              {collision.proposed_name ?? collision.normalized_name}
+            </span>
+            <p className="mt-0.5 text-xs text-amber-700">
+              {collision.vs_existing
+                ? 'This container name already exists in Filament DB — rename it or skip this cluster.'
+                : 'Two clusters in this batch would produce the same container name — rename one.'}
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+            {collision.vs_existing && (
+              <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                vs existing
+              </span>
+            )}
+            {collision.intra_batch && (
+              <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">
+                intra-batch
+              </span>
+            )}
+            {collision.existing_fdb_filament_id && (
+              <DeepLinks filamentdbFilamentId={collision.existing_fdb_filament_id} />
+            )}
+            <button
+              type="button"
+              onClick={() => goTo(3)}
+              className="px-2 py-0.5 text-xs rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 whitespace-nowrap"
+              title="Return to Variances step to fix variant grouping"
+            >
+              Fix variant mapping
+            </button>
+          </div>
+        </div>
+        {!skipped ? (
+          <div className="flex items-center gap-2 mt-1 pl-0.5">
+            <label className="text-xs text-gray-500 shrink-0">Rename to:</label>
+            <input
+              type="text"
+              value={nameEdit}
+              onChange={e => setNameEdit(e.target.value)}
+              className={`flex-1 border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400 ${
+                stillCollides ? 'border-red-400' : 'border-gray-300'
+              }`}
+              placeholder="New container name…"
+              disabled={saving}
+            />
+            <button
+              type="button"
+              disabled={saving || !nameEdit.trim()}
+              onClick={() => onSaveOverride({ cluster_key: clusterKey, name_override: nameEdit.trim(), skip: false })}
+              className="px-2.5 py-1 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 shrink-0"
+            >
+              Save name
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => onSaveOverride({ cluster_key: clusterKey, name_override: null, skip: true })}
+              className="px-2.5 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 shrink-0"
+            >
+              Skip cluster
+            </button>
+            {stillCollides && (
+              <span className="text-xs text-red-600 shrink-0">Name still collides</span>
+            )}
+            {override?.name_override && !stillCollides && (
+              <span className="text-xs text-green-600 shrink-0">Renamed</span>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 mt-1 pl-0.5">
+            <span className="text-xs text-gray-500 italic">This cluster will be skipped.</span>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                const resetName = collision.proposed_name ?? collision.normalized_name
+                setNameEdit(resetName)
+                onSaveOverride({ cluster_key: clusterKey, name_override: null, skip: false })
+              }}
+              className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              Undo skip
+            </button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Regular (non-container) collision
+  return (
+    <div className="px-4 py-3 text-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <span className="font-medium text-gray-800">{collision.normalized_name}</span>
+          {collision.sm_filament_ids.length > 0 && (
+            <span className="ml-2 text-xs text-gray-500">
+              SM filament{collision.sm_filament_ids.length !== 1 ? 's' : ''}: {collision.sm_filament_ids.join(', ')}
+            </span>
+          )}
+          <p className="mt-0.5 text-xs text-amber-700">
+            {collision.vs_existing
+              ? 'This name already exists in Filament DB — the create will fail with a 409. Go back to Variances to fix grouping, or this record will be skipped.'
+              : 'Two items in this batch share the same name — only one will be created.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {collision.vs_existing && (
+            <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+              vs existing
+            </span>
+          )}
+          {collision.intra_batch && (
+            <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">
+              intra-batch
+            </span>
+          )}
+          {collision.existing_fdb_filament_id && (
+            <DeepLinks filamentdbFilamentId={collision.existing_fdb_filament_id} />
+          )}
+          <button
+            type="button"
+            onClick={() => goTo(3)}
+            className="px-2 py-0.5 text-xs rounded border border-indigo-300 text-indigo-600 hover:bg-indigo-50 whitespace-nowrap"
+            title="Return to Variances step to fix variant grouping"
+          >
+            Fix variant mapping
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

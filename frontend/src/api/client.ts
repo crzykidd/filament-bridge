@@ -27,6 +27,7 @@ import type {
   SyncLogResponse,
   SyncStatusResponse,
   VariancesResponse,
+  ContainerNameOverridesRequest,
   WizardConnectivityResponse,
   WizardDecisionAck,
   WizardDirectionRequest,
@@ -193,6 +194,9 @@ export const postWizardSmVariants = (body: SMVariancesDecisionsRequest) =>
 export const getWizardVariances = () => request<VariancesResponse>('/wizard/variances')
 
 export const getWizardPreview = () => request<WizardPreviewResponse>('/wizard/preview')
+
+export const postWizardContainerNameOverrides = (body: ContainerNameOverridesRequest) =>
+  json<WizardDecisionAck>('/wizard/container-name-overrides', 'POST', body)
 
 export const postWizardExecute = (body: WizardExecuteRequest) =>
   json<WizardExecuteResponse>('/wizard/execute', 'POST', body)

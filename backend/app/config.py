@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # Comma-separated field names to exclude from auto-match
     field_mapping_excludes: str = ""
 
+    # Configurable marker appended to generic-container parent names.
+    # Default "(Master)" keeps the container name visually distinct from its color children.
+    # Empty string = no marker (containers get no suffix).
+    container_parent_marker: str = "(Master)"
+
     # Comma-separated finish/line keywords for SM variant clustering.
     # Filaments whose names contain different keywords are placed in separate groups.
     variant_line_keywords: str = (

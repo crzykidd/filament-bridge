@@ -49,6 +49,8 @@ from app.db import get_db
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.api import (
     AmbiguousRow,
+    ContainerNameOverride,
+    ContainerNameOverridesRequest,
     DefaultTareEntry,
     EmptyActiveEntry,
     FilamentRef,
@@ -117,13 +119,14 @@ def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
     )
 
 
-def _fdb_ref(fdb: FDBFilament) -> FilamentRef:
+def _fdb_ref(fdb: FDBFilament, *, is_master_container: bool = False) -> FilamentRef:
     return FilamentRef(
         filamentdb_filament_id=fdb.id,
         name=fdb.name,
         vendor=fdb.vendor,
         color=fdb.color,
         material=fdb.type,
+        is_master_container=is_master_container,
     )
 
 
@@ -161,29 +164,36 @@ def _resolve_variant_parent_mode(db: Session) -> VariantParentMode:
     return "unset"
 
 
-# Suffix appended to the generic container name so the container never collides
-# with its own color children.  E.g. "TTYT3d PLA Silk Master".
-_CONTAINER_MASTER_SUFFIX = " Master"
+def _resolve_container_parent_marker(db: Session) -> str:
+    """Return the effective container_parent_marker from BridgeConfig (or env default)."""
+    raw = get_config_value(db, "container_parent_marker", None)
+    if raw is None:
+        return _settings.container_parent_marker
+    return str(raw)
 
 
 def _container_display_name(
     sm_members: list[SpoolmanFilament],
     variant_keywords: list[str],
+    marker: str = "(Master)",
 ) -> str:
     """Derive a display name for a generic container parent from its cluster members.
 
     Uses the first member (arbitrary; naming is deterministic once the cluster is
     stable) to extract vendor + stripped-material + finish line — the same combination
-    that the cluster key groups on.  Appends a "Master" suffix so the container name
-    never collides with its own color children.
+    that the cluster key groups on.  Appends the configured marker (default "(Master)")
+    so the container name never collides with its own color children.
 
-    E.g.:
-      "ELEGOO" + "PLA" + "" → "ELEGOO PLA Master"
-      "Prusament" + "PLA Silk" + "silk" → "Prusament PLA Silk Master"
+    E.g. (marker="(Master)"):
+      "ELEGOO" + "PLA" + "" → "ELEGOO PLA (Master)"
+      "Prusament" + "PLA Silk" + "silk" → "Prusament PLA Silk (Master)"
         (material is stripped of the finish word before re-appending it once)
+
+    When marker is empty, no suffix is appended:
+      "ELEGOO" + "PLA" + "" → "ELEGOO PLA"
     """
     if not sm_members:
-        return "Filament Master"
+        return f"Filament {marker}".strip() if marker else "Filament"
     rep = sm_members[0]
     vendor = rep.vendor.name if rep.vendor else None
     raw_material = rep.material or _DEFAULT_FDB_MATERIAL
@@ -200,7 +210,10 @@ def _container_display_name(
     if finish:
         # Capitalize for display (finish comes from normalized lower)
         parts.append(finish.title())
-    return " ".join(parts) + _CONTAINER_MASTER_SUFFIX
+    base_name = " ".join(parts)
+    if marker:
+        return f"{base_name} {marker}"
+    return base_name
 
 
 def _vendor_hint(sm_vendor: str | None, fdb_vendor: str | None) -> str | None:
@@ -297,6 +310,27 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
 
     mr = match_filaments(sm_filaments, fdb_filaments, xref_by_sm_filament=xref_by_sm_filament or None)
 
+    # Build set of synthetic parent FDB ids (for is_master_container flag).
+    # Detect via: FilamentMapping with is_synthetic_parent=True, OR hasVariants=True.
+    # The mapping check is the authoritative signal; hasVariants is a fallback for
+    # parents the bridge didn't create.
+    _synth_fdb_ids_matches: set[str] = {
+        m.filamentdb_id
+        for m in db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
+    }
+    # Also collect the configured marker so we can detect containers by name suffix.
+    _marker_matches = _resolve_container_parent_marker(db)
+
+    def _is_master_fdb(fdb: FDBFilament) -> bool:
+        if fdb.id in _synth_fdb_ids_matches:
+            return True
+        if getattr(fdb, "hasVariants", False):
+            return True
+        # Heuristic: name ends with the configured marker (space + marker)
+        if _marker_matches and fdb.name and fdb.name.endswith(f" {_marker_matches}"):
+            return True
+        return False
+
     matched = [
         MatchPairRow(
             spoolman=_sm_ref(p.spoolman_filament),
@@ -318,7 +352,9 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
     return WizardMatchesResponse(
         matched=matched,
         unmatched_spoolman=[_sm_ref(s) for s in mr.unmatched_spoolman],
-        unmatched_filamentdb=[_fdb_ref(f) for f in mr.unmatched_fdb],
+        unmatched_filamentdb=[
+            _fdb_ref(f, is_master_container=_is_master_fdb(f)) for f in mr.unmatched_fdb
+        ],
         ambiguous=ambiguous,
         saved_decisions=saved_decisions,
     )
@@ -495,6 +531,22 @@ def wizard_save_variants(payload: WizardVariantsRequest, db: Session = Depends(g
     set_config_value(db, "wizard_variant_decisions", [g.model_dump() for g in payload.groups])
     db.commit()
     return WizardDecisionAck(persisted=len(payload.groups))
+
+
+@router.post("/wizard/container-name-overrides", response_model=WizardDecisionAck)
+def wizard_save_container_name_overrides(
+    payload: ContainerNameOverridesRequest, db: Session = Depends(get_db)
+) -> WizardDecisionAck:
+    """Persist per-cluster container-name overrides (rename or skip) from the Preview step.
+
+    The overrides dict maps cluster_key (str) → {name_override, skip}.
+    Execute reads this to use the override name instead of the generated name,
+    or skip the cluster entirely when skip=True.
+    """
+    overrides_dict = {o.cluster_key: o.model_dump() for o in payload.overrides}
+    set_config_value(db, "wizard_container_name_overrides", overrides_dict)
+    db.commit()
+    return WizardDecisionAck(persisted=len(payload.overrides))
 
 
 @router.post("/wizard/variants/sm", response_model=WizardDecisionAck)
@@ -909,6 +961,8 @@ async def _execute_spoolman_to_fdb(
     include_empty_spools: bool = True,
     variant_parent_mode: str = "promote_color",
     variant_keywords: list[str] | None = None,
+    container_parent_marker: str = "(Master)",
+    container_name_overrides: dict[str, dict] | None = None,
 ) -> None:
     """Import direction "spoolman": seed Filament DB from Spoolman.
 
@@ -935,6 +989,10 @@ async def _execute_spoolman_to_fdb(
         for m in db.query(FilamentMapping).filter_by(is_synthetic_parent=False).all()
         if m.spoolman_filament_id is not None
     }
+
+    # SM filament IDs belonging to user-skipped clusters (generic_container only).
+    # Populated in the pre-pass below; checked in Pass 1 + Pass 2 to suppress create.
+    _skipped_gc_sm_ids: set[int] = set()
 
     # ---- generic_container pre-pass: synthesise container parents ----
     # When variant_parent_mode == "generic_container", we build a colorless FDB
@@ -967,11 +1025,31 @@ async def _execute_spoolman_to_fdb(
         _sm_by_id: dict[int, SpoolmanFilament] = {f.id: f for f in sm_filaments}
         _fdb_parent_id_field = _settings.spoolman_field_filamentdb_parent_id
 
+        # Load container-name overrides dict: cluster_key_str → {name_override, skip}
+        _cn_overrides: dict[str, dict] = container_name_overrides or {}
+
         for cluster_key, members in _clusters_gc.items():
             if not members:
                 continue
 
-            display_name = _container_display_name(members, kw)
+            cluster_key_str = str(cluster_key)
+
+            # Check for user-set override or skip
+            _override_entry = _cn_overrides.get(cluster_key_str, {})
+            if _override_entry.get("skip"):
+                logger.info(
+                    "wizard execute %s: cluster %s skipped per user container-name override",
+                    res.cycle_id, cluster_key_str,
+                )
+                for _m in members:
+                    _skipped_gc_sm_ids.add(_m.id)
+                continue
+
+            _name_override = _override_entry.get("name_override")
+            if _name_override:
+                display_name = _name_override
+            else:
+                display_name = _container_display_name(members, kw, marker=container_parent_marker)
             vendor_name = members[0].vendor.name if members[0].vendor else None
 
             # --- Idempotency: find existing synthetic parent for this cluster ---
@@ -1134,6 +1212,11 @@ async def _execute_spoolman_to_fdb(
     for item in plan.filament_items:
         if item.variant_master_sm_id is not None:
             continue
+        # Skip entire cluster if the user chose "skip" on the container-name collision.
+        if item.sm_filament.id in _skipped_gc_sm_ids:
+            res.add(db, "filament", "skipped", detail="cluster skipped per container-name override",
+                    sm_filament_id=item.sm_filament.id)
+            continue
         attach_parent = attach_parent_for_sm.get(item.sm_filament.id)
         if item.action == "skip":
             if item.error:
@@ -1200,6 +1283,11 @@ async def _execute_spoolman_to_fdb(
     # ---- Pass 2: variants (variant_master_sm_id is set) ----
     for item in plan.filament_items:
         if item.variant_master_sm_id is None:
+            continue
+        # Skip entire cluster if the user chose "skip" on the container-name collision.
+        if item.sm_filament.id in _skipped_gc_sm_ids:
+            res.add(db, "filament", "skipped", detail="cluster skipped per container-name override",
+                    sm_filament_id=item.sm_filament.id)
             continue
         master_fdb_id = master_map.get(item.variant_master_sm_id)
         if master_fdb_id is None:
@@ -1602,8 +1690,16 @@ async def _execute_fdb_to_spoolman(
 
 
 def _compute_name_collisions(
-    plan: _SyncPlan, fdb_filaments: list[FDBFilament]
+    plan: _SyncPlan,
+    fdb_filaments: list[FDBFilament],
+    container_names: dict[tuple, str] | None = None,
 ) -> list[NameCollisionEntry]:
+    """Compute name collisions for the plan.
+
+    ``container_names`` maps cluster_key (tuple) → proposed container display name.
+    When provided, container-name collisions are annotated with ``is_container_collision=True``,
+    ``cluster_key``, and ``proposed_name`` so the Preview UI can render the rename/skip control.
+    """
     # Key on (vendor, name) so that same name from different vendors does NOT collide.
     existing: dict[tuple[str, str], str] = {
         (normalize_vendor(f.vendor), normalize_name(f.name)): f.id
@@ -1617,6 +1713,21 @@ def _compute_name_collisions(
             if norm_name:
                 key = (norm_vendor, norm_name)
                 incoming.setdefault(key, []).append(item)
+
+    # Build a reverse index: normalized (vendor, name) → cluster_key for container names
+    container_key_by_norm: dict[tuple[str, str], tuple] = {}
+    if container_names:
+        for cluster_key, cname in container_names.items():
+            norm_name = normalize_name(cname)
+            # Container vendor: extract from the display name if possible, but use empty
+            # vendor for normalization (containers use vendor in the name itself, not separately)
+            container_key_by_norm[(normalize_vendor(""), norm_name)] = cluster_key
+            # Also try with vendor prefix stripped — containers embed vendor in the name
+            # so vendor field may be empty. Try both "" and any vendor in the cluster key.
+            if cluster_key and len(cluster_key) >= 1:
+                vendor_norm = cluster_key[0] if isinstance(cluster_key, tuple) else normalize_vendor("")
+                container_key_by_norm[(vendor_norm, norm_name)] = cluster_key
+
     result: list[NameCollisionEntry] = []
     for (norm_vendor, norm_name), items in incoming.items():
         key = (norm_vendor, norm_name)
@@ -1630,6 +1741,35 @@ def _compute_name_collisions(
                 intra_batch=intra_batch,
                 existing_fdb_filament_id=existing.get(key),
             ))
+
+    # Container-name collision entries (separate from the plan-item collisions above)
+    if container_names:
+        for cluster_key, cname in container_names.items():
+            norm_name = normalize_name(cname)
+            # Check vs_existing in FDB
+            existing_fdb_id: str | None = None
+            for (ev, en), eid in existing.items():
+                if en == norm_name:
+                    existing_fdb_id = eid
+                    break
+            # Intra-batch: two clusters with the same generated name
+            same_name_clusters = [k for k, v in container_names.items() if normalize_name(v) == norm_name and k != cluster_key]
+            intra_batch = len(same_name_clusters) > 0
+            vs_existing_container = existing_fdb_id is not None
+
+            # Only report if there is a collision
+            if vs_existing_container or intra_batch:
+                result.append(NameCollisionEntry(
+                    normalized_name=norm_name,
+                    sm_filament_ids=[],  # container has no SM filament ids
+                    vs_existing=vs_existing_container,
+                    intra_batch=intra_batch,
+                    existing_fdb_filament_id=existing_fdb_id,
+                    is_container_collision=True,
+                    cluster_key=str(cluster_key),
+                    proposed_name=cname,
+                ))
+
     return result
 
 
@@ -1923,13 +2063,36 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
             detail=si.detail,
         ))
 
-    name_collisions = _compute_name_collisions(plan, fdb_filaments)
+    # Compute container display names for the generic_container mode collision check.
+    # These map cluster_key → proposed_name and are passed to _compute_name_collisions.
+    _preview_variant_mode = _resolve_variant_parent_mode(db)
+    _preview_container_names: dict[tuple, str] = {}
+    if _preview_variant_mode == "generic_container":
+        _preview_marker = _resolve_container_parent_marker(db)
+        _preview_kw = _resolve_variant_keywords(db)
+        for item in plan.filament_items:
+            if not item.resolved:
+                continue
+            _ck = sm_variant_cluster_key(item.sm_filament, keywords=_preview_kw)
+            if _ck not in _preview_container_names:
+                # Collect all resolved members for this cluster (approximate — use included sm)
+                _preview_container_names[_ck] = _container_display_name(
+                    [item.sm_filament], _preview_kw, marker=_preview_marker
+                )
+
+    name_collisions = _compute_name_collisions(plan, fdb_filaments, _preview_container_names or None)
     empty_active = _compute_empty_active(sm_spools)
     default_tare = _compute_default_tare(plan)
     variant_groups = _compute_variant_groups(plan)
     variant_plan = _compute_sm_variant_plan(plan, sm_filaments)
     # Phase 4: compute structured planned-writes list
     planned_writes = _compute_planned_writes(plan, sm_filaments, reconcile_by_master_preview)
+
+    # Load saved container-name overrides for the response (UI needs to hydrate from these)
+    _raw_overrides = get_config_value(db, "wizard_container_name_overrides", {}) or {}
+    saved_container_overrides = [
+        ContainerNameOverride(**v) for v in _raw_overrides.values() if isinstance(v, dict)
+    ]
 
     return WizardPreviewResponse(
         direction=sync_direction,
@@ -1947,6 +2110,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         variant_plan=variant_plan,
         include_empty_spools=include_empty,
         planned_writes=planned_writes,
+        container_name_overrides=saved_container_overrides,
     )
 
 
@@ -2029,6 +2193,8 @@ async def wizard_execute(
     if import_direction == "spoolman":
         exec_variant_mode = _resolve_variant_parent_mode(db)
         exec_variant_keywords = _resolve_variant_keywords(db)
+        exec_container_marker = _resolve_container_parent_marker(db)
+        exec_container_overrides: dict[str, dict] = get_config_value(db, "wizard_container_name_overrides", {}) or {}
         await _execute_spoolman_to_fdb(
             db, res, spoolman, filamentdb,
             sm_filaments, sm_spools, fdb_filaments,
@@ -2038,6 +2204,8 @@ async def wizard_execute(
             include_empty_spools=include_empty,
             variant_parent_mode=exec_variant_mode,
             variant_keywords=exec_variant_keywords,
+            container_parent_marker=exec_container_marker,
+            container_name_overrides=exec_container_overrides,
         )
     else:
         await _execute_fdb_to_spoolman(

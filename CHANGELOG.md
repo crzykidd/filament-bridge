@@ -11,6 +11,29 @@ GitHub release.
 
 ### Added
 
+- **Configurable container-parent marker** (`container_parent_marker`) — runtime-editable string
+  (env `CONTAINER_PARENT_MARKER`, default `"(Master)"`) appended to generic-container parent names
+  so they visually separate from their color-variant children. An empty string disables the suffix.
+  Wired through `BridgeConfig`, `ConfigResponse`/`ConfigUpdateRequest`, and the Settings UI
+  (inside the Variant parent mode section, shown only when `generic_container` is selected):
+  a checkbox "Append a marker to container parent names" controls on/off; when checked, a text
+  input pre-filled with `(Master)` lets the user customise the marker. Changing the marker does
+  not rename existing containers; the re-run resilient-409 backstop handles any resulting collision.
+- **Editable container-name override at Preview** — when a proposed generic-container name collides
+  with an existing Filament DB record (or another container in the same batch), the Preview step
+  now renders an editable text box pre-filled with the proposed name and a "Skip cluster" control.
+  The override persists as `wizard_container_name_overrides` in `BridgeConfig`; execute reads it
+  and uses the user-chosen name (or suppresses the entire cluster on skip). Skipping a cluster
+  also suppresses all its member filaments in both Pass 1 and Pass 2 of execute so no orphan
+  records are created. Works regardless of marker setting: an empty-marker collision surfaces the
+  same rename/skip UI.
+- **"Master / Parent" badge for synthetic container parents in wizard Matches step** — bridge-owned
+  FDB container parents (created by `generic_container` mode) previously showed as "Unmatched (FDB)"
+  (alarming, actionable). They now render as a distinct purple "Master / Parent" badge, are excluded
+  from the "unmatched" counter, and offer no skip/link actions. Detection order: `FilamentMapping`
+  with `is_synthetic_parent=True` (authoritative), then `hasVariants=True` (fallback for
+  non-bridge parents), then name-suffix heuristic.
+
 - **OpenTag color-words map** (`OPENTAG_COLOR_KEYWORDS`) — new runtime-editable setting that maps
   color/marketing words to canonical base colors (e.g. `galaxy=black`, `cool=grey`, `jet=black`).
   The OpenTag matcher uses the map to award base-color credit when both the Spoolman name and the
@@ -57,11 +80,12 @@ GitHub release.
   (#222F2E) now surfaces `prusament-pla-prusa-galaxy-black` above the 30% threshold.
 - **P0.1 Double finish word in container name** — `_container_display_name` now calls
   `strip_finish_words` on the raw `material` field before composing the container name, so a
-  Spoolman filament with `material = "PLA Silk"` produces "ELEGOO PLA Silk Master" rather than
-  "ELEGOO PLA Silk Silk Master".
-- **P0.2 Container "Master" suffix** — generic-container parents now always have " Master"
-  appended (e.g. "ELEGOO PLA Silk Master") so the container name can never collide with its own
-  color-variant children. The suffix is a named constant `_CONTAINER_MASTER_SUFFIX`.
+  Spoolman filament with `material = "PLA Silk"` produces "ELEGOO PLA Silk (Master)" rather than
+  "ELEGOO PLA Silk Silk (Master)".
+- **P0.2 Container marker changed to `(Master)`** — the parenthesised form visually separates
+  the marker from the filament name so "ELEGOO PLA (Master)" is distinct from color children
+  like "ELEGOO PLA Red". The marker is now user-configurable (see `container_parent_marker`
+  below); an empty marker disables the suffix entirely.
 - **P0.3 optTags on container reuse** — when a pre-existing container is reused on re-run, the
   wizard now PATCHes the shared finish tags (Silk / Matte / CF / …) onto the container if any are
   missing. Existing unrelated tags are preserved (merge, not clobber).

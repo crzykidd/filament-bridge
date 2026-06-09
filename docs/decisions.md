@@ -1,5 +1,56 @@
 # Decision record
 
+## 2026-06-09 — Configurable container marker, Master/Parent badge, editable collision rename
+
+### A — Container marker changed from `" Master"` to `"(Master)"` and made configurable
+
+`_CONTAINER_MASTER_SUFFIX = " Master"` constant removed from `api/wizard.py`. In its place,
+`_container_display_name()` accepts a `marker` parameter (default `"(Master)"`). The marker
+is appended as `base_name + " " + marker` when non-empty, or just `base_name` when empty.
+
+Rationale for the parenthesised form: `"(Master)"` visually separates the marker from the
+filament name so `"ELEGOO PLA (Master)"` reads as "container" at a glance and is clearly
+distinct from a color child like `"ELEGOO PLA Red"`. The plain `" Master"` form was easy to
+confuse with part of the filament name.
+
+The marker is runtime-configurable via `container_parent_marker` BridgeConfig key (env
+`CONTAINER_PARENT_MARKER`, default `"(Master)"`). Settings UI shows a checkbox + text field
+inside the Variant parent mode card, visible only when `generic_container` is selected.
+
+**Migration note (accepted risk):** changing the marker does not rename existing containers.
+A re-run with a changed marker will not find the old container via the cluster-tuple lookup
+and will attempt to create a new container under the new name. The resilient-409 backstop
+and the new per-cluster collision rename/skip UI handle any resulting collision. This was
+accepted as preferable to a migration that renames records in FDB without user consent.
+
+### B — `master_fdb` RowStatus for synthetic container parents in wizard Matches step
+
+Bridge-owned FDB container parents (those with `FilamentMapping.is_synthetic_parent=True`,
+or `hasVariants=True`, or a name ending in the configured marker) previously showed as
+"Unmatched (FDB)" — an alarming, actionable status implying they need to be linked or skipped.
+
+Added `'master_fdb'` RowStatus to `Step3Matches.tsx` with purple badge "Master / Parent".
+These rows: do not count toward the "unmatched" total, are excluded from bulk-select
+operations, do not show skip/link actions. Detection order: `is_synthetic_parent` mapping
+(authoritative) → `hasVariants=True` (fallback for non-bridge parents) → marker-suffix
+heuristic (last resort, for display consistency before mappings are created).
+
+### C — Editable container-name override at Preview (skip cluster)
+
+Container-name collisions at Preview now render an editable text box and a "Skip cluster"
+control in `StepNPreview.tsx`. Overrides persist as `wizard_container_name_overrides` in
+`BridgeConfig` (a `dict[cluster_key_str, {name_override, skip}]`).
+
+In execute (`_execute_spoolman_to_fdb`):
+- **Skip:** all SM filament IDs in the cluster are added to `_skipped_gc_sm_ids` before
+  the container loop continues. Pass 1 and Pass 2 check this set and skip items, emitting
+  a "cluster skipped per container-name override" log entry. No orphan records are created.
+- **Rename:** the `name_override` string is used as `display_name` instead of the generated
+  container name. The resilient-409 backstop catches any collision that slips through.
+
+Cluster keys are stored as `str(cluster_tuple)` (e.g. `"('elegoo', 'pla', '')"`) since JSON
+dict keys must be strings and tuples are not JSON-serializable.
+
 ## 2026-06-08 — OpenTag matching fixes + unmatched-UI enrichment
 
 ### A — normalize_vendor: hyphens treated as spaces

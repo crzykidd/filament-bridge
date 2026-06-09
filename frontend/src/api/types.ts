@@ -205,6 +205,8 @@ export interface ConfigResponse {
   debug_mode: boolean
   // Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction)
   variant_parent_mode: VariantParentMode
+  // Container parent marker appended to generic-container names (default "(Master)", empty = no suffix)
+  container_parent_marker: string
 }
 
 export interface ConfigUpdateRequest {
@@ -227,6 +229,8 @@ export interface ConfigUpdateRequest {
   debug_mode?: boolean | null
   // Variant parent mode
   variant_parent_mode?: VariantParentMode | null
+  // Container parent marker (empty string = no suffix)
+  container_parent_marker?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +262,8 @@ export interface FilamentRef {
   material?: string | null
   /** True when the Spoolman filament has a non-empty openprinttag_uuid extra field. */
   openprinttag?: boolean
+  /** True when this FDB ref is a synthetic container parent (bridge-owned, no SM counterpart). */
+  is_master_container?: boolean
 }
 
 export interface MatchPairRow {
@@ -463,6 +469,22 @@ export interface NameCollisionEntry {
   vs_existing: boolean
   intra_batch: boolean
   existing_fdb_filament_id: string | null
+  /** True when this collision is on a synthetic container parent name. */
+  is_container_collision?: boolean
+  /** The cluster key string for this container collision. */
+  cluster_key?: string | null
+  /** The proposed container name before any user override. */
+  proposed_name?: string | null
+}
+
+export interface ContainerNameOverride {
+  cluster_key: string
+  name_override: string | null
+  skip: boolean
+}
+
+export interface ContainerNameOverridesRequest {
+  overrides: ContainerNameOverride[]
 }
 
 export interface EmptyActiveEntry {
@@ -519,6 +541,7 @@ export interface WizardPreviewResponse {
   variant_plan: SMVariantGroupRow[]
   include_empty_spools: boolean
   planned_writes: PlannedWrite[]
+  container_name_overrides: ContainerNameOverride[]
 }
 
 // ---------------------------------------------------------------------------

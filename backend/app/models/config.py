@@ -46,6 +46,14 @@ _DEFAULTS = {
     # Default "unset" so both fresh installs and existing installs require an explicit
     # choice — there is no silent fallback.
     "variant_parent_mode": '"unset"',
+    # Marker appended to generic-container parent names so the container never collides
+    # with its own color children (e.g. "ELEGOO PLA (Master)").
+    # Empty string = no marker. Default "(Master)".
+    "container_parent_marker": '"(Master)"',
+    # Per-cluster container-name overrides: dict[cluster_key_str, str | null]
+    # Each entry is either an override name string, or null to skip that cluster.
+    # Populated from the Preview page's editable rename/skip UI.
+    "wizard_container_name_overrides": "{}",
 }
 
 

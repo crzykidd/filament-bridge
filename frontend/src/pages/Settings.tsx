@@ -159,6 +159,10 @@ export default function Settings() {
   // Variant parent mode state
   const [variantParentMode, setVariantParentModeState] = useState<VariantParentMode | null>(null)
 
+  // Container parent marker state
+  const [containerMarkerEnabled, setContainerMarkerEnabled] = useState<boolean | null>(null)
+  const [containerMarkerText, setContainerMarkerText] = useState<string | null>(null)
+
   // Debug mode state
   const [debugMode, setDebugModeState] = useState<boolean | null>(null)
   const [togglingDebugMode, setTogglingDebugMode] = useState(false)
@@ -188,7 +192,11 @@ export default function Settings() {
     (neverImportEmpties != null && neverImportEmpties !== data.never_import_empties) ||
     (syncIntervalMinutes != null && syncIntervalMinutes !== Math.round(data.sync_interval_seconds / 60)) ||
     (syncLogRetentionDays != null && syncLogRetentionDays !== data.sync_log_retention_days) ||
-    (variantParentMode != null && variantParentMode !== data.variant_parent_mode)
+    (variantParentMode != null && variantParentMode !== data.variant_parent_mode) ||
+    // Container marker dirty check: marker text or enabled toggle changed
+    (containerMarkerEnabled != null && containerMarkerEnabled !== (data.container_parent_marker !== '')) ||
+    (containerMarkerText != null && containerMarkerEnabled !== false &&
+      containerMarkerText !== data.container_parent_marker)
   )
 
   // Block in-app navigation (clicking a nav link) while there are unsaved changes.
@@ -240,6 +248,13 @@ export default function Settings() {
 
   const effectiveVariantParentMode = variantParentMode ?? data.variant_parent_mode
   const effectiveDebugMode = debugMode ?? data.debug_mode
+
+  // Container marker: effective values
+  const savedMarker = data.container_parent_marker
+  const effectiveMarkerEnabled = containerMarkerEnabled ?? (savedMarker !== '')
+  const effectiveMarkerText = containerMarkerText ?? (savedMarker !== '' ? savedMarker : '(Master)')
+  // What will be sent on Save: if checkbox is off → empty string; else → the text
+  const effectiveMarkerValue = effectiveMarkerEnabled ? effectiveMarkerText : ''
 
   async function handleDebugModeToggle() {
     setTogglingDebugMode(true)
@@ -351,6 +366,9 @@ export default function Settings() {
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
         never_import_empties: neverImportEmpties ?? undefined,
         variant_parent_mode: variantParentMode ?? undefined,
+        container_parent_marker: (containerMarkerEnabled != null || containerMarkerText != null)
+          ? effectiveMarkerValue
+          : undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -622,6 +640,49 @@ export default function Settings() {
             The Bulk Import Wizard (Spoolman &rarr; Filament DB direction) will not run until you
             choose a mode and save.
           </p>
+        )}
+
+        {effectiveVariantParentMode === 'generic_container' && (
+          <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id="container-marker-enabled"
+                checked={effectiveMarkerEnabled}
+                onChange={e => {
+                  setContainerMarkerEnabled(e.target.checked)
+                  if (e.target.checked && effectiveMarkerText === '') {
+                    setContainerMarkerText('(Master)')
+                  }
+                }}
+                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <label htmlFor="container-marker-enabled" className="text-sm font-medium text-gray-700 cursor-pointer">
+                Append a marker to container parent names
+              </label>
+            </div>
+            {effectiveMarkerEnabled && (
+              <div className="pl-7 space-y-1">
+                <input
+                  type="text"
+                  value={effectiveMarkerText}
+                  onChange={e => setContainerMarkerText(e.target.value)}
+                  placeholder="(Master)"
+                  className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 w-48"
+                />
+                <p className="text-xs text-gray-400">
+                  Keeps container names distinct from their color variants (e.g. "ELEGOO PLA {effectiveMarkerText}").
+                  On a name collision you can rename or skip per-record at Preview.
+                </p>
+              </div>
+            )}
+            {!effectiveMarkerEnabled && (
+              <p className="pl-7 text-xs text-gray-400">
+                Containers will have no suffix (e.g. "ELEGOO PLA"). If a collision occurs you can
+                rename or skip per-record at the Preview step.
+              </p>
+            )}
+          </div>
         )}
       </div>
 
