@@ -1,5 +1,35 @@
 # Decision record
 
+## 2026-06-08 — gated Debug mode with reset tools for clean re-testing
+
+Added a `debug_mode` bool config flag (default `false`) that gates two destructive
+reset endpoints at `POST /api/debug/*`:
+
+- **`clear-spoolman-fdb-refs`** — fetches all Spoolman spools and blanks the three
+  cross-ref extras (`filamentdb_id` / `filamentdb_spool_id` / `filamentdb_parent_id`)
+  on every spool that has any of them set. Writes to Spoolman; per-spool errors are
+  logged without aborting the batch.
+- **`reset-bridge-state`** — deletes all rows from `FilamentMapping`, `SpoolMapping`,
+  `Snapshot`, `Conflict`, and `SyncLog` (local only — no upstream writes). Also resets
+  `wizard_completed` to `false` so the wizard can be re-run cleanly. All other
+  `BridgeConfig` keys (including `debug_mode`) are preserved.
+
+Both endpoints return **403** unless `debug_mode` is currently `true` in `BridgeConfig`.
+Debug mode is enabled/disabled via the standard `PUT /api/config` endpoint.
+
+**Rationale:** When Filament DB is wiped for testing but Spoolman still carries stale
+xref extras, the bridge floods the conflict queue with deletion conflicts on first sync.
+These two tools provide a clean-slate path without manual database surgery.
+
+**Decision — reset `wizard_completed`:** on `reset-bridge-state`, `wizard_completed` is
+reset to `false` (not left as-is) so the user can cleanly re-run the wizard and rebuild
+all mappings from scratch. This is the more useful behavior for the testing scenario
+these tools target.
+
+In the Settings UI, a "Debug mode" toggle reveals a red "Danger zone" block with both
+buttons when enabled. The clear-refs button is gated behind `BackupSafetyDialog`
+(writes to Spoolman); the reset-state button uses a plain `window.confirm` (local only).
+
 ## 2026-06-08 — multicolor writes always include multi_color_direction (Spoolman 422 fix)
 
 Spoolman rejects a filament PATCH that sets `multi_color_hexes` without also setting

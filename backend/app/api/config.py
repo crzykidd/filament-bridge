@@ -119,6 +119,7 @@ def _config_response(db: Session) -> ConfigResponse:
         sync_interval_seconds=effective_interval,
         sync_log_retention_days=int(cfg.get("sync_log_retention_days", 30)),
         never_import_empties=bool(cfg.get("never_import_empties", False)),
+        debug_mode=bool(cfg.get("debug_mode", False)),
     )
 
 

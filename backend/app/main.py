@@ -29,6 +29,7 @@ from app import __version__
 from app.api import backup as backup_router
 from app.api import config as config_router
 from app.api import conflicts as conflicts_router
+from app.api import debug as debug_router
 from app.api import health as health_router
 from app.api import mappings as mappings_router
 from app.api import opentag as opentag_router
@@ -216,6 +217,7 @@ app.include_router(wizard_router.router, prefix="/api")
 app.include_router(opentag_router.router, prefix="/api")
 app.include_router(backup_router.router, prefix="/api")
 app.include_router(sync_log_router.router, prefix="/api")
+app.include_router(debug_router.router, prefix="/api")
 
 # Serve the React SPA from /static when the directory exists (built image only).
 # Guarded so `pytest` and `uvicorn --reload` work without a frontend build.

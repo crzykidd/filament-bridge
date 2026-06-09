@@ -31,6 +31,10 @@ _DEFAULTS = {
     # whose remaining net weight is 0 (empty/depleted). The filament definition
     # is still imported; only the empty spool inventory record is excluded.
     "never_import_empties": "false",
+    # Debug mode: when true, exposes the /api/debug/* reset endpoints for clean
+    # re-testing (clear Spoolman FDB xrefs; reset bridge local state).
+    # Off by default; never enable in production.
+    "debug_mode": "false",
 }
 
 

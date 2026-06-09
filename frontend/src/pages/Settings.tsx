@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy } from '../api/types'
@@ -154,6 +154,15 @@ export default function Settings() {
   const [importMsg, setImportMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Debug mode state
+  const [debugMode, setDebugModeState] = useState<boolean | null>(null)
+  const [togglingDebugMode, setTogglingDebugMode] = useState(false)
+  const [showClearRefsDialog, setShowClearRefsDialog] = useState(false)
+  const [clearRefsMsg, setClearRefsMsg] = useState('')
+  const [clearingRefs, setClearingRefs] = useState(false)
+  const [resettingState, setResettingState] = useState(false)
+  const [resetStateMsg, setResetStateMsg] = useState('')
+
   if (loading) return <div className="p-8 text-gray-500">Loading…</div>
   if (error) return <div className="p-8 text-red-600">{error}</div>
   if (!data) return null
@@ -173,6 +182,64 @@ export default function Settings() {
   const effectiveIntervalMinutes = syncIntervalMinutes ?? Math.round(data.sync_interval_seconds / 60)
   const effectiveRetentionDays = syncLogRetentionDays ?? data.sync_log_retention_days
   const showIntervalWarning = effectiveIntervalMinutes > 5
+
+  const effectiveDebugMode = debugMode ?? data.debug_mode
+
+  async function handleDebugModeToggle() {
+    setTogglingDebugMode(true)
+    try {
+      const newValue = !effectiveDebugMode
+      await updateConfig({ debug_mode: newValue })
+      setDebugModeState(newValue)
+      void reload()
+    } catch (e) {
+      console.error('Error toggling debug mode:', e)
+    } finally {
+      setTogglingDebugMode(false)
+    }
+  }
+
+  async function doClearRefs() {
+    setClearingRefs(true)
+    setClearRefsMsg('')
+    try {
+      const result = await clearSpoolmanFdbRefs()
+      setClearRefsMsg(
+        `Done: ${result.cleared} spool(s) cleared${result.failed > 0 ? `, ${result.failed} failed (see logs)` : ''}.`,
+      )
+    } catch (e) {
+      setClearRefsMsg(e instanceof Error ? e.message : 'Error clearing refs.')
+    } finally {
+      setClearingRefs(false)
+    }
+  }
+
+  async function handleResetBridgeState() {
+    const confirmed = window.confirm(
+      'Reset bridge sync state?\n\n' +
+      'This will clear ALL mappings, snapshots, conflicts, and the sync log — ' +
+      'and reset the setup wizard so it can be re-run.\n\n' +
+      'This does NOT touch Spoolman or Filament DB. Proceed?',
+    )
+    if (!confirmed) return
+    setResettingState(true)
+    setResetStateMsg('')
+    try {
+      const result = await resetBridgeState()
+      setResetStateMsg(
+        `Reset complete: ${result.filament_mappings} filament mapping(s), ` +
+        `${result.spool_mappings} spool mapping(s), ` +
+        `${result.snapshots} snapshot(s), ` +
+        `${result.conflicts} conflict(s), ` +
+        `${result.sync_log} sync log entry/entries deleted. Wizard reset.`,
+      )
+      void reload()
+    } catch (e) {
+      setResetStateMsg(e instanceof Error ? e.message : 'Error resetting state.')
+    } finally {
+      setResettingState(false)
+    }
+  }
 
   async function doEnableAutoSync() {
     setTogglingAutoSync(true)
@@ -280,6 +347,12 @@ export default function Settings() {
       actionLabel="Enable auto-sync"
       onCancel={() => setShowAutoSyncBackupDialog(false)}
       onProceed={() => { setShowAutoSyncBackupDialog(false); void doEnableAutoSync() }}
+    />
+    <BackupSafetyDialog
+      open={showClearRefsDialog}
+      actionLabel="Clear Filament DB references from Spoolman"
+      onCancel={() => setShowClearRefsDialog(false)}
+      onProceed={() => { setShowClearRefsDialog(false); void doClearRefs() }}
     />
     <div className="p-8 space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
@@ -541,6 +614,89 @@ export default function Settings() {
         <p>Wizard completed: <strong>{data.wizard_completed ? 'Yes' : 'No'}</strong></p>
         {data.import_direction && (
           <p>Import direction: <strong>{data.import_direction}</strong></p>
+        )}
+      </div>
+
+      {/* Debug mode */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-700">Debug mode</h2>
+        <p className="text-xs text-gray-400">
+          For development and testing only. Enables destructive reset tools below.
+          Never enable in production.
+        </p>
+        <div className="flex items-center justify-between py-2">
+          <span className="text-sm font-medium text-gray-700">Debug mode enabled</span>
+          <button
+            type="button"
+            onClick={() => void handleDebugModeToggle()}
+            disabled={togglingDebugMode}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+              effectiveDebugMode ? 'bg-indigo-600' : 'bg-gray-200'
+            }`}
+            aria-pressed={effectiveDebugMode}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                effectiveDebugMode ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        {effectiveDebugMode && (
+          <div className="rounded-lg border-2 border-red-300 bg-red-50 p-4 space-y-4 mt-2">
+            <h3 className="text-sm font-semibold text-red-700">Danger zone</h3>
+            <p className="text-xs text-red-600">
+              These actions are irreversible. Use only during testing with a wiped or
+              disposable dataset.
+            </p>
+
+            {/* Clear Spoolman FDB refs */}
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-800">
+                Clear Filament DB references from Spoolman
+              </p>
+              <p className="text-xs text-gray-500">
+                Blanks <code>filamentdb_id</code>, <code>filamentdb_spool_id</code>, and{' '}
+                <code>filamentdb_parent_id</code> on every Spoolman spool that has any of them
+                set. Writes to Spoolman — irreversible.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowClearRefsDialog(true)}
+                disabled={clearingRefs}
+                className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {clearingRefs ? 'Clearing…' : 'Clear Filament DB references from Spoolman'}
+              </button>
+              {clearRefsMsg && (
+                <p className="text-xs text-gray-700">{clearRefsMsg}</p>
+              )}
+            </div>
+
+            {/* Reset bridge state */}
+            <div className="space-y-2 border-t border-red-200 pt-4">
+              <p className="text-sm font-medium text-gray-800">
+                Reset bridge sync state
+              </p>
+              <p className="text-xs text-gray-500">
+                Clears the bridge's mappings, snapshots, conflicts, and sync log — does NOT
+                touch Spoolman or Filament DB. Also resets the setup wizard so it can be
+                re-run from scratch.
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleResetBridgeState()}
+                disabled={resettingState}
+                className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {resettingState ? 'Resetting…' : 'Reset bridge sync state'}
+              </button>
+              {resetStateMsg && (
+                <p className="text-xs text-gray-700">{resetStateMsg}</p>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>

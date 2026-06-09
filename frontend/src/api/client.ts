@@ -7,6 +7,7 @@ import type {
   BackupSpoolmanResponse,
   BulkResolveRequest,
   BulkResolveResponse,
+  ClearRefsResponse,
   ConfigResponse,
   ConfigUpdateRequest,
   ConflictResolveRequest,
@@ -20,6 +21,7 @@ import type {
   OpenTagCacheStatus,
   OpenTagDatasetMeta,
   OpenTagMatchesResponse,
+  ResetStateResponse,
   SMVariancesDecisionsRequest,
   SyncLogDeleteResponse,
   SyncLogResponse,
@@ -205,3 +207,13 @@ export const postOpenTagRefresh = () =>
   request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>
   json<OpenTagApplyResponse>('/openprinttag/apply', 'POST', body)
+
+// ---------------------------------------------------------------------------
+// Debug reset tools (only available when debug_mode=true)
+// ---------------------------------------------------------------------------
+
+export const clearSpoolmanFdbRefs = () =>
+  request<ClearRefsResponse>('/debug/clear-spoolman-fdb-refs', { method: 'POST' })
+
+export const resetBridgeState = () =>
+  request<ResetStateResponse>('/debug/reset-bridge-state', { method: 'POST' })

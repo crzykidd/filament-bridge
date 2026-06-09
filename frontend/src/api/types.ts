@@ -199,6 +199,8 @@ export interface ConfigResponse {
   sync_log_retention_days: number
   // Import behaviour
   never_import_empties: boolean
+  // Debug mode — exposes /api/debug/* reset endpoints when true
+  debug_mode: boolean
 }
 
 export interface ConfigUpdateRequest {
@@ -216,6 +218,8 @@ export interface ConfigUpdateRequest {
   sync_log_retention_days?: number | null
   // Import behaviour
   never_import_empties?: boolean | null
+  // Debug mode
+  debug_mode?: boolean | null
 }
 
 // ---------------------------------------------------------------------------
@@ -654,6 +658,24 @@ export interface OpenTagApplyResponse {
   ignored: number
   errors: number
   results: OpenTagApplyFilamentResult[]
+}
+
+// ---------------------------------------------------------------------------
+// Debug reset tools
+// ---------------------------------------------------------------------------
+
+export interface ClearRefsResponse {
+  cleared: number
+  failed: number
+}
+
+export interface ResetStateResponse {
+  filament_mappings: number
+  spool_mappings: number
+  snapshots: number
+  conflicts: number
+  sync_log: number
+  wizard_completed_reset: boolean
 }
 
 // ---------------------------------------------------------------------------

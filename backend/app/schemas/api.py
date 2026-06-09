@@ -199,6 +199,8 @@ class ConfigResponse(BaseModel):
     sync_log_retention_days: int = 30
     # Import behaviour
     never_import_empties: bool = False
+    # Debug mode — exposes /api/debug/* reset endpoints when true
+    debug_mode: bool = False
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -217,6 +219,8 @@ class ConfigUpdateRequest(BaseModel):
     sync_log_retention_days: int | None = Field(default=None, ge=0)
     # Import behaviour
     never_import_empties: bool | None = None
+    # Debug mode
+    debug_mode: bool | None = None
 
 
 # ---------------------------------------------------------------------------
