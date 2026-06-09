@@ -141,6 +141,7 @@ export default function Settings() {
   const [precision, setPrecision] = useState<number | null>(null)
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
   const [vendorAliases, setVendorAliases] = useState<string | null>(null)
+  const [colorKeywords, setColorKeywords] = useState<string | null>(null)
   const [neverImportEmpties, setNeverImportEmpties] = useState<boolean | null>(null)
 
   // Scheduler & Logs state
@@ -183,6 +184,7 @@ export default function Settings() {
     (precision != null && precision !== data.weight_precision_decimals) ||
     (variantKeywords != null && variantKeywords !== (data.variant_line_keywords ?? '')) ||
     (vendorAliases != null && vendorAliases !== (data.opentag_vendor_aliases ?? '')) ||
+    (colorKeywords != null && colorKeywords !== (data.opentag_color_keywords ?? '')) ||
     (neverImportEmpties != null && neverImportEmpties !== data.never_import_empties) ||
     (syncIntervalMinutes != null && syncIntervalMinutes !== Math.round(data.sync_interval_seconds / 60)) ||
     (syncLogRetentionDays != null && syncLogRetentionDays !== data.sync_log_retention_days) ||
@@ -228,6 +230,7 @@ export default function Settings() {
   const prec = precision ?? data.weight_precision_decimals
   const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
   const valiases = vendorAliases ?? data.opentag_vendor_aliases ?? ''
+  const vcolorkw = colorKeywords ?? data.opentag_color_keywords ?? ''
   const neverEmpties = neverImportEmpties ?? data.never_import_empties
 
   // Convert stored seconds → minutes for display; fall back to data value
@@ -342,6 +345,7 @@ export default function Settings() {
         weight_precision_decimals: prec,
         variant_line_keywords: variantKeywords ?? undefined,
         opentag_vendor_aliases: vendorAliases ?? undefined,
+        opentag_color_keywords: colorKeywords ?? undefined,
         // Convert minutes → seconds for the API; only send if user changed it
         sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
@@ -674,6 +678,22 @@ export default function Settings() {
             Maps Spoolman vendor names to OpenTag brand names for the OpenTag cleanup matcher,
             e.g. <code>prusa=prusament, polyterra=polymaker</code>. Required when the vendor
             name in Spoolman differs from the brand name used in OpenTag.
+          </span>
+        </div>
+        <div className="flex flex-col gap-1 py-3 border-b border-gray-100">
+          <span className="text-sm font-medium text-gray-700">Color word mappings (OpenTag matcher)</span>
+          <input
+            type="text"
+            value={vcolorkw}
+            onChange={e => setColorKeywords(e.target.value)}
+            placeholder="galaxy=black, cool=grey, jet=black"
+            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <span className="text-xs text-gray-400">
+            Maps color/marketing words to canonical base colors so "Jet Black" and "Galaxy Black"
+            both reduce to "black" for matching. Format: <code>keyword=base_color</code>, e.g.{' '}
+            <code>galaxy=black, cool=grey</code>. Merged on top of built-in defaults — leave blank
+            to use defaults only.
           </span>
         </div>
         <div className="pt-2 flex items-center gap-3">

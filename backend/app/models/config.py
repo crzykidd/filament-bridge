@@ -23,6 +23,9 @@ _DEFAULTS = {
     # Spoolman vendor → OpenTag brand aliases for the OpenTag cleanup matcher.
     # Empty string = no aliases (default).
     "opentag_vendor_aliases": '""',
+    # Color-word → base-color map for the OpenTag matcher color scorer.
+    # Empty string = use seed defaults from core/opentag_match.py.
+    "opentag_color_keywords": '""',
     # Runtime-configurable sync interval (seconds). 0 = use env-default.
     "sync_interval_seconds": "0",
     # Sync-log retention in days. 0 = keep forever.

@@ -29,7 +29,10 @@ def normalize_vendor(name: str | None) -> str:
     if not name:
         return ""
     n = unicodedata.normalize("NFKC", name).lower().strip()
-    n = re.sub(r"\s+", " ", n)
+    # Treat hyphens/underscores as spaces so "VOXEL-pla" and "Voxel PLA" both
+    # normalize to "voxel pla" and index into the same brand bucket.
+    n = re.sub(r"[-_]+", " ", n)
+    n = re.sub(r"\s+", " ", n).strip()
     return _VENDOR_CANONICAL.get(n, n)
 
 

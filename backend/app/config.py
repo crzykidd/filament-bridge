@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     # Default empty — no aliases applied.
     opentag_vendor_aliases: str = ""
 
+    # CSV of "keyword=base_color" pairs for color-name normalization in the
+    # OpenTag matcher.  Maps color words (including marketing names like
+    # "galaxy", "jet", "cool") to canonical base colors so "Jet Black" and
+    # "Galaxy Black" both reduce to "black" for base-color matching.
+    # Default empty — uses the seed defaults from core/opentag_match.py.
+    opentag_color_keywords: str = ""
+
     # OpenTag extra fields on Spoolman filament entity
     spoolman_field_openprinttag_slug: str = "openprinttag_slug"
     spoolman_field_openprinttag_uuid: str = "openprinttag_uuid"
@@ -71,6 +78,21 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_trailing_slash(cls, v: str) -> str:
         return v.rstrip("/")
+
+    @property
+    def parsed_opentag_color_keywords(self) -> dict[str, str]:
+        """Return the effective color-words map (keyword → base color).
+
+        When ``opentag_color_keywords`` is empty, returns ``DEFAULT_COLOR_KEYWORDS``
+        from ``core.opentag_match``.  When non-empty, the CSV overrides are MERGED
+        on top of the seed defaults so users can add entries without losing the seeds.
+        """
+        from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS, parse_color_keywords_config
+        if not self.opentag_color_keywords.strip():
+            return dict(DEFAULT_COLOR_KEYWORDS)
+        merged = dict(DEFAULT_COLOR_KEYWORDS)
+        merged.update(parse_color_keywords_config(self.opentag_color_keywords))
+        return merged
 
     @property
     def parsed_opentag_vendor_aliases(self) -> dict[str, str]:

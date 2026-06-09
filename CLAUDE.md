@@ -225,6 +225,7 @@ filament-bridge/
 | `SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS` | No | `filamentdb_material_tags` | Spoolman filament-level extra field storing finish-tag IDs (JSON list of ints) |
 | `MATERIAL_TAG_IDS` | No | (seed list) | CSV of `keyword=id` pairs overriding the default keyword→OpenPrintTag-ID map for finish detection. Empty = use seed defaults from `core/material_tags.py`. |
 | `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenTag brand pre-filter (e.g. `prusa=prusament`). Normalised on both sides; blank = no aliases. Overridable at runtime via Settings. |
+| `OPENTAG_COLOR_KEYWORDS` | No | — | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher (e.g. `galaxy=black,cool=grey,jet=black`). Merged on top of seed defaults from `core/opentag_match.py:DEFAULT_COLOR_KEYWORDS`; blank = seed defaults only. Overridable at runtime via Settings. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag material slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
@@ -243,6 +244,8 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
+| `opentag_vendor_aliases` | env fallback (`""`) | CSV of `sm=opentag` vendor alias pairs for the OpenTag matcher brand pre-filter. |
+| `opentag_color_keywords` | env fallback (`""`) | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher. Merged on top of `DEFAULT_COLOR_KEYWORDS` seed. |
 
 ## Important technical details
 

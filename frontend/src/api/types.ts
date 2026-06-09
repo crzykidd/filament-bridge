@@ -190,6 +190,7 @@ export interface ConfigResponse {
   import_direction: SourceOfTruth | null
   variant_line_keywords: string | null
   opentag_vendor_aliases: string | null
+  opentag_color_keywords: string | null
   weight_sync_direction: SyncDirection2
   weight_conflict_policy: ConflictPolicy
   material_properties_sync_direction: SyncDirection2
@@ -211,6 +212,7 @@ export interface ConfigUpdateRequest {
   weight_precision_decimals?: number | null
   variant_line_keywords?: string | null
   opentag_vendor_aliases?: string | null
+  opentag_color_keywords?: string | null
   weight_sync_direction?: SyncDirection2 | null
   weight_conflict_policy?: ConflictPolicy | null
   material_properties_sync_direction?: SyncDirection2 | null

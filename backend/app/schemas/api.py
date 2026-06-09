@@ -191,6 +191,7 @@ class ConfigResponse(BaseModel):
     import_direction: SourceOfTruth | None = None
     variant_line_keywords: str | None = None
     opentag_vendor_aliases: str | None = None
+    opentag_color_keywords: str | None = None
     # Two-axis sync direction + conflict policy (new model)
     weight_sync_direction: SyncDirection2 = "spoolman_to_filamentdb"
     weight_conflict_policy: ConflictPolicy = "manual"
@@ -214,6 +215,7 @@ class ConfigUpdateRequest(BaseModel):
     weight_precision_decimals: int | None = Field(default=None, ge=0, le=4)
     variant_line_keywords: str | None = None
     opentag_vendor_aliases: str | None = None
+    opentag_color_keywords: str | None = None
     # Two-axis sync direction + conflict policy (new model)
     weight_sync_direction: SyncDirection2 | None = None
     weight_conflict_policy: ConflictPolicy | None = None

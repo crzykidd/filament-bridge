@@ -1148,10 +1148,28 @@ export default function OpenTagCleanup() {
               <summary className="text-sm text-gray-500 cursor-pointer select-none">
                 {noMatch.length} unmatched filaments (confidence &lt; 30%)
               </summary>
-              <div className="mt-2 space-y-1 pl-4">
+              <div className="mt-2 space-y-2 pl-4">
                 {noMatch.map(m => (
-                  <div key={m.spoolman_filament_id} className="text-sm text-gray-600">
-                    {m.spoolman_name} ({m.spoolman_vendor}) — {Math.round(m.confidence * 100)}%
+                  <div key={m.spoolman_filament_id} className="flex flex-wrap items-center gap-2 py-1 border-b border-gray-100 last:border-0">
+                    <ColorSwatch hex={m.spoolman_color_hex} />
+                    <span className="text-sm font-medium text-gray-700">{m.spoolman_name}</span>
+                    {!m.spoolman_vendor ? (
+                      <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-xs font-medium border border-red-200">
+                        No manufacturer
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-600">{m.spoolman_vendor}</span>
+                    )}
+                    {m.spoolman_material && (
+                      <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">
+                        {m.spoolman_material}
+                      </span>
+                    )}
+                    <DeepLinks spoolmanFilamentId={m.spoolman_filament_id} />
+                    {confidenceBadge(m.confidence)}
+                    {m.no_match_reason && (
+                      <span className="text-xs text-gray-600 italic">{m.no_match_reason}</span>
+                    )}
                   </div>
                 ))}
               </div>

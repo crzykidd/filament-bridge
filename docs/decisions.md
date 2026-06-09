@@ -1,5 +1,46 @@
 # Decision record
 
+## 2026-06-08 — OpenTag matching fixes + unmatched-UI enrichment
+
+### A — normalize_vendor: hyphens treated as spaces
+
+`normalize_vendor()` in `core/matcher.py` now runs `re.sub(r"[-_]+", " ", n)` before collapsing
+whitespace. This is a shared function (variant clustering, vendor dedup, OpenTag brand gate).
+Treating a hyphen like a space is correct for vendor names generally — the full backend test
+suite was run and no existing test encoded the old hyphen behavior; 0 regressions.
+
+The root cause: Spoolman vendor `"VOXEL-pla"` → `"voxel-pla"` while OpenTag brand `"Voxel PLA"`
+→ `"voxel pla"`, so the brand bucket lookup returned 0 candidates and scoring never ran.
+
+### B — Color-words map + score rebalancing
+
+Added `DEFAULT_COLOR_KEYWORDS` (dict[str, str]) in `core/opentag_match.py` mapping color and
+marketing words to canonical base colors (e.g. `"galaxy" → "black"`, `"cool" → "grey"`).
+
+The `score_candidate` function was updated:
+- Hex weight: 0.10 → **0.15** (hex is ground truth, not brand marketing)
+- Color-name component: 0.30 → **0.25 token-sim + 0.05 base-color bonus**
+- Total weight is unchanged (sums to 1.0 for a perfect match)
+
+The base-color bonus is only awarded when token similarity < 1.0 (no double-credit for exact
+matches) and both sides reduce to the same non-empty base via the map. This means "Jet Black" and
+"Galaxy Black" (both → "black") now score above the 30% threshold even though their token sets
+are disjoint.
+
+The color map is user-extendable via `OPENTAG_COLOR_KEYWORDS` env var or the new "Color word
+mappings" Settings field. User entries are merged on top of the seed defaults.
+
+The scoring change was validated: all 747 existing backend tests pass; the accepted
+"orange vs copper" regression test still passes; no previously-correct match regressed.
+
+### C — Unmatched section enrichment (UI only)
+
+Each row in the OpenTag Cleanup unmatched `<details>` section now renders: color swatch,
+filament name, vendor (or red "No manufacturer" badge when missing), material badge, Spoolman
+deep link, confidence badge, and `no_match_reason`. No backend changes were required —
+`OpenTagFilamentMatch` already carried all these fields; only the frontend was using `{name}
+({vendor}) — {pct}%`.
+
 ## 2026-06-08 — Container naming "Master" suffix + resilient 409 execute
 
 ### P0.1 — Strip finish word from material before composing container name

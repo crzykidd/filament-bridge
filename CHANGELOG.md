@@ -11,6 +11,17 @@ GitHub release.
 
 ### Added
 
+- **OpenTag color-words map** (`OPENTAG_COLOR_KEYWORDS`) — new runtime-editable setting that maps
+  color/marketing words to canonical base colors (e.g. `galaxy=black`, `cool=grey`, `jet=black`).
+  The OpenTag matcher uses the map to award base-color credit when both the Spoolman name and the
+  OpenTag name reduce to the same base color even though the token sets are disjoint ("Jet Black"
+  and "Galaxy Black" both → "black"). The seed map is in `core/opentag_match.py:DEFAULT_COLOR_KEYWORDS`
+  and covers base colors, lightness modifiers, and common marketing names. User entries are merged
+  on top. Configurable via the new "Color word mappings" field in Settings.
+- **OpenTag unmatched section enriched** — each row in the OpenTag Cleanup unmatched section now
+  shows: color swatch, material badge, Spoolman deep link (`DeepLinks`), confidence badge, a red
+  "No manufacturer" error badge when the vendor is missing, and the `no_match_reason` string so
+  users understand why the filament didn't match.
 - **Spool age preserved on import** — when the bridge creates a spool in Filament DB it now sets
   `purchaseDate` from Spoolman's `registered` date and `openedDate` from Spoolman's `first_used`
   date (both truncated to date-only to match Filament DB's field format). Applies to both the
@@ -36,6 +47,14 @@ GitHub release.
 
 ### Fixed
 
+- **OpenTag VOXEL-pla brand gate** — `normalize_vendor()` now replaces hyphens and underscores
+  with spaces before collapsing whitespace. This fixes a 0% / unmatched result for Spoolman vendor
+  `"VOXEL-pla"` against OpenTag brand `"Voxel PLA"`: both now normalize to `"voxel pla"` and land
+  in the same brand bucket so scoring can run.
+- **OpenTag color scoring — "Jet Black" matches "Galaxy Black"** — the hex proximity weight was
+  increased from 0.10 → 0.15 (hex is ground truth) and the color-name component was split into
+  0.25 token-similarity + 0.05 base-color bonus (via the new color-words map). "PLA Jet Black"
+  (#222F2E) now surfaces `prusament-pla-prusa-galaxy-black` above the 30% threshold.
 - **P0.1 Double finish word in container name** — `_container_display_name` now calls
   `strip_finish_words` on the raw `material` field before composing the container name, so a
   Spoolman filament with `material = "PLA Silk"` produces "ELEGOO PLA Silk Master" rather than

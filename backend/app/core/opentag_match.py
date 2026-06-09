@@ -23,6 +23,132 @@ from app.schemas.spoolman import SpoolmanFilament
 
 
 # ---------------------------------------------------------------------------
+# Color-words map — maps any color word to a canonical base color
+# ---------------------------------------------------------------------------
+
+#: Default seed map for color-word normalization.
+#: Three kinds of entry:
+#:   - Base colors → themselves (canonical identity)
+#:   - Lightness modifiers ("light", "dark", "deep", "pastel") → ignored/stripped
+#:     (not in this map; handled by stripping modifier tokens before lookup)
+#:   - Brand/marketing names → a base color (e.g. "galaxy" → "black", "cool" → "grey")
+#: User-extendable via OPENTAG_COLOR_KEYWORDS env var or Settings UI.
+DEFAULT_COLOR_KEYWORDS: dict[str, str] = {
+    # Base colors
+    "black": "black",
+    "white": "white",
+    "grey": "grey",
+    "gray": "grey",
+    "silver": "grey",
+    "red": "red",
+    "blue": "blue",
+    "green": "green",
+    "yellow": "yellow",
+    "orange": "orange",
+    "purple": "purple",
+    "violet": "purple",
+    "pink": "pink",
+    "magenta": "pink",
+    "brown": "brown",
+    "beige": "brown",
+    "tan": "brown",
+    "gold": "gold",
+    "bronze": "bronze",
+    "copper": "copper",
+    "cyan": "cyan",
+    "teal": "cyan",
+    "navy": "blue",
+    "indigo": "purple",
+    "natural": "natural",
+    "clear": "clear",
+    "transparent": "clear",
+    # Marketing/brand names → base color
+    "galaxy": "black",
+    "jet": "black",
+    "onyx": "black",
+    "obsidian": "black",
+    "charcoal": "grey",
+    "cool": "grey",
+    "ash": "grey",
+    "fog": "grey",
+    "smoke": "grey",
+    "pearl": "white",
+    "ivory": "white",
+    "cream": "white",
+    "snow": "white",
+    "crimson": "red",
+    "scarlet": "red",
+    "ruby": "red",
+    "rose": "pink",
+    "coral": "orange",
+    "amber": "orange",
+    "pumpkin": "orange",
+    "lime": "green",
+    "olive": "green",
+    "mint": "green",
+    "forest": "green",
+    "army": "green",
+    "sky": "blue",
+    "azure": "blue",
+    "ocean": "blue",
+    "cobalt": "blue",
+    "sapphire": "blue",
+    "electric": "blue",
+    "royal": "blue",
+    "lavender": "purple",
+    "lilac": "purple",
+    "prusa": "",       # brand prefix, not a color — maps to empty (ignored)
+}
+
+# Modifier words that prefix a color token but should not block a base-color match.
+# These are stripped from color names before base-color lookup.
+_COLOR_MODIFIERS: frozenset[str] = frozenset({
+    "light", "lite", "dark", "deep", "pastel", "bright",
+    "pale", "vivid", "neon", "matte", "glossy",
+})
+
+
+def _base_color(tokens: set[str], color_map: dict[str, str]) -> str:
+    """Reduce a set of color tokens to a single canonical base color string.
+
+    Algorithm:
+    1. Strip modifier tokens.
+    2. For each remaining token, look it up in color_map.
+    3. Return the first non-empty base color found, or "" if none.
+
+    This is intentionally simple and fast — the map is the authority.
+    """
+    # First pass: look up non-modifier tokens directly
+    for tok in tokens:
+        if tok in _COLOR_MODIFIERS:
+            continue
+        base = color_map.get(tok)
+        if base:
+            return base
+    return ""
+
+
+def parse_color_keywords_config(csv: str) -> dict[str, str]:
+    """Parse a ``keyword=base_color`` CSV string into a color-words map.
+
+    Blank entries and entries without ``=`` are silently ignored.
+    The resulting dict OVERRIDES (does not merge with) DEFAULT_COLOR_KEYWORDS
+    when non-empty; the caller must decide whether to merge or replace.
+    """
+    result: dict[str, str] = {}
+    for pair in csv.split(","):
+        pair = pair.strip()
+        if "=" not in pair:
+            continue
+        kw, base = pair.split("=", 1)
+        kw = kw.strip().lower()
+        base = base.strip().lower()
+        if kw:
+            result[kw] = base
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Color-profile helpers — pure, no I/O
 # ---------------------------------------------------------------------------
 
@@ -551,6 +677,7 @@ def score_candidate(
     opt: dict[str, Any],
     tag_map: dict[str, int] | None = None,
     aliases: dict[str, str] | None = None,
+    color_map: dict[str, str] | None = None,
 ) -> float:
     """Score an OPTMaterial candidate against a SpoolmanFilament.
 
@@ -559,20 +686,33 @@ def score_candidate(
     Scoring components (weights sum to 1.0 for a perfect match):
     - Type/material match:   0.20 exact / 0.10 substring
     - Vendor/brand match:    0.20 exact / 0.10 substring
-    - Color name similarity: 0.30  ← key within-brand/material discriminator
+    - Color name similarity: 0.25  ← within-brand/material discriminator
       (finish words stripped BEFORE tokenising so "Transparent Orange" → {orange})
+      + 0.05 base-color bonus when both sides map to the same canonical base color
+      via the color-words map (e.g. "Jet Black" and "Galaxy Black" both → "black")
     - Finish tag overlap:    up to +0.15 reward; −0.10 to −0.15 mismatch penalty
-    - Color hex proximity:   0.10
+    - Color hex proximity:   0.15  ← primary color signal when both hexes present
+
+    Total weight is the same as before; hex weight increased from 0.10 → 0.15 because
+    hex is ground truth ("Jet Black" #222F2E and "Galaxy Black" #4b4545 are both clearly
+    dark) while marketing names ("Galaxy"/"Cool") are brand fluff.  The 0.05 reduction
+    comes from splitting the old 0.30 name component into 0.25 token-sim + 0.05 base-color.
 
     ``aliases`` is the parsed ``opentag_vendor_aliases`` dict
     (``{normalize_vendor(sm): normalize_vendor(opentag)}``).  When provided,
     the SM vendor is resolved through the alias map before comparing to the OPT
     brand so that e.g. "Prusa" scores as a full match against "Prusament".
+
+    ``color_map`` is the parsed ``opentag_color_keywords`` dict mapping color words to
+    canonical base colors (e.g. ``{"galaxy": "black", "jet": "black"}``).  Falls back
+    to ``DEFAULT_COLOR_KEYWORDS`` when None.
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
     if aliases is None:
         aliases = {}
+    if color_map is None:
+        color_map = DEFAULT_COLOR_KEYWORDS
 
     score = 0.0
 
@@ -597,7 +737,7 @@ def score_candidate(
         elif sm_vendor in opt_brand or opt_brand in sm_vendor:
             score += 0.10
 
-    # ---- Color name similarity (0.30) ----
+    # ---- Color name similarity (0.25 token-sim + 0.05 base-color bonus) ----
     # Finish words are removed inside _color_name_tokens so "Transparent Orange" → {"orange"};
     # the transparent/solid mismatch is then handled separately by the finish component.
     sm_color_tokens = _color_name_tokens(sm.name, sm_vendor_name, sm.material, tag_map)
@@ -605,7 +745,18 @@ def score_candidate(
         opt.get("name"), opt.get("brandName"), opt_type_raw, tag_map
     )
     name_sim = _name_similarity(sm_color_tokens, opt_color_tokens)
-    score += 0.30 * name_sim
+    score += 0.25 * name_sim
+
+    # Base-color bonus: when both sides reduce to the same canonical base color via the
+    # color-words map, add 0.05 so "Jet Black" and "Galaxy Black" (both → "black") still
+    # get color credit even though their token sets are disjoint.
+    # Only awarded when token similarity is < 1.0 (i.e., names are not already identical);
+    # no double-credit for exact matches.
+    if name_sim < 1.0:
+        sm_base = _base_color(sm_color_tokens, color_map)
+        opt_base = _base_color(opt_color_tokens, color_map)
+        if sm_base and opt_base and sm_base == opt_base:
+            score += 0.05
 
     # ---- Finish component (up to +0.15, min −0.15) ----
     sm_finish_ids = finish_ids_from_text(sm.name, sm.material, tag_map)
@@ -616,10 +767,13 @@ def score_candidate(
     opt_finish_ids.update(finish_ids_from_text(opt.get("name", ""), opt_type_raw, tag_map))
     score += _finish_score(sm_finish_ids, opt_finish_ids)
 
-    # ---- Color hex proximity (0.10) ----
+    # ---- Color hex proximity (0.15) ----
+    # Hex is the primary color signal — it's ground truth regardless of the marketing name.
+    # Weight increased from 0.10 to 0.15; the extra 0.05 comes from splitting the old 0.30
+    # name component into 0.25 token-sim + 0.05 base-color bonus.
     color_dist = _color_distance(sm.color_hex, opt.get("color"))
-    # distance 0 → 0.10, distance 1 → 0.0
-    score += max(0.0, 0.10 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
+    # distance 0 → 0.15, distance 1 → 0.0
+    score += max(0.0, 0.15 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
 
     return round(score, 4)
 
@@ -637,6 +791,7 @@ def find_best_match(
     *,
     top_n: int = 10,
     min_confidence: float = 0.30,
+    color_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Find the best matching OPTMaterial for a SpoolmanFilament.
 
@@ -653,6 +808,7 @@ def find_best_match(
     ``alternate_scores`` always has the same length as ``alternates``.
 
     ``aliases`` is forwarded to ``score_candidate`` for vendor-alias resolution.
+    ``color_map`` is forwarded to ``score_candidate`` for base-color reduction.
     """
     if not materials:
         return {"best": None, "confidence": 0.0, "alternates": [], "alternate_scores": []}
@@ -662,7 +818,7 @@ def find_best_match(
     # Defensive: skip any candidate that isn't a dict (guard against shape drift
     # or a malformed cache entry containing a string instead of an OPTMaterial).
     scored = [
-        (score_candidate(sm, opt, tag_map, aliases), opt)
+        (score_candidate(sm, opt, tag_map, aliases, color_map), opt)
         for opt in materials
         if isinstance(opt, dict)
     ]

@@ -5286,3 +5286,226 @@ def test_opt_color_profile_one_secondary_no_arrangement_is_single():
     assert result == "single", (
         f"Expected 'single' for one-secondary no-arrangement entry, got {result!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Part A: VOXEL-pla brand-gate fix — normalize_vendor treats hyphens as spaces
+# ---------------------------------------------------------------------------
+
+_OPT_VOXEL_PLA_BLACK = {
+    "uuid": "voxel-pla-0000-0000-000000000001",
+    "slug": "voxel-pla-pla-black",
+    "brandName": "Voxel PLA",
+    "name": "PLA Black",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "#111111",
+    "secondaryColors": [],
+    "density": 1.24,
+    "nozzleTempMax": 220,
+    "bedTempMax": 60,
+    "completenessScore": 75,
+}
+
+_OPT_VOXEL_PLA_WHITE = {
+    "uuid": "voxel-pla-0000-0000-000000000002",
+    "slug": "voxel-pla-pla-white",
+    "brandName": "Voxel PLA",
+    "name": "PLA White",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "#FFFFFF",
+    "secondaryColors": [],
+    "density": 1.24,
+    "nozzleTempMax": 220,
+    "bedTempMax": 60,
+    "completenessScore": 75,
+}
+
+
+def test_normalize_vendor_hyphen_treated_as_space():
+    """VOXEL-pla and Voxel PLA must normalize to the same string ('voxel pla').
+
+    Root cause: normalize_vendor() formerly only collapsed whitespace but did NOT
+    replace hyphens.  This caused 'VOXEL-pla' → 'voxel-pla' while 'Voxel PLA' →
+    'voxel pla', so the brand pre-filter missed all Voxel PLA candidates.
+    """
+    from app.core.matcher import normalize_vendor
+    assert normalize_vendor("VOXEL-pla") == normalize_vendor("Voxel PLA"), (
+        f"Expected normalize_vendor('VOXEL-pla') == normalize_vendor('Voxel PLA'), "
+        f"got {normalize_vendor('VOXEL-pla')!r} vs {normalize_vendor('Voxel PLA')!r}"
+    )
+    assert normalize_vendor("VOXEL-pla") == "voxel pla"
+    assert normalize_vendor("Voxel PLA") == "voxel pla"
+
+
+def test_voxel_pla_score_above_threshold():
+    """SM 'PLA Black' / vendor 'VOXEL-pla' must score >= 0.30 against OPT 'Voxel PLA / PLA Black'.
+
+    Before the fix, normalize_vendor('VOXEL-pla') = 'voxel-pla' while
+    normalize_vendor('Voxel PLA') = 'voxel pla', so vendor comparison returned 0 and
+    the score landed below the 30% threshold.
+    """
+    sm = SpoolmanFilament(
+        id=10,
+        name="PLA Black",
+        vendor=SpoolmanVendor(id=1, name="VOXEL-pla"),
+        material="PLA",
+        color_hex="111111",
+        extra={},
+    )
+    score = score_candidate(sm, _OPT_VOXEL_PLA_BLACK)
+    assert score >= 0.30, (
+        f"Expected score >= 0.30 for VOXEL-pla vs 'Voxel PLA', got {score:.4f}"
+    )
+
+
+def test_voxel_pla_find_best_match_returns_candidate():
+    """find_best_match must return a non-None best for SM 'VOXEL-pla' against Voxel PLA candidates.
+
+    This is the end-to-end brand-gate fix: SM vendor 'VOXEL-pla' must be bucketed
+    into the same brand pool as OPT brandName 'Voxel PLA' and produce a match.
+    """
+    sm = SpoolmanFilament(
+        id=10,
+        name="PLA Black",
+        vendor=SpoolmanVendor(id=1, name="VOXEL-pla"),
+        material="PLA",
+        color_hex="111111",
+        extra={},
+    )
+    result = find_best_match(sm, [_OPT_VOXEL_PLA_BLACK, _OPT_VOXEL_PLA_WHITE])
+    assert result["best"] is not None, (
+        "Expected a best match for VOXEL-pla vs Voxel PLA candidates (brand gate should let them through)"
+    )
+    assert result["best"]["slug"] == "voxel-pla-pla-black", (
+        f"Expected 'voxel-pla-pla-black', got {result['best']['slug']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Part B: Color-words map + scoring — "Jet Black" and "Galaxy Black" both → "black"
+# ---------------------------------------------------------------------------
+
+_OPT_PRUSAMENT_GALAXY_BLACK = {
+    "uuid": "prusament-0000-0000-0000-pla-galaxy-black",
+    "slug": "prusament-pla-prusa-galaxy-black",
+    "brandName": "Prusament",
+    "name": "PLA Prusa Galaxy Black",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "#4b4545",
+    "secondaryColors": [],
+    "density": 1.24,
+    "nozzleTempMax": 215,
+    "bedTempMax": 60,
+    "completenessScore": 90,
+}
+
+_OPT_PRUSAMENT_AZURE_BLUE = {
+    "uuid": "prusament-0000-0000-0000-pla-azure-blue",
+    "slug": "prusament-pla-azure-blue",
+    "brandName": "Prusament",
+    "name": "PLA Azure Blue",
+    "type": "PLA",
+    "abbreviation": "PLA",
+    "tags": [],
+    "color": "#0070C0",
+    "secondaryColors": [],
+    "density": 1.24,
+    "nozzleTempMax": 215,
+    "bedTempMax": 60,
+    "completenessScore": 90,
+}
+
+
+def test_jet_black_vs_galaxy_black_above_threshold():
+    """SM 'PLA Jet Black' (Prusament, #222F2E) must score >= 0.30 against
+    OPT 'PLA Prusa Galaxy Black' (#4b4545).
+
+    Both 'jet' and 'galaxy' map to base color 'black' in DEFAULT_COLOR_KEYWORDS,
+    so the base-color bonus brings the score over the threshold even though the
+    token names are disjoint.
+    """
+    sm = SpoolmanFilament(
+        id=3,
+        name="PLA Jet Black",
+        vendor=SpoolmanVendor(id=2, name="Prusament"),
+        material="PLA",
+        color_hex="222F2E",
+        extra={},
+    )
+    score = score_candidate(sm, _OPT_PRUSAMENT_GALAXY_BLACK)
+    assert score >= 0.30, (
+        f"Expected 'PLA Jet Black' to score >= 0.30 against Galaxy Black, got {score:.4f}"
+    )
+
+
+def test_jet_black_find_best_match_surfaces_galaxy_black():
+    """find_best_match must return Galaxy Black (not None) for SM 'PLA Jet Black' / Prusament.
+
+    This is the end-to-end acceptance test from the spec (case #3).
+    """
+    sm = SpoolmanFilament(
+        id=3,
+        name="PLA Jet Black",
+        vendor=SpoolmanVendor(id=2, name="Prusament"),
+        material="PLA",
+        color_hex="222F2E",
+        extra={},
+    )
+    result = find_best_match(sm, [_OPT_PRUSAMENT_GALAXY_BLACK, _OPT_PRUSAMENT_AZURE_BLUE])
+    assert result["best"] is not None, (
+        "Expected a match for 'PLA Jet Black' (Prusament) — should surface Galaxy Black"
+    )
+    assert result["best"]["slug"] == "prusament-pla-prusa-galaxy-black", (
+        f"Expected 'prusament-pla-prusa-galaxy-black', got {result['best']['slug']!r}"
+    )
+
+
+def test_base_color_bonus_light_grey_vs_grey():
+    """'Light Grey' and 'Grey' share the same base color ('grey') and should get the bonus.
+
+    The modifier 'light' must not block the base-color match.
+    """
+    from app.core.opentag_match import _base_color, DEFAULT_COLOR_KEYWORDS, _color_name_tokens
+    from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
+
+    # 'light grey' tokens = {'light', 'grey'} → after modifier strip → 'grey' base
+    toks_lg = _color_name_tokens("Light Grey", None, "PLA", DEFAULT_MATERIAL_TAG_IDS)
+    # 'grey' tokens = {'grey'}
+    toks_g = _color_name_tokens("Grey", None, "PLA", DEFAULT_MATERIAL_TAG_IDS)
+
+    base_lg = _base_color(toks_lg, DEFAULT_COLOR_KEYWORDS)
+    base_g = _base_color(toks_g, DEFAULT_COLOR_KEYWORDS)
+
+    assert base_lg == "grey", f"Expected 'grey' for 'Light Grey' tokens {toks_lg!r}, got {base_lg!r}"
+    assert base_g == "grey", f"Expected 'grey' for 'Grey' tokens {toks_g!r}, got {base_g!r}"
+    assert base_lg == base_g, "Light Grey and Grey should share the same base color"
+
+
+def test_base_color_bonus_marketing_name_galaxy_cool():
+    """'Galaxy' → 'black', 'Cool' → 'grey' via DEFAULT_COLOR_KEYWORDS marketing entries."""
+    from app.core.opentag_match import _base_color, DEFAULT_COLOR_KEYWORDS
+    assert _base_color({"galaxy"}, DEFAULT_COLOR_KEYWORDS) == "black"
+    assert _base_color({"cool"}, DEFAULT_COLOR_KEYWORDS) == "grey"
+    assert _base_color({"jet"}, DEFAULT_COLOR_KEYWORDS) == "black"
+
+
+def test_parse_color_keywords_config_basic():
+    """parse_color_keywords_config parses CSV of 'keyword=base' pairs correctly."""
+    from app.core.opentag_match import parse_color_keywords_config
+    result = parse_color_keywords_config("galaxy=black,cool=grey,jet=black")
+    assert result == {"galaxy": "black", "cool": "grey", "jet": "black"}
+
+
+def test_parse_color_keywords_config_ignores_blanks():
+    """parse_color_keywords_config silently ignores blank entries and entries without '='."""
+    from app.core.opentag_match import parse_color_keywords_config
+    result = parse_color_keywords_config(",galaxy=black,,foo,=bar,")
+    assert "galaxy" in result
+    assert "" not in result
+    assert "foo" not in result

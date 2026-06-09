@@ -430,20 +430,30 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         ) from exc
     materials: list[dict[str, Any]] = dataset["materials"]
     tag_map = _settings.parsed_material_tag_ids
-    # Load vendor alias map once — BridgeConfig value overrides the env default.
-    # Wrapped in try/except so tests without a real DB fall back to the env default gracefully.
+    # Load vendor alias map and color-keywords map once — BridgeConfig value overrides
+    # the env default.  Wrapped in try/except so tests without a real DB fall back to
+    # the env default gracefully.
     from app.api.config import get_config_value
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS, parse_color_keywords_config
     try:
         with SessionLocal() as _db:
             aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
+            color_kw_raw: str = get_config_value(_db, "opentag_color_keywords", _settings.opentag_color_keywords) or ""
     except Exception:
         aliases_raw = _settings.opentag_vendor_aliases
+        color_kw_raw = _settings.opentag_color_keywords
     vendor_aliases: dict[str, str] = _parse_vendor_aliases(aliases_raw)
+    # Merge user overrides on top of seed defaults
+    color_map: dict[str, str] = dict(DEFAULT_COLOR_KEYWORDS)
+    if color_kw_raw.strip():
+        color_map.update(parse_color_keywords_config(color_kw_raw))
 
     sm_filaments = await sm.get_filaments()
 
     # Build a brand index once — keyed by normalize_vendor(brandName) — so each SM
     # filament only scores its own brand's candidates instead of all ~11k materials.
+    # normalize_vendor now treats hyphens as spaces, so "VOXEL-pla" and "Voxel PLA"
+    # both produce "voxel pla" and map to the same bucket.
     materials_by_brand: dict[str, list[dict[str, Any]]] = {}
     # Also build a UUID index for exact-match bypass (filament already tagged by a prior run).
     by_uuid: dict[str, dict[str, Any]] = {}
@@ -522,7 +532,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 ) in ("", sm_fam)
             ]
 
-        match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases)
+        match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases, color_map=color_map)
         best = match_result["best"]
         confidence = match_result["confidence"]
         alternates = match_result["alternates"]
