@@ -11,6 +11,10 @@ GitHub release.
 
 ### Added
 
+- **Spool age preserved on import** — when the bridge creates a spool in Filament DB it now sets
+  `purchaseDate` from Spoolman's `registered` date and `openedDate` from Spoolman's `first_used`
+  date (both truncated to date-only to match Filament DB's field format). Applies to both the
+  Bulk Import Wizard and ongoing new-spool sync, so a roll's age isn't lost moving to Filament DB.
 - **Wizard top action bar** — primary Back/Next/Save action buttons now appear at both the top
   and bottom of each long wizard step (Matches, Variances, Preview) so users don't have to scroll
   to the bottom to proceed.

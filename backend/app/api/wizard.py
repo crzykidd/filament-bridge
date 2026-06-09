@@ -26,6 +26,7 @@ from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_sm_color
+from app.core.dates import spool_provenance_dates
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
 from app.core.material_tags import finish_ids_from_text, strip_finish_words
 from app.core.matcher import (
@@ -1432,6 +1433,8 @@ async def _execute_spoolman_to_fdb(
                 }
                 if sm_location:
                     spool_payload["locationId"] = _fdb_loc_cache[sm_location]
+                # Preserve the spool's age (purchase/opened dates) from Spoolman.
+                spool_payload.update(spool_provenance_dates(spool_item.sm_spool))
                 # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
                 raw = await filamentdb.create_spool(fdb_id, spool_payload)
                 new_fdb_spool_id = extract_created_spool_id(

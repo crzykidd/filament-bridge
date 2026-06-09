@@ -32,6 +32,7 @@ from app.core.color import (
     to_fdb_color,
     to_sm_color,
 )
+from app.core.dates import spool_provenance_dates
 from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
 from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text, parse_material_tags, serialize_material_tags
@@ -1434,6 +1435,8 @@ async def _handle_new_sm_spool(
             "totalWeight": gross,
             fdb_field_name: str(sm_spool.id),
         }
+        # Preserve the spool's age (purchase/opened dates) from Spoolman.
+        spool_payload.update(spool_provenance_dates(sm_spool))
         raw = await filamentdb.create_spool(fdb_filament.id, spool_payload)
         new_fdb_spool_id = extract_created_spool_id(
             raw,
