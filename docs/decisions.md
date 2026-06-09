@@ -1,5 +1,55 @@
 # Decision record
 
+## 2026-06-08 — Browser-local timestamp rendering (`d22cad8`)
+
+All timestamps in the UI are rendered in the browser's local timezone.
+`frontend/src/utils/datetime.ts` appends `"Z"` to naive UTC strings (no timezone suffix)
+before passing them to `toLocaleString`, so the browser interprets them as UTC and converts
+to local time rather than treating them as local time.
+
+## 2026-06-08 — Conflicts page rework + `ColorDisplay` + multicolor in `_conflict_identity` (`eb9af66`)
+
+The Conflicts page was rebuilt with collapsible rows, sort controls, expand-all, and resolve
+clarity. A `ColorDisplay` component renders multicolor swatches. `_conflict_identity` in
+`backend/app/api/conflicts.py` now extracts `multi_color_hexes` and `multi_color_direction`
+from the Spoolman snapshot so conflict cards can show multicolor filament colors.
+`new_spool` conflict action buttons are labelled "Dismiss" (not "Resolve") for clarity.
+
+## 2026-06-08 — Sync-log windows view + `DELETE /sync-log` (`7b0361e`)
+
+`GET /api/sync-log?windows=N` returns only the most recent N distinct `cycle_id` values
+(default: all). This lets the UI page through recent cycles without downloading the full log.
+`DELETE /api/sync-log` truncates the entire sync log table; gated to non-dry-run use and
+exposed in Settings for user-initiated clear.
+
+## 2026-06-08 — Synced Records enrichment: multicolor, weight, empty, conflict deep-link (`a870950`)
+
+`MappingRow` (returned by `GET /api/mappings`) now carries `multi_color_hexes`,
+`remaining_weight`, `is_empty` (remaining_weight == 0), and `conflict_id` (id of any open
+conflict for this pair). The Synced Records table gains a hide-empty toggle, a multicolor
+color swatch, a conflict deep-link icon, and an empty-state illustration.
+
+## 2026-06-07 — Wizard OpenPrintTag flag + filter (`db8a4c6`, `4b5db3f`)
+
+`FilamentRef` in the wizard matches response gains `openprinttag` (bool, `True` when the
+Spoolman filament's `openprinttag_uuid` extra field is non-empty). The match-step filter bar
+gains a "Tagged only" toggle that hides filaments without the flag, and a "Hide tagged"
+toggle that hides already-tagged ones. An OPT badge appears on tagged rows in the table.
+
+## 2026-06-07 — OPT stamped badge on OpenTag Cleanup cards (`7eb5e98`)
+
+Each OpenTag Cleanup match card header shows an `OpenTagStampedBadge`: grey when the
+Spoolman filament's `openprinttag_uuid` matches the selected candidate (in-sync); orange
+when a UUID is set but differs from the candidate (drifted). No badge when unset.
+`getExistingUuid` is extracted as a shared helper.
+
+## 2026-06-07 — PLA+/grade modeling: base polymer + grade in name; no material guard (`memory/pla-plus-modeling-decision.md`)
+
+PLA+ and grades (PLA-CF, PLA Marble, etc.) are modeled as base polymer type (`PLA`) with
+the grade in the filament name — per the OpenTag spec. The bridge deliberately does NOT add
+a material guard that preserves the literal string "PLA+"; the polymer-family gate in the
+matcher maps both `PLA` and `PLA+` to the `pla` family so they remain mutually matchable.
+
 ## 2026-06-08 — gated Debug mode with reset tools for clean re-testing
 
 Added a `debug_mode` bool config flag (default `false`) that gates two destructive

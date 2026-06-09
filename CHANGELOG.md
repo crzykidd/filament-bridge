@@ -11,6 +11,28 @@ GitHub release.
 
 ### Added
 
+- **Pre-write backup safeguard** — `BackupSafetyDialog` gates three destructive actions
+  (Wizard Execute, OpenTag Apply, Enable auto-sync): one-click Spoolman backup
+  (`POST /api/backup/spoolman`) and one-click Filament DB backup (`GET /api/snapshot`
+  proxied to `DATA_DIR/backups/`) before proceeding.
+- **OpenTag secondary-colors recovery** — fetches the raw OpenPrintTag tarball on each
+  cache refresh to recover `secondaryColors` missing from the FDB feed; multicolor-mismatch
+  badge on cleanup cards when SM is multicolor but the matched OPT entry is single-color.
+- **Scheduler & Logs settings** — runtime-editable sync interval (minutes) and sync-log
+  retention (days) in Settings; `Sync Log` page gains a windowed view (`?windows=N` = most
+  recent N cycle_ids) and a clear-log action (`DELETE /sync-log`).
+- **Bulk Import Wizard** — wizard renamed from "Initial Sync Wizard" (re-runnable;
+  idempotent execute); "Never import empties" global setting replaces per-run checkbox.
+- **Debug mode + reset tools** — `debug_mode` config flag gates two destructive endpoints:
+  clear Spoolman FDB cross-ref extras and reset bridge local state (mappings, snapshots,
+  conflicts, sync log); both visible in a Settings danger zone.
+- **Browser-local timestamps** — all timestamps in the UI render in the browser's local
+  timezone (naive UTC strings get a `Z` appended before `toLocaleString`).
+- **Synced Records enrichment** — `MappingRow` carries `multi_color_hexes`,
+  `remaining_weight`, `is_empty`, and `conflict_id`; table gains hide-empty toggle,
+  multicolor swatch, conflict deep-link, and empty-state.
+- **Wizard OPT badge + filters** — OpenPrintTag-tagged filaments show an OPT badge in the
+  match step; filter bar gains tagged-only, hide-matched, and hide-tagged toggles.
 - **Guided initial-sync wizard** — multi-step wizard covering connectivity check, import
   direction, fuzzy vendor+name+color match review, variant grouping, field-variances
   reconciliation, dry-run preview, and execute. Decision state persists across browser visits.
@@ -63,6 +85,15 @@ GitHub release.
 
 ### Changed
 
+- **Conflicts page rework** — collapsible conflict rows, sort controls, expand-all,
+  resolve-clarity improvements, and multicolor color display; new_spool conflicts labelled
+  "Dismiss".
+- **Ongoing source-of-truth removed from wizard Step 2** — sync direction and conflict
+  policy are Settings-only; wizard Step 2 only persists `import_direction`.
+- **Standard `docker-compose.yml` is bridge-only** — full dev stack (Spoolman + Filament DB
+  + Mongo + bridge build-from-source) moved to `docker-compose.dev.yml`.
+- **Container runs non-root 1000:1000** — entrypoint chown+gosu drops to `PUID:PGID` after
+  healing `/data` ownership; no static `USER` directive.
 - Replaced the single source-of-truth model with the two-axis
   direction × conflict-policy model; Settings page exposes all six per-category controls.
 - Enforced new-spool sync direction is now a first-class setting written by the wizard;
@@ -74,6 +105,17 @@ GitHub release.
 
 ### Fixed
 
+- `multi_color_direction` is now always sent alongside `multi_color_hexes` (completes the
+  multicolor 422 trio; `multi_unknown` defaults to `"coaxial"`).
+- `new_spool` conflicts are now deduplicated (no duplicate row each cycle) and
+  auto-resolved when the spool becomes mapped.
+- Wizard pre-matches already-linked records via `filamentdb_id` cross-reference before
+  fuzzy matching, making re-runs idempotent.
+- Readonly-DB crash on a root-owned volume is self-healed by the entrypoint chown before
+  startup.
+- OpenTag color-name tokenization now splits on non-alphanumeric characters (fixes
+  "Green/Purple" → `{green, purple}`).
+- All backend ruff lint errors resolved (74 → 0).
 - Stale cross-reference no longer causes `create_spool` to be skipped when the target spool
   already exists with a different xref; spoolWeight is resolved from the tare before use.
 - `netFilamentWeight` is now set on Filament DB filament create so the spool percentage bar
