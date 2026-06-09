@@ -38,7 +38,12 @@ The bridge creates a **colorless container parent** for every cluster —
 including single-color clusters.
 
 - The container has: name (vendor + material + finish, e.g., "ELEGOO PLA"),
-  type/material, and vendor. No color, no temperatures, no spools.
+  type/material, vendor, and the finish tags (Silk / Matte / CF / …) shared by
+  every member of the cluster. No color, no temperatures, no spools.
+- Finish tags belong to the whole line, so they sit on the container and the
+  color variants inherit them (Filament DB `optTags` are array-fallback
+  inheritable). Only finishes shared by *all* members of the cluster are placed
+  on the container.
 - **Every** Spoolman color becomes a child variant of its cluster's container,
   regardless of cluster size.
 - This roughly doubles the Filament DB filament record count (one container per

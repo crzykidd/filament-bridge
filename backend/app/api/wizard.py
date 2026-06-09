@@ -25,6 +25,7 @@ from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
+from app.core.material_tags import finish_ids_from_text
 from app.core.matcher import (
     extract_finish_line,
     match_filaments,
@@ -1003,6 +1004,21 @@ async def _execute_spoolman_to_fdb(
                     container_payload["vendor"] = vendor_name
                 # Explicitly no color (colorless container) — send color: null.
                 container_payload["color"] = None
+                # Carry the finish tags (Silk / Matte / CF / …) that the whole
+                # cluster shares onto the container, so the line profile reads as
+                # e.g. "PLA Silk" and variants inherit optTags array-fallback.
+                # Use the intersection across members so only genuinely shared
+                # finishes land on the parent; finish_ids_from_text returns finish
+                # IDs only (never the per-color arrangement tags 28/29).
+                _tag_map = _settings.parsed_material_tag_ids
+                _member_finishes = [
+                    finish_ids_from_text(m.name, m.material, _tag_map) for m in members
+                ]
+                _shared_finish_ids = (
+                    set.intersection(*_member_finishes) if _member_finishes else set()
+                )
+                if _shared_finish_ids:
+                    container_payload["optTags"] = sorted(_shared_finish_ids)
                 # Filter out None values but keep color: None explicitly
                 container_payload_clean = {
                     k: v for k, v in container_payload.items()

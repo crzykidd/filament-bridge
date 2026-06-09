@@ -281,6 +281,50 @@ def test_wizard_execute_generic_container_multi_color_all_variants_under_contain
     assert len(synth_rows) == 1
 
 
+def test_wizard_execute_generic_container_carries_shared_finish_tags(db):
+    """generic_container: a Silk cluster's container parent carries the shared finish tag.
+
+    The finish (Silk / Matte / …) is a property of the whole line, so it belongs on
+    the container parent (variants inherit optTags array-fallback in Filament DB).
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    db.commit()
+
+    sm_filaments = [
+        _sm_filament(10, "PLA Silk Red"),
+        _sm_filament(11, "PLA Silk Blue"),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    create_calls: list[dict] = []
+    call_counter = 0
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
+    assert len(containers) == 1
+    container = containers[0]
+    # Name carries the finish line, and optTags carries the shared Silk id (17).
+    assert container.get("name") == "ELEGOO PLA Silk"
+    assert container.get("optTags") == [17]
+
+
 def test_wizard_execute_generic_container_two_separate_clusters_two_containers(db):
     """generic_container: 2 clusters (PLA + PETG) → 2 containers, each with own children."""
     set_config_value(db, "import_direction", "spoolman")
