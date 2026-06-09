@@ -19,6 +19,10 @@ GitHub release.
   cluster so the line reads as e.g. "PLA Silk" and variants inherit them. The container has no
   Spoolman counterpart and never participates in sync. The wizard is gated on a chosen mode
   (no silent default). See `docs/variant-parent-mode.md`.
+- **Unsaved-changes guard on Settings** — navigating away from the Settings page (in-app nav
+  or browser refresh/close) with unsaved edits now prompts for confirmation; an "Unsaved changes"
+  indicator appears next to Save. The app router was migrated to a data router
+  (`createBrowserRouter`) to enable `useBlocker`.
 - **Pre-write backup safeguard** — `BackupSafetyDialog` gates three destructive actions
   (Wizard Execute, OpenTag Apply, Enable auto-sync): one-click Spoolman backup
   (`POST /api/backup/spoolman`) and one-click Filament DB backup (`GET /api/snapshot`

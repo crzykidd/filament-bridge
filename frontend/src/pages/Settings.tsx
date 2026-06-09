@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { useBlocker } from 'react-router-dom'
 import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
@@ -165,6 +166,54 @@ export default function Settings() {
   const [clearingRefs, setClearingRefs] = useState(false)
   const [resettingState, setResettingState] = useState(false)
   const [resetStateMsg, setResetStateMsg] = useState('')
+
+  // --- Unsaved-changes guard ---------------------------------------------
+  // A field is dirty only when its override state is set AND differs from the
+  // loaded value (so changing a field then changing it back clears dirty, and
+  // a successful save — which reloads `data` — also clears it). Only the
+  // Save-gated fields are tracked; the auto-sync and debug toggles persist
+  // immediately and are intentionally excluded.
+  const isDirty = !!data && (
+    (weightDir != null && weightDir !== data.weight_sync_direction) ||
+    (weightPolicy != null && weightPolicy !== data.weight_conflict_policy) ||
+    (matDir != null && matDir !== data.material_properties_sync_direction) ||
+    (matPolicy != null && matPolicy !== data.material_properties_conflict_policy) ||
+    (newSpoolDir != null && newSpoolDir !== data.new_spool_sync_direction) ||
+    (threshold !== '' && threshold !== String(data.sync_weight_threshold_grams)) ||
+    (precision != null && precision !== data.weight_precision_decimals) ||
+    (variantKeywords != null && variantKeywords !== (data.variant_line_keywords ?? '')) ||
+    (vendorAliases != null && vendorAliases !== (data.opentag_vendor_aliases ?? '')) ||
+    (neverImportEmpties != null && neverImportEmpties !== data.never_import_empties) ||
+    (syncIntervalMinutes != null && syncIntervalMinutes !== Math.round(data.sync_interval_seconds / 60)) ||
+    (syncLogRetentionDays != null && syncLogRetentionDays !== data.sync_log_retention_days) ||
+    (variantParentMode != null && variantParentMode !== data.variant_parent_mode)
+  )
+
+  // Block in-app navigation (clicking a nav link) while there are unsaved changes.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      isDirty && currentLocation.pathname !== nextLocation.pathname,
+  )
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      if (window.confirm('You have unsaved changes on this page. Leave without saving?')) {
+        blocker.proceed()
+      } else {
+        blocker.reset()
+      }
+    }
+  }, [blocker])
+
+  // Block browser-level navigation (refresh, tab close, external link).
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
 
   if (loading) return <div className="p-8 text-gray-500">Loading…</div>
   if (error) return <div className="p-8 text-red-600">{error}</div>
@@ -635,6 +684,9 @@ export default function Settings() {
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
+          {isDirty && !saving && (
+            <span className="text-xs font-medium text-amber-600">Unsaved changes</span>
+          )}
           {saveMsg && <span className="text-sm text-gray-600">{saveMsg}</span>}
         </div>
       </div>
