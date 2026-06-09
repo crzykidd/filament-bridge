@@ -7,7 +7,7 @@ Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) 
 > ## ⚠️ ALPHA — back up your databases before any writes
 >
 > filament-bridge is **alpha** software that writes to both **Spoolman** and **Filament DB**.
-> **Before** running the initial-sync wizard, applying an OpenTag cleanup, or enabling
+> **Before** running the Bulk Import Wizard, applying an OpenTag cleanup, or enabling
 > auto-sync, **back up all three databases** (Spoolman, Filament DB, and the bridge). See
 > [Backups](#backups). Test against non-critical data first.
 
@@ -26,7 +26,7 @@ Neither can do what the other does well. filament-bridge keeps them in sync so y
 
 ## Backups
 
-**Before running the wizard, applying an OpenTag cleanup, or enabling auto-sync, back up all three systems.** The bridge keeps auto-sync OFF by default and never deletes upstream records without explicit user action — but during alpha a backup is still the safe move.
+**Before running the Bulk Import Wizard, applying an OpenTag cleanup, or enabling auto-sync, back up all three systems.** The bridge keeps auto-sync OFF by default and never deletes upstream records without explicit user action — but during alpha a backup is still the safe move.
 
 ### Spoolman
 
@@ -73,17 +73,20 @@ Restore with `POST /api/backup/import`.
 ## What it does
 
 - **Bidirectional sync engine** — spool weights, material properties, and inventory changes flow between Filament DB and Spoolman on a configurable interval
-- **Guided initial-sync wizard** — multi-step wizard with fuzzy vendor+name+color matching, group-by/sort/filter review, bulk actions, decision persistence, and a Rescan action
+- **Bulk Import Wizard** — re-runnable multi-step wizard with fuzzy vendor+name+color matching, group-by/sort/filter review, bulk actions, decision persistence, and a Rescan action; run it any time to import new filaments; optionally skip creating empty spool records via the "Never import empties" setting
 - **Usage-logged weight sync** — Spoolman weight decrements are logged as Filament DB usage entries (preserving the audit trail), not raw weight overwrites; net↔gross weight-model translation is automatic
 - **Per-category sync direction + conflict policy** — each data category (weight, material properties, new spools) has an independently configurable sync direction and conflict policy; `newest_wins` is available for weight only
 - **Field and cost mapping** — Spoolman extra fields map to Filament DB's richer property set (density, temperatures, TDS URL, cost, etc.) by name match or explicit configuration
 - **Spoolman→FDB variant grouping** — understands Filament DB's parent/variant model; groups flat Spoolman filaments into parent+color-variant hierarchies during the wizard
 - **Structured multicolor/gradient sync** — bidirectional sync of FDB multi-color and gradient fields, version-gated to Filament DB ≥ 1.33.0
 - **Material-finish tag round-trip** — OpenPrintTag finish tags (matte, silk, satin, etc.) sync as a Spoolman extra field (`filamentdb_material_tags`) and back
-- **Conflict queue** — when both sides change the same field between sync cycles, the change is queued for manual resolution (conflicts are never silently auto-resolved)
+- **Conflict queue** — collapsible, sortable rows; when both sides change the same field between sync cycles the change is queued for manual resolution (conflicts are never silently auto-resolved); Synced Records rows link directly to the relevant conflict
 - **Upstream-deletion detection** — detects records deleted in either system and queues them for explicit user action
 - **OpenTag (OpenPrintTag) cleanup tool** — matches your Spoolman filaments against the OpenPrintTag database, lets you review candidates, apply to Spoolman, and stamp the OpenPrintTag `slug`/`uuid` into Filament DB
-- **Runtime Settings** — sync direction, conflict policy, variant keywords, and vendor aliases are editable in the Settings UI without restarting the service
+- **Pre-write backup safeguard** — a backup dialog *gates* the three write actions (Bulk Import Wizard Execute, OpenTag Apply, Enable auto-sync); back up Spoolman and/or Filament DB in one click before proceeding
+- **Scheduler & Logs** — sync interval is runtime-editable in Settings (no restart needed; env var sets the default); sync-log page has window views (last 10 or 25 cycles) and a clear-log action; configurable log-retention period
+- **Debug mode** — a Settings toggle (off by default) that reveals a Danger Zone with reset tools: clear Spoolman FDB cross-references and reset bridge local state; all `/api/debug/*` endpoints return 403 when debug mode is off
+- **Runtime Settings** — sync direction, conflict policy, scheduler interval, log retention, variant keywords, vendor aliases, and more are editable in the Settings UI without restarting the service; timestamps throughout the UI are rendered in the browser's local timezone
 
 ---
 
@@ -110,7 +113,7 @@ Restore with `POST /api/backup/import`.
                           ┌──────────────────────────────────────┐
                           │           filament-bridge            │
                           │                                      │
-┌─────────────┐           │  - Guided initial-sync wizard        │           ┌───────────────┐
+┌─────────────┐           │  - Bulk Import Wizard                │           ┌───────────────┐
 │  Filament DB │◄─────────┤  - Continuous sync engine            ├──────────►│    Spoolman   │
 │  (Next.js)   │  FDB API │  - Conflict queue + resolution       │  SM API   │   (FastAPI)   │
 └──────┬───────┘          │  - OpenTag cleanup tool              │           └───────┬───────┘
@@ -194,19 +197,19 @@ environment:
 
 ---
 
-## First run — the wizard
+## Bulk Import Wizard
 
-Navigate to `http://localhost:8090` after starting the container. The guided wizard walks you through:
+Navigate to `http://localhost:8090` after starting the container. The Bulk Import Wizard walks you through pairing records between the two systems. It can be re-run at any time — for example to import a batch of new filaments added to Spoolman after the initial setup.
 
 1. **Connectivity check** — verifies the bridge can reach both upstream APIs
-2. **Import direction** — choose whether the initial seed comes from Filament DB or from Spoolman
+2. **Import direction** — choose whether the import comes from Filament DB or from Spoolman
 3. **Match review** — the bridge reads both databases, fuzzy-matches records by vendor + name + color, and shows matched pairs, ambiguous matches, and unmatched records; group, sort, filter, and bulk-resolve as needed
 4. **Variant grouping** — for Spoolman→FDB imports, assign color variants to parent filaments
 5. **Variances** — review field differences and pick which value wins per field
 6. **Dry-run preview** — see every write the execute step will perform (created, updated, conflicts, skipped)
-7. **Execute** — writes cross-reference IDs to both systems and enables the sync engine
+7. **Execute** — gated behind the pre-write backup dialog; writes cross-reference IDs to both systems
 
-After the wizard, review the Settings page to configure per-category sync direction and conflict policy, then explicitly enable auto-sync.
+After the wizard, review the Settings page to configure per-category sync direction and conflict policy, then explicitly enable auto-sync. The **Never import empties** setting (Settings → Scheduler & Logs) controls whether depleted spools (net weight = 0) are skipped during wizard imports; the filament definition is always imported regardless.
 
 ---
 

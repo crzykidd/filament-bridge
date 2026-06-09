@@ -48,7 +48,7 @@ different uid:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles when auto-sync is enabled. Auto-sync is OFF by default; enable it explicitly in the Settings UI after completing the wizard. |
+| `SYNC_INTERVAL_SECONDS` | No | `120` | Default seconds between auto-sync cycles when auto-sync is enabled. This env var sets the startup default; the interval can be overridden at runtime in Settings → Scheduler & Logs without restarting the container. Auto-sync is OFF by default; enable it explicitly in the Settings UI after completing the wizard. |
 
 ### Two-axis sync model
 
@@ -141,6 +141,10 @@ container. The runtime value is persisted in SQLite and overrides the env var de
 | OpenTag vendor aliases | `OPENTAG_VENDOR_ALIASES` | Comma-separated `sm_vendor=opentag_brand` pairs |
 | Sync weight threshold (grams) | — | Weight changes smaller than this are ignored (reduces noise from rounding) |
 | Weight precision (decimal places) | — | Number of decimal places used when comparing/writing weights |
+| `sync_interval_seconds` | `SYNC_INTERVAL_SECONDS` | Runtime-editable in Settings → Scheduler & Logs. When set to a non-zero value it overrides the env var default; 0 means "use env var". Minimum enforced by the backend. |
+| `sync_log_retention_days` | — | Days to retain sync-log rows (default `30`; `0` = keep forever). Old rows are pruned at the start of each auto-sync cycle. |
+| `never_import_empties` | — | When `true`, the Bulk Import Wizard skips creating Filament DB spool records for spools whose net remaining weight is 0 (depleted). The filament definition is still imported; only the empty spool inventory record is excluded. Default `false`. |
+| `debug_mode` | — | When `true`, exposes the `/api/debug/*` reset endpoints (clear Spoolman FDB cross-references; reset bridge local state). All debug endpoints return `403` when this is `false`. Off by default — do not enable in production. |
 
 ---
 
