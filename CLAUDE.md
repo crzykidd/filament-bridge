@@ -113,10 +113,10 @@ standard for scoped work: plan → decide → execute → document. Pending task
 ## Architecture decisions
 
 - **No upstream modifications** — bridge only uses documented REST APIs and Spoolman's extra field system. Never fork or patch Filament DB or Spoolman.
-- **Three-phase sync** — guided initial sync wizard → validation dry run → user-enabled auto-sync. Auto-sync is OFF by default and requires explicit user action to enable.
+- **Three-phase sync** — Bulk Import Wizard (re-runnable) → validation dry run → user-enabled auto-sync. Auto-sync is OFF by default and requires explicit user action to enable.
 - **Conflicts are never auto-resolved** — queued for human decision with optional Discord notification. This is a hard rule — do not implement silent conflict resolution.
 - **Weight decrements from Spoolman create usage log entries in Filament DB** (via `POST /api/filaments/:id/spools/:spoolId/usage`), never raw weight overwrites. This preserves Filament DB's usage history audit trail.
-- **Source of truth is user-configurable** per data category (weight, material properties, new spools). The bridge does not assume which system is authoritative.
+- **Sync direction and conflict policy are user-configurable** per data category via Settings (two independent axes: `direction` and `conflict_policy`). Resolved by `core/sync_policy.py:resolve_sync_action`. The Bulk Import Wizard captures the initial import direction only; the ongoing two-axis model lives in Settings.
 - **Configuration via environment variables** — service refuses to start without required vars (`FILAMENTDB_URL`, `SPOOLMAN_URL`). No config file. No database-stored config for connection URLs.
 - **Never delete records** in either upstream system without explicit user action in the bridge UI.
 
@@ -134,6 +134,7 @@ filament-bridge/
 ├── README.md                               — open source project README
 ├── CLAUDE.md                               — this file (read first)
 ├── Dockerfile                              — multi-stage build (Node + Python)
+├── docker-entrypoint.sh                    — chown-then-gosu entrypoint (PUID/PGID → non-root user)
 ├── docker-compose.yml                      — standard bridge-only deployment (published image, external Spoolman/FDB)
 ├── docker-compose.dev.yml                  — full local dev stack (bridge build:. + Spoolman + Filament DB + Mongo)
 ├── backend/
@@ -142,15 +143,29 @@ filament-bridge/
 │   │   │   ├── sync.py                     — trigger sync, dry run, enable/disable auto-sync
 │   │   │   ├── conflicts.py                — list, resolve, bulk-resolve conflicts
 │   │   │   ├── mappings.py                 — view/edit spool and filament mappings
-│   │   │   ├── config.py                   — runtime config (source of truth, field mappings)
+│   │   │   ├── config.py                   — runtime config (direction+policy, field mappings)
 │   │   │   ├── backup.py                   — export/import bridge state
-│   │   │   └── health.py                   — connectivity check for both upstream APIs
+│   │   │   ├── health.py                   — connectivity check for both upstream APIs
+│   │   │   ├── opentag.py                  — OpenTag cleanup tool (matches, refresh, apply)
+│   │   │   ├── sync_log.py                 — audit log viewer (FR-17)
+│   │   │   ├── wizard.py                   — Bulk Import Wizard read/decision endpoints (FR-1–FR-6)
+│   │   │   ├── debug.py                    — gated reset tools (403 unless debug_mode is on)
+│   │   │   └── errors.py                   — consistent error envelope for the bridge API
 │   │   ├── core/
 │   │   │   ├── engine.py                   — main sync loop: snapshot, diff, apply, log
+│   │   │   ├── sync_policy.py              — two-axis direction+policy resolver (resolve_sync_action)
+│   │   │   ├── planner.py                  — wizard execution planner (shared by FR-7 and FR-14)
+│   │   │   ├── dryrun.py                   — dry-run preview helpers (FR-14)
 │   │   │   ├── differ.py                   — diff two snapshots, classify changes
-│   │   │   ├── matcher.py                  — fuzzy matching for initial sync (vendor+name+color)
+│   │   │   ├── matcher.py                  — fuzzy matching for import wizard (vendor+name+color)
 │   │   │   ├── weight.py                   — net↔gross weight conversion logic
-│   │   │   └── fields.py                   — field mapping resolution (auto-match + explicit)
+│   │   │   ├── fields.py                   — field mapping resolution (auto-match + explicit)
+│   │   │   ├── color.py                    — multicolor/gradient conversion (FDB ↔ Spoolman)
+│   │   │   ├── material_tags.py            — finish-tag detection and serialization
+│   │   │   ├── version.py                  — FDB semantic-version comparison helpers
+│   │   │   ├── opentag_match.py            — OPTMaterial → Spoolman field mapper + scorer
+│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated)
+│   │   │   └── opentag_secondary.py        — secondary-color recovery from the raw OPT tarball
 │   │   ├── models/
 │   │   │   ├── mapping.py                  — SpoolMapping, FilamentMapping (cross-reference IDs)
 │   │   │   ├── conflict.py                 — Conflict queue entries
@@ -171,11 +186,13 @@ filament-bridge/
 │   │   │   ├── StatusBadge.tsx             — sync status indicators (green/yellow/red/grey)
 │   │   │   └── ...
 │   │   ├── pages/
-│   │   │   ├── Wizard/                     — multi-step initial sync wizard (FR-1 through FR-7)
+│   │   │   ├── Wizard/                     — Bulk Import Wizard (re-runnable; FR-1 through FR-7)
 │   │   │   ├── Dashboard.tsx               — sync status overview (FR-15)
 │   │   │   ├── SyncedRecords.tsx           — paired records table (FR-19)
 │   │   │   ├── Conflicts.tsx               — conflict queue and resolution (FR-16)
-│   │   │   └── SyncLog.tsx                 — audit log viewer (FR-17)
+│   │   │   ├── SyncLog.tsx                 — audit log viewer (FR-17)
+│   │   │   ├── Settings.tsx                — runtime settings (direction+policy, debug, interval, etc.)
+│   │   │   └── OpenTagCleanup.tsx          — OpenTag cleanup tool UI (FR-23b)
 │   │   ├── api/                            — typed fetch wrappers for bridge backend API
 │   │   └── App.tsx                         — router setup, layout
 │   ├── package.json
@@ -195,7 +212,9 @@ filament-bridge/
 |---|---|---|---|
 | `FILAMENTDB_URL` | **Yes** | — | Base URL of Filament DB (e.g., `http://filament-db:3000`) |
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of Spoolman (e.g., `http://spoolman:7912`) |
-| `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles |
+| `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles (also runtime-editable via Settings) |
+| `PUID` | No | `1000` | User ID the container process runs as (entrypoint chowns `/data` then drops to this UID) |
+| `PGID` | No | `1000` | Group ID the container process runs as |
 | `SPOOLMAN_FIELD_FILAMENTDB_ID` | No | `filamentdb_id` | Spoolman extra field name for Filament DB filament ID |
 | `SPOOLMAN_FIELD_FILAMENTDB_PARENT_ID` | No | `filamentdb_parent_id` | Spoolman extra field for parent filament ID |
 | `SPOOLMAN_FIELD_FILAMENTDB_SPOOL_ID` | No | `filamentdb_spool_id` | Spoolman extra field for spool subdocument ID |
@@ -212,6 +231,17 @@ filament-bridge/
 | `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications (declared; not yet implemented) |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |
+
+### Runtime-editable settings (BridgeConfig)
+
+Several settings can be changed at runtime via the Settings UI (stored in SQLite, env vars are the start-up fallback):
+
+| Setting | Default | Description |
+|---|---|---|
+| `sync_interval_seconds` | env fallback (`120`) | Auto-sync interval; applied immediately on save |
+| `debug_mode` | `false` | Enables `POST /api/debug/clear-spoolman-fdb-refs` and `POST /api/debug/reset-bridge-state` (403 when off) |
+| `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
+| `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
 
 ## Important technical details
 
