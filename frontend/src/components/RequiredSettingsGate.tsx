@@ -33,14 +33,14 @@ export function RequiredSettingsGate() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-lg border border-amber-300 shadow-lg p-6 max-w-md w-full space-y-4">
-        <h2 className="text-base font-semibold text-amber-800">Required settings not configured</h2>
-        <p className="text-sm text-gray-700">
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-amber-300 dark:border-amber-700 shadow-lg p-6 max-w-md w-full space-y-4">
+        <h2 className="text-base font-semibold text-amber-800 dark:text-amber-300">Required settings not configured</h2>
+        <p className="text-sm text-gray-700 dark:text-gray-300">
           The following settings must be configured before the bridge is fully usable:
         </p>
         <ul className="list-disc list-inside space-y-1">
           {unset.map(key => (
-            <li key={key} className="text-sm text-gray-800">
+            <li key={key} className="text-sm text-gray-800 dark:text-gray-200">
               {SETTING_LABELS[key] ?? key}
             </li>
           ))}
@@ -48,7 +48,7 @@ export function RequiredSettingsGate() {
         <div className="flex gap-3 pt-2">
           <button
             type="button"
-            onClick={() => { void navigate('/settings') }}
+            onClick={() => { setDismissed(true); void navigate('/settings') }}
             className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700"
           >
             Go to Settings
@@ -56,7 +56,7 @@ export function RequiredSettingsGate() {
           <button
             type="button"
             onClick={() => setDismissed(true)}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200"
+            className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600"
           >
             Later
           </button>
