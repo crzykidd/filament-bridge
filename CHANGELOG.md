@@ -212,6 +212,11 @@ GitHub release.
 
 ### Fixed
 
+- **OpenTag download hint tracks dataset size** — the "first load downloads…" status
+  message no longer hardcodes "≈11k records". Each successful grab persists the record
+  count to BridgeConfig (`opentag_last_count`); `GET /api/openprinttag/status` now returns
+  a `last_count` field (the largest count ever seen, surviving cache-file deletion) and the
+  UI shows e.g. "12,104+ records". Falls back to "thousands of records" before the first grab.
 - **OpenTag VOXEL-pla brand gate** — `normalize_vendor()` now replaces hyphens and underscores
   with spaces before collapsing whitespace. This fixes a 0% / unmatched result for Spoolman vendor
   `"VOXEL-pla"` against OpenTag brand `"Voxel PLA"`: both now normalize to `"voxel pla"` and land

@@ -713,6 +713,7 @@ export default function OpenTagCleanup() {
       count: data.dataset.count,
       stale: data.dataset.stale,
       max_age_hours: prev?.max_age_hours ?? 24,
+      last_count: Math.max(data.dataset.count, prev?.last_count ?? 0),
     }))
     // Initialize decisions: default to OpenTag values for each field
     const initial: Record<number, Record<string, OpenTagFieldDecision>> = {}
@@ -739,9 +740,11 @@ export default function OpenTagCleanup() {
     setStatusMsg(null)
     try {
       if (!skipRefresh) {
+        const known = cacheStatus?.last_count || cacheStatus?.count || 0
+        const recordHint = known > 0 ? `${known.toLocaleString()}+ records` : 'thousands of records'
         setStatusMsg(
           'Fetching the OpenTag dataset from Filament DB… ' +
-          '(first load downloads ≈​11k records — up to a minute)',
+          `(first load downloads ${recordHint} — up to a minute)`,
         )
         await postOpenTagRefresh()
         // Refresh status banner after fetch
@@ -756,7 +759,7 @@ export default function OpenTagCleanup() {
       setWorking(false)
       setStatusMsg(null)
     }
-  }, [_applyMatchesData])
+  }, [_applyMatchesData, cacheStatus])
 
   // On mount: once status is known, kick off the appropriate load
   const [autoLoadDone, setAutoLoadDone] = useState(false)

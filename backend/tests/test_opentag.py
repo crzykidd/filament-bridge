@@ -1231,6 +1231,58 @@ async def test_openprinttag_refresh_route_responds(tmp_path):
         _ot_mod._settings.data_dir = original_data_dir
 
 
+@pytest.mark.asyncio
+async def test_openprinttag_status_reports_persisted_last_count(tmp_path, monkeypatch):
+    """A successful refresh persists the record count; /status surfaces it as
+    last_count even after the cache file is deleted (so the 'first load
+    downloads ~N records' hint survives cache clears and tracks dataset growth)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    import app.api.opentag as _ot_mod
+    from app.db import Base
+    from app.models.config import seed_defaults
+
+    # Real (in-memory) DB bound into the module-level SessionLocal the endpoint uses.
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    test_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    with test_session() as _s:
+        seed_defaults(_s)
+        _s.commit()
+    monkeypatch.setattr(_ot_mod, "SessionLocal", test_session)
+    monkeypatch.setattr(_ot_mod._settings, "data_dir", str(tmp_path))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])
+
+    test_app = FastAPI()
+    test_app.include_router(_ot_mod.router, prefix="/api")
+    test_app.state.filamentdb = fake_fdb
+    test_app.state.spoolman = AsyncMock()
+    client = TestClient(test_app)
+
+    # Fresh: no cache, nothing persisted yet.
+    assert client.get("/api/openprinttag/status").json()["last_count"] == 0
+
+    # Refresh fetches 2 records and persists the count.
+    assert client.post("/api/openprinttag/refresh").json()["count"] == 2
+
+    # Simulate a cleared cache (file deleted) — the live count drops to 0 but the
+    # persisted last_count remains.
+    for f in tmp_path.iterdir():
+        f.unlink()
+
+    body = client.get("/api/openprinttag/status").json()
+    assert body["count"] == 0
+    assert body["last_count"] == 2
+
+
 def test_old_opentag_refresh_route_404():
     """POST /api/opentag/refresh (old path) must 404."""
     client, _sm, _fdb = _make_test_app_with_mocks()

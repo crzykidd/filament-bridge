@@ -56,6 +56,10 @@ class OpenTagCacheStatus(BaseModel):
     count: int
     stale: bool
     max_age_hours: int
+    # Largest record count seen on any prior successful grab, persisted in
+    # BridgeConfig so the "first load downloads ~N records" hint stays accurate
+    # (and survives cache-file deletion) as the upstream dataset grows.
+    last_count: int = 0
 
 
 class OpenTagFieldRow(BaseModel):
@@ -320,6 +324,37 @@ def _build_sm_patch(
 # ---------------------------------------------------------------------------
 
 
+_LAST_COUNT_KEY = "opentag_last_count"
+
+
+def _record_last_count(count: int) -> None:
+    """Persist the most recent dataset record count to BridgeConfig.
+
+    Lets the UI show an accurate "first load downloads ~N records" hint that
+    tracks the growing upstream dataset and survives cache-file deletion.
+    Best-effort: never let a persistence hiccup fail the fetch.
+    """
+    if count <= 0:
+        return
+    from app.api.config import set_config_value
+    try:
+        with SessionLocal() as _db:
+            set_config_value(_db, _LAST_COUNT_KEY, int(count))
+            _db.commit()
+    except Exception:  # pragma: no cover - best-effort persistence
+        logger.warning("opentag: failed to persist last record count", exc_info=True)
+
+
+def _read_last_count() -> int:
+    """Read the persisted last record count from BridgeConfig (0 if never set)."""
+    from app.api.config import get_config_value
+    try:
+        with SessionLocal() as _db:
+            return int(get_config_value(_db, _LAST_COUNT_KEY, 0) or 0)
+    except Exception:  # pragma: no cover - tests without a real DB
+        return 0
+
+
 @router.get("/openprinttag/status", response_model=OpenTagCacheStatus)
 async def opentag_status() -> OpenTagCacheStatus:
     """Return local cache metadata WITHOUT fetching from FDB.
@@ -334,6 +369,7 @@ async def opentag_status() -> OpenTagCacheStatus:
         count=meta["count"],
         stale=meta["stale"],
         max_age_hours=_settings.opentag_cache_max_age_hours,
+        last_count=max(meta["count"], _read_last_count()),
     )
 
 
@@ -378,6 +414,7 @@ async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
             "opentag_fetch_failed",
             "Failed to connect to Filament DB while fetching the OpenTag dataset.",
         ) from exc
+    _record_last_count(result["count"])
     return OpenTagDatasetMeta(
         fetched_at=result["fetched_at"],
         count=result["count"],
@@ -429,6 +466,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             "Failed to connect to Filament DB while fetching the OpenTag dataset.",
         ) from exc
     materials: list[dict[str, Any]] = dataset["materials"]
+    _record_last_count(dataset["count"])
     tag_map = _settings.parsed_material_tag_ids
     # Load vendor alias map and color-keywords map once — BridgeConfig value overrides
     # the env default.  Wrapped in try/except so tests without a real DB fall back to

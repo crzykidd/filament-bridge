@@ -619,6 +619,8 @@ export interface OpenTagCacheStatus {
   count: number
   stale: boolean
   max_age_hours: number
+  /** Largest record count seen on any prior successful grab (0 if never fetched). */
+  last_count: number
 }
 
 export interface OpenTagFieldRow {
