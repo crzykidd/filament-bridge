@@ -19,12 +19,10 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import config, wizard
-from app.api.config import get_config_value, set_config_value
+from app.api.config import set_config_value
 from app.db import Base, get_db
 from app.models.config import seed_defaults
-from app.models.mapping import FilamentMapping, SpoolMapping
-from app.models.snapshot import Snapshot
-from app.models.sync_log import SyncLog
+from app.models.mapping import FilamentMapping
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
@@ -683,7 +681,6 @@ def test_container_reuse_patches_opt_tags(db):
 
     filamentdb = _fake_filamentdb()
     # fdb_by_id lookup: return the existing container when fetched
-    from unittest.mock import MagicMock as MM
     filamentdb.get_filaments = AsyncMock(return_value=[
         FDBFilament.model_validate({
             "_id": "prior-silk-container", "name": "ELEGOO PLA Silk",
@@ -925,7 +922,7 @@ def test_container_name_override_skip_omits_cluster(db):
     filamentdb.create_filament = AsyncMock(side_effect=_create)
     client = _client(db, spoolman, filamentdb)
 
-    body = client.post("/api/wizard/execute").json()
+    client.post("/api/wizard/execute")
     # PLA cluster skipped entirely, PETG cluster should proceed
     containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     container_names = {c["name"] for c in containers}

@@ -26,7 +26,7 @@ from app.config import settings as _settings
 from app.db import get_db
 from app.models.config import BridgeConfig
 from app.models.sync_log import SyncLog
-from app.schemas.api import ConfigResponse, ConfigUpdateRequest, VariantParentMode
+from app.schemas.api import ConfigResponse, ConfigUpdateRequest
 
 logger = logging.getLogger(__name__)
 

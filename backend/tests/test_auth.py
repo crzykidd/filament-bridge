@@ -33,7 +33,7 @@ from app.api import auth as auth_module
 from app.api import config as config_module
 from app.api import health as health_module
 from app.api.auth import require_auth
-from app.api.config import get_config_value, set_config_value
+from app.api.config import set_config_value
 from app.db import Base, get_db
 from app.models.config import seed_defaults
 

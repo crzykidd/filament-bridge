@@ -2211,8 +2211,8 @@ def test_opt_to_spoolman_fields_gradient_multi_color_hexes_contains_all():
     assert "0000CC" in hexes
 
 
-def test_opt_to_spoolman_fields_single_color_unchanged():
-    """Single-color OPT → color_hex set, no multi fields."""
+def test_opt_to_spoolman_fields_single_color_pla_silk():
+    """Single-color OPT (PLA silk) → color_hex set, no multi fields."""
     fields = opt_to_spoolman_fields(_OPT_PLA_SILK)
     assert fields.get("color_hex") == "B87333"
     assert "multi_color_direction" not in fields
