@@ -45,9 +45,9 @@ function formatAge(fetchedAt: string | null): string {
 function confidenceBadge(c: number) {
   const pct = Math.round(c * 100)
   const bg =
-    pct >= 70 ? 'bg-green-100 text-green-800' :
-    pct >= 40 ? 'bg-yellow-100 text-yellow-800' :
-    'bg-red-100 text-red-800'
+    pct >= 70 ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300' :
+    pct >= 40 ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300' :
+    'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300'
   return (
     <span className={`px-1.5 py-0.5 rounded text-xs font-mono ${bg}`}>
       {pct}%
@@ -60,7 +60,7 @@ function ColorSwatch({ hex }: { hex: string | null }) {
   const clean = hex.startsWith('#') ? hex : `#${hex}`
   return (
     <span
-      className="inline-block w-4 h-4 rounded border border-gray-300 align-middle mr-1"
+      className="inline-block w-4 h-4 rounded border border-gray-300 dark:border-gray-600 align-middle mr-1"
       style={{ backgroundColor: clean }}
       title={clean}
     />
@@ -88,25 +88,25 @@ function FieldReviewRow({ row, decision, onChange }: FieldRowProps) {
   const colorHex = isColor && typeof decision.value === 'string' ? decision.value : null
 
   return (
-    <tr className="hover:bg-gray-50">
-      <td className="px-3 py-2 text-xs font-mono text-gray-500 whitespace-nowrap">{row.field}</td>
-      <td className="px-3 py-2 text-sm text-gray-700">
+    <tr className="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+      <td className="px-3 py-2 text-xs font-mono text-gray-500 dark:text-gray-400 whitespace-nowrap">{row.field}</td>
+      <td className="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">
         {isColor && <ColorSwatch hex={renderValue(row.spoolman_value)} />}
         {renderValue(row.spoolman_value)}
       </td>
-      <td className="px-3 py-2 text-sm text-indigo-700">
+      <td className="px-3 py-2 text-sm text-indigo-700 dark:text-indigo-400">
         {isColor && <ColorSwatch hex={renderValue(row.opentag_value)} />}
         {renderValue(row.opentag_value)}
       </td>
       <td className="px-3 py-2">
         {decision.keep_mine ? (
-          <span className="text-xs text-gray-600 italic">keeping mine</span>
+          <span className="text-xs text-gray-600 dark:text-gray-400 italic">keeping mine</span>
         ) : (
           <div className="flex items-center gap-1">
             {isColor && <ColorSwatch hex={colorHex} />}
             <input
               type={typeof decision.value === 'number' ? 'number' : 'text'}
-              className="border border-gray-300 rounded px-2 py-0.5 text-xs w-32 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-0.5 text-xs w-32 focus:outline-none focus:ring-1 focus:ring-indigo-400"
               value={decision.value === null || decision.value === undefined ? '' : String(decision.value)}
               onChange={e => {
                 const raw = e.target.value
@@ -123,8 +123,8 @@ function FieldReviewRow({ row, decision, onChange }: FieldRowProps) {
           type="button"
           className={`text-xs px-2 py-0.5 rounded border transition-colors ${
             decision.keep_mine
-              ? 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-gray-200'
-              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-100'
+              ? 'bg-gray-100 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
+              : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
           }`}
           onClick={() => onChange({ ...decision, keep_mine: !decision.keep_mine })}
         >
@@ -198,7 +198,7 @@ function OpenTagStampedBadge({ existingUuid, dataDiffers }: { existingUuid: stri
   if (dataDiffers) {
     return (
       <span
-        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-amber-100 text-amber-700 border-amber-300"
+        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
         title="Tagged in OpenPrintTag — Spoolman data differs from OpenTag"
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
@@ -210,7 +210,7 @@ function OpenTagStampedBadge({ existingUuid, dataDiffers }: { existingUuid: stri
   }
   return (
     <span
-      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-gray-100 text-gray-500 border-gray-200"
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-600"
       title="Already tagged in OpenPrintTag — in sync"
     >
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
@@ -269,26 +269,26 @@ function FilamentCard({
   const { existingUuid, dataDiffers } = computeBadgeState(match, activeCandidate)
 
   return (
-    <div className={`border rounded-lg mb-4 ${ignored ? 'opacity-50' : ''}`}>
+    <div className={`border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg mb-4 ${ignored ? 'opacity-50' : ''}`}>
       <div
-        className="flex items-center justify-between px-4 py-2 bg-gray-50 rounded-t-lg cursor-pointer select-none"
+        className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-900/40 rounded-t-lg cursor-pointer select-none"
         onClick={() => setExpanded(e => !e)}
       >
         <div className="flex items-center gap-3">
           <ColorSwatch hex={match.spoolman_color_hex} />
-          <span className="font-medium text-sm">{match.spoolman_name}</span>
+          <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{match.spoolman_name}</span>
           {match.spoolman_vendor && (
-            <span className="text-xs text-gray-500">{match.spoolman_vendor}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{match.spoolman_vendor}</span>
           )}
           {match.spoolman_material && (
-            <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">
+            <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs">
               {match.spoolman_material}
             </span>
           )}
           <DeepLinks spoolmanFilamentId={match.spoolman_filament_id} />
           {displayMulticolorMismatch && (
             <span
-              className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-medium"
+              className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-xs font-medium"
               title="Spoolman has multicolor data but the matched OpenTag entry is single-color"
             >
               multicolor mismatch
@@ -299,7 +299,7 @@ function FilamentCard({
           {/* Candidate dropdown — shown when there are multiple candidates */}
           {hasCandidates && (
             <select
-              className="text-xs border border-indigo-200 rounded px-1 py-0.5 bg-white text-indigo-700 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="text-xs border border-indigo-200 dark:border-indigo-700 rounded px-1 py-0.5 bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
               value={activeCandidateIdx}
               onClick={e => e.stopPropagation()}
               onChange={e => {
@@ -315,19 +315,19 @@ function FilamentCard({
             </select>
           )}
           {!hasCandidates && activeCandidate && (
-            <span className="text-xs text-indigo-600">
+            <span className="text-xs text-indigo-600 dark:text-indigo-400">
               → {activeCandidate.opt_brand} / {activeCandidate.opt_name}
             </span>
           )}
           {!hasCandidates && !activeCandidate && match.opt_brand && (
-            <span className="text-xs text-indigo-600">
+            <span className="text-xs text-indigo-600 dark:text-indigo-400">
               → {match.opt_brand} / {match.opt_name}
             </span>
           )}
           <OpenTagStampedBadge existingUuid={existingUuid} dataDiffers={dataDiffers} />
           {confidenceBadge(displayConfidence)}
           {(activeCandidate?.opt_slug ?? match.opt_slug) && (
-            <span className="text-xs text-gray-600 font-mono">
+            <span className="text-xs text-gray-600 dark:text-gray-400 font-mono">
               {activeCandidate?.opt_slug ?? match.opt_slug}
             </span>
           )}
@@ -338,22 +338,22 @@ function FilamentCard({
             type="button"
             className={`text-xs px-2 py-0.5 rounded border ml-2 ${
               ignored
-                ? 'bg-gray-200 border-gray-400 text-gray-700'
-                : 'bg-white border-orange-300 text-orange-600 hover:bg-orange-50'
+                ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-200'
+                : 'bg-white dark:bg-gray-800 border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
             }`}
             onClick={e => { e.stopPropagation(); onIgnore(!ignored) }}
           >
             {ignored ? 'unignore' : 'ignore match'}
           </button>
-          <span className="text-gray-400">{expanded ? '▲' : '▼'}</span>
+          <span className="text-gray-400 dark:text-gray-500">{expanded ? '▲' : '▼'}</span>
         </div>
       </div>
 
       {expanded && !ignored && displayFields.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm divide-y divide-gray-200">
+          <table className="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-700">
             <thead>
-              <tr className="bg-gray-50 text-xs text-gray-500 uppercase">
+              <tr className="bg-gray-50 dark:bg-gray-900/40 text-xs text-gray-500 dark:text-gray-400 uppercase">
                 <th className="px-3 py-1 text-left">Field</th>
                 <th className="px-3 py-1 text-left">Spoolman</th>
                 <th className="px-3 py-1 text-left">OpenTag</th>
@@ -361,7 +361,7 @@ function FilamentCard({
                 <th className="px-3 py-1 text-left" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {displayFields.map(row => (
                 <FieldReviewRow
                   key={row.field}
@@ -376,7 +376,7 @@ function FilamentCard({
       )}
 
       {expanded && !ignored && displayFields.length === 0 && (
-        <p className="px-4 py-3 text-sm text-gray-500 italic">
+        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 italic">
           {displayConfidence < 0.30
             ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
             : 'No field differences detected.'}
@@ -450,38 +450,38 @@ function ConfirmStep({
 
   return (
     <div>
-      <h2 className="text-lg font-semibold mb-1">Confirm writes</h2>
-      <p className="text-sm text-gray-600 mb-4">
+      <h2 className="text-lg font-semibold mb-1 text-gray-900 dark:text-gray-100">Confirm writes</h2>
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
         {writes.length} field writes across {Object.keys(byFilament).length} filaments.
         {ignoredIds.size > 0 && ` (${ignoredIds.size} ignored)`}
         {' '}Review everything below before applying.
       </p>
 
       {writes.length === 0 ? (
-        <p className="text-gray-500 italic text-sm">Nothing to write — all fields kept or ignored.</p>
+        <p className="text-gray-500 dark:text-gray-400 italic text-sm">Nothing to write — all fields kept or ignored.</p>
       ) : (
         <div className="space-y-4 mb-6">
           {Object.entries(byFilament).map(([smId, { name, writes: ws }]) => (
-            <div key={smId} className="border rounded-lg overflow-hidden">
-              <div className="px-4 py-2 bg-indigo-50 flex items-center gap-2">
-                <span className="font-medium text-sm">{name}</span>
-                <span className="text-xs text-gray-500">SM #{smId}</span>
-                <span className="ml-auto text-xs text-gray-500">{ws.length} writes</span>
+            <div key={smId} className="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg overflow-hidden">
+              <div className="px-4 py-2 bg-indigo-50 dark:bg-indigo-900/30 flex items-center gap-2">
+                <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{name}</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">SM #{smId}</span>
+                <span className="ml-auto text-xs text-gray-500 dark:text-gray-400">{ws.length} writes</span>
               </div>
-              <table className="min-w-full text-xs divide-y divide-gray-200">
+              <table className="min-w-full text-xs divide-y divide-gray-200 dark:divide-gray-700">
                 <thead>
-                  <tr className="bg-gray-50 text-gray-500 uppercase">
+                  <tr className="bg-gray-50 dark:bg-gray-900/40 text-gray-500 dark:text-gray-400 uppercase">
                     <th className="px-3 py-1 text-left">Field</th>
                     <th className="px-3 py-1 text-left">Old</th>
                     <th className="px-3 py-1 text-left">New</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                   {ws.map(w => (
                     <tr key={w.field}>
-                      <td className="px-3 py-1 font-mono text-gray-500">{w.field}</td>
-                      <td className="px-3 py-1 text-gray-500">{renderValue(w.oldValue)}</td>
-                      <td className="px-3 py-1 text-indigo-700 font-medium">{renderValue(w.newValue)}</td>
+                      <td className="px-3 py-1 font-mono text-gray-500 dark:text-gray-400">{w.field}</td>
+                      <td className="px-3 py-1 text-gray-500 dark:text-gray-400">{renderValue(w.oldValue)}</td>
+                      <td className="px-3 py-1 text-indigo-700 dark:text-indigo-400 font-medium">{renderValue(w.newValue)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -494,7 +494,7 @@ function ConfirmStep({
       <div className="flex gap-3">
         <button
           type="button"
-          className="px-4 py-2 text-sm border border-gray-300 rounded hover:bg-gray-50"
+          className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
           onClick={onBack}
           disabled={applying}
         >
@@ -620,23 +620,23 @@ function GroupSection({
     <div className="mb-4">
       {showHeader && (
         <div
-          className="flex items-center gap-2 w-full px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-md mb-2 select-none cursor-pointer"
+          className="flex items-center gap-2 w-full px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md mb-2 select-none cursor-pointer"
           onClick={onToggleCollapse}
         >
-          <span className="text-gray-400 text-xs w-3 shrink-0">
+          <span className="text-gray-400 dark:text-gray-500 text-xs w-3 shrink-0">
             {collapsed ? '▸' : '▾'}
           </span>
-          <span className="text-sm font-semibold text-gray-700">{group.key}</span>
-          <span className="text-xs text-gray-500 ml-1">
+          <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">{group.key}</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">
             {matchedCount} matched · {noMatchCount} no-match · {taggedCount} tagged
-            <span className="ml-1 text-gray-500">({total})</span>
+            <span className="ml-1 text-gray-500 dark:text-gray-400">({total})</span>
           </span>
           <button
             type="button"
             className={`ml-auto text-xs px-2 py-0.5 rounded border transition-colors ${
               allIgnored
-                ? 'bg-gray-200 border-gray-400 text-gray-700 hover:bg-gray-300'
-                : 'bg-white border-orange-300 text-orange-600 hover:bg-orange-50'
+                ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-600'
+                : 'bg-white dark:bg-gray-800 border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
             }`}
             onClick={e => { e.stopPropagation(); onIgnoreAll(!allIgnored) }}
           >
@@ -937,25 +937,25 @@ export default function OpenTagCleanup() {
       <div className="flex items-center gap-4 mb-6 p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
         {cacheStatus?.exists ? (
           <>
-            <span className="text-sm text-gray-600">
+            <span className="text-sm text-gray-600 dark:text-gray-300">
               OpenTag dataset: <strong>{cacheStatus.count}</strong> materials
             </span>
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
               fetched {formatAge(cacheStatus.fetched_at)}
             </span>
             {cacheStatus.stale && (
-              <span className="px-2 py-0.5 rounded bg-yellow-100 text-yellow-800 text-xs">stale</span>
+              <span className="px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 text-xs">stale</span>
             )}
           </>
         ) : (
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-gray-500 dark:text-gray-400">
             {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
           </span>
         )}
         <div className="ml-auto flex gap-2">
           <button
             type="button"
-            className="px-3 py-1 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50 disabled:opacity-50"
+            className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
             onClick={() => runLoad(true)}
             disabled={working}
             title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
@@ -964,7 +964,7 @@ export default function OpenTagCleanup() {
           </button>
           <button
             type="button"
-            className="px-3 py-1 text-sm border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50 disabled:opacity-50"
+            className="px-3 py-1 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-50"
             onClick={handleRefresh}
             disabled={working}
             title="Re-download the OpenTag dataset from Filament DB, then reprocess"
@@ -993,10 +993,10 @@ export default function OpenTagCleanup() {
       {!working && step === 'review' && response && (
         <div>
           <div className="flex items-center justify-between mb-4">
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-gray-600 dark:text-gray-300">
               {withMatch.length} matches found, {noMatch.length} unmatched, {ignoredIds.size} ignored
               {filterActive && (
-                <span className="ml-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                <span className="ml-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-1.5 py-0.5">
                   {hiddenCount} hidden by filter
                 </span>
               )}
@@ -1012,17 +1012,17 @@ export default function OpenTagCleanup() {
           </div>
 
           {/* Group / sort controls */}
-          <div className="flex flex-wrap items-center gap-4 mb-3 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
+          <div className="flex flex-wrap items-center gap-4 mb-3 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-medium">Group by:</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Group by:</span>
               {(['none', 'brand', 'material'] as GroupBy[]).map(g => (
                 <button
                   key={g}
                   type="button"
                   className={`text-xs px-2 py-0.5 rounded border transition-colors ${
                     groupBy === g
-                      ? 'bg-indigo-100 border-indigo-400 text-indigo-700 font-semibold'
-                      : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
+                      ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+                      : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
                   }`}
                   onClick={() => setGroupBy(g)}
                 >
@@ -1031,15 +1031,15 @@ export default function OpenTagCleanup() {
               ))}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-medium">Sort by:</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Sort by:</span>
               {(['confidence', 'brand', 'material', 'name', 'spoolman_id'] as SortBy[]).map(s => (
                 <button
                   key={s}
                   type="button"
                   className={`text-xs px-2 py-0.5 rounded border transition-colors ${
                     sortBy === s
-                      ? 'bg-indigo-100 border-indigo-400 text-indigo-700 font-semibold'
-                      : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'
+                      ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+                      : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
                   }`}
                   onClick={() => setSortBy(s)}
                   title={sortLabel(s)}
@@ -1052,7 +1052,7 @@ export default function OpenTagCleanup() {
               <div className="flex items-center gap-2 ml-auto">
                 <button
                   type="button"
-                  className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                  className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
                   onClick={() => {
                     const next: Record<string, boolean> = {}
                     for (const g of displayGroups) next[g.key] = false
@@ -1063,7 +1063,7 @@ export default function OpenTagCleanup() {
                 </button>
                 <button
                   type="button"
-                  className="text-xs px-2 py-0.5 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-100"
+                  className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
                   onClick={() => {
                     const next: Record<string, boolean> = {}
                     for (const g of displayGroups) next[g.key] = true
@@ -1076,19 +1076,19 @@ export default function OpenTagCleanup() {
             )}
             {/* Filter toggles */}
             <div className={`flex items-center gap-3 ${groupBy === 'none' ? 'ml-auto' : ''}`}>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
+                  className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-indigo-600 focus:ring-indigo-400"
                   checked={hideMatched}
                   onChange={e => setHideMatched(e.target.checked)}
                 />
                 Hide matched
               </label>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-300 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  className="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
+                  className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-indigo-600 focus:ring-indigo-400"
                   checked={hideAlreadyTagged}
                   onChange={e => setHideAlreadyTagged(e.target.checked)}
                 />
@@ -1098,14 +1098,14 @@ export default function OpenTagCleanup() {
           </div>
 
           {/* Bulk-action bar */}
-          <div className="flex items-center gap-3 mb-4 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg">
-            <span className="text-sm text-gray-600">
+          <div className="flex items-center gap-3 mb-4 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+            <span className="text-sm text-gray-600 dark:text-gray-300">
               {withMatch.length - withMatch.filter(m => ignoredIds.has(m.spoolman_filament_id)).length} of {withMatch.length} selected
             </span>
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                className="text-xs px-3 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 onClick={() => setIgnoredIds(new Set())}
                 disabled={withMatch.length === 0}
               >
@@ -1113,7 +1113,7 @@ export default function OpenTagCleanup() {
               </button>
               <button
                 type="button"
-                className="text-xs px-3 py-1 rounded border border-orange-300 bg-white text-orange-600 hover:bg-orange-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-xs px-3 py-1 rounded border border-orange-300 dark:border-orange-700 bg-white dark:bg-gray-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 disabled:opacity-40 disabled:cursor-not-allowed"
                 onClick={() => setIgnoredIds(new Set(withMatch.map(m => m.spoolman_filament_id)))}
                 disabled={withMatch.length === 0}
               >
@@ -1123,7 +1123,7 @@ export default function OpenTagCleanup() {
           </div>
 
           {withMatch.length === 0 && noMatch.length === 0 && (
-            <p className="text-gray-500 italic text-sm">No Spoolman filaments found.</p>
+            <p className="text-gray-500 dark:text-gray-400 italic text-sm">No Spoolman filaments found.</p>
           )}
 
           {displayGroups.map(group => (
@@ -1145,30 +1145,30 @@ export default function OpenTagCleanup() {
 
           {noMatch.length > 0 && (
             <details className="mt-4">
-              <summary className="text-sm text-gray-500 cursor-pointer select-none">
+              <summary className="text-sm text-gray-500 dark:text-gray-400 cursor-pointer select-none">
                 {noMatch.length} unmatched filaments (confidence &lt; 30%)
               </summary>
               <div className="mt-2 space-y-2 pl-4">
                 {noMatch.map(m => (
-                  <div key={m.spoolman_filament_id} className="flex flex-wrap items-center gap-2 py-1 border-b border-gray-100 last:border-0">
+                  <div key={m.spoolman_filament_id} className="flex flex-wrap items-center gap-2 py-1 border-b border-gray-100 dark:border-gray-700 last:border-0">
                     <ColorSwatch hex={m.spoolman_color_hex} />
-                    <span className="text-sm font-medium text-gray-700">{m.spoolman_name}</span>
+                    <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{m.spoolman_name}</span>
                     {!m.spoolman_vendor ? (
-                      <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-xs font-medium border border-red-200">
+                      <span className="px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-xs font-medium border border-red-200 dark:border-red-800">
                         No manufacturer
                       </span>
                     ) : (
-                      <span className="text-xs text-gray-600">{m.spoolman_vendor}</span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">{m.spoolman_vendor}</span>
                     )}
                     {m.spoolman_material && (
-                      <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">
+                      <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs">
                         {m.spoolman_material}
                       </span>
                     )}
                     <DeepLinks spoolmanFilamentId={m.spoolman_filament_id} />
                     {confidenceBadge(m.confidence)}
                     {m.no_match_reason && (
-                      <span className="text-xs text-gray-600 italic">{m.no_match_reason}</span>
+                      <span className="text-xs text-gray-600 dark:text-gray-400 italic">{m.no_match_reason}</span>
                     )}
                   </div>
                 ))}
@@ -1193,16 +1193,16 @@ export default function OpenTagCleanup() {
       {step === 'done' && applyResult && (
         <div className="px-6 py-8 text-center">
           <div className="text-4xl mb-4">{applyResult.errors === 0 ? '✓' : '⚠'}</div>
-          <h2 className="text-xl font-semibold mb-2">
+          <h2 className="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">
             {applyResult.errors === 0 ? 'Done!' : 'Completed with errors'}
           </h2>
-          <p className="text-gray-600 mb-6">
+          <p className="text-gray-600 dark:text-gray-400 mb-6">
             Applied {applyResult.applied} filament updates.
             {applyResult.errors > 0 && ` ${applyResult.errors} errors — check the sync log.`}
           </p>
           <button
             type="button"
-            className="px-4 py-2 border border-gray-300 rounded text-sm hover:bg-gray-50"
+            className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
             onClick={() => { setStep('review'); runLoad(true) }}
           >
             Start over

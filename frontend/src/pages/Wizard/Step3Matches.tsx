@@ -37,15 +37,16 @@ const STATUS_ORDER: Record<RowStatus, number> = {
   matched: 0, ambiguous: 1, unmatched_sm: 2, unmatched_fdb: 3, master_fdb: 4,
 }
 const STATUS_COLOR: Record<RowStatus, string> = {
-  matched: 'bg-green-100 text-green-700',
-  ambiguous: 'bg-yellow-100 text-yellow-700',
-  unmatched_sm: 'bg-gray-100 text-gray-600',
-  unmatched_fdb: 'bg-blue-100 text-blue-600',
-  master_fdb: 'bg-purple-100 text-purple-700',
+  matched: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
+  ambiguous: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
+  unmatched_sm: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
+  unmatched_fdb: 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300',
+  master_fdb: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
 }
 const STATUS_HDR_BG: Record<RowStatus, string> = {
-  matched: 'bg-green-50', ambiguous: 'bg-yellow-50',
-  unmatched_sm: 'bg-gray-50', unmatched_fdb: 'bg-gray-50', master_fdb: 'bg-purple-50',
+  matched: 'bg-green-50 dark:bg-gray-750', ambiguous: 'bg-yellow-50 dark:bg-gray-750',
+  unmatched_sm: 'bg-gray-50 dark:bg-gray-750', unmatched_fdb: 'bg-gray-50 dark:bg-gray-750',
+  master_fdb: 'bg-purple-50 dark:bg-gray-750',
 }
 
 // Shared grid template — must match in header, filter row, and member rows.
@@ -98,7 +99,7 @@ function TriCheckbox({ checked, indeterminate, onChange, disabled }: {
   return (
     <input ref={ref} type="checkbox" checked={checked} disabled={disabled}
       onChange={e => onChange(e.target.checked)}
-      className="mt-0.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed" />
+      className="mt-0.5 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed" />
   )
 }
 
@@ -127,7 +128,7 @@ function OptBadge() {
   return (
     <span
       title="OpenPrintTag tagged"
-      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-gray-100 text-gray-500 border-gray-200 shrink-0"
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300 border-gray-200 dark:border-gray-600 shrink-0"
     >
       {/* tag glyph */}
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
@@ -169,7 +170,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           <FTag f={row.fdb} side="fdb" />
           <DeepLinks filamentdbFilamentId={row.fdb?.filamentdb_filament_id} />
           {row.vendorDedup && (
-            <span className="px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs">
+            <span className="px-1.5 py-0.5 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded text-xs">
               vendor: {row.vendorDedup}
             </span>
           )}
@@ -263,7 +264,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
               className={`px-2 py-0.5 rounded text-xs font-medium shrink-0 ${
                 isLinked && decision?.filamentdb_id === c.filamentdb_filament_id
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}>Link</button>
             <FTag f={c} side="fdb" />
             <DeepLinks filamentdbFilamentId={c.filamentdb_filament_id} />
@@ -273,7 +274,7 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           {(['create', 'skip'] as const).map(a => (
             <button key={a} onClick={() => setDec(smId, a)}
               className={`px-2 py-0.5 rounded text-xs font-medium ${
-                decision?.action === a ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                decision?.action === a ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}>{a}</button>
           ))}
         </div>
@@ -499,7 +500,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
           <label className="flex items-center gap-1.5">
             <span className="text-xs text-gray-500 shrink-0">Group by</span>
             <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupDim)}
-              className="text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
               <option value="status">Status</option>
               <option value="material">Material</option>
               <option value="vendor">Brand</option>
@@ -509,7 +510,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
           <label className="flex items-center gap-1.5">
             <span className="text-xs text-gray-500 shrink-0">Sort by</span>
             <select value={sortCol} onChange={e => setSortCol(e.target.value as SortCol)}
-              className="text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
               <option value="name">Name</option>
               <option value="vendor">Brand</option>
               <option value="material">Material</option>
@@ -518,7 +519,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
             </select>
             <button onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
               title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
-              className="px-1.5 py-1 text-xs border border-gray-200 rounded hover:bg-gray-50">
+              className="px-1.5 py-1 text-xs border border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-50 dark:hover:bg-gray-700">
               {sortDir === 'asc' ? '↑' : '↓'}
             </button>
           </label>
@@ -526,13 +527,13 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
           <div className="flex items-center gap-1.5 flex-1 min-w-36">
             <input type="text" placeholder="Search all fields…" value={search}
               onChange={e => setSearch(e.target.value)}
-              className="text-xs border border-gray-200 rounded px-2 py-1 w-full focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500" />
+              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 w-full focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500" />
           </div>
 
           <label className="flex items-center gap-1.5">
             <span className="text-xs text-gray-500 shrink-0">Status</span>
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as RowStatus | 'all')}
-              className="text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
+              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500">
               <option value="all">All</option>
               <option value="matched">Matched</option>
               <option value="ambiguous">Ambiguous</option>
@@ -544,10 +545,10 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
 
           <label className="flex items-center gap-1.5 cursor-pointer select-none">
             <input type="checkbox" checked={filterOpt} onChange={e => setFilterOpt(e.target.checked)}
-              className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+              className="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-indigo-600 focus:ring-indigo-500" />
             <span className="text-xs text-gray-500 shrink-0">OpenPrintTag-tagged only</span>
             {optTaggedCount > 0 && (
-              <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-xs font-medium">
+              <span className="px-1.5 py-0.5 bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded text-xs font-medium">
                 {optTaggedCount}
               </span>
             )}
@@ -558,13 +559,13 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
             const masterCount = allRows.filter(r => r.status === 'master_fdb').length
             const unmatchedFdbCount = allRows.filter(r => r.status === 'unmatched_fdb').length
             return (
-              <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 shrink-0">
-                <span>Total <span className="font-semibold text-gray-700">{allRows.length}</span></span>
-                <span className="text-green-600">✓ {data.matched.length}</span>
-                {data.ambiguous.length > 0 && <span className="text-yellow-600">? {data.ambiguous.length}</span>}
+              <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 shrink-0">
+                <span>Total <span className="font-semibold text-gray-700 dark:text-gray-200">{allRows.length}</span></span>
+                <span className="text-green-600 dark:text-green-400">✓ {data.matched.length}</span>
+                {data.ambiguous.length > 0 && <span className="text-yellow-600 dark:text-yellow-400">? {data.ambiguous.length}</span>}
                 {data.unmatched_spoolman.length > 0 && <span>+SM {data.unmatched_spoolman.length}</span>}
                 {unmatchedFdbCount > 0 && <span>+FDB {unmatchedFdbCount}</span>}
-                {masterCount > 0 && <span className="text-purple-600">♦ {masterCount} parent</span>}
+                {masterCount > 0 && <span className="text-purple-600 dark:text-purple-400">♦ {masterCount} parent</span>}
               </div>
             )
           })()}
@@ -573,7 +574,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
         <div className="flex items-center gap-2 text-xs">
           <button onClick={() => setCollapsed(new Set(groups.map(([k]) => k)))}
             className="text-indigo-600 hover:text-indigo-800">Collapse all</button>
-          <span className="text-gray-300">|</span>
+          <span className="text-gray-300 dark:text-gray-600">|</span>
           <button onClick={() => setCollapsed(new Set())}
             className="text-indigo-600 hover:text-indigo-800">Expand all</button>
           {filtered.length !== allRows.length && (
@@ -588,20 +589,20 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
         <div className="bg-gray-50 dark:bg-gray-750 border-b border-gray-200 dark:border-gray-700">
           <div className={`${G} py-2 items-center`}>
             <TriCheckbox {...tableTri} onChange={v => bulkSet(actionable, v)} />
-            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Spoolman</span>
-            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Filament DB</span>
-            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Material</span>
-            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Status</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Spoolman</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Filament DB</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Material</span>
+            <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Status</span>
           </div>
           <div className={`${G} pb-2 items-center`}>
             <div />
             <input type="text" placeholder="Name…" value={colFilter.name}
               onChange={e => setColFilter(f => ({ ...f, name: e.target.value }))}
-              className="text-xs border border-gray-200 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500" />
+              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500" />
             <div />
             <input type="text" placeholder="Material…" value={colFilter.material}
               onChange={e => setColFilter(f => ({ ...f, material: e.target.value }))}
-              className="text-xs border border-gray-200 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500" />
+              className="text-xs border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-0.5 focus:ring-1 focus:ring-indigo-500" />
             <div />
           </div>
         </div>
@@ -621,7 +622,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
             r => r.status === 'ambiguous' && decisions[r.smId!]?.action !== 'link'
           ).length
           const isCollapsed = collapsed.has(gKey)
-          const headerBg = isStatusGrouping && gStatus ? STATUS_HDR_BG[gStatus] : 'bg-gray-50'
+          const headerBg = isStatusGrouping && gStatus ? STATUS_HDR_BG[gStatus] : 'bg-gray-50 dark:bg-gray-750'
           const gLabel = isStatusGrouping ? STATUS_LABEL[gStatus!] : gKey
 
           const statusBreakdown = !isStatusGrouping
@@ -631,7 +632,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
             : []
 
           return (
-            <div key={gKey} className="border-b border-gray-100 last:border-b-0">
+            <div key={gKey} className="border-b border-gray-100 dark:border-gray-700 last:border-b-0">
               {/* Group header */}
               <div className={`${headerBg} px-4 py-2.5 flex items-center gap-3`}>
                 {actionableInGroup.length > 0
@@ -639,9 +640,9 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
                   : <div className="w-4 shrink-0" />}
                 <button onClick={() => toggleCollapse(gKey)}
                   className="flex items-center gap-1.5 flex-1 text-left min-w-0">
-                  <span className="text-gray-400 text-xs shrink-0">{isCollapsed ? '▶' : '▼'}</span>
-                  <span className="text-sm font-medium text-gray-700 truncate">{gLabel}</span>
-                  <span className="text-xs text-gray-400 shrink-0">({rows.length})</span>
+                  <span className="text-gray-400 dark:text-gray-400 text-xs shrink-0">{isCollapsed ? '▶' : '▼'}</span>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-100 truncate">{gLabel}</span>
+                  <span className="text-xs text-gray-400 dark:text-gray-400 shrink-0">({rows.length})</span>
                 </button>
                 {statusBreakdown.length > 0 && (
                   <div className="flex items-center gap-1 shrink-0">
@@ -660,7 +661,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
               </div>
 
               {!isCollapsed && (
-                <div className="divide-y divide-gray-100">
+                <div className="divide-y divide-gray-100 dark:divide-gray-700">
                   {rows.map(r => (
                     <MemberRow
                       key={`${r.status}:${r.smId ?? r.fdbId}`}

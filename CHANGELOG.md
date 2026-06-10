@@ -16,10 +16,12 @@ GitHub release.
   inline script in `index.html` applies the theme class before React loads, preventing any
   white flash. An "Appearance" section at the top of Settings exposes the three-way segmented
   control; a compact three-button toggle (☀/⊙/☾) also appears at the bottom of the sidebar.
-  Dark styling covers the shared chrome (Layout, sidebar, modals) and all primary pages
-  (Dashboard, Conflicts, SyncedRecords, SyncLog, Settings, Login) plus Wizard steps 1, 2, and 6.
-  Inner sub-components of the larger Wizard steps and OpenTagCleanup are partially polished and
-  will be completed incrementally.
+  Dark styling covers the shared chrome (Layout, sidebar, modals), all primary pages
+  (Dashboard, Conflicts, SyncedRecords, SyncLog, Settings, Login, OpenTagCleanup) and Wizard
+  steps 1, 2, 3, and 6. Inner sub-components of the remaining large Wizard steps (StepVariances,
+  StepNPreview) are partially polished and will be completed incrementally. A `gray-750` offset
+  surface color was added to the Tailwind theme for raised dark header rows (table column headers
+  and group headers).
 
 - **Version badge + GitHub update check + release-notes popup** — the sidebar now
   shows the current version (with a `-dev+<sha>` suffix on dev builds) linking to
