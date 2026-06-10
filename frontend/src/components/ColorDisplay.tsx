@@ -43,12 +43,12 @@ export function ColorDisplay({
     return (
       <span className="inline-flex items-center gap-1.5">
         <span
-          className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0"
+          className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-gray-600 shrink-0"
           style={{ background: gradient }}
           title={normalized.join(' / ')}
         />
         {showLabel && (
-          <span className="text-xs text-gray-500">{label}</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">{label}</span>
         )}
       </span>
     )
@@ -59,12 +59,12 @@ export function ColorDisplay({
     return (
       <span className="inline-flex items-center gap-1.5">
         <span
-          className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0"
+          className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-gray-600 shrink-0"
           style={{ backgroundColor: hex }}
           title={hex}
         />
         {showLabel && (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-500">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
             {hex}
           </span>
         )}
@@ -72,5 +72,5 @@ export function ColorDisplay({
     )
   }
 
-  return <span className="text-gray-400 text-sm">—</span>
+  return <span className="text-gray-400 dark:text-gray-500 text-sm">—</span>
 }

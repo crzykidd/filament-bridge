@@ -4,6 +4,8 @@ import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clear
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy, VariantParentMode } from '../api/types'
+import { useTheme } from '../context/ThemeContext'
+import type { ThemeMode } from '../context/ThemeContext'
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -27,11 +29,11 @@ function DirectionSelect({
   ]
   return (
     <div className="flex items-center justify-between py-2">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
+      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</span>
       <select
         value={value}
         onChange={e => onChange(e.target.value as SyncDirection2)}
-        className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400"
       >
         {options.map(o => (
           <option key={o.value} value={o.value}>{o.label}</option>
@@ -60,12 +62,12 @@ function WeightConflictSelect({
   return (
     <div className={`flex flex-col gap-1 py-2 ${disabled ? 'opacity-40' : ''}`}>
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700">On conflict</span>
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">On conflict</span>
         <select
           value={value}
           disabled={disabled}
           onChange={e => onChange(e.target.value as ConflictPolicy)}
-          className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed"
+          className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed"
         >
           {options.map(o => (
             <option key={o.value} value={o.value}>{o.label}</option>
@@ -74,13 +76,13 @@ function WeightConflictSelect({
       </div>
       {(value === 'spoolman_wins' || value === 'filamentdb_wins' || value === 'newest_wins') &&
        direction === 'two_way' && (
-        <p className="text-xs text-amber-600">
+        <p className="text-xs text-amber-600 dark:text-amber-400">
           Warning: auto-resolving weight conflicts can silently discard real consumption
           history. Use manual review when in doubt.
         </p>
       )}
       {value === 'newest_wins' && direction === 'two_way' && (
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-gray-400 dark:text-gray-500">
           Newest wins compares timestamps across two separate servers — clock skew can
           produce incorrect results. Frequent syncing minimises this risk.
         </p>
@@ -106,17 +108,56 @@ function MatPropConflictSelect({
   const disabled = direction !== 'two_way'
   return (
     <div className={`flex items-center justify-between py-2 ${disabled ? 'opacity-40' : ''}`}>
-      <span className="text-sm font-medium text-gray-700">On conflict</span>
+      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">On conflict</span>
       <select
         value={value}
         disabled={disabled}
         onChange={e => onChange(e.target.value as MatConflictPolicy)}
-        className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed"
+        className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:cursor-not-allowed"
       >
         {options.map(o => (
           <option key={o.value} value={o.value}>{o.label}</option>
         ))}
       </select>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Appearance section
+// ---------------------------------------------------------------------------
+
+const THEME_OPTIONS: { value: ThemeMode; label: string; description: string }[] = [
+  { value: 'light', label: 'Light', description: 'Always use the light theme.' },
+  { value: 'dark', label: 'Dark', description: 'Always use the dark theme.' },
+  { value: 'system', label: 'System', description: 'Follow your OS preference.' },
+]
+
+function AppearanceSection() {
+  const { mode, setMode } = useTheme()
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5 space-y-3">
+      <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Appearance</h2>
+      <p className="text-xs text-gray-400 dark:text-gray-500">
+        Choose a color theme. The preference is stored locally in your browser.
+      </p>
+      <div className="flex gap-2">
+        {THEME_OPTIONS.map(opt => (
+          <button
+            key={opt.value}
+            type="button"
+            title={opt.description}
+            onClick={() => setMode(opt.value)}
+            className={`flex-1 px-3 py-2 rounded border text-sm font-medium transition-colors ${
+              mode === opt.value
+                ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300 dark:hover:border-gray-500 hover:bg-gray-50 dark:hover:bg-gray-700'
+            }`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }
@@ -186,11 +227,6 @@ export default function Settings() {
   const [tokenToggleMsg, setTokenToggleMsg] = useState('')
 
   // --- Unsaved-changes guard ---------------------------------------------
-  // A field is dirty only when its override state is set AND differs from the
-  // loaded value (so changing a field then changing it back clears dirty, and
-  // a successful save — which reloads `data` — also clears it). Only the
-  // Save-gated fields are tracked; the auto-sync and debug toggles persist
-  // immediately and are intentionally excluded.
   const isDirty = !!data && (
     (weightDir != null && weightDir !== data.weight_sync_direction) ||
     (weightPolicy != null && weightPolicy !== data.weight_conflict_policy) ||
@@ -206,13 +242,11 @@ export default function Settings() {
     (syncIntervalMinutes != null && syncIntervalMinutes !== Math.round(data.sync_interval_seconds / 60)) ||
     (syncLogRetentionDays != null && syncLogRetentionDays !== data.sync_log_retention_days) ||
     (variantParentMode != null && variantParentMode !== data.variant_parent_mode) ||
-    // Container marker dirty check: marker text or enabled toggle changed
     (containerMarkerEnabled != null && containerMarkerEnabled !== (data.container_parent_marker !== '')) ||
     (containerMarkerText != null && containerMarkerEnabled !== false &&
       containerMarkerText !== data.container_parent_marker)
   )
 
-  // Block in-app navigation (clicking a nav link) while there are unsaved changes.
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
       isDirty && currentLocation.pathname !== nextLocation.pathname,
@@ -227,7 +261,6 @@ export default function Settings() {
     }
   }, [blocker])
 
-  // Block browser-level navigation (refresh, tab close, external link).
   useEffect(() => {
     if (!isDirty) return
     const handler = (e: BeforeUnloadEvent) => {
@@ -238,13 +271,12 @@ export default function Settings() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [isDirty])
 
-  // Load auth status for security section visibility
   useEffect(() => {
     getAuthStatus().then(s => setAuthEnabled(s.auth_enabled)).catch(() => {})
   }, [])
 
-  if (loading) return <div className="p-8 text-gray-500">Loading…</div>
-  if (error) return <div className="p-8 text-red-600">{error}</div>
+  if (loading) return <div className="p-8 text-gray-500 dark:text-gray-400">Loading…</div>
+  if (error) return <div className="p-8 text-red-600 dark:text-red-400">{error}</div>
   if (!data) return null
 
   const wDir = weightDir ?? data.weight_sync_direction
@@ -259,7 +291,6 @@ export default function Settings() {
   const vcolorkw = colorKeywords ?? data.opentag_color_keywords ?? ''
   const neverEmpties = neverImportEmpties ?? data.never_import_empties
 
-  // Convert stored seconds → minutes for display; fall back to data value
   const effectiveIntervalMinutes = syncIntervalMinutes ?? Math.round(data.sync_interval_seconds / 60)
   const effectiveRetentionDays = syncLogRetentionDays ?? data.sync_log_retention_days
   const showIntervalWarning = effectiveIntervalMinutes > 5
@@ -267,11 +298,9 @@ export default function Settings() {
   const effectiveVariantParentMode = variantParentMode ?? data.variant_parent_mode
   const effectiveDebugMode = debugMode ?? data.debug_mode
 
-  // Container marker: effective values
   const savedMarker = data.container_parent_marker
   const effectiveMarkerEnabled = containerMarkerEnabled ?? (savedMarker !== '')
   const effectiveMarkerText = containerMarkerText ?? (savedMarker !== '' ? savedMarker : '(Master)')
-  // What will be sent on Save: if checkbox is off → empty string; else → the text
   const effectiveMarkerValue = effectiveMarkerEnabled ? effectiveMarkerText : ''
 
   async function handleDebugModeToggle() {
@@ -346,7 +375,6 @@ export default function Settings() {
 
   async function handleAutoSyncToggle() {
     if (data.auto_sync_enabled) {
-      // Disabling is immediate — no dialog required
       setTogglingAutoSync(true)
       setAutoSyncMsg('')
       try {
@@ -359,7 +387,6 @@ export default function Settings() {
         setTogglingAutoSync(false)
       }
     } else {
-      // Enabling is gated behind the backup safety dialog
       setShowAutoSyncBackupDialog(true)
     }
   }
@@ -424,7 +451,6 @@ export default function Settings() {
         variant_line_keywords: variantKeywords ?? undefined,
         opentag_vendor_aliases: vendorAliases ?? undefined,
         opentag_color_keywords: colorKeywords ?? undefined,
-        // Convert minutes → seconds for the API; only send if user changed it
         sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
         never_import_empties: neverImportEmpties ?? undefined,
@@ -479,6 +505,15 @@ export default function Settings() {
     }
   }
 
+  // Shared class fragments
+  const inputCls = 'border border-gray-300 dark:border-gray-600 rounded px-2 py-1 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400'
+  const cardCls = 'bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5'
+  const dividerCls = 'border-t border-gray-100 dark:border-gray-700'
+  const labelCls = 'text-sm font-medium text-gray-700 dark:text-gray-300'
+  const subTextCls = 'text-xs text-gray-400 dark:text-gray-500'
+  const toggleOnCls = 'bg-indigo-600'
+  const toggleOffCls = 'bg-gray-200 dark:bg-gray-600'
+
   return (
     <>
     <BackupSafetyDialog
@@ -494,17 +529,20 @@ export default function Settings() {
       onProceed={() => { setShowClearRefsDialog(false); void doClearRefs() }}
     />
     <div className="p-8 space-y-6 max-w-2xl">
-      <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
+
+      {/* Appearance */}
+      <AppearanceSection />
 
       {/* Scheduler & Logs */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700 mb-1">Scheduler &amp; Logs</h2>
+      <div className={`${cardCls} space-y-3`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Scheduler &amp; Logs</h2>
 
         {/* Auto-sync toggle */}
         <div className="flex items-center justify-between py-2">
           <div>
-            <span className="text-sm font-medium text-gray-700">Auto-sync enabled</span>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <span className={labelCls}>Auto-sync enabled</span>
+            <p className={`${subTextCls} mt-0.5`}>
               Requires the setup wizard to be completed first.
             </p>
           </div>
@@ -512,8 +550,8 @@ export default function Settings() {
             type="button"
             onClick={() => void handleAutoSyncToggle()}
             disabled={togglingAutoSync}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-              data.auto_sync_enabled ? 'bg-indigo-600' : 'bg-gray-200'
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed ${
+              data.auto_sync_enabled ? toggleOnCls : toggleOffCls
             }`}
             aria-pressed={data.auto_sync_enabled}
           >
@@ -524,62 +562,61 @@ export default function Settings() {
             />
           </button>
         </div>
-        {autoSyncMsg && <p className="text-xs text-gray-600">{autoSyncMsg}</p>}
+        {autoSyncMsg && <p className={`text-xs text-gray-600 dark:text-gray-300`}>{autoSyncMsg}</p>}
 
         {/* Sync interval */}
-        <div className="flex flex-col gap-1 py-2 border-t border-gray-100">
+        <div className={`flex flex-col gap-1 py-2 ${dividerCls}`}>
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-gray-700">Sync interval (minutes)</span>
+            <span className={labelCls}>Sync interval (minutes)</span>
             <input
               type="number"
               min="1"
               step="1"
               value={effectiveIntervalMinutes}
               onChange={e => setSyncIntervalMinutes(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className={`w-24 ${inputCls} text-right`}
             />
           </div>
           {showIntervalWarning && (
-            <p className="text-xs text-amber-600">
+            <p className="text-xs text-amber-600 dark:text-amber-400">
               Longer intervals give both systems more time to change the same record between
               syncs, raising the chance of merge conflicts.
             </p>
           )}
-          <p className="text-xs text-gray-400">
+          <p className={subTextCls}>
             Minimum 30 seconds (0.5 min). Takes effect immediately without a restart.
           </p>
         </div>
 
         {/* Sync-log retention */}
-        <div className="flex flex-col gap-1 py-2 border-t border-gray-100">
+        <div className={`flex flex-col gap-1 py-2 ${dividerCls}`}>
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium text-gray-700">Sync-log retention (days)</span>
+            <span className={labelCls}>Sync-log retention (days)</span>
             <input
               type="number"
               min="0"
               step="1"
               value={effectiveRetentionDays}
               onChange={e => setSyncLogRetentionDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
-              className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className={`w-24 ${inputCls} text-right`}
             />
           </div>
-          <p className="text-xs text-gray-400">
+          <p className={subTextCls}>
             Old sync-log rows are pruned at the start of each auto-sync cycle. Set to 0 to keep
             all entries forever.
           </p>
         </div>
 
-        {/* Application logs note */}
-        <p className="text-xs text-gray-400 border-t border-gray-100 pt-3">
+        <p className={`${subTextCls} ${dividerCls} pt-3`}>
           Application logs go to the container&apos;s stdout — rotation is handled by your Docker
           logging driver.
         </p>
       </div>
 
       {/* Weight sync */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Weight sync</h2>
-        <p className="text-xs text-gray-400 mb-3">
+      <div className={`${cardCls} space-y-1`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Weight sync</h2>
+        <p className={`${subTextCls} mb-3`}>
           Controls which direction weight changes flow and what happens when both
           sides change between syncs.
         </p>
@@ -588,7 +625,6 @@ export default function Settings() {
           value={wDir}
           onChange={v => {
             setWeightDir(v)
-            // Reset policy to manual when leaving two_way (policy is irrelevant in one-way)
             if (v !== 'two_way') setWeightPolicy('manual')
           }}
         />
@@ -600,9 +636,9 @@ export default function Settings() {
       </div>
 
       {/* Material properties sync */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Material properties sync</h2>
-        <p className="text-xs text-gray-400 mb-3">
+      <div className={`${cardCls} space-y-1`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Material properties sync</h2>
+        <p className={`${subTextCls} mb-3`}>
           Controls direction for field sync, multicolor/color, density, diameter,
           temperatures, and cost.
         </p>
@@ -622,9 +658,9 @@ export default function Settings() {
       </div>
 
       {/* New spools */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">New spools</h2>
-        <p className="text-xs text-gray-400 mb-3">
+      <div className={`${cardCls} space-y-1`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">New spools</h2>
+        <p className={`${subTextCls} mb-3`}>
           Controls which newly-detected unmapped spools are automatically created in the
           other system. Two-way creates in both directions (default behavior).
         </p>
@@ -633,18 +669,18 @@ export default function Settings() {
           value={nsDir}
           onChange={v => setNewSpoolDir(v)}
         />
-        <div className="flex items-start justify-between py-3 border-t border-gray-100">
+        <div className={`flex items-start justify-between py-3 ${dividerCls}`}>
           <div>
-            <span className="text-sm font-medium text-gray-700">Never import empties</span>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <span className={labelCls}>Never import empties</span>
+            <p className={`${subTextCls} mt-0.5`}>
               Empty/depleted spools are skipped on import; the filament definition is still imported.
             </p>
           </div>
           <button
             type="button"
             onClick={() => setNeverImportEmpties(!neverEmpties)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ml-4 mt-0.5 ${
-              neverEmpties ? 'bg-indigo-600' : 'bg-gray-200'
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ml-4 mt-0.5 ${
+              neverEmpties ? toggleOnCls : toggleOffCls
             }`}
             aria-pressed={neverEmpties}
           >
@@ -658,19 +694,23 @@ export default function Settings() {
       </div>
 
       {/* Variant parent mode */}
-      <div className={`bg-white rounded-lg border p-5 space-y-3 ${effectiveVariantParentMode === 'unset' ? 'border-amber-400' : 'border-gray-200'}`}>
+      <div className={`bg-white dark:bg-gray-800 rounded-lg border p-5 space-y-3 ${
+        effectiveVariantParentMode === 'unset'
+          ? 'border-amber-400 dark:border-amber-600'
+          : 'border-gray-200 dark:border-gray-700'
+      }`}>
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">Variant parent mode</h2>
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Variant parent mode</h2>
           {effectiveVariantParentMode === 'unset' && (
-            <span className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-300 rounded px-2 py-0.5">
+            <span className="text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded px-2 py-0.5">
               Choose a mode before running the wizard
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-gray-500 dark:text-gray-400">
           Controls how the Bulk Import Wizard builds the parent/variant structure in Filament DB
           from flat Spoolman filaments.{' '}
-          <a href="/docs/variant-parent-mode" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
+          <a href="/docs/variant-parent-mode" target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 hover:underline">
             Read the details
           </a>
         </p>
@@ -683,13 +723,13 @@ export default function Settings() {
                 value={mode}
                 checked={effectiveVariantParentMode === mode}
                 onChange={() => setVariantParentModeState(mode)}
-                className="mt-0.5 h-4 w-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                className="mt-0.5 h-4 w-4 text-indigo-600 border-gray-300 dark:border-gray-600 focus:ring-indigo-500"
               />
               <div>
-                <span className="text-sm font-medium text-gray-700">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                   {mode === 'promote_color' ? 'Promote a color to parent' : 'Generic container parent'}
                 </span>
-                <p className="text-xs text-gray-400 mt-0.5">
+                <p className={`${subTextCls} mt-0.5`}>
                   {mode === 'promote_color'
                     ? 'One color is promoted as the Filament DB parent; the others become variants. Matches the wizard\'s original behavior.'
                     : 'A colorless container is created for every group (even single-color). All colors are variants under it. Uniform structure — every color is always a child.'}
@@ -699,14 +739,14 @@ export default function Settings() {
           ))}
         </div>
         {effectiveVariantParentMode === 'unset' && (
-          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
+          <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded p-2">
             The Bulk Import Wizard (Spoolman &rarr; Filament DB direction) will not run until you
             choose a mode and save.
           </p>
         )}
 
         {effectiveVariantParentMode === 'generic_container' && (
-          <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
+          <div className={`mt-3 pt-3 ${dividerCls} space-y-2`}>
             <div className="flex items-center gap-3">
               <input
                 type="checkbox"
@@ -718,9 +758,9 @@ export default function Settings() {
                     setContainerMarkerText('(Master)')
                   }
                 }}
-                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
               />
-              <label htmlFor="container-marker-enabled" className="text-sm font-medium text-gray-700 cursor-pointer">
+              <label htmlFor="container-marker-enabled" className={`${labelCls} cursor-pointer`}>
                 Append a marker to container parent names
               </label>
             </div>
@@ -731,16 +771,16 @@ export default function Settings() {
                   value={effectiveMarkerText}
                   onChange={e => setContainerMarkerText(e.target.value)}
                   placeholder="(Master)"
-                  className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 w-48"
+                  className={`${inputCls} w-48`}
                 />
-                <p className="text-xs text-gray-400">
+                <p className={subTextCls}>
                   Keeps container names distinct from their color variants (e.g. "ELEGOO PLA {effectiveMarkerText}").
                   On a name collision you can rename or skip per-record at Preview.
                 </p>
               </div>
             )}
             {!effectiveMarkerEnabled && (
-              <p className="pl-7 text-xs text-gray-400">
+              <p className={`pl-7 ${subTextCls}`}>
                 Containers will have no suffix (e.g. "ELEGOO PLA"). If a collision occurs you can
                 rename or skip per-record at the Preview step.
               </p>
@@ -750,73 +790,73 @@ export default function Settings() {
       </div>
 
       {/* Other settings */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-1">
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">Other settings</h2>
+      <div className={`${cardCls} space-y-1`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Other settings</h2>
         <div className="flex items-center justify-between py-3">
-          <span className="text-sm font-medium text-gray-700">Weight sync threshold (g)</span>
+          <span className={labelCls}>Weight sync threshold (g)</span>
           <input
             type="number"
             min="0.1"
             step="0.5"
             value={thresh}
             onChange={e => setThreshold(e.target.value)}
-            className="w-24 border border-gray-300 rounded px-2 py-1 text-sm text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className={`w-24 ${inputCls} text-right`}
           />
         </div>
         <div className="flex items-center justify-between py-3">
-          <span className="text-sm font-medium text-gray-700">Weight precision (decimal places)</span>
+          <span className={labelCls}>Weight precision (decimal places)</span>
           <select
             value={prec}
             onChange={e => setPrecision(Number(e.target.value))}
-            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className={inputCls}
           >
             {[0, 1, 2, 3, 4].map(n => (
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
         </div>
-        <div className="flex flex-col gap-1 py-3 border-b border-gray-100">
-          <span className="text-sm font-medium text-gray-700">Variant line keywords</span>
+        <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
+          <span className={labelCls}>Variant line keywords</span>
           <input
             type="text"
             value={vkw}
             onChange={e => setVariantKeywords(e.target.value)}
             placeholder="silk, matte, rapid, …"
-            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className={inputCls}
           />
-          <span className="text-xs text-gray-400">
-            Words that mark a distinct variant line, e.g. <code>silk, matte, rapid</code>.
+          <span className={subTextCls}>
+            Words that mark a distinct variant line, e.g. <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">silk, matte, rapid</code>.
             Filaments whose names contain different keywords won't be grouped together.
           </span>
         </div>
-        <div className="flex flex-col gap-1 py-3 border-b border-gray-100">
-          <span className="text-sm font-medium text-gray-700">Manufacturer mappings (Spoolman → OpenTag)</span>
+        <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
+          <span className={labelCls}>Manufacturer mappings (Spoolman → OpenTag)</span>
           <input
             type="text"
             value={valiases}
             onChange={e => setVendorAliases(e.target.value)}
             placeholder="prusa=prusament, polyterra=polymaker"
-            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className={inputCls}
           />
-          <span className="text-xs text-gray-400">
+          <span className={subTextCls}>
             Maps Spoolman vendor names to OpenTag brand names for the OpenTag cleanup matcher,
-            e.g. <code>prusa=prusament, polyterra=polymaker</code>. Required when the vendor
+            e.g. <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">prusa=prusament, polyterra=polymaker</code>. Required when the vendor
             name in Spoolman differs from the brand name used in OpenTag.
           </span>
         </div>
-        <div className="flex flex-col gap-1 py-3 border-b border-gray-100">
-          <span className="text-sm font-medium text-gray-700">Color word mappings (OpenTag matcher)</span>
+        <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
+          <span className={labelCls}>Color word mappings (OpenTag matcher)</span>
           <input
             type="text"
             value={vcolorkw}
             onChange={e => setColorKeywords(e.target.value)}
             placeholder="galaxy=black, cool=grey, jet=black"
-            className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className={inputCls}
           />
-          <span className="text-xs text-gray-400">
+          <span className={subTextCls}>
             Maps color/marketing words to canonical base colors so "Jet Black" and "Galaxy Black"
-            both reduce to "black" for matching. Format: <code>keyword=base_color</code>, e.g.{' '}
-            <code>galaxy=black, cool=grey</code>. Merged on top of built-in defaults — leave blank
+            both reduce to "black" for matching. Format: <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">keyword=base_color</code>, e.g.{' '}
+            <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">galaxy=black, cool=grey</code>. Merged on top of built-in defaults — leave blank
             to use defaults only.
           </span>
         </div>
@@ -829,23 +869,23 @@ export default function Settings() {
             {saving ? 'Saving…' : 'Save'}
           </button>
           {isDirty && !saving && (
-            <span className="text-xs font-medium text-amber-600">Unsaved changes</span>
+            <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Unsaved changes</span>
           )}
-          {saveMsg && <span className="text-sm text-gray-600">{saveMsg}</span>}
+          {saveMsg && <span className="text-sm text-gray-600 dark:text-gray-300">{saveMsg}</span>}
         </div>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700">Backup</h2>
+      <div className={`${cardCls} space-y-3`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Backup</h2>
         <div className="flex gap-3 flex-wrap items-center">
           <button
             onClick={handleExport}
             disabled={exporting}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+            className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
           >
             {exporting ? 'Exporting…' : 'Download backup'}
           </button>
-          <label className="px-4 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 cursor-pointer">
+          <label className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 cursor-pointer">
             {importing ? 'Importing…' : 'Import backup'}
             <input
               ref={fileRef}
@@ -857,45 +897,45 @@ export default function Settings() {
             />
           </label>
         </div>
-        {importMsg && <p className="text-sm text-gray-600">{importMsg}</p>}
+        {importMsg && <p className="text-sm text-gray-600 dark:text-gray-300">{importMsg}</p>}
       </div>
 
-      <div className="bg-gray-50 rounded-lg border border-gray-200 p-5 text-sm text-gray-500 space-y-1">
-        <p>Wizard completed: <strong>{data.wizard_completed ? 'Yes' : 'No'}</strong></p>
+      <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 p-5 text-sm text-gray-500 dark:text-gray-400 space-y-1">
+        <p>Wizard completed: <strong className="text-gray-700 dark:text-gray-300">{data.wizard_completed ? 'Yes' : 'No'}</strong></p>
         {data.import_direction && (
-          <p>Import direction: <strong>{data.import_direction}</strong></p>
+          <p>Import direction: <strong className="text-gray-700 dark:text-gray-300">{data.import_direction}</strong></p>
         )}
       </div>
 
       {/* Security — only shown when AUTH_ENABLED=true */}
       {authEnabled && (
-        <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
-          <h2 className="text-sm font-semibold text-gray-700">Security</h2>
+        <div className={`${cardCls} space-y-4`}>
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Security</h2>
 
           {/* Change password */}
-          <div className="space-y-2 pb-4 border-b border-gray-100">
-            <h3 className="text-sm font-medium text-gray-700">Change password</h3>
+          <div className={`space-y-2 pb-4 ${dividerCls}`}>
+            <h3 className={`text-sm font-medium text-gray-700 dark:text-gray-300`}>Change password</h3>
             <div className="space-y-2 max-w-xs">
               <input
                 type="password"
                 placeholder="Current password"
                 value={currentPw}
                 onChange={e => setCurrentPw(e.target.value)}
-                className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className={`w-full ${inputCls}`}
               />
               <input
                 type="password"
                 placeholder="New password"
                 value={newPw}
                 onChange={e => setNewPw(e.target.value)}
-                className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className={`w-full ${inputCls}`}
               />
               <input
                 type="password"
                 placeholder="Confirm new password"
                 value={confirmPw}
                 onChange={e => setConfirmPw(e.target.value)}
-                className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className={`w-full ${inputCls}`}
               />
               <button
                 type="button"
@@ -905,28 +945,28 @@ export default function Settings() {
               >
                 {changingPw ? 'Saving…' : 'Change password'}
               </button>
-              {changePwMsg && <p className="text-xs text-gray-600">{changePwMsg}</p>}
+              {changePwMsg && <p className="text-xs text-gray-600 dark:text-gray-300">{changePwMsg}</p>}
             </div>
           </div>
 
           {/* API token */}
           <div className="space-y-2">
-            <h3 className="text-sm font-medium text-gray-700">API token</h3>
-            <p className="text-xs text-gray-400">
-              Enables machine access via <code>Authorization: Bearer &lt;token&gt;</code> or{' '}
-              <code>X-API-Key: &lt;token&gt;</code>. Only enable if you have an integration that needs it.
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">API token</h3>
+            <p className={subTextCls}>
+              Enables machine access via <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">Authorization: Bearer &lt;token&gt;</code> or{' '}
+              <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">X-API-Key: &lt;token&gt;</code>. Only enable if you have an integration that needs it.
             </p>
 
             {/* Enable/disable toggle */}
             <div className="flex items-center justify-between py-1">
-              <span className="text-sm text-gray-700">Token authentication enabled</span>
+              <span className="text-sm text-gray-700 dark:text-gray-300">Token authentication enabled</span>
               <button
                 type="button"
                 onClick={() => void handleTokenToggle()}
                 disabled={togglingToken || !data.api_token}
                 title={!data.api_token ? 'Generate a token first' : undefined}
-                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                  data.api_token_enabled ? 'bg-indigo-600' : 'bg-gray-200'
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  data.api_token_enabled ? toggleOnCls : toggleOffCls
                 }`}
                 aria-pressed={data.api_token_enabled}
               >
@@ -937,25 +977,25 @@ export default function Settings() {
                 />
               </button>
             </div>
-            {tokenToggleMsg && <p className="text-xs text-gray-600">{tokenToggleMsg}</p>}
+            {tokenToggleMsg && <p className="text-xs text-gray-600 dark:text-gray-300">{tokenToggleMsg}</p>}
 
             {/* Token display */}
             {data.api_token && (
               <div className="flex items-center gap-2 mt-1">
-                <code className="text-xs bg-gray-100 border border-gray-200 rounded px-2 py-1 font-mono break-all">
+                <code className="text-xs bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded px-2 py-1 font-mono break-all text-gray-800 dark:text-gray-200">
                   {tokenVisible ? data.api_token : '••••••••••••••••••••'}
                 </code>
                 <button
                   type="button"
                   onClick={() => setTokenVisible(v => !v)}
-                  className="text-xs text-indigo-600 hover:underline whitespace-nowrap"
+                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline whitespace-nowrap"
                 >
                   {tokenVisible ? 'Hide' : 'Show'}
                 </button>
                 <button
                   type="button"
                   onClick={() => { void navigator.clipboard.writeText(data.api_token ?? '') }}
-                  className="text-xs text-indigo-600 hover:underline whitespace-nowrap"
+                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline whitespace-nowrap"
                 >
                   Copy
                 </button>
@@ -966,30 +1006,30 @@ export default function Settings() {
               type="button"
               onClick={() => void handleRegenerateToken()}
               disabled={regeneratingToken}
-              className="px-4 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 disabled:opacity-50 mt-1"
+              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 mt-1"
             >
               {regeneratingToken ? 'Generating…' : data.api_token ? 'Regenerate token' : 'Generate token'}
             </button>
-            {tokenMsg && <p className="text-xs text-gray-600">{tokenMsg}</p>}
+            {tokenMsg && <p className="text-xs text-gray-600 dark:text-gray-300">{tokenMsg}</p>}
           </div>
         </div>
       )}
 
       {/* Debug mode */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-gray-700">Debug mode</h2>
-        <p className="text-xs text-gray-400">
+      <div className={`${cardCls} space-y-3`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Debug mode</h2>
+        <p className={subTextCls}>
           For development and testing only. Enables destructive reset tools below.
           Never enable in production.
         </p>
         <div className="flex items-center justify-between py-2">
-          <span className="text-sm font-medium text-gray-700">Debug mode enabled</span>
+          <span className={labelCls}>Debug mode enabled</span>
           <button
             type="button"
             onClick={() => void handleDebugModeToggle()}
             disabled={togglingDebugMode}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-              effectiveDebugMode ? 'bg-indigo-600' : 'bg-gray-200'
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed ${
+              effectiveDebugMode ? toggleOnCls : toggleOffCls
             }`}
             aria-pressed={effectiveDebugMode}
           >
@@ -1002,21 +1042,22 @@ export default function Settings() {
         </div>
 
         {effectiveDebugMode && (
-          <div className="rounded-lg border-2 border-red-300 bg-red-50 p-4 space-y-4 mt-2">
-            <h3 className="text-sm font-semibold text-red-700">Danger zone</h3>
-            <p className="text-xs text-red-600">
+          <div className="rounded-lg border-2 border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 p-4 space-y-4 mt-2">
+            <h3 className="text-sm font-semibold text-red-700 dark:text-red-400">Danger zone</h3>
+            <p className="text-xs text-red-600 dark:text-red-400">
               These actions are irreversible. Use only during testing with a wiped or
               disposable dataset.
             </p>
 
             {/* Clear Spoolman FDB refs */}
             <div className="space-y-2">
-              <p className="text-sm font-medium text-gray-800">
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
                 Clear Filament DB references from Spoolman
               </p>
-              <p className="text-xs text-gray-500">
-                Blanks <code>filamentdb_id</code>, <code>filamentdb_spool_id</code>, and{' '}
-                <code>filamentdb_parent_id</code> on every Spoolman spool that has any of them
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Blanks <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_id</code>,{' '}
+                <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_spool_id</code>, and{' '}
+                <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_parent_id</code> on every Spoolman spool that has any of them
                 set. Writes to Spoolman — irreversible.
               </p>
               <button
@@ -1028,16 +1069,16 @@ export default function Settings() {
                 {clearingRefs ? 'Clearing…' : 'Clear Filament DB references from Spoolman'}
               </button>
               {clearRefsMsg && (
-                <p className="text-xs text-gray-700">{clearRefsMsg}</p>
+                <p className="text-xs text-gray-700 dark:text-gray-300">{clearRefsMsg}</p>
               )}
             </div>
 
             {/* Reset bridge state */}
-            <div className="space-y-2 border-t border-red-200 pt-4">
-              <p className="text-sm font-medium text-gray-800">
+            <div className={`space-y-2 border-t border-red-200 dark:border-red-800 pt-4`}>
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
                 Reset bridge sync state
               </p>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
                 Clears the bridge's mappings, snapshots, conflicts, and sync log — does NOT
                 touch Spoolman or Filament DB. Also resets the setup wizard so it can be
                 re-run from scratch.
@@ -1051,7 +1092,7 @@ export default function Settings() {
                 {resettingState ? 'Resetting…' : 'Reset bridge sync state'}
               </button>
               {resetStateMsg && (
-                <p className="text-xs text-gray-700">{resetStateMsg}</p>
+                <p className="text-xs text-gray-700 dark:text-gray-300">{resetStateMsg}</p>
               )}
             </div>
           </div>

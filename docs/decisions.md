@@ -1,5 +1,37 @@
 # Decision record
 
+## 2026-06-09 — Light/dark/system theme infrastructure
+
+### A — localStorage-only persistence, no backend config entry
+
+Theme preference is stored in `localStorage` key `fb_theme` (values `'light'|'dark'|'system'`).
+Not persisted to the backend `BridgeConfig` table. Rationale: theme is a per-browser/per-device
+UI preference, not a server-side setting. Multiple browsers visiting the same instance can
+independently choose their own theme without conflict.
+
+### B — Pre-paint inline script in index.html
+
+A short inline `<script>` in `index.html` `<head>` reads `localStorage('fb_theme')` and
+immediately adds the `dark` class to `<html>` (and sets `color-scheme`) before any React
+code executes. This prevents the white-flash-on-dark-OS-preference problem that would occur
+if theme was applied only after React hydrates. The script mirrors the logic in
+`ThemeContext.tsx:applyTheme()`.
+
+### C — Three-mode system: `light` | `dark` | `system`
+
+`system` (the default) tracks `window.matchMedia('(prefers-color-scheme: dark)')` via an
+`addEventListener('change')` listener attached in `ThemeProvider`. When the OS switches
+(e.g. auto-dark at sunset), the UI follows without a page reload.
+
+### D — Incremental dark-polish for large Wizard files
+
+Step3Matches (687 lines), StepVariances (1301 lines), StepNPreview (548 lines), and
+OpenTagCleanup (1215 lines) received outer structural dark polish only (loading states,
+error banners, headings, action bars, outer container cards, table chrome). Inner
+sub-components (`MemberRow`, `StatusPill`, `FTag`, `OptBadge`, `FilamentCard`,
+`FieldReviewRow`, `GroupSection`, plan-detail and flag-section internals) are left for
+a follow-up task. The primary surfaces and shared chrome are fully dark-correct.
+
 ## 2026-06-09 — Version display, GitHub update check, dev channel marker
 
 ### A — Backend-proxied GitHub release check, cached 6 h

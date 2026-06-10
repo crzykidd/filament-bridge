@@ -11,6 +11,16 @@ GitHub release.
 
 ### Added
 
+- **Light/dark/system theme** — the UI now supports three color modes: Light, Dark, and System
+  (tracks OS preference; default). Choice persists in `localStorage` (`fb_theme`). A pre-paint
+  inline script in `index.html` applies the theme class before React loads, preventing any
+  white flash. An "Appearance" section at the top of Settings exposes the three-way segmented
+  control; a compact three-button toggle (☀/⊙/☾) also appears at the bottom of the sidebar.
+  Dark styling covers the shared chrome (Layout, sidebar, modals) and all primary pages
+  (Dashboard, Conflicts, SyncedRecords, SyncLog, Settings, Login) plus Wizard steps 1, 2, and 6.
+  Inner sub-components of the larger Wizard steps and OpenTagCleanup are partially polished and
+  will be completed incrementally.
+
 - **Version badge + GitHub update check + release-notes popup** — the sidebar now
   shows the current version (with a `-dev+<sha>` suffix on dev builds) linking to
   its GitHub release. When a newer release is detected on GitHub (checked server-side,

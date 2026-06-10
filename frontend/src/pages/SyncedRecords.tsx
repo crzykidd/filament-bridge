@@ -52,7 +52,7 @@ export default function SyncedRecords() {
 
   return (
     <div className="p-8 space-y-4">
-      <h1 className="text-2xl font-bold text-gray-900">Synced Records</h1>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Synced Records</h1>
 
       <div className="flex gap-3 flex-wrap items-center">
         <input
@@ -60,7 +60,7 @@ export default function SyncedRecords() {
           placeholder="Search name / vendor / color…"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="border border-gray-300 rounded px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className="border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm w-64 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-400"
         />
         <div className="flex gap-1">
           {STATUS_OPTIONS.map(opt => (
@@ -70,49 +70,49 @@ export default function SyncedRecords() {
               className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
                 statusFilter === opt.value
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               {opt.label}
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none ml-2">
+        <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer select-none ml-2">
           <input
             type="checkbox"
             checked={hideEmpty}
             onChange={e => setHideEmpty(e.target.checked)}
-            className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400"
+            className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-400"
           />
           Hide empty spools
         </label>
       </div>
 
-      {loading && <p className="text-gray-500">Loading…</p>}
-      {error && <p className="text-red-600">{error}</p>}
+      {loading && <p className="text-gray-500 dark:text-gray-400">Loading…</p>}
+      {error && <p className="text-red-600 dark:text-red-400">{error}</p>}
 
       {!loading && !error && (
-        <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
+        <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+            <thead className="bg-gray-50 dark:bg-gray-750">
               <tr>
                 {['Name', 'Vendor', 'Color', 'SM weight', 'FDB weight', 'Status', 'Last synced', 'Links'].map(h => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                     {h}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-6 text-center text-gray-400">{emptyMessage}</td>
+                  <td colSpan={8} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">{emptyMessage}</td>
                 </tr>
               )}
               {rows.map(row => (
-                <tr key={row.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{row.name ?? '—'}</td>
-                  <td className="px-4 py-3 text-gray-600">{row.vendor ?? '—'}</td>
+                <tr key={row.id} className="hover:bg-gray-50 dark:hover:bg-gray-750">
+                  <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{row.name ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.vendor ?? '—'}</td>
                   <td className="px-4 py-3">
                     <ColorDisplay
                       colorHex={row.color}
@@ -121,8 +121,8 @@ export default function SyncedRecords() {
                       showLabel
                     />
                   </td>
-                  <td className="px-4 py-3 text-gray-600">{fmtWeight(row.spoolman_weight, '(net)')}</td>
-                  <td className="px-4 py-3 text-gray-600">{fmtWeight(row.filamentdb_weight, '(gross)')}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtWeight(row.spoolman_weight, '(net)')}</td>
+                  <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtWeight(row.filamentdb_weight, '(gross)')}</td>
                   <td className="px-4 py-3">
                     {row.status === 'conflict' ? (
                       <Link
@@ -136,7 +136,7 @@ export default function SyncedRecords() {
                       <StatusBadge status={row.status} />
                     )}
                   </td>
-                  <td className="px-4 py-3 text-gray-500">{formatLocal(row.last_synced)}</td>
+                  <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatLocal(row.last_synced)}</td>
                   <td className="px-4 py-3">
                     <DeepLinks
                       filamentdbFilamentId={row.filamentdb_filament_id}

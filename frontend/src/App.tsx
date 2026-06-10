@@ -18,6 +18,7 @@ import { WizardShell } from './pages/Wizard'
 import Login from './pages/Login'
 import { getAuthStatus, register401Handler } from './api/client'
 import type { AuthStatusResponse } from './api/types'
+import { ThemeProvider } from './context/ThemeContext'
 
 // Data router (createBrowserRouter) is required so pages can use `useBlocker`
 // (e.g. Settings' unsaved-changes guard). The classic <BrowserRouter> component
@@ -64,26 +65,32 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <span className="text-gray-400 text-sm">Loading…</span>
-      </div>
+      <ThemeProvider>
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+          <span className="text-gray-400 dark:text-gray-500 text-sm">Loading…</span>
+        </div>
+      </ThemeProvider>
     )
   }
 
   // Show setup/login when auth is enabled and user is not authenticated
   if (authStatus && authStatus.auth_enabled && !authStatus.authenticated) {
     return (
-      <Login
-        passwordSet={authStatus.password_set}
-        onAuthenticated={() => void checkAuth()}
-      />
+      <ThemeProvider>
+        <Login
+          passwordSet={authStatus.password_set}
+          onAuthenticated={() => void checkAuth()}
+        />
+      </ThemeProvider>
     )
   }
 
   // DeepLinkProvider uses no router hooks, so it can wrap the RouterProvider.
   return (
-    <DeepLinkProvider>
-      <RouterProvider router={router} />
-    </DeepLinkProvider>
+    <ThemeProvider>
+      <DeepLinkProvider>
+        <RouterProvider router={router} />
+      </DeepLinkProvider>
+    </ThemeProvider>
   )
 }

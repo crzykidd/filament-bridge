@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import { getHealth, authLogout, getAuthStatus, getVersionInfo } from '../api/client'
 import type { HealthResponse, VersionInfo } from '../api/types'
 import { RequiredSettingsGate } from './RequiredSettingsGate'
+import { useTheme } from '../context/ThemeContext'
+import type { ThemeMode } from '../context/ThemeContext'
 
 // ---------------------------------------------------------------------------
 // Helpers for release-notes dismissal (per-version, localStorage)
@@ -57,19 +59,19 @@ function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       onClick={handleBackdropClick}
     >
-      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 flex flex-col max-h-[80vh]">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full mx-4 flex flex-col max-h-[80vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
           <div>
-            <h2 className="text-base font-semibold text-gray-900">
+            <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
               {info.release_name ?? `v${info.latest}`}
             </h2>
-            <p className="text-xs text-gray-500 mt-0.5">filament-bridge update</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">filament-bridge update</p>
           </div>
           <button
             type="button"
             onClick={onDismiss}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none"
             aria-label="Close"
           >
             ×
@@ -78,21 +80,21 @@ function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
         {/* Body — release notes rendered as plain text (untrusted markdown from GitHub) */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {info.release_notes ? (
-            <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans leading-relaxed">
+            <pre className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300 font-sans leading-relaxed">
               {info.release_notes}
             </pre>
           ) : (
-            <p className="text-sm text-gray-500">No release notes available.</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">No release notes available.</p>
           )}
         </div>
         {/* Footer */}
-        <div className="px-5 py-3 border-t border-gray-200 flex items-center justify-between gap-3">
+        <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
           {info.release_url && (
             <a
               href={info.release_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-indigo-600 hover:underline"
+              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
             >
               Full release notes ↗
             </a>
@@ -179,6 +181,39 @@ function VersionBadge() {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Theme toggle — compact segmented control for the sidebar footer
+// ---------------------------------------------------------------------------
+
+const THEME_OPTIONS: { value: ThemeMode; label: string; title: string }[] = [
+  { value: 'light', label: '☀', title: 'Light' },
+  { value: 'system', label: '⊙', title: 'System' },
+  { value: 'dark', label: '☾', title: 'Dark' },
+]
+
+function SidebarThemeToggle() {
+  const { mode, setMode } = useTheme()
+  return (
+    <div className="flex rounded overflow-hidden border border-indigo-600" role="group" aria-label="Theme">
+      {THEME_OPTIONS.map(opt => (
+        <button
+          key={opt.value}
+          type="button"
+          title={opt.title}
+          onClick={() => setMode(opt.value)}
+          className={`flex-1 py-1 text-xs font-medium transition-colors ${
+            mode === opt.value
+              ? 'bg-indigo-600 text-white'
+              : 'text-indigo-300 hover:bg-indigo-700 hover:text-white'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', exact: true },
   { to: '/synced-records', label: 'Synced Records', exact: false },
@@ -228,10 +263,10 @@ export function Layout() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
       {/* Sidebar */}
-      <aside className="w-52 bg-indigo-800 flex flex-col shrink-0">
-        <div className="px-4 py-4 border-b border-indigo-700">
+      <aside className="w-52 bg-indigo-800 dark:bg-indigo-950 flex flex-col shrink-0">
+        <div className="px-4 py-4 border-b border-indigo-700 dark:border-indigo-800">
           <button
             onClick={() => navigate('/')}
             className="text-white font-bold text-sm leading-tight text-left w-full"
@@ -255,7 +290,7 @@ export function Layout() {
           ))}
         </nav>
         {/* Settings pinned at bottom, visually separated */}
-        <div className="px-2 pb-2 border-t border-indigo-700 pt-2">
+        <div className="px-2 pb-2 border-t border-indigo-700 dark:border-indigo-800 pt-2">
           <NavLink to="/settings" end={false} className={navClass}>
             Settings
           </NavLink>
@@ -272,7 +307,11 @@ export function Layout() {
             </button>
           </div>
         )}
-        <div className="px-4 py-3 border-t border-indigo-700 flex items-center gap-2">
+        {/* Theme toggle */}
+        <div className="px-3 pb-2">
+          <SidebarThemeToggle />
+        </div>
+        <div className="px-4 py-3 border-t border-indigo-700 dark:border-indigo-800 flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${statusDot}`} />
           <span className="text-indigo-200 text-xs">
             {health ? health.status : 'connecting…'}

@@ -50,8 +50,8 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
     })
   }
 
-  if (loading) return <p className="text-gray-500">Loading preview…</p>
-  if (error) return <p className="text-red-600">{error}</p>
+  if (loading) return <p className="text-gray-500 dark:text-gray-400">Loading preview…</p>
+  if (error) return <p className="text-red-600 dark:text-red-400">{error}</p>
   if (!data) return null
 
   const created = data.plan_rows.filter(r => r.action === 'created')
@@ -79,7 +79,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
   // Shared action bar — rendered at top and bottom of this long step
   const actionBar = (
     <div className="flex justify-between">
-      <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+      <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
         ← Back
       </button>
       <button onClick={next} className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
@@ -91,8 +91,8 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-800">Preview (dry run)</h2>
-        <p className="text-sm text-gray-500 mt-1">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Preview (dry run)</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           A read-only preview of what the initial sync would do. Nothing is written to either system.
         </p>
       </div>

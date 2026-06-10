@@ -28,14 +28,14 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-800">Import direction</h2>
-        <p className="text-sm text-gray-500 mt-1">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Import direction</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Choose which system's data is imported into the other during this run.
         </p>
       </div>
 
-      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-2">
-        <p className="text-sm font-semibold text-gray-700 mb-3">Initial import direction</p>
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5 space-y-2">
+        <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Initial import direction</p>
         <div className="grid grid-cols-2 gap-3">
           {([
             { value: 'spoolman', label: 'Spoolman → Filament DB', desc: 'Import Spoolman filaments/spools into Filament DB' },
@@ -46,28 +46,28 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
               onClick={() => setDirection(opt.value)}
               className={`text-left p-4 rounded-lg border-2 transition-colors ${
                 direction === opt.value
-                  ? 'border-indigo-600 bg-indigo-50'
-                  : 'border-gray-200 hover:border-gray-300'
+                  ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-900/20 dark:border-indigo-500'
+                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
               }`}
             >
-              <p className="font-medium text-sm">{opt.label}</p>
-              <p className="text-xs text-gray-500 mt-1">{opt.desc}</p>
+              <p className="font-medium text-sm text-gray-800 dark:text-gray-200">{opt.label}</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{opt.desc}</p>
             </button>
           ))}
         </div>
       </div>
 
-      <p className="text-sm text-gray-500">
+      <p className="text-sm text-gray-500 dark:text-gray-400">
         Ongoing source-of-truth settings (weight, material properties, new spools) are
-        configured in <strong>Settings</strong> and apply to all future sync cycles.
+        configured in <strong className="text-gray-700 dark:text-gray-300">Settings</strong> and apply to all future sync cycles.
         Empty/depleted spool behaviour is also controlled by the "Never import empties"
         toggle in Settings.
       </p>
 
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
 
       <div className="flex justify-between">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
           ← Back
         </button>
         <button

@@ -1,10 +1,10 @@
 import type { MappingStatus } from '../api/types'
 
 const MAPPING_STYLES: Record<MappingStatus, string> = {
-  in_sync: 'bg-green-100 text-green-800',
-  pending: 'bg-yellow-100 text-yellow-800',
-  conflict: 'bg-red-100 text-red-800',
-  unlinked: 'bg-gray-100 text-gray-600',
+  in_sync: 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400',
+  pending: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-400',
+  conflict: 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400',
+  unlinked: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
 }
 
 const MAPPING_LABELS: Record<MappingStatus, string> = {
@@ -25,9 +25,9 @@ export function StatusBadge({ status }: { status: MappingStatus }) {
 type SystemStatus = 'ok' | 'degraded' | 'error'
 
 const SYSTEM_STYLES: Record<SystemStatus, string> = {
-  ok: 'bg-green-100 text-green-800',
-  degraded: 'bg-yellow-100 text-yellow-800',
-  error: 'bg-red-100 text-red-800',
+  ok: 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400',
+  degraded: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-400',
+  error: 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400',
 }
 
 export function SystemStatusBadge({ status }: { status: SystemStatus }) {

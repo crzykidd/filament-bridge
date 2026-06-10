@@ -25,12 +25,12 @@ const TYPE_LABELS: Record<ConflictType, string> = {
 }
 
 const TYPE_BADGE_COLORS: Record<ConflictType, string> = {
-  deleted: 'bg-red-100 text-red-700',
-  new_spool_sm: 'bg-emerald-100 text-emerald-700',
-  new_spool_fdb: 'bg-blue-100 text-blue-700',
-  weight: 'bg-amber-100 text-amber-700',
-  multicolor: 'bg-purple-100 text-purple-700',
-  property: 'bg-gray-100 text-gray-600',
+  deleted: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
+  new_spool_sm: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400',
+  new_spool_fdb: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
+  weight: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  multicolor: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400',
+  property: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
 }
 
 const TYPE_ORDER: ConflictType[] = ['deleted', 'new_spool_sm', 'new_spool_fdb', 'weight', 'multicolor', 'property']
@@ -61,9 +61,9 @@ function deletedSideLabel(conflict: ConflictResponse): string {
 // ---------------------------------------------------------------------------
 
 function ValueDisplay({ value }: { value: unknown }) {
-  if (value == null) return <span className="text-gray-400">—</span>
+  if (value == null) return <span className="text-gray-400 dark:text-gray-500">—</span>
   const s = typeof value === 'object' ? JSON.stringify(value) : String(value)
-  return <span className="font-mono text-xs">{s}</span>
+  return <span className="font-mono text-xs text-gray-900 dark:text-gray-100">{s}</span>
 }
 
 /**
@@ -97,32 +97,32 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
   }
 
   return (
-    <div className="border-t border-gray-100 mt-0 px-4 pb-4 pt-3 space-y-3">
+    <div className="border-t border-gray-100 dark:border-gray-700 mt-0 px-4 pb-4 pt-3 space-y-3">
       {/* Values grid (not shown for deletion or new_spool) */}
       {!isDeletion && !newSpool && (
         <div className="grid grid-cols-2 gap-4 text-sm">
-          <div className="bg-emerald-50 rounded p-3">
-            <p className="text-xs font-medium text-emerald-700 mb-1">Spoolman value</p>
+          <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded p-3">
+            <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mb-1">Spoolman value</p>
             <ValueDisplay value={conflict.spoolman_value} />
           </div>
-          <div className="bg-blue-50 rounded p-3">
-            <p className="text-xs font-medium text-blue-700 mb-1">Filament DB value</p>
+          <div className="bg-blue-50 dark:bg-blue-900/20 rounded p-3">
+            <p className="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1">Filament DB value</p>
             <ValueDisplay value={conflict.filamentdb_value} />
           </div>
         </div>
       )}
 
       {isDeletion && (
-        <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm text-amber-800">
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-3 text-sm text-amber-800 dark:text-amber-300">
           This record was deleted in <strong>{deletedSideLabel(conflict)}</strong>. Removing the
           mapping will drop the pair from Synced Records. The deleted record will not be recreated.
         </div>
       )}
 
       {newSpool && (
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           Dismisses this notice — create the record via the{' '}
-          <span className="font-medium text-gray-700">Bulk Import Wizard</span>.
+          <span className="font-medium text-gray-700 dark:text-gray-300">Bulk Import Wizard</span>.
         </p>
       )}
 
@@ -156,7 +156,7 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
               className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
                 resolution === r
                   ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               Use {r === 'manual' ? 'manual value' : r}
@@ -168,7 +168,7 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
               placeholder="Enter value…"
               value={manualValue}
               onChange={e => setManualValue(e.target.value)}
-              className="border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
           )}
           <button
@@ -180,7 +180,7 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
           </button>
         </div>
       )}
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
     </div>
   )
 }
@@ -209,10 +209,10 @@ function CollapsibleConflict({
   const fieldLabel = conflict.field_name === DELETION_FIELD ? 'Record deleted' : conflict.field_name
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
       {/* Compact summary row */}
       <div
-        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 select-none"
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-750 select-none"
         onClick={onToggle}
       >
         {/* Checkbox (open tab only, stop propagation so click doesn't expand) */}
@@ -222,7 +222,7 @@ function CollapsibleConflict({
             checked={selected}
             onClick={e => e.stopPropagation()}
             onChange={onSelect}
-            className="h-4 w-4 rounded border-gray-300 text-indigo-600 shrink-0"
+            className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 shrink-0"
           />
         )}
 
@@ -240,16 +240,16 @@ function CollapsibleConflict({
         />
 
         {/* Identity label */}
-        <span className="flex-1 text-sm font-medium text-gray-800 truncate min-w-0">
+        <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200 truncate min-w-0">
           {conflict.label ?? `SM #${conflict.spoolman_id}`}
         </span>
 
         {/* Field / entity */}
-        <span className="shrink-0 text-xs text-gray-400 hidden sm:block">{conflict.entity_type}</span>
-        <span className="shrink-0 text-xs font-mono text-gray-500 hidden md:block">{fieldLabel}</span>
+        <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500 hidden sm:block">{conflict.entity_type}</span>
+        <span className="shrink-0 text-xs font-mono text-gray-500 dark:text-gray-400 hidden md:block">{fieldLabel}</span>
 
         {/* Detected time */}
-        <span className="shrink-0 text-xs text-gray-400 hidden lg:block">
+        <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500 hidden lg:block">
           {formatLocal(conflict.detected_at)}
         </span>
 
@@ -263,11 +263,11 @@ function CollapsibleConflict({
 
         {/* Resolved badge (resolved tab only) */}
         {tab === 'resolved' && conflict.resolution && (
-          <span className="shrink-0 text-xs text-gray-400">via {conflict.resolution}</span>
+          <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">via {conflict.resolution}</span>
         )}
 
         {/* Caret */}
-        <span className={`shrink-0 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}>
+        <span className={`shrink-0 text-gray-400 dark:text-gray-500 transition-transform ${expanded ? 'rotate-180' : ''}`}>
           ▾
         </span>
       </div>
@@ -277,7 +277,7 @@ function CollapsibleConflict({
         <ConflictDetail conflict={conflict} onResolved={onResolved} />
       )}
       {expanded && tab === 'resolved' && (
-        <div className="border-t border-gray-100 px-4 py-3 text-sm text-gray-500 space-y-1">
+        <div className="border-t border-gray-100 dark:border-gray-700 px-4 py-3 text-sm text-gray-500 dark:text-gray-400 space-y-1">
           <p>Resolved {formatLocal(conflict.resolved_at)} via <strong>{conflict.resolution}</strong></p>
           {conflict.resolved_value != null && (
             <p>Recorded value: <ValueDisplay value={conflict.resolved_value} /></p>
@@ -374,14 +374,16 @@ export default function Conflicts() {
     <div className="p-8 space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Conflicts</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Conflicts</h1>
         <div className="flex gap-2">
           {(['open', 'resolved'] as const).map(t => (
             <button
               key={t}
               onClick={() => { setTab(t); setSelected([]); setExpandedIds(new Set()) }}
               className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                tab === t ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                tab === t
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
               {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -391,7 +393,7 @@ export default function Conflicts() {
       </div>
 
       {/* Info banner — explain what Resolve does */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-800 space-y-1">
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 text-sm text-blue-800 dark:text-blue-300 space-y-1">
         <p>
           <strong>Resolving a conflict records your choice and removes it from the queue</strong> — it does
           not write to Spoolman or Filament DB (upstream apply is a planned follow-up). Deletion conflicts
@@ -399,8 +401,8 @@ export default function Conflicts() {
         </p>
       </div>
 
-      {loading && <p className="text-gray-500">Loading…</p>}
-      {error && <p className="text-red-600">{error}</p>}
+      {loading && <p className="text-gray-500 dark:text-gray-400">Loading…</p>}
+      {error && <p className="text-red-600 dark:text-red-400">{error}</p>}
 
       {/* Filter bar + Sort + Expand controls */}
       {!loading && !error && allRows.length > 0 && (
@@ -411,8 +413,8 @@ export default function Conflicts() {
                 onClick={() => { setTypeFilter('all'); setSelected([]) }}
                 className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                   activeFilter === 'all'
-                    ? 'bg-gray-800 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                 }`}
               >
                 All ({allRows.length})
@@ -423,20 +425,20 @@ export default function Conflicts() {
                   onClick={() => { setTypeFilter(type); setSelected([]) }}
                   className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
                     activeFilter === type
-                      ? 'bg-gray-800 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
+                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                   }`}
                 >
                   {label} ({count})
                 </button>
               ))}
-              <span className="w-px h-5 bg-gray-200 mx-1" />
+              <span className="w-px h-5 bg-gray-200 dark:bg-gray-600 mx-1" />
             </>
           )}
 
           {/* Sort control */}
           <div className="flex items-center gap-1.5">
-            <span className="text-xs text-gray-500">Sort:</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Sort:</span>
             {([
               ['detected', 'Newest'],
               ['type', 'Type'],
@@ -447,8 +449,8 @@ export default function Conflicts() {
                 onClick={() => setSortKey(key)}
                 className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                   sortKey === key
-                    ? 'bg-indigo-100 text-indigo-700'
-                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
                 }`}
               >
                 {lbl}
@@ -458,16 +460,16 @@ export default function Conflicts() {
 
           {rows.length > 1 && (
             <>
-              <span className="w-px h-5 bg-gray-200 mx-1" />
+              <span className="w-px h-5 bg-gray-200 dark:bg-gray-600 mx-1" />
               <button
                 onClick={expandAll}
-                className="px-2.5 py-1 rounded text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200"
+                className="px-2.5 py-1 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
               >
                 Expand all
               </button>
               <button
                 onClick={collapseAll}
-                className="px-2.5 py-1 rounded text-xs font-medium bg-gray-100 text-gray-500 hover:bg-gray-200"
+                className="px-2.5 py-1 rounded text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600"
               >
                 Collapse all
               </button>
@@ -478,13 +480,17 @@ export default function Conflicts() {
 
       {/* Bulk resolve bar */}
       {tab === 'open' && selected.length > 0 && (
-        <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded p-3">
-          <span className="text-sm text-indigo-700">{selected.length} selected</span>
+        <div className="flex items-center gap-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded p-3">
+          <span className="text-sm text-indigo-700 dark:text-indigo-300">{selected.length} selected</span>
           {(['spoolman', 'filamentdb'] as const).map(r => (
             <button
               key={r}
               onClick={() => setBulkRes(r)}
-              className={`px-3 py-1 rounded text-sm font-medium ${bulkRes === r ? 'bg-indigo-600 text-white' : 'bg-white border border-gray-300'}`}
+              className={`px-3 py-1 rounded text-sm font-medium ${
+                bulkRes === r
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200'
+              }`}
             >
               Use {r}
             </button>
@@ -501,7 +507,7 @@ export default function Conflicts() {
 
       {/* Empty state */}
       {!loading && !error && rows.length === 0 && (
-        <p className="text-gray-500">
+        <p className="text-gray-500 dark:text-gray-400">
           {activeFilter === 'all'
             ? `No ${tab} conflicts.`
             : `No ${tab} ${TYPE_LABELS[activeFilter].toLowerCase()} conflicts.`}

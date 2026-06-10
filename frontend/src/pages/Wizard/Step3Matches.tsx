@@ -452,8 +452,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     finally { setSaving(false) }
   }
 
-  if (loading && !data) return <p className="text-gray-500">Loading match data…</p>
-  if (error) return <p className="text-red-600">{error}</p>
+  if (loading && !data) return <p className="text-gray-500 dark:text-gray-400">Loading match data…</p>
+  if (error) return <p className="text-red-600 dark:text-red-400">{error}</p>
   if (!data) return null
 
   const actionable = sorted.filter(r => r.status !== 'unmatched_fdb')
@@ -463,12 +463,12 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   const actionBar = (
     <div className="flex justify-between items-center">
       <button onClick={prev}
-        className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
         ← Back
       </button>
       <div className="flex items-center gap-3">
         <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
-          className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded text-sm font-medium hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2">
+          className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2">
           {rescanning
             ? <><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />Rescanning…</>
             : '↻ Rescan'}
@@ -484,8 +484,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-gray-800">Match review</h2>
-        <p className="text-sm text-gray-500 mt-1">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Match review</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Review auto-matched pairs, resolve ambiguous matches, and decide what to do with unmatched items.
         </p>
       </div>
@@ -494,7 +494,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
       {actionBar}
 
       {/* Toolbar */}
-      <div className="bg-white border border-gray-200 rounded-lg p-3 space-y-2">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-2">
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-1.5">
             <span className="text-xs text-gray-500 shrink-0">Group by</span>
@@ -583,9 +583,9 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
         {/* Column headers + per-column filter inputs */}
-        <div className="bg-gray-50 border-b border-gray-200">
+        <div className="bg-gray-50 dark:bg-gray-750 border-b border-gray-200 dark:border-gray-700">
           <div className={`${G} py-2 items-center`}>
             <TriCheckbox {...tableTri} onChange={v => bulkSet(actionable, v)} />
             <span className="text-xs font-medium uppercase tracking-wide text-gray-500">Spoolman</span>
@@ -678,7 +678,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
         })}
       </div>
 
-      {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
+      {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
       {/* Bottom action bar */}
       {actionBar}

@@ -460,11 +460,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
     return (
       <div className="space-y-5">
         <div>
-          <h2 className="text-lg font-semibold text-gray-800">Variances</h2>
-          <p className="text-sm text-gray-500 mt-1">No variant groups or tare adjustments needed.</p>
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Variances</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">No variant groups or tare adjustments needed.</p>
         </div>
         <div className="flex justify-between">
-          <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">← Back</button>
+          <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">← Back</button>
           <button onClick={() => { setTareOverrides([]); next() }} className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">Next →</button>
         </div>
       </div>
@@ -475,7 +475,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   const actionBar = (
     <div className="flex justify-between">
       <button onClick={prev}
-        className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">
+        className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
         ← Back
       </button>
       <button onClick={handleSave} disabled={saving}
@@ -488,8 +488,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-800">Variances</h2>
-        <p className="text-sm text-gray-500 mt-1">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Variances</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
           Review variant groupings and tare (empty-reel) weights. One tare per group applies to all members.
         </p>
       </div>
@@ -1117,7 +1117,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       )}
 
       {ignoreErr && <p className="text-sm text-red-600">Ignore failed: {ignoreErr}</p>}
-      {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
+      {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
       {/* Bottom action bar */}
       {actionBar}
@@ -1143,8 +1143,8 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
 
-  if (varLoading || wtLoading) return <p className="text-gray-500">Loading variant groups…</p>
-  if (varError || wtError) return <p className="text-red-600">{varError ?? wtError}</p>
+  if (varLoading || wtLoading) return <p className="text-gray-500 dark:text-gray-400">Loading variant groups…</p>
+  if (varError || wtError) return <p className="text-red-600 dark:text-red-400">{varError ?? wtError}</p>
   if (!variantsData) return null
 
   function rowKey(spoolmanId: number | null, fdbId: string | null) {
@@ -1287,10 +1287,10 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
         </div>
       )}
 
-      {saveErr && <p className="text-sm text-red-600">{saveErr}</p>}
+      {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
       <div className="flex justify-between">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200">← Back</button>
+        <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">← Back</button>
         <button onClick={handleSave} disabled={saving}
           className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
           {saving ? 'Saving…' : 'Save & Next →'}

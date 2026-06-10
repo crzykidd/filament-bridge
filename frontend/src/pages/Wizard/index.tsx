@@ -26,16 +26,20 @@ function Stepper({ current }: { current: number }) {
             i < current
               ? 'bg-indigo-600 border-indigo-600 text-white'
               : i === current
-                ? 'border-indigo-600 text-indigo-600 bg-white'
-                : 'border-gray-300 text-gray-400 bg-white'
+                ? 'border-indigo-600 text-indigo-600 bg-white dark:bg-gray-900 dark:text-indigo-400 dark:border-indigo-400'
+                : 'border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-900'
           }`}>
             {i + 1}
           </div>
-          <span className={`ml-2 text-sm ${i === current ? 'text-indigo-600 font-medium' : 'text-gray-400'}`}>
+          <span className={`ml-2 text-sm ${
+            i === current
+              ? 'text-indigo-600 dark:text-indigo-400 font-medium'
+              : 'text-gray-400 dark:text-gray-500'
+          }`}>
             {s.label}
           </span>
           {i < STEPS.length - 1 && (
-            <div className={`mx-3 h-0.5 w-8 ${i < current ? 'bg-indigo-600' : 'bg-gray-200'}`} />
+            <div className={`mx-3 h-0.5 w-8 ${i < current ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'}`} />
           )}
         </div>
       ))}
@@ -60,7 +64,7 @@ export function WizardShell() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Bulk Import Wizard</h1>
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">Bulk Import Wizard</h1>
       <Stepper current={step} />
       <Routes>
         <Route index element={<Navigate to="connectivity" replace />} />
