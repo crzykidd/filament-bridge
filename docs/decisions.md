@@ -1,5 +1,45 @@
 # Decision record
 
+## 2026-06-09 — Single-account auth + API token + first-login required-settings gate
+
+### A — Stateless signed cookie (no sessions table)
+
+Used itsdangerous `TimestampSigner` rather than a DB-backed sessions table. Rationale:
+no migration needed, no GC job, survives concurrent instances. The signing secret
+(`auth_secret`) is auto-generated on first startup and persisted in `BridgeConfig`.
+
+### B — API token stored in BridgeConfig (plaintext)
+
+The API token value is stored in `BridgeConfig` as plaintext so the Settings UI can
+display it (masked). For a single-user self-hosted app the token is no more sensitive
+than the SQLite database file. Hashing the token was considered but rejected because
+it would prevent display without a reveal-once UX that adds complexity for no
+meaningful gain in this threat model.
+
+### C — change-password endpoint does NOT require the session cookie
+
+The `POST /api/auth/change-password` endpoint is mounted on the `auth_router` which
+is public (no router-level `require_auth` dependency). However, it verifies the
+current password before accepting the new one, providing equivalent security without
+needing the cookie. This also works in the `AUTH_ENABLED=false` recovery flow where
+a cookie may not be present.
+
+### D — required_settings_unset as a list in ConfigResponse
+
+Added `required_settings_unset: list[str]` to `ConfigResponse` (and
+`GET /api/config`) rather than a separate endpoint. Rationale: the frontend already
+calls `/api/config` on Settings load; piggybacking the required-settings check avoids
+a second round-trip. The list is computed server-side so future required settings can
+be added without frontend changes.
+
+### E — `require_auth` applied via router-level `dependencies=` in main.py
+
+Rather than decorating each individual route handler, `require_auth` is applied
+as a router-level dependency on the 9 protected `include_router()` calls in
+`main.py`. The 4 public exceptions (health + auth endpoints) are simply left
+without the dependency. This is explicit, easy to audit, and avoids accidentally
+forgetting auth on a new route inside a protected router.
+
 ## 2026-06-09 — Configurable container marker, Master/Parent badge, editable collision rename
 
 ### A — Container marker changed from `" Master"` to `"(Master)"` and made configurable

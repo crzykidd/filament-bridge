@@ -207,6 +207,11 @@ export interface ConfigResponse {
   variant_parent_mode: VariantParentMode
   // Container parent marker appended to generic-container names (default "(Master)", empty = no suffix)
   container_parent_marker: string
+  // API token — value shown in Settings UI; null = not yet generated
+  api_token: string | null
+  api_token_enabled: boolean
+  // Required settings that must be configured before the bridge is usable
+  required_settings_unset: string[]
 }
 
 export interface ConfigUpdateRequest {
@@ -231,6 +236,8 @@ export interface ConfigUpdateRequest {
   variant_parent_mode?: VariantParentMode | null
   // Container parent marker (empty string = no suffix)
   container_parent_marker?: string | null
+  // API token enable/disable (value is managed via /auth/api-token/regenerate)
+  api_token_enabled?: boolean | null
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +713,17 @@ export interface ResetStateResponse {
   conflicts: number
   sync_log: number
   wizard_completed_reset: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface AuthStatusResponse {
+  auth_enabled: boolean
+  password_set: boolean
+  authenticated: boolean
+  api_token_enabled: boolean
 }
 
 // ---------------------------------------------------------------------------

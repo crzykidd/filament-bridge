@@ -231,6 +231,7 @@ filament-bridge/
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | String appended (after a space) to generic-container parent names in the wizard. Empty string = no suffix. Overridable at runtime via Settings. |
 | `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications (declared; not yet implemented) |
+| `AUTH_ENABLED` | No | `true` | When `false`, auth is fully bypassed (open app). Set to `false` for locked-out recovery: disable → change password in Settings → re-enable. |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |
 
@@ -245,6 +246,8 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
+| `api_token_enabled` | `false` | When `true`, requests may authenticate via `Authorization: Bearer <token>` or `X-API-Key`. Toggle in Settings → Security. |
+| `api_token` | (none) | The API token value — stored in BridgeConfig so Settings can display it. Regenerate via Settings → Security → Regenerate token. |
 | `opentag_vendor_aliases` | env fallback (`""`) | CSV of `sm=opentag` vendor alias pairs for the OpenTag matcher brand pre-filter. |
 | `opentag_color_keywords` | env fallback (`""`) | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher. Merged on top of `DEFAULT_COLOR_KEYWORDS` seed. |
 | `container_parent_marker` | env fallback (`"(Master)"`) | String appended to generic-container parent names (e.g. "ELEGOO PLA (Master)"). Empty = no suffix. Shown in Settings when `generic_container` mode is active. |

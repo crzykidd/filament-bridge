@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     # Notifications
     discord_webhook_url: str | None = None
 
+    # Auth
+    # When true (default), all /api/* routes except the public set require a
+    # valid fb_session cookie or an enabled API token. Set to false to open the
+    # app fully (e.g. for locked-out recovery: disable, change password, re-enable).
+    auth_enabled: bool = True
+
     # Operational
     log_level: str = "info"
     data_dir: str = "/data"

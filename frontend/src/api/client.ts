@@ -1,4 +1,5 @@
 import type {
+  AuthStatusResponse,
   AutoSyncRequest,
   AutoSyncResponse,
   BackupExport,
@@ -53,12 +54,26 @@ export class BridgeApiError extends Error {
   }
 }
 
+// Callback that App.tsx registers so the client can signal a 401 to the auth gate.
+// Kept as a simple module-level variable to avoid React import cycles.
+let _on401: (() => void) | null = null
+export function register401Handler(cb: () => void): void {
+  _on401 = cb
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     headers: { 'Content-Type': 'application/json', ...init?.headers },
+    // credentials:'include' is required for the httpOnly fb_session cookie to be sent
+    credentials: 'include',
     ...init,
   })
   if (!res.ok) {
+    // On 401, fire the handler so the auth gate re-checks status and shows login.
+    // Skip the callback for auth endpoints themselves to avoid redirect loops.
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      _on401?.()
+    }
     let code = 'unknown_error'
     let message = `HTTP ${res.status}`
     try {
@@ -221,3 +236,24 @@ export const clearSpoolmanFdbRefs = () =>
 
 export const resetBridgeState = () =>
   request<ResetStateResponse>('/debug/reset-bridge-state', { method: 'POST' })
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export const getAuthStatus = () => request<AuthStatusResponse>('/auth/status')
+
+export const authSetup = (password: string) =>
+  json<AuthStatusResponse>('/auth/setup', 'POST', { password })
+
+export const authLogin = (password: string) =>
+  json<AuthStatusResponse>('/auth/login', 'POST', { password })
+
+export const authLogout = () =>
+  request<{ ok: boolean }>('/auth/logout', { method: 'POST' })
+
+export const authChangePassword = (current_password: string, new_password: string) =>
+  json<{ ok: boolean }>('/auth/change-password', 'POST', { current_password, new_password })
+
+export const authRegenerateToken = () =>
+  request<{ api_token: string }>('/auth/api-token/regenerate', { method: 'POST' })

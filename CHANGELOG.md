@@ -11,6 +11,21 @@ GitHub release.
 
 ### Added
 
+- **Single-account auth + API token** — the bridge is now protected by optional password
+  authentication (default enabled, `AUTH_ENABLED` env var). First visit shows a setup screen
+  to set the admin password; subsequent visits show a login form. Sessions use a stateless
+  signed `fb_session` httpOnly cookie (itsdangerous, 30-day max-age). An optional single API
+  token (enable/disable + regenerate in Settings → Security) allows machine access via
+  `Authorization: Bearer` or `X-API-Key`. All `/api/*` routes except `/api/health`,
+  `/api/auth/status`, `/api/auth/login`, and `/api/auth/setup` require authentication.
+  Set `AUTH_ENABLED=false` to bypass auth entirely (for locked-out recovery — see
+  `docs/security.md` for the procedure). New runtime settings: `api_token` (read-only display),
+  `api_token_enabled`. New env var: `AUTH_ENABLED` (bool, default `true`).
+- **First-login required-settings gate** — after authentication (or on every load when auth is
+  disabled), the UI checks `required_settings_unset` in the config response. When non-empty (e.g.
+  `variant_parent_mode` is still `"unset"`), a dismissible modal prompts the user to visit Settings
+  and configure the listed items before using the bridge.
+
 - **Configurable container-parent marker** (`container_parent_marker`) — runtime-editable string
   (env `CONTAINER_PARENT_MARKER`, default `"(Master)"`) appended to generic-container parent names
   so they visually separate from their color-variant children. An empty string disables the suffix.

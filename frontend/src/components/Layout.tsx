@@ -1,7 +1,8 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { getHealth } from '../api/client'
+import { getHealth, authLogout, getAuthStatus } from '../api/client'
 import type { HealthResponse } from '../api/types'
+import { RequiredSettingsGate } from './RequiredSettingsGate'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', exact: true },
@@ -23,10 +24,13 @@ function navClass({ isActive }: { isActive: boolean }) {
 
 export function Layout() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
+  const [authEnabled, setAuthEnabled] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setHealth(null))
+    getAuthStatus().then(s => setAuthEnabled(s.auth_enabled)).catch(() => {})
   }, [])
 
   const statusDot = health
@@ -36,6 +40,17 @@ export function Layout() {
         ? 'bg-yellow-400'
         : 'bg-red-400'
     : 'bg-gray-400'
+
+  async function handleLogout() {
+    setLoggingOut(true)
+    try {
+      await authLogout()
+      // Reload the page so App.tsx re-checks auth status and shows login
+      window.location.reload()
+    } catch {
+      window.location.reload()
+    }
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
@@ -70,6 +85,18 @@ export function Layout() {
             Settings
           </NavLink>
         </div>
+        {authEnabled && (
+          <div className="px-2 pb-2">
+            <button
+              type="button"
+              onClick={() => { void handleLogout() }}
+              disabled={loggingOut}
+              className="block w-full px-3 py-2 rounded text-sm font-medium text-indigo-200 hover:bg-indigo-700 hover:text-white text-left transition-colors disabled:opacity-50"
+            >
+              {loggingOut ? 'Signing out…' : 'Sign out'}
+            </button>
+          </div>
+        )}
         <div className="px-4 py-3 border-t border-indigo-700 flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${statusDot}`} />
           <span className="text-indigo-200 text-xs">
@@ -82,6 +109,9 @@ export function Layout() {
       <main className="flex-1 overflow-y-auto">
         <Outlet />
       </main>
+
+      {/* Required settings gate (overlays the whole app when needed) */}
+      <RequiredSettingsGate />
     </div>
   )
 }

@@ -23,9 +23,10 @@ from typing import AsyncGenerator
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from app import __version__
+from app.api import auth as auth_router
 from app.api import backup as backup_router
 from app.api import config as config_router
 from app.api import conflicts as conflicts_router
@@ -36,6 +37,7 @@ from app.api import opentag as opentag_router
 from app.api import sync as sync_router
 from app.api import sync_log as sync_log_router
 from app.api import wizard as wizard_router
+from app.api.auth import require_auth
 from app.config import settings
 from app.core.engine import run_sync_cycle
 from app.db import SessionLocal
@@ -208,16 +210,21 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
+# Public: health + auth endpoints (no require_auth dependency)
 app.include_router(health_router.router, prefix="/api")
-app.include_router(sync_router.router, prefix="/api")
-app.include_router(conflicts_router.router, prefix="/api")
-app.include_router(mappings_router.router, prefix="/api")
-app.include_router(config_router.router, prefix="/api")
-app.include_router(wizard_router.router, prefix="/api")
-app.include_router(opentag_router.router, prefix="/api")
-app.include_router(backup_router.router, prefix="/api")
-app.include_router(sync_log_router.router, prefix="/api")
-app.include_router(debug_router.router, prefix="/api")
+app.include_router(auth_router.router, prefix="/api")
+
+# Protected: all remaining API routers require authentication
+_auth_dep = [Depends(require_auth)]
+app.include_router(sync_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(conflicts_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(mappings_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(config_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(wizard_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
 
 # Serve the React SPA from /static when the directory exists (built image only).
 # Guarded so `pytest` and `uvicorn --reload` work without a frontend build.

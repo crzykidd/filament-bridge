@@ -99,10 +99,27 @@ def _effective_sync_interval(db: Session) -> int:
     return _settings.sync_interval_seconds
 
 
+_REQUIRED_SETTINGS = ["variant_parent_mode"]
+
+
+def _required_settings_unset(cfg: dict) -> list[str]:
+    """Return list of required setting keys that are still in their 'unset' sentinel state."""
+    unset = []
+    if (cfg.get("variant_parent_mode") or "unset") == "unset":
+        unset.append("variant_parent_mode")
+    return unset
+
+
 def _config_response(db: Session) -> ConfigResponse:
     cfg = read_config(db)
     db_interval = int(cfg.get("sync_interval_seconds") or 0)
     effective_interval = max(db_interval, _SYNC_INTERVAL_MIN) if db_interval > 0 else _settings.sync_interval_seconds
+
+    # api_token: return the stored token value if present, else None.
+    # NEVER return admin_password_hash or auth_secret.
+    api_token_raw = cfg.get("api_token", None)
+    api_token = api_token_raw if api_token_raw else None
+
     return ConfigResponse(
         sync_weight_threshold_grams=float(cfg.get("sync_weight_threshold_grams", 2.0)),
         weight_precision_decimals=int(cfg.get("weight_precision_decimals", 2)),
@@ -123,6 +140,9 @@ def _config_response(db: Session) -> ConfigResponse:
         debug_mode=bool(cfg.get("debug_mode", False)),
         variant_parent_mode=cfg.get("variant_parent_mode", "unset") or "unset",
         container_parent_marker=str(cfg.get("container_parent_marker", _settings.container_parent_marker)),
+        api_token=api_token,
+        api_token_enabled=bool(cfg.get("api_token_enabled", False)),
+        required_settings_unset=_required_settings_unset(cfg),
     )
 
 

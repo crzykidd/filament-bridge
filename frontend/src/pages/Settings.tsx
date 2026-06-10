@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBlocker } from 'react-router-dom'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy, VariantParentMode } from '../api/types'
@@ -172,6 +172,19 @@ export default function Settings() {
   const [resettingState, setResettingState] = useState(false)
   const [resetStateMsg, setResetStateMsg] = useState('')
 
+  // Security section state
+  const [authEnabled, setAuthEnabled] = useState(false)
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [changePwMsg, setChangePwMsg] = useState('')
+  const [changingPw, setChangingPw] = useState(false)
+  const [tokenVisible, setTokenVisible] = useState(false)
+  const [tokenMsg, setTokenMsg] = useState('')
+  const [regeneratingToken, setRegeneratingToken] = useState(false)
+  const [togglingToken, setTogglingToken] = useState(false)
+  const [tokenToggleMsg, setTokenToggleMsg] = useState('')
+
   // --- Unsaved-changes guard ---------------------------------------------
   // A field is dirty only when its override state is set AND differs from the
   // loaded value (so changing a field then changing it back clears dirty, and
@@ -224,6 +237,11 @@ export default function Settings() {
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [isDirty])
+
+  // Load auth status for security section visibility
+  useEffect(() => {
+    getAuthStatus().then(s => setAuthEnabled(s.auth_enabled)).catch(() => {})
+  }, [])
 
   if (loading) return <div className="p-8 text-gray-500">Loading…</div>
   if (error) return <div className="p-8 text-red-600">{error}</div>
@@ -343,6 +361,51 @@ export default function Settings() {
     } else {
       // Enabling is gated behind the backup safety dialog
       setShowAutoSyncBackupDialog(true)
+    }
+  }
+
+  async function handleChangePassword() {
+    setChangePwMsg('')
+    if (!currentPw || !newPw) { setChangePwMsg('All fields are required.'); return }
+    if (newPw !== confirmPw) { setChangePwMsg('New passwords do not match.'); return }
+    setChangingPw(true)
+    try {
+      await authChangePassword(currentPw, newPw)
+      setChangePwMsg('Password changed.')
+      setCurrentPw(''); setNewPw(''); setConfirmPw('')
+    } catch (e) {
+      setChangePwMsg(e instanceof Error ? e.message : 'Error changing password.')
+    } finally {
+      setChangingPw(false)
+    }
+  }
+
+  async function handleRegenerateToken() {
+    if (!window.confirm('Generate a new API token? The old token will stop working immediately.')) return
+    setRegeneratingToken(true)
+    setTokenMsg('')
+    try {
+      await authRegenerateToken()
+      setTokenMsg('New token generated.')
+      void reload()
+    } catch (e) {
+      setTokenMsg(e instanceof Error ? e.message : 'Error generating token.')
+    } finally {
+      setRegeneratingToken(false)
+    }
+  }
+
+  async function handleTokenToggle() {
+    setTogglingToken(true)
+    setTokenToggleMsg('')
+    try {
+      await updateConfig({ api_token_enabled: !data.api_token_enabled })
+      setTokenToggleMsg(data.api_token_enabled ? 'API token disabled.' : 'API token enabled.')
+      void reload()
+    } catch (e) {
+      setTokenToggleMsg(e instanceof Error ? e.message : 'Error toggling token.')
+    } finally {
+      setTogglingToken(false)
     }
   }
 
@@ -803,6 +866,114 @@ export default function Settings() {
           <p>Import direction: <strong>{data.import_direction}</strong></p>
         )}
       </div>
+
+      {/* Security — only shown when AUTH_ENABLED=true */}
+      {authEnabled && (
+        <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-700">Security</h2>
+
+          {/* Change password */}
+          <div className="space-y-2 pb-4 border-b border-gray-100">
+            <h3 className="text-sm font-medium text-gray-700">Change password</h3>
+            <div className="space-y-2 max-w-xs">
+              <input
+                type="password"
+                placeholder="Current password"
+                value={currentPw}
+                onChange={e => setCurrentPw(e.target.value)}
+                className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <input
+                type="password"
+                placeholder="New password"
+                value={newPw}
+                onChange={e => setNewPw(e.target.value)}
+                className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <input
+                type="password"
+                placeholder="Confirm new password"
+                value={confirmPw}
+                onChange={e => setConfirmPw(e.target.value)}
+                className="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <button
+                type="button"
+                onClick={() => void handleChangePassword()}
+                disabled={changingPw}
+                className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {changingPw ? 'Saving…' : 'Change password'}
+              </button>
+              {changePwMsg && <p className="text-xs text-gray-600">{changePwMsg}</p>}
+            </div>
+          </div>
+
+          {/* API token */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium text-gray-700">API token</h3>
+            <p className="text-xs text-gray-400">
+              Enables machine access via <code>Authorization: Bearer &lt;token&gt;</code> or{' '}
+              <code>X-API-Key: &lt;token&gt;</code>. Only enable if you have an integration that needs it.
+            </p>
+
+            {/* Enable/disable toggle */}
+            <div className="flex items-center justify-between py-1">
+              <span className="text-sm text-gray-700">Token authentication enabled</span>
+              <button
+                type="button"
+                onClick={() => void handleTokenToggle()}
+                disabled={togglingToken || !data.api_token}
+                title={!data.api_token ? 'Generate a token first' : undefined}
+                className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                  data.api_token_enabled ? 'bg-indigo-600' : 'bg-gray-200'
+                }`}
+                aria-pressed={data.api_token_enabled}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                    data.api_token_enabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+            {tokenToggleMsg && <p className="text-xs text-gray-600">{tokenToggleMsg}</p>}
+
+            {/* Token display */}
+            {data.api_token && (
+              <div className="flex items-center gap-2 mt-1">
+                <code className="text-xs bg-gray-100 border border-gray-200 rounded px-2 py-1 font-mono break-all">
+                  {tokenVisible ? data.api_token : '••••••••••••••••••••'}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => setTokenVisible(v => !v)}
+                  className="text-xs text-indigo-600 hover:underline whitespace-nowrap"
+                >
+                  {tokenVisible ? 'Hide' : 'Show'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { void navigator.clipboard.writeText(data.api_token ?? '') }}
+                  className="text-xs text-indigo-600 hover:underline whitespace-nowrap"
+                >
+                  Copy
+                </button>
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleRegenerateToken()}
+              disabled={regeneratingToken}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded text-sm font-medium hover:bg-gray-200 disabled:opacity-50 mt-1"
+            >
+              {regeneratingToken ? 'Generating…' : data.api_token ? 'Regenerate token' : 'Generate token'}
+            </button>
+            {tokenMsg && <p className="text-xs text-gray-600">{tokenMsg}</p>}
+          </div>
+        </div>
+      )}
 
       {/* Debug mode */}
       <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-3">

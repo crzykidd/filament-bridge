@@ -211,6 +211,13 @@ class ConfigResponse(BaseModel):
     # Marker appended to generic-container parent names (default "(Master)").
     # Empty string = no marker (containers get no suffix).
     container_parent_marker: str = "(Master)"
+    # API token settings — token value is included so Settings can display it.
+    # admin_password_hash and auth_secret are NEVER included in any response.
+    api_token: str | None = None
+    api_token_enabled: bool = False
+    # Required settings that must be configured before the bridge is usable.
+    # Frontend redirects to /settings and shows a modal when this list is non-empty.
+    required_settings_unset: list[str] = Field(default_factory=list)
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -236,6 +243,8 @@ class ConfigUpdateRequest(BaseModel):
     variant_parent_mode: VariantParentMode | None = None
     # Container parent marker (empty string = no suffix)
     container_parent_marker: str | None = None
+    # API token control (value managed via /auth/api-token/regenerate; only flag is updatable here)
+    api_token_enabled: bool | None = None
 
 
 # ---------------------------------------------------------------------------

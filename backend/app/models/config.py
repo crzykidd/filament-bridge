@@ -54,6 +54,17 @@ _DEFAULTS = {
     # Each entry is either an override name string, or null to skip that cluster.
     # Populated from the Preview page's editable rename/skip UI.
     "wizard_container_name_overrides": "{}",
+    # Auth: persisted server secret for signing fb_session cookies (itsdangerous).
+    # Auto-generated on first startup; survives restarts so existing sessions remain valid.
+    # Never expose in API responses or logs.
+    "auth_secret": "null",
+    # bcrypt hash of the admin password. "null" = password not yet set (setup required).
+    "admin_password_hash": "null",
+    # Single API token value. Stored so Settings UI can display it.
+    # "null" = no token generated yet.
+    "api_token": "null",
+    # When true, requests may authenticate via Authorization: Bearer <token> or X-API-Key.
+    "api_token_enabled": "false",
 }
 
 
