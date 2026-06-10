@@ -74,7 +74,7 @@ function ColorSwatch({ hex }: { hex: string | null | undefined }) {
   if (!hex) return null
   return (
     <span
-      className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 shrink-0"
+      className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-gray-600 shrink-0"
       style={{ backgroundColor: hex.startsWith('#') ? hex : `#${hex}` }}
       title={hex}
     />
@@ -88,8 +88,8 @@ function ColorSwatch({ hex }: { hex: string | null | undefined }) {
 export default function StepVariances({ next, prev, setTareOverrides }: WizardCtx) {
   const { data, loading, error } = useApi(getWizardVariances)
 
-  if (loading) return <p className="text-gray-500">Loading…</p>
-  if (error) return <p className="text-red-600">{error}</p>
+  if (loading) return <p className="text-gray-500 dark:text-gray-400">Loading…</p>
+  if (error) return <p className="text-red-600 dark:text-red-400">{error}</p>
   if (!data) return null
 
   return data.direction === 'spoolman'
@@ -500,7 +500,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       {/* P2.6: Sort control */}
       {(data.groups.length > 0 || data.ungrouped.length > 0) && (
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">Sort by:</span>
+          <span className="text-xs text-gray-500 dark:text-gray-400">Sort by:</span>
           {(['vendor', 'material'] as const).map(key => (
             <button
               key={key}
@@ -508,7 +508,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
               className={`px-2.5 py-1 text-xs rounded-full border font-medium transition-colors ${
                 sortBy === key
                   ? 'bg-indigo-600 text-white border-indigo-600'
-                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                  : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
               }`}
             >
               {key === 'vendor' ? 'Brand A→Z' : 'Material A→Z'}
@@ -520,7 +520,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       {/* Variant groups */}
       {data.groups.length > 0 && (
         <div className="space-y-4">
-          <h3 className="text-sm font-medium text-gray-700">Variant groups</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-200">Variant groups</h3>
           {/* Sorted index array so original groupIdx stays valid for state keying */}
           {[...data.groups.keys()]
             .sort((a, b) => {
@@ -541,11 +541,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             const moveTargets = moveTargetOptions('auto', groupIdx)
 
             return (
-              <div key={groupIdx} className="bg-white rounded-lg border border-gray-200 p-5">
+              <div key={groupIdx} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5">
                 {/* D3: attach-vs-create choice */}
                 {group.existing_fdb_parent && (
-                  <div className="mb-3 bg-blue-50 border border-blue-200 rounded p-3">
-                    <p className="text-xs font-medium text-blue-800 mb-2">
+                  <div className="mb-3 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded p-3">
+                    <p className="text-xs font-medium text-blue-800 dark:text-blue-300 mb-2">
                       Existing Filament DB parent found: <span className="font-semibold">{group.existing_fdb_parent.name}</span>
                     </p>
                     <div className="flex gap-2">
@@ -556,7 +556,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                           className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                             attachDecision[groupIdx] === opt
                               ? 'bg-blue-600 text-white'
-                              : 'bg-white text-blue-700 border border-blue-300 hover:bg-blue-50'
+                              : 'bg-white dark:bg-gray-700 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-700 hover:bg-blue-50 dark:hover:bg-gray-600'
                           }`}
                         >
                           {opt === 'attach' ? `Attach to «${group.existing_fdb_parent.name}»` : 'Create new parent'}
@@ -569,30 +569,30 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                 {/* Group header: name + finish pill + tare */}
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium text-gray-800">{group.base_name}</p>
-                    <div className="flex flex-wrap gap-2 text-xs text-gray-500 mt-0.5">
+                    <p className="font-medium text-gray-800 dark:text-gray-100">{group.base_name}</p>
+                    <div className="flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                       {group.vendor && <span>{group.vendor}</span>}
                       {group.material && <span>{group.material}</span>}
                       {group.finish && (
-                        <span className="bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded capitalize">{group.finish}</span>
+                        <span className="bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 px-1.5 py-0.5 rounded capitalize">{group.finish}</span>
                       )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-gray-500 whitespace-nowrap">Empty-reel tare (g):</label>
+                    <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">Empty-reel tare (g):</label>
                     <input
                       type="number" min="0" step="1"
                       value={masterTareVal}
                       onChange={e => setTareBySMId(prev => ({ ...prev, [masterId]: e.target.value }))}
-                      className="w-20 border border-gray-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                     {tareIsDefault && (
-                      <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">default</span>
+                      <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 px-1.5 py-0.5 rounded">default</span>
                     )}
                   </div>
                 </div>
 
-                <div className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                <div className="mb-3 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-3 py-2">
                   All variants in this group will use the master's empty-reel tare: <strong>{masterTareVal} g</strong>.
                   Filament DB stores one tare per filament.
                 </div>
@@ -607,7 +607,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     const isMoving = movingMember?.smId === smId && movingMember.fromGroupType === 'auto' && movingMember.fromIdx === groupIdx
                     const isIgnoring = ignoringId === smId
                     return (
-                      <div key={smId} className="flex items-start gap-2 p-2 rounded hover:bg-gray-50">
+                      <div key={smId} className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40">
                         <input
                           type="radio"
                           name={`master-${groupIdx}`}
@@ -619,31 +619,31 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <ColorSwatch hex={filData.color_hex} />
-                            <span className={`text-sm ${isMaster ? 'font-semibold text-indigo-700' : 'text-gray-700'}`}>
+                            <span className={`text-sm ${isMaster ? 'font-semibold text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-200'}`}>
                               {filData.ref.name}
                             </span>
                             {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
-                            {filData.color_hex && <span className="text-xs text-gray-400 font-mono">{filData.color_hex}</span>}
+                            {filData.color_hex && <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{filData.color_hex}</span>}
                             {/* Type chip — primary source is SM material; FDB material_type shown as mismatch only */}
-                            <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
+                            <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 px-1.5 py-0.5 rounded">
                               {filData.material ?? '—'}
                             </span>
                             {filData.material_type && filData.material_type !== filData.material && (
-                              <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">
+                              <span className="text-xs bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 px-1.5 py-0.5 rounded">
                                 FDB: {filData.material_type}
                               </span>
                             )}
                             {/* Diameter chip — always shown, dash when null */}
-                            <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                            <span className="text-xs bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 rounded">
                               {filData.diameter != null ? `${filData.diameter} mm` : '⌀ —'}
                             </span>
                             {/* Density chip — always shown, dash when null */}
-                            <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                            <span className="text-xs bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 rounded">
                               {filData.density != null ? `${filData.density} g/cm³` : 'ρ —'}
                             </span>
                             {/* Temps — editable inputs for master, read-only chip for non-master */}
                             {isMaster ? (
-                              <span className="inline-flex items-center gap-1 text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
+                              <span className="inline-flex items-center gap-1 text-xs bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800 px-1.5 py-0.5 rounded">
                                 🌡
                                 <input
                                   type="number"
@@ -678,7 +678,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                       },
                                     }))
                                   }}
-                                  className="w-12 bg-transparent border-b border-orange-300 text-center focus:outline-none focus:border-orange-500"
+                                  className="w-12 bg-transparent border-b border-orange-300 dark:border-orange-700 text-center focus:outline-none focus:border-orange-500"
                                   title="Nozzle temp (°C)"
                                 />
                                 °/
@@ -715,20 +715,20 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                       },
                                     }))
                                   }}
-                                  className="w-12 bg-transparent border-b border-orange-300 text-center focus:outline-none focus:border-orange-500"
+                                  className="w-12 bg-transparent border-b border-orange-300 dark:border-orange-700 text-center focus:outline-none focus:border-orange-500"
                                   title="Bed temp (°C)"
                                 />
                                 °
                               </span>
                             ) : (filData.settings_extruder_temp != null || filData.settings_bed_temp != null) ? (
-                              <span className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
+                              <span className="text-xs bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800 px-1.5 py-0.5 rounded">
                                 {filData.settings_extruder_temp ?? '—'}° / {filData.settings_bed_temp ?? '—'}°
                               </span>
                             ) : null}
                             <DeepLinks spoolmanFilamentId={filData.ref.spoolman_filament_id} />
                           </div>
                           {conflicts.length > 0 && (
-                            <div className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                            <div className="mt-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-2 py-1">
                               Conflicts with master:
                               {conflicts.map(c => (
                                 <span key={c.field} className="ml-1">
@@ -744,7 +744,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                           {isMoving ? (
                             <>
                               <select
-                                className="text-xs border border-gray-200 rounded px-2 py-1"
+                                className="text-xs border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1"
                                 defaultValue=""
                                 onChange={e => { if (e.target.value) moveMember('auto', groupIdx, smId, e.target.value) }}
                                 autoFocus
@@ -752,22 +752,22 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                 <option value="" disabled>Move to…</option>
                                 {moveTargets.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                               </select>
-                              <button onClick={() => setMovingMember(null)} className="text-xs text-gray-400 hover:text-gray-600 px-1">✕</button>
+                              <button onClick={() => setMovingMember(null)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 px-1">✕</button>
                             </>
                           ) : (
                             <>
                               <button
                                 onClick={() => setMovingMember({ fromGroupType: 'auto', fromIdx: groupIdx, smId })}
-                                className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                                className="text-xs px-2 py-1 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                               >Move to…</button>
                               <button
                                 onClick={() => makeStandaloneFromAutoGroup(groupIdx, smId)}
-                                className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                                className="text-xs px-2 py-1 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                               >Standalone</button>
                               <button
                                 disabled={isIgnoring}
                                 onClick={() => ignoreFilament(smId, 'auto', groupIdx)}
-                                className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                                className="text-xs px-2 py-1 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
                               >{isIgnoring ? '…' : 'Ignore'}</button>
                             </>
                           )}
@@ -798,9 +798,9 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                   if (conflictFields.size === 0) return null
                   const masterData = allFilamentData.get(masterId)
                   return (
-                    <div className="mt-3 bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
-                      <p className="text-xs font-medium text-amber-800">Reconcile conflicting properties</p>
-                      <p className="text-xs text-amber-700">Choose which value to use for each conflicting field. This will be applied to both Filament DB and Spoolman on execute.</p>
+                    <div className="mt-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded p-3 space-y-2">
+                      <p className="text-xs font-medium text-amber-800 dark:text-amber-300">Reconcile conflicting properties</p>
+                      <p className="text-xs text-amber-700 dark:text-amber-300">Choose which value to use for each conflicting field. This will be applied to both Filament DB and Spoolman on execute.</p>
                       {Array.from(conflictFields.entries()).map(([rawField, { values }]) => {
                         // Translate raw SM field name → canonical key for backend _RECONCILE_FIELD_MAP
                         const canonicalKey = CONFLICT_FIELD_TO_CANONICAL[rawField] ?? rawField
@@ -817,7 +817,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         ]
                         return (
                           <div key={canonicalKey} className="flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-medium text-gray-700 w-28 shrink-0">{rawField}:</span>
+                            <span className="text-xs font-medium text-gray-700 dark:text-gray-200 w-28 shrink-0">{rawField}:</span>
                             {allValues.map((opt, i) => {
                               const isSelected = current?.value === opt.value ||
                                 (current == null && i === 0)  // default: master value
@@ -840,7 +840,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                   className={`text-xs px-2 py-1 rounded border transition-colors ${
                                     isSelected
                                       ? 'bg-amber-600 text-white border-amber-600'
-                                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                                      : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
                                   }`}
                                 >
                                   {opt.label}
@@ -850,7 +850,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                             <input
                               type="text"
                               placeholder="Manual value…"
-                              className="text-xs border border-gray-300 rounded px-2 py-1 w-24 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                              className="text-xs border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 w-24 focus:outline-none focus:ring-1 focus:ring-amber-400"
                               onBlur={e => {
                                 const v = e.target.value.trim()
                                 if (!v) return
@@ -877,7 +877,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     {addingTo === groupIdx ? (
                       <div className="flex items-center gap-2">
                         <select
-                          className="text-xs border border-gray-200 rounded px-2 py-1 flex-1"
+                          className="text-xs border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 flex-1"
                           defaultValue=""
                           onChange={e => { if (e.target.value) addMember(groupIdx, parseInt(e.target.value)) }}
                         >
@@ -889,11 +889,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                           ))}
                         </select>
                         <button onClick={() => setAddingTo(null)}
-                          className="text-xs text-gray-500 hover:text-gray-700 shrink-0">Cancel</button>
+                          className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 shrink-0">Cancel</button>
                       </div>
                     ) : (
                       <button onClick={() => setAddingTo(groupIdx)}
-                        className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                        className="text-xs text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 font-medium">
                         + Add member
                       </button>
                     )}
@@ -909,7 +909,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       {effectiveUngrouped.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-gray-700">Standalone filaments</h3>
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-200">Standalone filaments</h3>
             {selectedForGrouping.size >= 2 && (
               <button
                 onClick={createGroupFromSelected}
@@ -920,9 +920,9 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             )}
           </div>
           {selectedForGrouping.size > 0 && selectedForGrouping.size < 2 && (
-            <p className="text-xs text-gray-500">Select one more to enable grouping.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Select one more to enable grouping.</p>
           )}
-          <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
             {[...effectiveUngrouped]
               .sort((a, b) => {
                 const va = sortBy === 'vendor' ? (a.ref.vendor ?? '') : (a.material ?? '')
@@ -933,46 +933,46 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
               const smId = f.ref.spoolman_filament_id!
               const isIgnoring = ignoringId === smId
               return (
-                <div key={smId} className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-gray-50">
+                <div key={smId} className="flex flex-wrap items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/40">
                   {/* Manual grouping checkbox */}
                   <input
                     type="checkbox"
                     checked={selectedForGrouping.has(smId)}
                     onChange={() => toggleSelectForGrouping(smId)}
-                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 shrink-0"
+                    className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 text-indigo-600 focus:ring-indigo-500 shrink-0"
                     title="Select to group as variants"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <ColorSwatch hex={f.color_hex} />
-                      <span className="text-sm text-gray-700">{f.ref.name}</span>
-                      {f.ref.vendor && <span className="text-xs text-gray-400">{f.ref.vendor}</span>}
-                      {f.color_hex && <span className="text-xs font-mono text-gray-400">{f.color_hex}</span>}
+                      <span className="text-sm text-gray-700 dark:text-gray-200">{f.ref.name}</span>
+                      {f.ref.vendor && <span className="text-xs text-gray-400 dark:text-gray-500">{f.ref.vendor}</span>}
+                      {f.color_hex && <span className="text-xs font-mono text-gray-400 dark:text-gray-500">{f.color_hex}</span>}
                       {/* Type chip — primary source is SM material; FDB material_type shown as mismatch only */}
-                      <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded">
+                      <span className="text-xs bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 px-1.5 py-0.5 rounded">
                         {f.material ?? '—'}
                       </span>
                       {f.material_type && f.material_type !== f.material && (
-                        <span className="text-xs bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">
+                        <span className="text-xs bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 px-1.5 py-0.5 rounded">
                           FDB: {f.material_type}
                         </span>
                       )}
                       {/* Diameter chip — always shown, dash when null */}
-                      <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                      <span className="text-xs bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 rounded">
                         {f.diameter != null ? `${f.diameter} mm` : '⌀ —'}
                       </span>
                       {/* Density chip — always shown, dash when null */}
-                      <span className="text-xs bg-gray-50 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded">
+                      <span className="text-xs bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 px-1.5 py-0.5 rounded">
                         {f.density != null ? `${f.density} g/cm³` : 'ρ —'}
                       </span>
                       {/* Temps chip — shown when at least one temp is set */}
                       {(f.settings_extruder_temp != null || f.settings_bed_temp != null) && (
-                        <span className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-1.5 py-0.5 rounded">
+                        <span className="text-xs bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800 px-1.5 py-0.5 rounded">
                           {f.settings_extruder_temp ?? '—'}° / {f.settings_bed_temp ?? '—'}°
                         </span>
                       )}
                       {f.suggest_exclude && (
-                        <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">
+                        <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded">
                           {f.conflicts && f.conflicts.length > 0
                             ? (() => {
                                 const labels = [...new Set(f.conflicts.map(c => CONFLICT_FIELD_LABELS[c.field] ?? c.field))]
@@ -984,22 +984,22 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       <DeepLinks spoolmanFilamentId={smId} />
                     </div>
                   </div>
-                  <label className="flex items-center gap-1.5 text-xs text-gray-500 shrink-0">
+                  <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 shrink-0">
                     Tare (g):
                     <input
                       type="number" min="0" step="1"
                       value={tareBySMId[smId] ?? String(f.tare)}
                       onChange={e => setTareBySMId(prev => ({ ...prev, [smId]: e.target.value }))}
-                      className="w-20 border border-gray-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
                     />
                     {f.tare_source === 'default' && (
-                      <span className="text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">default</span>
+                      <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 px-1.5 py-0.5 rounded">default</span>
                     )}
                   </label>
                   {movingStandaloneId === smId ? (
                     <>
                       <select
-                        className="text-xs border border-gray-200 rounded px-2 py-1 shrink-0"
+                        className="text-xs border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 shrink-0"
                         defaultValue=""
                         onChange={e => { if (e.target.value) moveFromStandalone(smId, e.target.value) }}
                         autoFocus
@@ -1007,18 +1007,18 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         <option value="" disabled>Move to…</option>
                         {standaloneTargetOptions().map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
-                      <button onClick={() => setMovingStandaloneId(null)} className="text-xs text-gray-400 hover:text-gray-600 px-1 shrink-0">✕</button>
+                      <button onClick={() => setMovingStandaloneId(null)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 px-1 shrink-0">✕</button>
                     </>
                   ) : (
                     <button
                       onClick={() => setMovingStandaloneId(smId)}
-                      className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100 shrink-0"
+                      className="text-xs px-2 py-1 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 shrink-0"
                     >Move to…</button>
                   )}
                   <button
                     disabled={isIgnoring}
                     onClick={() => ignoreFilament(smId)}
-                    className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50 shrink-0"
+                    className="text-xs px-2 py-1 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 shrink-0"
                   >{isIgnoring ? '…' : 'Ignore'}</button>
                 </div>
               )
@@ -1030,7 +1030,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       {/* Extra groups from manual selection */}
       {Object.keys(extraGroupMemberships).length > 0 && (
         <div className="space-y-4">
-          <h3 className="text-sm font-medium text-gray-700">Manually grouped</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-200">Manually grouped</h3>
           {Object.entries(extraGroupMemberships).map(([idxStr, membership]) => {
             const extraIdx = parseInt(idxStr)
             if (membership.size === 0) return null
@@ -1038,15 +1038,15 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             const masterTareVal = tareBySMId[masterId] ?? '200'
             const moveTargetsExtra = moveTargetOptions('extra', extraIdx)
             return (
-              <div key={extraIdx} className="bg-white rounded-lg border border-indigo-200 p-4 space-y-2">
+              <div key={extraIdx} className="bg-white dark:bg-gray-800 rounded-lg border border-indigo-200 dark:border-indigo-800 p-4 space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-gray-700">Manual group {extraIdx + 1}</p>
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-200">Manual group {extraIdx + 1}</p>
                   <button
                     onClick={() => {
                       setExtraGroupMemberships(prev => { const n = { ...prev }; delete n[extraIdx]; return n })
                       setExtraMasters(prev => { const n = { ...prev }; delete n[extraIdx]; return n })
                     }}
-                    className="text-xs text-gray-400 hover:text-red-500"
+                    className="text-xs text-gray-400 dark:text-gray-500 hover:text-red-500"
                   >
                     Disband
                   </button>
@@ -1064,7 +1064,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         onChange={() => setExtraMasters(prev => ({ ...prev, [extraIdx]: smId }))}
                         className="accent-indigo-600 shrink-0"
                         title="Set as master" />
-                      <span className={`text-sm flex-1 min-w-0 ${isMaster ? 'font-semibold text-indigo-700' : 'text-gray-700'}`}>
+                      <span className={`text-sm flex-1 min-w-0 ${isMaster ? 'font-semibold text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-200'}`}>
                         {filData.ref.name}
                       </span>
                       {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
@@ -1072,7 +1072,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         {isMoving ? (
                           <>
                             <select
-                              className="text-xs border border-gray-200 rounded px-2 py-1"
+                              className="text-xs border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1"
                               defaultValue=""
                               onChange={e => { if (e.target.value) moveMember('extra', extraIdx, smId, e.target.value) }}
                               autoFocus
@@ -1080,22 +1080,22 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                               <option value="" disabled>Move to…</option>
                               {moveTargetsExtra.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
-                            <button onClick={() => setMovingMember(null)} className="text-xs text-gray-400 hover:text-gray-600 px-1">✕</button>
+                            <button onClick={() => setMovingMember(null)} className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 px-1">✕</button>
                           </>
                         ) : (
                           <>
                             <button
                               onClick={() => setMovingMember({ fromGroupType: 'extra', fromIdx: extraIdx, smId })}
-                              className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                              className="text-xs px-2 py-1 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                             >Move to…</button>
                             <button
                               onClick={() => makeStandaloneFromExtraGroup(extraIdx, smId)}
-                              className="text-xs px-2 py-1 text-gray-600 border border-gray-200 rounded hover:bg-gray-100"
+                              className="text-xs px-2 py-1 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
                             >Standalone</button>
                             <button
                               disabled={isIgnoring}
                               onClick={() => ignoreFilament(smId, 'extra', extraIdx)}
-                              className="text-xs px-2 py-1 text-red-600 border border-red-200 rounded hover:bg-red-50 disabled:opacity-50"
+                              className="text-xs px-2 py-1 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 rounded hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
                             >{isIgnoring ? '…' : 'Ignore'}</button>
                           </>
                         )}
@@ -1103,12 +1103,12 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     </div>
                   )
                 })}
-                <label className="flex items-center gap-1.5 text-xs text-gray-500">
+                <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                   Group tare (g):
                   <input type="number" min="0" step="1"
                     value={masterTareVal}
                     onChange={e => setTareBySMId(prev => ({ ...prev, [masterId]: e.target.value }))}
-                    className="w-20 border border-gray-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                    className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                 </label>
               </div>
             )
@@ -1116,7 +1116,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
         </div>
       )}
 
-      {ignoreErr && <p className="text-sm text-red-600">Ignore failed: {ignoreErr}</p>}
+      {ignoreErr && <p className="text-sm text-red-600 dark:text-red-400">Ignore failed: {ignoreErr}</p>}
       {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
       {/* Bottom action bar */}
@@ -1195,37 +1195,37 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-800">Variances</h2>
-        <p className="text-sm text-gray-500 mt-1">Review variant groupings and weight conversions.</p>
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Variances</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Review variant groupings and weight conversions.</p>
       </div>
 
       {/* FDB variant groups */}
       {(variantsData.fdb_groups?.length ?? 0) > 0 ? (
         <div className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-700">Variant groups</h3>
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-200">Variant groups</h3>
           {variantsData.fdb_groups.map((group, i) => (
-            <div key={i} className={`bg-white rounded-lg border border-gray-200 p-5 ${skipped.has(i) ? 'opacity-50' : ''}`}>
+            <div key={i} className={`bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5 ${skipped.has(i) ? 'opacity-50' : ''}`}>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <p className="font-medium text-gray-800">{group.base_name}</p>
-                  {group.vendor && <p className="text-xs text-gray-500">{group.vendor}</p>}
+                  <p className="font-medium text-gray-800 dark:text-gray-100">{group.base_name}</p>
+                  {group.vendor && <p className="text-xs text-gray-500 dark:text-gray-400">{group.vendor}</p>}
                 </div>
                 <button onClick={() => toggleSkip(i)}
-                  className={`px-3 py-1 rounded text-xs font-medium ${skipped.has(i) ? 'bg-gray-200 text-gray-600' : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'}`}>
+                  className={`px-3 py-1 rounded text-xs font-medium ${skipped.has(i) ? 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300' : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-200 dark:hover:bg-yellow-800/40'}`}>
                   {skipped.has(i) ? 'Unskip' : 'Skip'}
                 </button>
               </div>
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-gray-500 uppercase w-14">Parent</span>
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-14">Parent</span>
                   <span className="text-sm font-medium">{group.suggested_parent.name}</span>
                   <DeepLinks filamentdbFilamentId={group.suggested_parent.filamentdb_filament_id} />
                 </div>
                 <div className="pl-14 space-y-1">
                   {group.variants.map(v => (
                     <div key={v.filamentdb_filament_id} className="flex items-center gap-2">
-                      <span className="text-sm text-gray-600">{v.name}</span>
-                      {v.color && <span className="text-xs text-gray-400">{v.color}</span>}
+                      <span className="text-sm text-gray-600 dark:text-gray-300">{v.name}</span>
+                      {v.color && <span className="text-xs text-gray-400 dark:text-gray-500">{v.color}</span>}
                       <DeepLinks filamentdbFilamentId={v.filamentdb_filament_id} />
                     </div>
                   ))}
@@ -1235,37 +1235,37 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
           ))}
         </div>
       ) : (
-        <p className="text-sm text-gray-500">No variant groups detected in Filament DB.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">No variant groups detected in Filament DB.</p>
       )}
 
       {/* Weight review */}
       {weightsData && weightsData.rows.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-700">Weight conversions</h3>
-          <p className="text-xs text-gray-500">
+          <h3 className="text-sm font-medium text-gray-700 dark:text-gray-200">Weight conversions</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
             Override tare (empty reel) per spool if needed.
             Direction: <strong>{weightsData.direction.replace(/_/g, ' ')}</strong>.
           </p>
-          <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
-            <table className="min-w-full divide-y divide-gray-200 text-sm">
-              <thead className="bg-gray-50">
+          <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-900/40">
                 <tr>
                   {['Spool', 'Net (g)', 'Gross (g)', 'Tare (g)', 'Source', 'Override tare', 'Links'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+                    <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {weightsData.rows.map(row => {
                   const key = rowKey(row.spoolman_spool_id, row.filamentdb_spool_id)
                   return (
-                    <tr key={key} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900">{row.name ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{row.net_weight?.toFixed(1) ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{row.gross_weight?.toFixed(1) ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{row.tare.toFixed(1)}</td>
+                    <tr key={key} className="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                      <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{row.name ?? '—'}</td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.net_weight?.toFixed(1) ?? '—'}</td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.gross_weight?.toFixed(1) ?? '—'}</td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.tare.toFixed(1)}</td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${row.tare_source === 'default' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600'}`}>
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${row.tare_source === 'default' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
                           {row.tare_source}
                         </span>
                       </td>
@@ -1273,7 +1273,7 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
                         <input type="number" min="0" step="1" placeholder={row.tare.toFixed(0)}
                           value={overrides[key] ?? ''}
                           onChange={e => setOverrides(o => ({ ...o, [key]: e.target.value }))}
-                          className="w-20 border border-gray-300 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                          className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                       </td>
                       <td className="px-4 py-3">
                         <DeepLinks filamentdbFilamentId={row.filamentdb_filament_id} spoolmanSpoolId={row.spoolman_spool_id} />

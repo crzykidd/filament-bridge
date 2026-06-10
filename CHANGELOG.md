@@ -25,8 +25,8 @@ GitHub release.
   control; a compact three-button toggle (☀/⊙/☾) also appears at the bottom of the sidebar.
   Dark styling covers the shared chrome (Layout, sidebar, modals), all primary pages
   (Dashboard, Conflicts, SyncedRecords, SyncLog, Settings, Login, OpenTagCleanup) and Wizard
-  steps 1, 2, 3, and 6. Inner sub-components of the remaining large Wizard steps (StepVariances,
-  StepNPreview) are partially polished and will be completed incrementally. A `gray-750` offset
+  steps 1, 2, 3, 5 (Variances), and 6. Inner sub-components of the remaining large Wizard step
+  (StepNPreview) are partially polished and will be completed incrementally. A `gray-750` offset
   surface color was added to the Tailwind theme for raised dark header rows (table column headers
   and group headers).
 
