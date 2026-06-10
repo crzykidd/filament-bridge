@@ -1,5 +1,48 @@
 # Decision record
 
+## 2026-06-09 — Version display, GitHub update check, dev channel marker
+
+### A — Backend-proxied GitHub release check, cached 6 h
+
+The backend calls `https://api.github.com/repos/crzykidd/filament-bridge/releases/latest`
+and caches the result in-memory for 6 hours. The browser never calls GitHub directly.
+Rationale: avoids CORS complexity; allows the endpoint to degrade gracefully (cached value
+or `null`); a single caching point is easy to reason about. No new Python dependency —
+`urllib.request` from the stdlib handles the call.
+
+### B — `/api/version` is PUBLIC (no auth required)
+
+`GET /api/version` is registered without `require_auth`, alongside `/api/health` and
+`/api/auth/*`. Rationale: the current version / channel / commit are not sensitive
+information. Making it public lets the version badge render immediately even if the session
+has expired, matching the LabelForge pattern. A future change that returned private data
+would warrant moving it behind auth; the current payload does not.
+
+### C — Dev channel + short SHA baked in at image build time
+
+`BRIDGE_CHANNEL` and `BRIDGE_COMMIT` are set via Docker build args (`BUILD_CHANNEL`,
+`GIT_COMMIT`). The running container has no `.git` directory, so runtime detection is not
+possible. The ARG/ENV lines are placed near the very end of the Dockerfile, immediately
+before EXPOSE/CMD, to avoid busting earlier cache layers on every commit. The default
+channel is `release` so a plain `docker build` (and the prod compose) need no extra wiring.
+
+### D — Update nag suppressed on dev builds
+
+When `channel != "release"`, `update_available` is forced to `false` even if `latest >
+current`. Rationale: dev builds run ahead of the latest release; showing "update
+available" on a dev build would be misleading. `latest` is still returned so operators
+can see what the latest release is without acting on the nag.
+
+### E — Per-version localStorage dismissal; no popup on first run
+
+The release-notes modal is shown when `update_available` is true AND a previous version
+was stored in `localStorage['fb_last_seen_version']` AND that stored value differs from
+`latest`. Omitting the popup on first run (no stored value) prevents alarming users of
+fresh installs. This mirrors the LabelForge pattern.
+
+**Revisit when:** a server-side notification delivery mechanism is warranted, or when
+the GitHub call should be opt-in (currently always-on).
+
 ## 2026-06-09 — Single-account auth + API token + first-login required-settings gate
 
 ### A — Stateless signed cookie (no sessions table)

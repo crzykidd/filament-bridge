@@ -150,6 +150,7 @@ filament-bridge/
 │   │   │   ├── sync_log.py                 — audit log viewer (FR-17)
 │   │   │   ├── wizard.py                   — Bulk Import Wizard read/decision endpoints (FR-1–FR-6)
 │   │   │   ├── debug.py                    — gated reset tools (403 unless debug_mode is on)
+│   │   │   ├── version.py                  — public GET /api/version (current, build, GitHub update check)
 │   │   │   └── errors.py                   — consistent error envelope for the bridge API
 │   │   ├── core/
 │   │   │   ├── engine.py                   — main sync loop: snapshot, diff, apply, log
@@ -230,6 +231,8 @@ filament-bridge/
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | String appended (after a space) to generic-container parent names in the wizard. Empty string = no suffix. Overridable at runtime via Settings. |
+| `BRIDGE_CHANNEL` | No | `release` | Build channel baked in at image build time (Docker build arg `BUILD_CHANNEL`). When `dev`, the displayed version gets a `-dev` suffix (+ short commit). |
+| `BRIDGE_COMMIT` | No | — | Short git SHA baked in at image build time (Docker build arg `GIT_COMMIT`). Shown in version label on dev builds. |
 | `DISCORD_WEBHOOK_URL` | No | — | Discord webhook for conflict/error notifications (declared; not yet implemented) |
 | `AUTH_ENABLED` | No | `true` | When `false`, auth is fully bypassed (open app). Set to `false` for locked-out recovery: disable → change password in Settings → re-enable. |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |

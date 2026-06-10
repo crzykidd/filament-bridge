@@ -11,6 +11,15 @@ GitHub release.
 
 ### Added
 
+- **Version badge + GitHub update check + release-notes popup** — the sidebar now
+  shows the current version (with a `-dev+<sha>` suffix on dev builds) linking to
+  its GitHub release. When a newer release is detected on GitHub (checked server-side,
+  cached 6 hours), an "↑ vX.Y.Z" pill appears; a one-time modal pops up with the
+  release notes and a link to the full release. Dev/channel builds suppress the update
+  nag. New env vars `BRIDGE_CHANNEL` (default `release`) and `BRIDGE_COMMIT`
+  (default empty) are baked in at image build time. New public endpoint `GET /api/version`.
+  New Dockerfile build args `BUILD_CHANNEL` / `GIT_COMMIT`.
+
 - **Single-account auth + API token** — the bridge is now protected by optional password
   authentication (default enabled, `AUTH_ENABLED` env var). First visit shows a setup screen
   to set the admin password; subsequent visits show a login form. Sessions use a stateless

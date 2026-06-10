@@ -1,5 +1,6 @@
 import type {
   AuthStatusResponse,
+  VersionInfo,
   AutoSyncRequest,
   AutoSyncResponse,
   BackupExport,
@@ -96,6 +97,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 function json<T>(path: string, method: string, body: unknown): Promise<T> {
   return request<T>(path, { method, body: JSON.stringify(body) })
 }
+
+// ---------------------------------------------------------------------------
+// Version / update check
+// ---------------------------------------------------------------------------
+
+export const getVersionInfo = () => request<VersionInfo>('/version')
 
 // ---------------------------------------------------------------------------
 // Health

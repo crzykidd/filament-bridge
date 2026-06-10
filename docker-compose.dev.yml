@@ -2,11 +2,17 @@
 # For a normal deployment use docker-compose.yml and point it at your existing Spoolman/Filament DB.
 services:
   filament-bridge:
-    build: .
+    # Pass BUILD_CHANNEL=dev and the current git SHA so the version badge shows the dev suffix.
+    # Stamp with: GIT_COMMIT=$(git rev-parse --short HEAD) docker compose -f docker-compose.dev.yml build
+    build:
+      context: .
+      args:
+        BUILD_CHANNEL: dev
+        GIT_COMMIT: ${GIT_COMMIT:-}
     ports:
       - "8090:8090"
     volumes:
-      - ~/projects/filament-bridge/private_data/spoolman:/data
+      - ~/projects/filament-bridge/private_data/filament-bridge:/data
     environment:
       FILAMENTDB_URL: http://filament-db:3000
       SPOOLMAN_URL: http://spoolman:7912

@@ -716,6 +716,23 @@ export interface ResetStateResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Version / update check
+// ---------------------------------------------------------------------------
+
+export interface VersionInfo {
+  current: string
+  latest: string | null
+  update_available: boolean
+  release_url: string | null
+  release_name: string | null
+  release_notes: string | null
+  channel: string
+  commit: string | null
+  build: string
+  is_dev: boolean
+}
+
+// ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
 

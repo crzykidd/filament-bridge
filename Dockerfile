@@ -39,6 +39,13 @@ RUN groupadd -g 1000 app && useradd -u 1000 -g 1000 -m -s /usr/sbin/nologin app 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
+# Build-channel and git-commit baked in near the end so they don't bust earlier cache layers.
+# Stamp with: BUILD_CHANNEL=dev GIT_COMMIT=$(git rev-parse --short HEAD) docker build ...
+ARG BUILD_CHANNEL=release
+ARG GIT_COMMIT=""
+ENV BRIDGE_CHANNEL=$BUILD_CHANNEL \
+    BRIDGE_COMMIT=$GIT_COMMIT
+
 EXPOSE 8090
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

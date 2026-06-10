@@ -32,6 +32,7 @@ from app.api import config as config_router
 from app.api import conflicts as conflicts_router
 from app.api import debug as debug_router
 from app.api import health as health_router
+from app.api import version as version_router
 from app.api import mappings as mappings_router
 from app.api import opentag as opentag_router
 from app.api import sync as sync_router
@@ -210,9 +211,10 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-# Public: health + auth endpoints (no require_auth dependency)
+# Public: health + auth + version endpoints (no require_auth dependency)
 app.include_router(health_router.router, prefix="/api")
 app.include_router(auth_router.router, prefix="/api")
+app.include_router(version_router.router, prefix="/api")
 
 # Protected: all remaining API routers require authentication
 _auth_dep = [Depends(require_auth)]
