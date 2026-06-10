@@ -29,13 +29,21 @@ def spoolman_to_fdb_gross(
 def fdb_to_spoolman_net(
     total_weight: float,
     spool_weight: float | None,
-    usage_grams_sum: float = 0.0,
     precision: int = 2,
 ) -> NetResult:
-    """Convert Filament DB gross totalWeight → Spoolman net remaining_weight."""
+    """Convert Filament DB gross totalWeight → Spoolman net remaining_weight.
+
+    net = totalWeight - tare.  We do NOT subtract usageHistory: Filament DB
+    reduces ``totalWeight`` directly when a usage entry is logged (verified
+    against the live API — POST .../usage of 10g drops totalWeight by 10 and
+    appends the entry to usageHistory), so ``totalWeight`` is already the
+    *current* gross.  Subtracting usageHistory on top of that double-counts
+    every gram of usage, which (together with stale snapshots) produced a
+    runaway, compounding weight-decrement loop in two-way sync.
+    """
     used_default = spool_weight is None
     tare = DEFAULT_TARE_GRAMS if used_default else spool_weight
-    net = total_weight - tare - usage_grams_sum
+    net = total_weight - tare
     return NetResult(remaining_weight=round(max(net, 0.0), precision), used_default_tare=used_default)
 
 

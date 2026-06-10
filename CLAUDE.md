@@ -260,9 +260,18 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 ### Weight model translation
 Spoolman `remaining_weight` is net filament. Filament DB `totalWeight` is gross (filament + reel). The filament-level `spoolWeight` field is the empty reel tare weight.
 - Spoolman → Filament DB: `totalWeight = remaining_weight + spoolWeight`
-- Filament DB → Spoolman: `remaining_weight = totalWeight - spoolWeight - sum(usageHistory.grams)`
+- Filament DB → Spoolman: `remaining_weight = totalWeight - spoolWeight`
+  **DO NOT also subtract `sum(usageHistory.grams)`.** Filament DB reduces `totalWeight`
+  directly when a usage entry is logged (verified against the live API: a 10 g usage drops
+  `totalWeight` by 10 *and* appends to `usageHistory`), so `totalWeight` is already the
+  *current* gross. Subtracting usage on top of that double-counts it — that, combined with
+  one-sided snapshot refreshes, caused a runaway compounding weight-decrement loop in two-way
+  sync (fixed 2026-06-10; see `docs/decisions.md`). `usageHistory` is an audit trail only.
 - Weight decrements from Spoolman are logged as usage entries in Filament DB with `source: "spoolman"`
 - Weight increases (user added filament, correction) should update totalWeight directly, not create negative usage entries
+- **After any weight propagation the engine must refresh BOTH side snapshots to the post-write
+  agreed values** (SM `remaining_weight` and FDB `totalWeight`), or the propagated change is
+  re-detected as a fresh change on the other side next cycle → ping-pong.
 
 ### Filament DB API endpoints the bridge uses
 - `GET /api/filaments` — list all filaments with embedded spools

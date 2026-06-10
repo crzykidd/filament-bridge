@@ -1900,20 +1900,30 @@ async def run_sync_cycle(
             try:
                 if not dry_run:
                     if delta > 0:
-                        # Weight decreased → log usage entry (FR-9)
+                        # Weight decreased → log usage entry (FR-9). Filament DB
+                        # reduces totalWeight by `delta` when the usage is logged.
                         await filamentdb.log_usage(
                             fdb_filament_id, fdb_spool.id, delta,
                             job_label=f"spoolman sync {today_iso}",
                             source="spoolman",
                             date=today_iso,
                         )
+                        new_fdb_total = (fdb_spool.totalWeight or 0.0) - delta
                     else:
                         # Weight increased → update totalWeight (correction)
                         gross, used_default = spoolman_to_fdb_gross(new_w or 0.0, tare, precision=precision)
                         if used_default:
                             logger.warning("Cycle %s: using default tare for FDB spool %s", cycle_id, fdb_spool.id)
                         await filamentdb.update_spool(fdb_filament_id, fdb_spool.id, {"totalWeight": gross})
+                        new_fdb_total = gross
+                    # Refresh BOTH snapshots to the post-write agreed state.  Updating
+                    # only the SM side left the FDB snapshot stale, so next cycle the
+                    # (now-decremented) FDB totalWeight looked like a fresh FDB-side
+                    # change and got pushed back to SM → the weight ping-pong loop.
                     _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
+                    fdb_snap_after = _fdb_snapshot_dict(fdb_spool)
+                    fdb_snap_after["totalWeight"] = round(new_fdb_total, precision)
+                    _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, fdb_snap_after)
                     _log(
                         db, cycle_id, "spoolman_to_filamentdb", "update", "spool",
                         spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
@@ -1945,22 +1955,26 @@ async def run_sync_cycle(
                 result.errors += 1
 
         elif weight_action == SyncAction.PUSH_FDB_TO_SM:
-            # FDB → SM weight sync (FR-10) — need detail for usage sum
+            # FDB → SM weight sync (FR-10).  FDB's totalWeight already reflects
+            # usage (logging usage reduces it), so net = totalWeight - tare — do
+            # NOT re-subtract usageHistory (that double-counted and, with the
+            # stale-snapshot loop, compounded the decrement to zero).
             fdb_filament = fdb_filaments.get(fdb_filament_id)
             tare = fdb_filament.spoolWeight if fdb_filament else None
             try:
-                fdb_detail = await filamentdb.get_filament(fdb_filament_id)
-                detail_spool = next((s for s in fdb_detail.spools if s.id == fdb_spool.id), None)
-                if detail_spool is None:
-                    raise ValueError(f"FDB spool {fdb_spool.id} absent in detail view")
-                usage_sum = sum(u.grams for u in detail_spool.usageHistory if u.grams > 0)
                 new_w = cs.fdb_weight_change.new_value if cs.fdb_weight_change else fdb_spool.totalWeight or 0.0
-                net, used_default = fdb_to_spoolman_net(new_w or 0.0, tare, usage_sum, precision=precision)
+                net, used_default = fdb_to_spoolman_net(new_w or 0.0, tare, precision=precision)
                 if used_default:
                     logger.warning("Cycle %s: using default tare for SM spool %s", cycle_id, sm_spool.id)
                 if not dry_run:
                     await spoolman.update_spool(sm_spool.id, {"remaining_weight": net})
+                    # Refresh BOTH snapshots to the post-write agreed state so the
+                    # value we just wrote to SM is not re-detected as an SM-side
+                    # change next cycle (other half of the weight ping-pong loop).
                     _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                    sm_snap_after = _sm_snapshot_dict(sm_spool, field_maps)
+                    sm_snap_after["remaining_weight"] = net
+                    _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), sm_snap_after)
                     _log(
                         db, cycle_id, "filamentdb_to_spoolman", "update", "spool",
                         spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,

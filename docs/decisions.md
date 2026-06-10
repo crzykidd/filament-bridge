@@ -2684,3 +2684,36 @@ unchanged.
 The aliases are loaded from BridgeConfig on every matches request (with env-default fallback and
 a try/except so existing tests without a real DB are unaffected). The Settings UI ("Manufacturer
 mappings (Spoolman → OpenTag)") writes the CSV to `opentag_vendor_aliases` in BridgeConfig.
+
+---
+
+## 2026-06-10 — Weight model: net = totalWeight − tare (no usageHistory subtraction); refresh both snapshots after a weight push
+
+**Context.** Production hit a runaway, compounding weight-decrement loop: a single ~58 g print
+drove a mapped spool to 0 g over several sync cycles, with the per-cycle decrement *doubling*
+(58 → 116 → 232 …) and the value ping-ponging SM↔FDB each cycle.
+
+**Root cause (two bugs).**
+1. **Usage double-count.** `fdb_to_spoolman_net` computed `totalWeight − tare − sum(usageHistory)`.
+   Verified against the live Filament DB API: `POST /api/filaments/:id/spools/:sid/usage` of 10 g
+   reduces the spool's `totalWeight` by 10 **and** appends a 10 g `usageHistory` entry. So
+   `totalWeight` already reflects usage; subtracting `usageHistory` again double-counts it.
+2. **Stale snapshot feedback loop.** After a weight push the engine refreshed only the *source*
+   side's snapshot (SM→FDB updated only the SM snapshot; FDB→SM only the FDB snapshot). The
+   other side's just-changed value then looked like a fresh change next cycle and got pushed
+   back — an infinite ping-pong, which bug #1 turned into a compounding decrement.
+
+**Decision.**
+- `fdb_to_spoolman_net(total, tare)` → `max(total − tare, 0)`; the `usage_grams_sum` parameter
+  was removed so the double-count is impossible. (Only the ongoing FDB→SM weight path ever
+  passed it; the wizard/planner/new-spool import paths already used `total − tare`, which is why
+  the *initial* import was always correct.)
+- After **either** weight-push direction the engine now refreshes **both** snapshots to the
+  post-write agreed state: SM `remaining_weight` = the value written/current, and FDB
+  `totalWeight` = `old_total − delta` (usage path) or the gross we set (increase path). Next
+  cycle sees no change on either side → converges.
+- The FDB→SM path no longer fetches the filament detail (it was only for the usage sum).
+
+CLAUDE.md "Weight model translation" was corrected to match. Regression tests:
+`test_engine.py::test_weight_two_way_print_converges_no_loop` and `…_fdb_change_converges_no_loop`
+(multi-cycle convergence, no compounding); `test_weight.py::test_does_not_subtract_usage`.

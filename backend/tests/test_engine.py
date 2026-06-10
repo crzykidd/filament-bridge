@@ -173,6 +173,100 @@ async def test_weight_decrease_logs_usage(db):
     assert call_args.kwargs["source"] == "spoolman"
 
 
+def _patch_settings(mock_settings):
+    """Apply the minimal _settings attrs the weight path needs."""
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+def _snap_value(db, source, entity_type, entity_id, key):
+    row = db.query(Snapshot).filter_by(source=source, entity_type=entity_type, entity_id=entity_id).first()
+    return json.loads(row.data)[key] if row else None
+
+
+@pytest.mark.asyncio
+async def test_weight_two_way_print_converges_no_loop(db):
+    """Regression for the runaway weight loop: a single Spoolman-side decrement
+    (a print) under two_way must propagate ONCE (usage log) and then converge —
+    no compounding FDB→SM bounce on subsequent cycles.
+
+    Pre-fix, cycle 1 refreshed only the SM snapshot, so cycle 2 saw the
+    (now-reduced) FDB totalWeight as a fresh change, pushed it back to SM, and
+    the usage double-count compounded it toward zero.
+    """
+    # In agreement at start: SM net 800, FDB gross 1000, tare 200.
+    sm_spool = _sm_spool(1, 742.0)  # printed 58g (800 → 742)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        # Cycle 1: SM dropped 58g → SM→FDB usage log.
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c1")
+        assert fdb_client.log_usage.call_count == 1
+        assert fdb_client.log_usage.call_args.args[2] == pytest.approx(58.0)
+        spoolman.update_spool.assert_not_called()  # no FDB→SM bounce
+        # Both snapshots refreshed to the post-write agreed state.
+        assert _snap_value(db, "spoolman", "spool", "1", "remaining_weight") == pytest.approx(742.0)
+        assert _snap_value(db, "filamentdb", "spool", "spool-1", "totalWeight") == pytest.approx(942.0)
+
+        # FDB applied the usage: totalWeight 1000 → 942. Simulate live FDB for the
+        # next cycles; SM stays at 742 (no further print).
+        fdb_client.get_filaments = AsyncMock(return_value=[_fdb_filament("fil-1", "spool-1", 942.0, tare=200.0)])
+
+        # Cycles 2 & 3: must be NOOP — no new usage, no SM decrement.
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c2")
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c3")
+
+    assert fdb_client.log_usage.call_count == 1   # still just the one real print
+    spoolman.update_spool.assert_not_called()     # SM never re-decremented
+
+
+@pytest.mark.asyncio
+async def test_weight_two_way_fdb_change_converges_no_loop(db):
+    """A lone FDB-side weight change under two_way propagates to SM once
+    (net = totalWeight - tare, NO usage subtraction) and then converges."""
+    # Start in agreement: SM 800, FDB 1000, tare 200. FDB jumps to 1100 (user
+    # added filament / correction) → net should become 900.
+    sm_spool = _sm_spool(1, 800.0)
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1100.0, tare=200.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        # Cycle 1: FDB changed → FDB→SM, net = 1100 - 200 = 900.
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c1")
+        assert spoolman.update_spool.call_count == 1
+        assert spoolman.update_spool.call_args.args[1]["remaining_weight"] == pytest.approx(900.0)
+        fdb_client.log_usage.assert_not_called()
+        assert _snap_value(db, "spoolman", "spool", "1", "remaining_weight") == pytest.approx(900.0)
+        assert _snap_value(db, "filamentdb", "spool", "spool-1", "totalWeight") == pytest.approx(1100.0)
+
+        # SM now reflects 900; FDB unchanged. Next cycles must be NOOP.
+        spoolman.get_spools = AsyncMock(return_value=[_sm_spool(1, 900.0)])
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c2")
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c3")
+
+    assert spoolman.update_spool.call_count == 1   # no further SM writes
+    fdb_client.log_usage.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_both_sides_changed_creates_conflict_no_writes(db):
     """Weight changed on both sides with two_way+manual → Conflict row, zero API writes."""

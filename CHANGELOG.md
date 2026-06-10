@@ -219,6 +219,14 @@ GitHub release.
 
 ### Fixed
 
+- **Runaway weight-decrement loop in two-way sync** — a single Spoolman-side decrement
+  (e.g. one print) could compound across sync cycles and drive a mapped spool to 0 g,
+  ping-ponging the value SM↔FDB with a doubling delta. Two bugs: (1) `fdb_to_spoolman_net`
+  subtracted `usageHistory` from `totalWeight`, but Filament DB already reduces `totalWeight`
+  when usage is logged — double-counting every gram; (2) after a weight push only the source
+  side's snapshot was refreshed, so the propagated change was re-detected as a fresh change on
+  the other side next cycle. Net is now `totalWeight − tare` (no usage subtraction) and both
+  snapshots are refreshed to the agreed state after every push, so weight sync converges.
 - **Settings helper-text contrast in dark mode** — the small descriptive text under
   each settings field used `dark:text-gray-500`, which was too dark to read on the
   dark background; bumped to `dark:text-gray-400`.

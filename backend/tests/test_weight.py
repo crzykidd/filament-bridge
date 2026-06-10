@@ -33,28 +33,32 @@ class TestSpoolmanToFdbGross:
 
 class TestFdbToSpoolmanNet:
     def test_basic_conversion(self):
-        result = fdb_to_spoolman_net(1020.0, 220.0, 0.0)
+        result = fdb_to_spoolman_net(1020.0, 220.0)
         assert result.remaining_weight == pytest.approx(800.0)
         assert result.used_default_tare is False
 
-    def test_with_usage(self):
-        result = fdb_to_spoolman_net(1020.0, 220.0, 100.0)
+    def test_does_not_subtract_usage(self):
+        # FDB reduces totalWeight directly when usage is logged, so net is just
+        # total - tare; usageHistory must NOT be subtracted again (the double-
+        # count was the runaway weight-decrement loop). Here totalWeight (920)
+        # already reflects 100g of usage off the original 1020 gross.
+        result = fdb_to_spoolman_net(920.0, 220.0)
         assert result.remaining_weight == pytest.approx(700.0)
 
     def test_default_tare_when_none(self):
-        result = fdb_to_spoolman_net(1000.0, None, 0.0)
+        result = fdb_to_spoolman_net(1000.0, None)
         assert result.remaining_weight == pytest.approx(1000.0 - DEFAULT_TARE_GRAMS)
         assert result.used_default_tare is True
 
     def test_clamps_at_zero(self):
-        # Over-usage should not produce negative remaining weight
-        result = fdb_to_spoolman_net(220.0, 220.0, 500.0)
+        # tare exceeding totalWeight should not produce negative remaining weight
+        result = fdb_to_spoolman_net(100.0, 220.0)
         assert result.remaining_weight == pytest.approx(0.0)
 
     def test_roundtrip(self):
         # gross → net → gross should recover the original net weight
         gross = spoolman_to_fdb_gross(750.0, 200.0).total_weight
-        net = fdb_to_spoolman_net(gross, 200.0, 0.0).remaining_weight
+        net = fdb_to_spoolman_net(gross, 200.0).remaining_weight
         assert net == pytest.approx(750.0)
 
 
