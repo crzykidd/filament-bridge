@@ -102,31 +102,6 @@ GitHub release.
 - **Settings pinned to sidebar bottom** — Settings link is now visually separated at the bottom
   of the sidebar navigation.
 
-### Fixed
-
-- **OpenTag VOXEL-pla brand gate** — `normalize_vendor()` now replaces hyphens and underscores
-  with spaces before collapsing whitespace. This fixes a 0% / unmatched result for Spoolman vendor
-  `"VOXEL-pla"` against OpenTag brand `"Voxel PLA"`: both now normalize to `"voxel pla"` and land
-  in the same brand bucket so scoring can run.
-- **OpenTag color scoring — "Jet Black" matches "Galaxy Black"** — the hex proximity weight was
-  increased from 0.10 → 0.15 (hex is ground truth) and the color-name component was split into
-  0.25 token-similarity + 0.05 base-color bonus (via the new color-words map). "PLA Jet Black"
-  (#222F2E) now surfaces `prusament-pla-prusa-galaxy-black` above the 30% threshold.
-- **P0.1 Double finish word in container name** — `_container_display_name` now calls
-  `strip_finish_words` on the raw `material` field before composing the container name, so a
-  Spoolman filament with `material = "PLA Silk"` produces "ELEGOO PLA Silk (Master)" rather than
-  "ELEGOO PLA Silk Silk (Master)".
-- **P0.2 Container marker changed to `(Master)`** — the parenthesised form visually separates
-  the marker from the filament name so "ELEGOO PLA (Master)" is distinct from color children
-  like "ELEGOO PLA Red". The marker is now user-configurable (see `container_parent_marker`
-  below); an empty marker disables the suffix entirely.
-- **P0.3 optTags on container reuse** — when a pre-existing container is reused on re-run, the
-  wizard now PATCHes the shared finish tags (Silk / Matte / CF / …) onto the container if any are
-  missing. Existing unrelated tags are preserved (merge, not clobber).
-- **P1.1 Resilient 409 on filament create** — a 409 Conflict from Filament DB during container or
-  child filament creation is now caught per-record (not per-batch). The record is marked as
-  `failed` with detail `"name collision: <name>"`; the rest of the batch continues unaffected.
-
 ### Generic container parent mode
 
 - **Generic container parent mode** — new `variant_parent_mode` setting (`unset` / `promote_color`
@@ -235,6 +210,28 @@ GitHub release.
 
 ### Fixed
 
+- **OpenTag VOXEL-pla brand gate** — `normalize_vendor()` now replaces hyphens and underscores
+  with spaces before collapsing whitespace. This fixes a 0% / unmatched result for Spoolman vendor
+  `"VOXEL-pla"` against OpenTag brand `"Voxel PLA"`: both now normalize to `"voxel pla"` and land
+  in the same brand bucket so scoring can run.
+- **OpenTag color scoring — "Jet Black" matches "Galaxy Black"** — the hex proximity weight was
+  increased from 0.10 → 0.15 (hex is ground truth) and the color-name component was split into
+  0.25 token-similarity + 0.05 base-color bonus (via the new color-words map). "PLA Jet Black"
+  (#222F2E) now surfaces `prusament-pla-prusa-galaxy-black` above the 30% threshold.
+- **P0.1 Double finish word in container name** — `_container_display_name` now calls
+  `strip_finish_words` on the raw `material` field before composing the container name, so a
+  Spoolman filament with `material = "PLA Silk"` produces "ELEGOO PLA Silk (Master)" rather than
+  "ELEGOO PLA Silk Silk (Master)".
+- **P0.2 Container marker changed to `(Master)`** — the parenthesised form visually separates
+  the marker from the filament name so "ELEGOO PLA (Master)" is distinct from color children
+  like "ELEGOO PLA Red". The marker is now user-configurable (see `container_parent_marker`
+  above); an empty marker disables the suffix entirely.
+- **P0.3 optTags on container reuse** — when a pre-existing container is reused on re-run, the
+  wizard now PATCHes the shared finish tags (Silk / Matte / CF / …) onto the container if any are
+  missing. Existing unrelated tags are preserved (merge, not clobber).
+- **P1.1 Resilient 409 on filament create** — a 409 Conflict from Filament DB during container or
+  child filament creation is now caught per-record (not per-batch). The record is marked as
+  `failed` with detail `"name collision: <name>"`; the rest of the batch continues unaffected.
 - `multi_color_direction` is now always sent alongside `multi_color_hexes` (completes the
   multicolor 422 trio; `multi_unknown` defaults to `"coaxial"`).
 - `new_spool` conflicts are now deduplicated (no duplicate row each cycle) and
