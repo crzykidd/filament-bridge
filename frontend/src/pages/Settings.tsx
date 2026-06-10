@@ -510,7 +510,7 @@ export default function Settings() {
   const cardCls = 'bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5'
   const dividerCls = 'border-t border-gray-100 dark:border-gray-700'
   const labelCls = 'text-sm font-medium text-gray-700 dark:text-gray-300'
-  const subTextCls = 'text-xs text-gray-400 dark:text-gray-500'
+  const subTextCls = 'text-xs text-gray-500 dark:text-gray-400'
   const toggleOnCls = 'bg-indigo-600'
   const toggleOffCls = 'bg-gray-200 dark:bg-gray-600'
 

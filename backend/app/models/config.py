@@ -21,11 +21,13 @@ _DEFAULTS = {
     # New spool creation direction: two_way = bidirectional (= today's behavior).
     "new_spool_sync_direction": '"two_way"',
     # Spoolman vendor → OpenTag brand aliases for the OpenTag cleanup matcher.
-    # Empty string = no aliases (default).
-    "opentag_vendor_aliases": '""',
-    # Color-word → base-color map for the OpenTag matcher color scorer.
-    # Empty string = use seed defaults from core/opentag_match.py.
-    "opentag_color_keywords": '""',
+    # Seeded with common defaults for NEW installs only (on_conflict_do_nothing
+    # never overwrites an existing install's value — empty or customised).
+    "opentag_vendor_aliases": '"prusa=prusament, polyterra=polymaker"',
+    # Color-word → base-color map for the OpenTag matcher color scorer. Merged on
+    # top of core/opentag_match.py:DEFAULT_COLOR_KEYWORDS, so these are additive.
+    # Seeded for NEW installs only (existing installs keep their value).
+    "opentag_color_keywords": '"galaxy=black, cool=grey, jet=black"',
     # Runtime-configurable sync interval (seconds). 0 = use env-default.
     "sync_interval_seconds": "0",
     # Sync-log retention in days. 0 = keep forever.

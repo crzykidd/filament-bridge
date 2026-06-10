@@ -56,6 +56,31 @@ def _fresh_db():
     return session
 
 
+def test_seed_defaults_sets_opentag_examples_on_new_install():
+    """A fresh DB seeds the example OpenTag vendor aliases + color keywords."""
+    db = _fresh_db()
+    assert get_config_value(db, "opentag_vendor_aliases") == "prusa=prusament, polyterra=polymaker"
+    assert get_config_value(db, "opentag_color_keywords") == "galaxy=black, cool=grey, jet=black"
+    db.close()
+
+
+def test_seed_defaults_does_not_clobber_existing_opentag_values():
+    """Re-seeding (e.g. on an upgrade restart) must leave a user's existing
+    value untouched — even an intentionally-empty one — thanks to
+    on_conflict_do_nothing."""
+    db = _fresh_db()
+    # Simulate an existing install that cleared the aliases and customised colors.
+    set_config_value(db, "opentag_vendor_aliases", "")
+    set_config_value(db, "opentag_color_keywords", "myword=red")
+    db.commit()
+
+    seed_defaults(db)  # second startup
+
+    assert get_config_value(db, "opentag_vendor_aliases") == ""
+    assert get_config_value(db, "opentag_color_keywords") == "myword=red"
+    db.close()
+
+
 def _fake_spoolman(spools=None, filaments=None, vendors=None) -> AsyncMock:
     client = AsyncMock()
     client.get_spools = AsyncMock(return_value=spools or [])

@@ -11,6 +11,13 @@ GitHub release.
 
 ### Added
 
+- **Seeded OpenTag matcher defaults on new installs** — fresh installs now seed
+  `opentag_vendor_aliases` (`prusa=prusament, polyterra=polymaker`) and
+  `opentag_color_keywords` (`galaxy=black, cool=grey, jet=black`) so the Settings
+  fields start with real, editable defaults instead of greyed-out examples. Seeding
+  uses `on_conflict_do_nothing`, so **existing installs are never clobbered** — an
+  upgrade keeps whatever value the user already had (including an intentionally blank one).
+
 - **Light/dark/system theme** — the UI now supports three color modes: Light, Dark, and System
   (tracks OS preference; default). Choice persists in `localStorage` (`fb_theme`). A pre-paint
   inline script in `index.html` applies the theme class before React loads, preventing any
@@ -212,6 +219,9 @@ GitHub release.
 
 ### Fixed
 
+- **Settings helper-text contrast in dark mode** — the small descriptive text under
+  each settings field used `dark:text-gray-500`, which was too dark to read on the
+  dark background; bumped to `dark:text-gray-400`.
 - **OpenTag download hint tracks dataset size** — the "first load downloads…" status
   message no longer hardcodes "≈11k records". Each successful grab persists the record
   count to BridgeConfig (`opentag_last_count`); `GET /api/openprinttag/status` now returns
