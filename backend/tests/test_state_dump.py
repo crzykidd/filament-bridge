@@ -7,7 +7,7 @@ import datetime
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -179,8 +179,8 @@ def test_format_state_dump_sm_filaments_sorted_by_id():
     now = datetime.datetime(2026, 6, 11, tzinfo=datetime.timezone.utc)
     text = format_state_dump(sm_filaments, [], [], {}, now, settings)
 
-    lines = [l for l in text.splitlines() if l.startswith("filament #")]
-    ids = [int(l.split("#")[1].split(" ")[0]) for l in lines]
+    lines = [ln for ln in text.splitlines() if ln.startswith("filament #")]
+    ids = [int(ln.split("#")[1].split(" ")[0]) for ln in lines]
     assert ids == sorted(ids)
 
 
@@ -190,8 +190,8 @@ def test_format_state_dump_sm_spools_sorted_by_id():
     now = datetime.datetime(2026, 6, 11, tzinfo=datetime.timezone.utc)
     text = format_state_dump([], sm_spools, [], {}, now, settings)
 
-    lines = [l for l in text.splitlines() if l.startswith("spool #")]
-    ids = [int(l.split("#")[1].split(" ")[0]) for l in lines]
+    lines = [ln for ln in text.splitlines() if ln.startswith("spool #")]
+    ids = [int(ln.split("#")[1].split(" ")[0]) for ln in lines]
     assert ids == sorted(ids)
 
 
@@ -205,8 +205,8 @@ def test_format_state_dump_fdb_filaments_sorted_by_id():
     now = datetime.datetime(2026, 6, 11, tzinfo=datetime.timezone.utc)
     text = format_state_dump([], [], fdb_filaments, {}, now, settings)
 
-    lines = [l for l in text.splitlines() if l.startswith("filament ") and not l.startswith("filament #")]
-    fids = [l.split(" ")[1] for l in lines]
+    lines = [ln for ln in text.splitlines() if ln.startswith("filament ") and not ln.startswith("filament #")]
+    fids = [ln.split(" ")[1] for ln in lines]
     assert fids == sorted(fids)
 
 
@@ -230,7 +230,7 @@ def test_format_state_dump_sm_filament_extras_decoded():
     now = datetime.datetime(2026, 6, 11, tzinfo=datetime.timezone.utc)
     text = format_state_dump([fil], [], [], {}, now, settings)
 
-    fil_line = next(l for l in text.splitlines() if l.startswith("filament #"))
+    fil_line = next(ln for ln in text.splitlines() if ln.startswith("filament #"))
     assert "filamentdb_id=665f0c00000000000000" in fil_line   # truncated
     assert "openprinttag_slug=hatchbox-pla" in fil_line
     assert "filamentdb_parent_id" not in fil_line              # empty → omitted
@@ -249,7 +249,7 @@ def test_format_state_dump_sm_spool_extras_decoded():
     now = datetime.datetime(2026, 6, 11, tzinfo=datetime.timezone.utc)
     text = format_state_dump([], [spool], [], {}, now, settings)
 
-    spool_line = next(l for l in text.splitlines() if l.startswith("spool #"))
+    spool_line = next(ln for ln in text.splitlines() if ln.startswith("spool #"))
     assert "filamentdb_spool_id=665f0d00" in spool_line
     assert "filamentdb_parent_id=665f0c00" in spool_line
     assert "filamentdb_id" not in spool_line   # empty → omitted

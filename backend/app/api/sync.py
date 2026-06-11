@@ -16,7 +16,6 @@ from app.api.config import _effective_sync_interval, get_config_value, set_confi
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.api.mappings import build_mapping_rows
-from app.config import settings
 from app.core.compat import sync_compatibility_errors
 from app.core.dryrun import plan_dry_run
 from app.core.engine import run_sync_cycle

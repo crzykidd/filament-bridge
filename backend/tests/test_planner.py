@@ -804,8 +804,8 @@ def test_stale_spool_mapping_routes_to_create(db):
     # FDB has a filament but with a DIFFERENT spool id (simulates user deleting the spool).
     fdb_fil = _make_fdb_filament("fdb-fil-3", ["current-spool-bbb"])
     # SpoolMapping points to a spool that no longer exists in FDB.
-    stale_sm = _add_spool_mapping(db, sm_spool_id=103, fdb_filament_id="fdb-fil-3",
-                                   fdb_spool_id="deleted-fdb-spool")
+    _add_spool_mapping(db, sm_spool_id=103, fdb_filament_id="fdb-fil-3",
+                       fdb_spool_id="deleted-fdb-spool")
     db.commit()
 
     plan = _run_planner(
@@ -898,7 +898,6 @@ def test_stale_filament_mapping_execute_replaces_mapping(db):
     stale_fm = FilamentMapping(spoolman_filament_id=5, filamentdb_id="old-fdb-fil")
     db.add(stale_fm)
     db.commit()
-    stale_fm_id = stale_fm.id
 
     app = FastAPI()
     app.include_router(wizard.router, prefix="/api")
@@ -973,7 +972,6 @@ def test_stale_spool_mapping_execute_replaces_mapping(db):
     )
     db.add(stale_sm)
     db.commit()
-    stale_sm_id = stale_sm.id
 
     app = FastAPI()
     app.include_router(wizard.router, prefix="/api")

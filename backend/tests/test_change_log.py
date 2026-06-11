@@ -5,9 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
-import tempfile
 from pathlib import Path
-from typing import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -111,7 +109,7 @@ class TestFormatChangeLine:
 
     def test_json_encoded_string_unwrapped(self):
         """JSON-encoded extra values should be unwrapped to bare scalar."""
-        from app.core.change_log import format_change_line, _render
+        from app.core.change_log import _render
         # simulate a Spoolman extra value: JSON-quoted string "916.9"
         assert _render(json.dumps(916.9)) == "916.9"
         assert _render(json.dumps("PLA")) == "PLA"
@@ -246,7 +244,6 @@ class TestEngineIntegration:
     @pytest.mark.asyncio
     async def test_update_produces_changes_log_entry(self, db, tmp_path):
         import json as _json
-        from unittest.mock import AsyncMock, MagicMock
 
         from app.core.engine import run_sync_cycle
         from app.models.mapping import FilamentMapping, SpoolMapping
@@ -321,16 +318,9 @@ class TestEngineIntegration:
         fdb_client.update_spool = AsyncMock(return_value={})
         fdb_client.update_filament = AsyncMock(return_value={})
 
-        with patch("app.core.change_log.record_change") as mock_rc:
-            # Let real record_change run but capture calls — actually, let's
-            # just route to our temp path by patching the settings.
-            pass
-
         # Run with real record_change pointing at our temp path.
         import app.core.change_log as cl_module
         original_record = cl_module.record_change
-
-        captured_lines: list[str] = []
 
         def _patched_record(*, action, direction, entity_type, _path=None, _enabled=None, _now=None, **kw):
             original_record(
@@ -340,7 +330,7 @@ class TestEngineIntegration:
             )
 
         with patch.object(cl_module, "record_change", side_effect=_patched_record):
-            result = await run_sync_cycle(
+            await run_sync_cycle(
                 db, sm_client, fdb_client,
                 dry_run=False, cycle_id="test-e2e",
             )
@@ -348,9 +338,9 @@ class TestEngineIntegration:
         # There should be at least one UPDATE line in changes.log.
         assert os.path.exists(log_path), "changes.log was not created"
         content = Path(log_path).read_text()
-        lines = [l for l in content.splitlines() if "UPDATE" in l]
+        lines = [ln for ln in content.splitlines() if "UPDATE" in ln]
         assert lines, f"No UPDATE line in changes.log:\n{content}"
         # The weight field should appear.
-        assert any("weight" in l.lower() or "916" in l or "900" in l for l in lines), (
+        assert any("weight" in ln.lower() or "916" in ln or "900" in ln for ln in lines), (
             f"No weight-related UPDATE line:\n{content}"
         )

@@ -29,7 +29,7 @@ from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.compat import sync_compatibility_errors
 from app.core.dates import spool_provenance_dates
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
-from app.core.material_tags import finish_ids_from_text, serialize_material_tags, strip_finish_words
+from app.core.material_tags import finish_ids_from_text, serialize_material_tags
 from app.core.matcher import (
     extract_finish_line,
     match_filaments,

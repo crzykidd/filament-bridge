@@ -2568,7 +2568,6 @@ async def test_ensure_extra_fields_registers_custom_spool_keys():
     /api/v1/field/spool/fdb_id — not /api/v1/field/spool/filamentdb_id.
     """
     from app.services.spoolman import SpoolmanClient
-    from app.schemas.spoolman import SpoolmanFieldDef
     from unittest.mock import patch as _patch, AsyncMock as _AsyncMock
 
     client = SpoolmanClient.__new__(SpoolmanClient)

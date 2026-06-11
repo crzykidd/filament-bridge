@@ -49,8 +49,7 @@ async def test_get_spools_paginates_across_two_pages():
     # Verify offset pagination was used correctly.
     calls = client._client.get.call_args_list
     assert len(calls) == 2
-    first_params = calls[0].kwargs.get("params") or calls[0].args[1] if len(calls[0].args) > 1 else calls[0].kwargs.get("params", {})
-    # Normalize: the call is get(path, params=...)
+    # The call is get(path, params=...)
     assert calls[0].kwargs["params"]["offset"] == 0
     assert calls[1].kwargs["params"]["offset"] == 1000
 
