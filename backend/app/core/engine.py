@@ -1093,6 +1093,194 @@ async def _sync_cost(
 
 
 # ---------------------------------------------------------------------------
+# Material-property sync — native filament temperature fields (bidirectional)
+# ---------------------------------------------------------------------------
+
+# (label, FDB temperatures.<attr>, Spoolman native filament field).  Bed/nozzle
+# temps are NATIVE filament fields on BOTH sides, so they are not covered by the
+# spool extra-field mapper (resolve_field_map only matches SM *extra* keys to
+# identically-named FDB fields).  This pass owns them, mirroring _sync_cost.
+MATERIAL_PROP_TEMP_PAIRS: list[tuple[str, str, str]] = [
+    ("bed_temp", "bed", "settings_bed_temp"),
+    ("nozzle_temp", "nozzle", "settings_extruder_temp"),
+]
+
+
+def _norm_temp(v: Any) -> int | None:
+    """Normalise a temperature for comparison/storage (FDB float ↔ SM int)."""
+    if v is None:
+        return None
+    try:
+        return int(round(float(v)))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _sync_material_props(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    dry_run: bool,
+    *,
+    filament_mappings: list[FilamentMapping],
+    sm_filaments: dict[int, Any],
+    fdb_filaments: dict[str, Any],
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
+) -> None:
+    """Bidirectional filament-level sync of native temperature fields (bed/nozzle).
+
+    Per-field snapshot baseline (``_mp_<sm_field>`` per side), routed through
+    ``resolve_sync_action`` under the material_properties direction + policy —
+    same shape as ``_sync_cost``.  FDB→SM writes the native Spoolman filament
+    field; SM→FDB read-modify-writes the FDB ``temperatures`` object so sibling
+    temps are preserved.
+    """
+    for m in filament_mappings:
+        sm_fil = sm_filaments.get(m.spoolman_filament_id)
+        fdb_fil = fdb_filaments.get(m.filamentdb_id)
+        if sm_fil is None or fdb_fil is None:
+            continue
+        fdb_temps = getattr(fdb_fil, "temperatures", None)
+        label_name = getattr(sm_fil, "name", None) or getattr(fdb_fil, "name", None)
+
+        for label, fdb_attr, sm_field in MATERIAL_PROP_TEMP_PAIRS:
+            fdb_now = _norm_temp(getattr(fdb_temps, fdb_attr, None) if fdb_temps else None)
+            sm_now = _norm_temp(getattr(sm_fil, sm_field, None))
+            if fdb_now is None and sm_now is None:
+                continue
+
+            snap_key = f"_mp_{sm_field}"
+            sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
+            fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
+            sm_then = sm_snap.get(snap_key) if sm_snap else None
+            fdb_then = fdb_snap.get(snap_key) if fdb_snap else None
+
+            def _store(sv: Any, fv: Any, _k: str = snap_key) -> None:
+                _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {_k: sv})
+                _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {_k: fv})
+
+            # First sight — store baseline, no write.
+            if sm_then is None and fdb_then is None:
+                if not dry_run:
+                    _store(sm_now, fdb_now)
+                else:
+                    result.preview.append({
+                        "action": "skip", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": label, "old": None, "new": None,
+                        "reason": "first sync of this pair — baseline stored, no diff yet",
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.skipped += 1
+                continue
+
+            sm_changed = sm_then != sm_now
+            fdb_changed = fdb_then != fdb_now
+            if not sm_changed and not fdb_changed:
+                continue
+            # Both changed into agreement → refresh baseline silently.
+            if sm_changed and fdb_changed and sm_now == fdb_now:
+                if not dry_run:
+                    _store(sm_now, fdb_now)
+                continue
+
+            action = resolve_sync_action(
+                sm_changed=sm_changed, fdb_changed=fdb_changed,
+                direction=matprop_direction, policy=matprop_policy,
+            )
+
+            if action == SyncAction.NOOP:
+                continue
+
+            if action == SyncAction.QUEUE_CONFLICT:
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "filament", label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "filament", label,
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            spoolman_value=sm_now, filamentdb_value=fdb_now,
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": label, "old": sm_now, "new": fdb_now,
+                        "reason": f"both sides changed {label}",
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.conflicts += 1
+                continue
+
+            if action == SyncAction.PUSH_SM_TO_FDB:
+                if not dry_run:
+                    try:
+                        temps_payload = fdb_temps.model_dump() if fdb_temps else {}
+                        temps_payload[fdb_attr] = sm_now
+                        await filamentdb.update_filament(m.filamentdb_id, {"temperatures": temps_payload})
+                        _store(sm_now, sm_now)
+                        _log(
+                            db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=label, old_value=fdb_now, new_value=sm_now,
+                        )
+                        result.updated += 1
+                    except Exception as exc:
+                        logger.error("Cycle %s: %s SM→FDB failed %s: %s", cycle_id, label, m.filamentdb_id, exc)
+                        _log(
+                            db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=label, error_message=str(exc),
+                        )
+                        result.errors += 1
+                else:
+                    result.preview.append({
+                        "action": "update", "entity_type": "filament",
+                        "direction": "spoolman_to_filamentdb", "label": label_name,
+                        "field": label, "old": fdb_now, "new": sm_now, "reason": None,
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.updated += 1
+                continue
+
+            if action == SyncAction.PUSH_FDB_TO_SM:
+                if not dry_run:
+                    try:
+                        await spoolman.update_filament(m.spoolman_filament_id, {sm_field: fdb_now})
+                        _store(fdb_now, fdb_now)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=label, old_value=sm_now, new_value=fdb_now,
+                        )
+                        result.updated += 1
+                    except Exception as exc:
+                        logger.error("Cycle %s: %s FDB→SM failed %s: %s", cycle_id, label, m.spoolman_filament_id, exc)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=label, error_message=str(exc),
+                        )
+                        result.errors += 1
+                else:
+                    result.preview.append({
+                        "action": "update", "entity_type": "filament",
+                        "direction": "filamentdb_to_spoolman", "label": label_name,
+                        "field": label, "old": sm_now, "new": fdb_now, "reason": None,
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.updated += 1
+
+
+# ---------------------------------------------------------------------------
 # Finish-tag sync (OpenPrintTag model, bidirectional)
 # ---------------------------------------------------------------------------
 
@@ -2067,6 +2255,18 @@ async def run_sync_cycle(
         filament_mappings=filament_mappings,
         sm_filaments=sm_filaments,
         sm_spools_by_filament=sm_spools_by_filament_for_cost,
+        fdb_filaments=fdb_filaments,
+        spoolman=spoolman,
+        filamentdb=filamentdb,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
+    )
+
+    # ---- Material-property sync (native bed/nozzle temperatures, bidirectional) ----
+    await _sync_material_props(
+        db, cycle_id, result, dry_run,
+        filament_mappings=filament_mappings,
+        sm_filaments=sm_filaments,
         fdb_filaments=fdb_filaments,
         spoolman=spoolman,
         filamentdb=filamentdb,

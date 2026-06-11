@@ -219,6 +219,15 @@ GitHub release.
 
 ### Fixed
 
+- **Bed / nozzle temperature now sync between Filament DB and Spoolman** — editing a
+  filament's bed (or nozzle) temperature in Filament DB never propagated to Spoolman even
+  under two-way sync, because these are *native* filament fields on both sides
+  (`temperatures.bed`/`nozzle` ↔ `settings_bed_temp`/`settings_extruder_temp`) and the ongoing
+  field-mapper only matched Spoolman *extra* fields. A new `_sync_material_props` engine pass
+  syncs them both directions under the material_properties direction + policy (with per-field
+  snapshot baselines and conflict queuing, mirroring the cost sync). SM→FDB writes preserve
+  sibling temperatures via read-modify-write. (The wizard's initial import already handled these
+  via its own map; only ongoing sync was missing them.)
 - **Runaway weight-decrement loop in two-way sync** — a single Spoolman-side decrement
   (e.g. one print) could compound across sync cycles and drive a mapped spool to 0 g,
   ping-ponging the value SM↔FDB with a doubling delta. Two bugs: (1) `fdb_to_spoolman_net`

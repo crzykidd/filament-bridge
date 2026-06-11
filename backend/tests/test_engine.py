@@ -973,6 +973,169 @@ async def test_cost_spool_price_wins_over_filament_price(db):
 
 
 # ---------------------------------------------------------------------------
+# Material-property (bed/nozzle temperature) sync
+# ---------------------------------------------------------------------------
+
+MP_SM_FIL_ID = 60
+MP_FDB_FIL_ID = "fil-mp"
+
+
+def _sm_fil_with_temps(bed=None, nozzle=None) -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=MP_SM_FIL_ID, name="Temp PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        settings_bed_temp=bed, settings_extruder_temp=nozzle,
+    )
+
+
+def _fdb_fil_with_temps(bed=None, nozzle=None) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": MP_FDB_FIL_ID, "name": "Temp PLA",
+        "temperatures": {"bed": bed, "nozzle": nozzle},
+        "spools": [],
+    })
+
+
+def _add_filament_mapping_mp(db):
+    db.add(FilamentMapping(spoolman_filament_id=MP_SM_FIL_ID, filamentdb_id=MP_FDB_FIL_ID))
+    db.flush()
+
+
+@pytest.mark.asyncio
+async def test_bed_temp_fdb_to_sm_two_way(db):
+    """The reported bug: a lone FDB bed-temp change propagates to Spoolman under
+    two_way (writes the NATIVE settings_bed_temp on the SM filament)."""
+    _add_filament_mapping_mp(db)
+    _seed_matprop_config(db, direction="two_way", policy="manual")
+    sm_fil = _sm_fil_with_temps(bed=60, nozzle=210)        # SM unchanged
+    fdb_fil = _fdb_fil_with_temps(bed=65, nozzle=210)      # FDB bed 60→65
+    _store_snapshot(db, "spoolman", "filament", str(MP_SM_FIL_ID), {"_mp_settings_bed_temp": 60})
+    _store_snapshot(db, "filamentdb", "filament", MP_FDB_FIL_ID, {"_mp_settings_bed_temp": 60})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    spoolman.update_filament.assert_called_once_with(MP_SM_FIL_ID, {"settings_bed_temp": 65})
+    fdb_client.update_filament.assert_not_called()
+    assert result.updated == 1
+
+
+@pytest.mark.asyncio
+async def test_bed_temp_sm_to_fdb_preserves_nozzle(db):
+    """A lone SM bed-temp change writes FDB temperatures via read-modify-write,
+    preserving the sibling nozzle temp."""
+    _add_filament_mapping_mp(db)
+    _seed_matprop_config(db, direction="two_way", policy="manual")
+    sm_fil = _sm_fil_with_temps(bed=70, nozzle=210)        # SM bed 60→70
+    fdb_fil = _fdb_fil_with_temps(bed=60, nozzle=210)      # FDB unchanged
+    _store_snapshot(db, "spoolman", "filament", str(MP_SM_FIL_ID), {"_mp_settings_bed_temp": 60})
+    _store_snapshot(db, "filamentdb", "filament", MP_FDB_FIL_ID, {"_mp_settings_bed_temp": 60})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_called_once()
+    args = fdb_client.update_filament.call_args.args
+    assert args[0] == MP_FDB_FIL_ID
+    assert args[1]["temperatures"]["bed"] == 70
+    assert args[1]["temperatures"]["nozzle"] == 210   # sibling preserved
+    spoolman.update_filament.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_nozzle_temp_fdb_to_sm_two_way(db):
+    """Nozzle temp FDB→SM writes the native settings_extruder_temp."""
+    _add_filament_mapping_mp(db)
+    _seed_matprop_config(db, direction="two_way", policy="manual")
+    sm_fil = _sm_fil_with_temps(bed=60, nozzle=210)
+    fdb_fil = _fdb_fil_with_temps(bed=60, nozzle=225)     # FDB nozzle 210→225
+    _store_snapshot(db, "spoolman", "filament", str(MP_SM_FIL_ID), {"_mp_settings_extruder_temp": 210})
+    _store_snapshot(db, "filamentdb", "filament", MP_FDB_FIL_ID, {"_mp_settings_extruder_temp": 210})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    spoolman.update_filament.assert_called_once_with(MP_SM_FIL_ID, {"settings_extruder_temp": 225})
+
+
+@pytest.mark.asyncio
+async def test_bed_temp_both_changed_creates_conflict(db):
+    """Both sides changed bed temp under two_way+manual → conflict, no writes."""
+    _add_filament_mapping_mp(db)
+    _seed_matprop_config(db, direction="two_way", policy="manual")
+    sm_fil = _sm_fil_with_temps(bed=70, nozzle=210)
+    fdb_fil = _fdb_fil_with_temps(bed=65, nozzle=210)
+    _store_snapshot(db, "spoolman", "filament", str(MP_SM_FIL_ID), {"_mp_settings_bed_temp": 60})
+    _store_snapshot(db, "filamentdb", "filament", MP_FDB_FIL_ID, {"_mp_settings_bed_temp": 60})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 1
+    spoolman.update_filament.assert_not_called()
+    fdb_client.update_filament.assert_not_called()
+    conflict = db.query(Conflict).filter_by(field_name="bed_temp").first()
+    assert conflict is not None and conflict.spoolman_id == MP_SM_FIL_ID
+
+
+@pytest.mark.asyncio
+async def test_bed_temp_first_sight_no_write(db):
+    """No prior baseline → store baseline only, no write."""
+    _add_filament_mapping_mp(db)
+    _seed_matprop_config(db, direction="two_way", policy="manual")
+    sm_fil = _sm_fil_with_temps(bed=60, nozzle=210)
+    fdb_fil = _fdb_fil_with_temps(bed=65, nozzle=215)
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    spoolman.update_filament.assert_not_called()
+    fdb_client.update_filament.assert_not_called()
+    snap = db.query(Snapshot).filter_by(source="spoolman", entity_type="filament", entity_id=str(MP_SM_FIL_ID)).first()
+    assert json.loads(snap.data)["_mp_settings_bed_temp"] == 60
+
+
+@pytest.mark.asyncio
+async def test_bed_temp_oneway_fdb_to_sm_blocks_sm_change(db):
+    """direction=filamentdb_to_spoolman: a lone SM bed change must NOT propagate."""
+    _add_filament_mapping_mp(db)
+    _seed_matprop_config(db, direction="filamentdb_to_spoolman", policy="manual")
+    sm_fil = _sm_fil_with_temps(bed=70, nozzle=210)       # SM changed
+    fdb_fil = _fdb_fil_with_temps(bed=60, nozzle=210)     # FDB unchanged
+    _store_snapshot(db, "spoolman", "filament", str(MP_SM_FIL_ID), {"_mp_settings_bed_temp": 60})
+    _store_snapshot(db, "filamentdb", "filament", MP_FDB_FIL_ID, {"_mp_settings_bed_temp": 60})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _cost_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_filament.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Verification tests: per-category resolver behaviors (new two-axis model)
 # ---------------------------------------------------------------------------
 
