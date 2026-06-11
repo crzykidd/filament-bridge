@@ -150,6 +150,13 @@ export interface BulkResolveResponse {
 // Mappings
 // ---------------------------------------------------------------------------
 
+export interface MappingDetailField {
+  field: string
+  label: string
+  spoolman: string | number | null
+  filamentdb: string | number | null
+}
+
 export interface MappingRow {
   id: number
   status: MappingStatus
@@ -170,6 +177,7 @@ export interface MappingRow {
   remaining_weight: number | null
   is_empty: boolean
   conflict_id: number | null
+  detail: MappingDetailField[]
 }
 
 export interface MappingUpdateRequest {

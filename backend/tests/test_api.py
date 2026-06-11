@@ -595,6 +595,42 @@ def test_mapping_row_enrichment_fields(db):
     assert r2["multi_color_direction"] is None
 
 
+def test_mapping_row_detail_per_side_values(db):
+    """MappingRow.detail carries per-side values: SM from the spool's filament
+    block, FDB weight from the spool snapshot and FDB temps/cost from the FDB
+    filament snapshot (what the material-property / cost passes persist)."""
+    fm = FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-d")
+    db.add(fm)
+    db.flush()
+    sm_filament = {
+        "id": 10, "name": "PLA", "vendor": {"name": "ELEGOO"},
+        "material": "PLA", "density": 1.24, "diameter": 1.75,
+        "settings_bed_temp": 60, "settings_extruder_temp": 210,
+        "price": 16.0, "color_hex": "0E21AE",
+    }
+    db.add(SpoolMapping(spoolman_spool_id=10, filamentdb_filament_id="fil-d",
+                        filamentdb_spool_id="s10", filament_mapping_id=fm.id))
+    _snap(db, "spoolman", "10", {"remaining_weight": 800.0, "filament": sm_filament})
+    _snap(db, "filamentdb", "s10", {"totalWeight": 1000.0})
+    # FDB filament snapshot — synced signatures the engine persists.
+    db.add(Snapshot(source="filamentdb", entity_type="filament", entity_id="fil-d",
+                    data=json.dumps({"_mp_settings_bed_temp": 65,
+                                     "_mp_settings_extruder_temp": 210, "_cost": 18.0})))
+    db.commit()
+
+    rows = _client(db).get("/api/mappings").json()
+    detail = {d["field"]: d for d in next(r for r in rows if r["spoolman_spool_id"] == 10)["detail"]}
+
+    assert detail["weight"]["spoolman"] == 800.0 and detail["weight"]["filamentdb"] == 1000.0
+    # bed temp differs across sides (FDB edited) — both surfaced
+    assert detail["bed_temp"]["spoolman"] == 60 and detail["bed_temp"]["filamentdb"] == 65
+    assert detail["nozzle_temp"]["spoolman"] == 210 and detail["nozzle_temp"]["filamentdb"] == 210
+    assert detail["cost"]["spoolman"] == 16.0 and detail["cost"]["filamentdb"] == 18.0
+    # SM-only context fields: FDB side null (rendered "—")
+    assert detail["material"]["spoolman"] == "PLA" and detail["material"]["filamentdb"] is None
+    assert detail["density"]["spoolman"] == 1.24
+
+
 def test_delete_mapping_unlinks_only(db):
     db.add(SpoolMapping(spoolman_spool_id=5, filamentdb_filament_id="fil-x", filamentdb_spool_id="s5"))
     db.commit()

@@ -11,6 +11,12 @@ GitHub release.
 
 ### Added
 
+- **Expandable Synced Records rows** — each row in Synced Records now expands (collapsed by
+  default; with Expand-all / Collapse-all) to a compact side-by-side detail showing the
+  per-side last-known values for the things the bridge syncs — Spoolman (emerald) vs
+  Filament DB (blue): weight (net/gross), bed/nozzle temp, cost, plus material/density/
+  diameter/color as Spoolman context. Values come from the stored snapshots (no extra upstream
+  fetch); the `/api/mappings` response gained an optional `detail` array.
 - **Seeded OpenTag matcher defaults on new installs** — fresh installs now seed
   `opentag_vendor_aliases` (`prusa=prusament, polyterra=polymaker`) and
   `opentag_color_keywords` (`galaxy=black, cool=grey, jet=black`) so the Settings

@@ -24,7 +24,12 @@ from app.db import get_db
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.models.snapshot import Snapshot
-from app.schemas.api import MappingRow, MappingStatus, MappingUpdateRequest
+from app.schemas.api import (
+    MappingDetailField,
+    MappingRow,
+    MappingStatus,
+    MappingUpdateRequest,
+)
 
 router = APIRouter()
 
@@ -35,6 +40,48 @@ def _snapshot(db: Session, source: str, entity_id: str) -> Snapshot | None:
         .filter_by(source=source, entity_type="spool", entity_id=entity_id)
         .first()
     )
+
+
+def _filament_snapshot(db: Session, source: str, entity_id: str) -> dict | None:
+    row = (
+        db.query(Snapshot)
+        .filter_by(source=source, entity_type="filament", entity_id=entity_id)
+        .first()
+    )
+    return json.loads(row.data) if row else None
+
+
+def _build_detail(sm_filament: dict, fdb_snap: dict | None, fdb_fil_snap: dict | None,
+                  remaining: float | None) -> list[MappingDetailField]:
+    """Per-side last-known values for the things the bridge syncs.
+
+    Spoolman side comes straight from the spool snapshot's nested filament block;
+    Filament DB side comes from the FDB spool snapshot (gross weight) and the FDB
+    *filament* snapshot's synced signatures (``_mp_*`` temps, ``_cost``) that the
+    engine's material-property / cost passes persist.  Fields with no stored FDB
+    counterpart show ``None`` (rendered as "—").
+    """
+    fdb_fil = fdb_fil_snap or {}
+    return [
+        MappingDetailField(field="weight", label="Weight",
+                           spoolman=remaining, filamentdb=(fdb_snap or {}).get("totalWeight")),
+        MappingDetailField(field="material", label="Material",
+                           spoolman=sm_filament.get("material"), filamentdb=None),
+        MappingDetailField(field="bed_temp", label="Bed temp",
+                           spoolman=sm_filament.get("settings_bed_temp"),
+                           filamentdb=fdb_fil.get("_mp_settings_bed_temp")),
+        MappingDetailField(field="nozzle_temp", label="Nozzle temp",
+                           spoolman=sm_filament.get("settings_extruder_temp"),
+                           filamentdb=fdb_fil.get("_mp_settings_extruder_temp")),
+        MappingDetailField(field="density", label="Density",
+                           spoolman=sm_filament.get("density"), filamentdb=None),
+        MappingDetailField(field="diameter", label="Diameter",
+                           spoolman=sm_filament.get("diameter"), filamentdb=None),
+        MappingDetailField(field="cost", label="Cost",
+                           spoolman=sm_filament.get("price"), filamentdb=fdb_fil.get("_cost")),
+        MappingDetailField(field="color", label="Color",
+                           spoolman=sm_filament.get("color_hex"), filamentdb=None),
+    ]
 
 
 def build_mapping_rows(db: Session) -> list[MappingRow]:
@@ -115,6 +162,12 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
                 remaining_weight=remaining,
                 is_empty=(remaining is not None and remaining <= 0),
                 conflict_id=conflict_id,
+                detail=_build_detail(
+                    sm_filament,
+                    fdb_snap,
+                    _filament_snapshot(db, "filamentdb", m.filamentdb_filament_id),
+                    remaining,
+                ),
             )
         )
     return rows

@@ -150,6 +150,14 @@ class BulkResolveResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class MappingDetailField(BaseModel):
+    """One synced field with the last-known value on each side (for the expandable row)."""
+    field: str
+    label: str
+    spoolman: object | None = None
+    filamentdb: object | None = None
+
+
 class MappingRow(BaseModel):
     id: int  # SpoolMapping.id
     status: MappingStatus
@@ -170,6 +178,7 @@ class MappingRow(BaseModel):
     remaining_weight: float | None = None      # SM spool remaining_weight (same as spoolman_weight; named for clarity)
     is_empty: bool = False                     # True when remaining_weight <= 0
     conflict_id: int | None = None             # open Conflict.id for this spool (status=="conflict" rows)
+    detail: list[MappingDetailField] = []      # per-side values for the expandable row
 
 
 class MappingUpdateRequest(BaseModel):
