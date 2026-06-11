@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { getWizardPreview, getConfig, postWizardContainerNameOverrides } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
+import { HelpTip } from '../../components/HelpTip'
 import type { PlannedWrite, ContainerNameOverride, NameCollisionEntry } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -148,6 +149,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         count={data.flag_counts.name_collision}
         open={open.has('name_collision')}
         onToggle={() => toggle('name_collision')}
+        tip="Names that already exist in Filament DB or repeat within this import — rename, fix grouping, or they fail per-record."
       >
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.name_collisions.map((c, i) => (
@@ -172,6 +174,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         open={open.has('empty_active')}
         onToggle={() => toggle('empty_active')}
         infoOnly={config?.never_import_empties ?? false}
+        tip="Depleted but unarchived Spoolman spools. If 'Never import empties' is on, they're skipped; otherwise they'll be imported."
       >
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {(config?.never_import_empties ?? false) && (
@@ -202,6 +205,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         count={data.flag_counts.default_tare}
         open={open.has('default_tare')}
         onToggle={() => toggle('default_tare')}
+        tip="No reel weight found anywhere — 200 g assumed; fix per-group in Variances."
       >
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.default_tare.map((t, i) => (
@@ -227,6 +231,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         count={data.flag_counts.variant_group}
         open={open.has('variant_group')}
         onToggle={() => toggle('variant_group')}
+        tip="Parent/variant trees this import will create."
       >
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.variant_groups.map((g, i) => (
@@ -513,7 +518,7 @@ function PlannedWritesList({
 }
 
 function FlagSection({
-  flagKey, label, count, open, onToggle, infoOnly, children,
+  flagKey, label, count, open, onToggle, infoOnly, tip, children,
 }: {
   flagKey: FlagKey
   label?: string
@@ -521,6 +526,7 @@ function FlagSection({
   open: boolean
   onToggle: () => void
   infoOnly?: boolean
+  tip?: string
   children: React.ReactNode
 }) {
   const displayLabel = label ?? FLAG_LABELS[flagKey]
@@ -534,7 +540,10 @@ function FlagSection({
         disabled={count === 0}
         className="w-full flex items-center justify-between px-4 py-3 text-left disabled:opacity-60"
       >
-        <span className="font-medium text-gray-800 dark:text-gray-200">{displayLabel}</span>
+        <span className="inline-flex items-center font-medium text-gray-800 dark:text-gray-200">
+          {displayLabel}
+          {tip && <HelpTip text={tip} />}
+        </span>
         <span className="flex items-center gap-2">
           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
             {count}

@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-help-tooltips
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: HelpTip component built; tips added across Settings (11), Dashboard (6), SyncedRecords (4), Conflicts (2), Wizard Step2/Step3/Variances/Preview/Execute (12), OpenTagCleanup (4). All 40 frontend tests pass (4 new HelpTip tests), tsc clean, 907 backend tests pass.
 ---
 
 # Task: Add "?" help tooltips with local context across the UI

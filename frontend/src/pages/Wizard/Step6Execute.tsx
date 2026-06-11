@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { postWizardExecute } from '../../api/client'
 import { DeepLinks } from '../../components/DeepLinks'
 import { BackupSafetyDialog } from '../../components/BackupSafetyDialog'
+import { HelpTip } from '../../components/HelpTip'
 import type { WizardExecuteResponse, WizardExecuteRecord } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -193,8 +194,9 @@ export default function Step6Execute({ prev, tareOverrides }: WizardCtx) {
             This will write to both Spoolman and Filament DB. Review your choices before proceeding.
           </p>
           {tareOverrides.length > 0 && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            <p className="flex items-center text-sm text-gray-500 dark:text-gray-400 mt-1">
               {tareOverrides.length} tare override{tareOverrides.length !== 1 ? 's' : ''} applied.
+              <HelpTip text="Tare values you set in Variances; submitted with this run only." />
             </p>
           )}
         </div>

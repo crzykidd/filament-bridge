@@ -9,6 +9,7 @@ import {
 } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
+import { HelpTip } from '../../components/HelpTip'
 import type {
   ReconciledField,
   SMVariantDecision,
@@ -548,7 +549,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     <p className="text-xs font-medium text-blue-800 dark:text-blue-300 mb-2">
                       Existing Filament DB parent found: <span className="font-semibold">{group.existing_fdb_parent.name}</span>
                     </p>
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       {(['attach', 'create_new'] as const).map(opt => (
                         <button
                           key={opt}
@@ -562,6 +563,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                           {opt === 'attach' ? `Attach to «${group.existing_fdb_parent.name}»` : 'Create new parent'}
                         </button>
                       ))}
+                      <HelpTip text="Attach: new colors become variants of your existing Filament DB parent. Create new: a separate parent is created for this group." />
                     </div>
                   </div>
                 )}
@@ -579,7 +581,10 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <label className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">Empty-reel tare (g):</label>
+                    <label className="flex items-center text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                      Empty-reel tare (g):
+                      <HelpTip text="Weight of the empty spool. Used to convert Spoolman's net weight to Filament DB's gross weight; one tare applies to the whole group." />
+                    </label>
                     <input
                       type="number" min="0" step="1"
                       value={masterTareVal}
@@ -608,14 +613,19 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     const isIgnoring = ignoringId === smId
                     return (
                       <div key={smId} className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40">
-                        <input
-                          type="radio"
-                          name={`master-${groupIdx}`}
-                          checked={isMaster}
-                          onChange={() => pickMaster(groupIdx, smId)}
-                          className="mt-1 accent-indigo-600 shrink-0"
-                          title="Set as master (parent)"
-                        />
+                        <span className="flex items-start">
+                          <input
+                            type="radio"
+                            name={`master-${groupIdx}`}
+                            checked={isMaster}
+                            onChange={() => pickMaster(groupIdx, smId)}
+                            className="mt-1 accent-indigo-600 shrink-0"
+                            title="Set as master (parent)"
+                          />
+                          {isMaster && (
+                            <HelpTip text="The master becomes (or maps to) the Filament DB parent. Variants inherit its print settings." />
+                          )}
+                        </span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <ColorSwatch hex={filData.color_hex} />
@@ -972,13 +982,16 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                         </span>
                       )}
                       {f.suggest_exclude && (
-                        <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded">
-                          {f.conflicts && f.conflicts.length > 0
-                            ? (() => {
-                                const labels = [...new Set(f.conflicts.map(c => CONFLICT_FIELD_LABELS[c.field] ?? c.field))]
-                                return `suggested standalone — ${labels.join(', ')} differ`
-                              })()
-                            : 'suggested standalone'}
+                        <span className="inline-flex items-center gap-1">
+                          <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded">
+                            {f.conflicts && f.conflicts.length > 0
+                              ? (() => {
+                                  const labels = [...new Set(f.conflicts.map(c => CONFLICT_FIELD_LABELS[c.field] ?? c.field))]
+                                  return `suggested standalone — ${labels.join(', ')} differ`
+                                })()
+                              : 'suggested standalone'}
+                          </span>
+                          <HelpTip text="This member's print properties differ from the master's, so it may not belong in the group. Move it out or reconcile the values below." />
                         </span>
                       )}
                       <DeepLinks spoolmanFilamentId={smId} />

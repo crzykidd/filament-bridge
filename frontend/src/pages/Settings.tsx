@@ -6,6 +6,7 @@ import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy, VariantParentMode } from '../api/types'
 import { useTheme } from '../context/ThemeContext'
 import type { ThemeMode } from '../context/ThemeContext'
+import { HelpTip } from '../components/HelpTip'
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -17,10 +18,14 @@ function DirectionSelect({
   label,
   value,
   onChange,
+  tip,
+  tipHref,
 }: {
   label: string
   value: SyncDirection2
   onChange: (v: SyncDirection2) => void
+  tip?: string
+  tipHref?: string
 }) {
   const options: { value: SyncDirection2; label: string }[] = [
     { value: 'two_way', label: 'Two-way' },
@@ -29,7 +34,10 @@ function DirectionSelect({
   ]
   return (
     <div className="flex items-center justify-between py-2">
-      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{label}</span>
+      <span className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
+        {label}
+        {tip && <HelpTip text={tip} learnMoreHref={tipHref} />}
+      </span>
       <select
         value={value}
         onChange={e => onChange(e.target.value as SyncDirection2)}
@@ -62,7 +70,13 @@ function WeightConflictSelect({
   return (
     <div className={`flex flex-col gap-1 py-2 ${disabled ? 'opacity-40' : ''}`}>
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">On conflict</span>
+        <span className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
+          On conflict
+          <HelpTip
+            text="Used only in two-way mode when both sides changed between syncs. Manual queues it for you; the others pick a winner automatically."
+            learnMoreHref="/docs/conflicts"
+          />
+        </span>
         <select
           value={value}
           disabled={disabled}
@@ -108,7 +122,10 @@ function MatPropConflictSelect({
   const disabled = direction !== 'two_way'
   return (
     <div className={`flex items-center justify-between py-2 ${disabled ? 'opacity-40' : ''}`}>
-      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">On conflict</span>
+      <span className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-300">
+        On conflict
+        <HelpTip text="Newest-wins isn't available here — Spoolman doesn't timestamp filament edits." />
+      </span>
       <select
         value={value}
         disabled={disabled}
@@ -607,7 +624,10 @@ export default function Settings() {
         {/* Auto-sync toggle */}
         <div className="flex items-center justify-between py-2">
           <div>
-            <span className={labelCls}>Auto-sync enabled</span>
+            <span className="flex items-center">
+              <span className={labelCls}>Auto-sync enabled</span>
+              <HelpTip text="Runs a sync cycle on the interval below. Stays off until you enable it; enabling asks you to back up first." />
+            </span>
             <p className={`${subTextCls} mt-0.5`}>
               Requires the setup wizard to be completed first.
             </p>
@@ -693,6 +713,8 @@ export default function Settings() {
             setWeightDir(v)
             if (v !== 'two_way') setWeightPolicy('manual')
           }}
+          tip="Which side's weight changes get copied to the other. One-way ignores changes on the locked side; two-way syncs both and can conflict."
+          tipHref="/docs/sync-model"
         />
         <WeightConflictSelect
           value={wPol}
@@ -715,6 +737,8 @@ export default function Settings() {
             setMatDir(v)
             if (v !== 'two_way') setMatPolicy('manual')
           }}
+          tip="Covers material/type, density, diameter, temperatures, cost, color, and finish tags."
+          tipHref="/docs/sync-model"
         />
         <MatPropConflictSelect
           value={mPol}
@@ -734,10 +758,14 @@ export default function Settings() {
           label="Direction"
           value={nsDir}
           onChange={v => setNewSpoolDir(v)}
+          tip="When an unmapped spool appears in one system, the bridge creates it in the other. Direction limits which side gets auto-created."
         />
         <div className={`flex items-start justify-between py-3 ${dividerCls}`}>
           <div>
-            <span className={labelCls}>Never import empties</span>
+            <span className="flex items-center">
+              <span className={labelCls}>Never import empties</span>
+              <HelpTip text="Applies to wizard imports only — the ongoing engine doesn't create records for depleted spools either way." />
+            </span>
             <p className={`${subTextCls} mt-0.5`}>
               Empty/depleted spools are skipped on import; the filament definition is still imported.
             </p>
@@ -766,7 +794,13 @@ export default function Settings() {
           : 'border-gray-200 dark:border-gray-700'
       }`}>
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Variant parent mode</h2>
+          <span className="flex items-center gap-1">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Variant parent mode</h2>
+            <HelpTip
+              text="How the wizard builds Filament DB's parent/variant tree from flat Spoolman filaments. Choose once before the first import; existing mappings are never changed."
+              learnMoreHref="/docs/variant-parent-mode"
+            />
+          </span>
           {effectiveVariantParentMode === 'unset' && (
             <span className="text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded px-2 py-0.5">
               Choose a mode before running the wizard
@@ -859,7 +893,10 @@ export default function Settings() {
       <div className={`${cardCls} space-y-1`}>
         <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Other settings</h2>
         <div className="flex items-center justify-between py-3">
-          <span className={labelCls}>Weight sync threshold (g)</span>
+          <span className="flex items-center">
+            <span className={labelCls}>Weight sync threshold (g)</span>
+            <HelpTip text="Changes smaller than this are ignored, so net↔gross rounding doesn't cause endless tiny updates. Default 2 g." />
+          </span>
           <input
             type="number"
             min="0.1"
@@ -870,7 +907,10 @@ export default function Settings() {
           />
         </div>
         <div className="flex items-center justify-between py-3">
-          <span className={labelCls}>Weight precision (decimal places)</span>
+          <span className="flex items-center">
+            <span className={labelCls}>Weight precision (decimal places)</span>
+            <HelpTip text="Decimal places used when comparing and writing weights." />
+          </span>
           <select
             value={prec}
             onChange={e => setPrecision(Number(e.target.value))}
@@ -882,7 +922,10 @@ export default function Settings() {
           </select>
         </div>
         <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
-          <span className={labelCls}>Variant line keywords</span>
+          <span className="flex items-center">
+            <span className={labelCls}>Variant line keywords</span>
+            <HelpTip text="Used by the wizard when grouping colors into variant lines. Changes apply to the next wizard run." />
+          </span>
           <input
             type="text"
             value={vkw}
@@ -896,7 +939,10 @@ export default function Settings() {
           </span>
         </div>
         <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
-          <span className={labelCls}>Manufacturer mappings (Spoolman → OpenTag)</span>
+          <span className="flex items-center">
+            <span className={labelCls}>Manufacturer mappings (Spoolman → OpenTag)</span>
+            <HelpTip text="Only affects the OpenTag Cleanup matcher, not sync." learnMoreHref="/docs/opentag-cleanup" />
+          </span>
           <input
             type="text"
             value={valiases}
@@ -1025,7 +1071,13 @@ export default function Settings() {
 
             {/* Enable/disable toggle */}
             <div className="flex items-center justify-between py-1">
-              <span className="text-sm text-gray-700 dark:text-gray-300">Token authentication enabled</span>
+              <span className="flex items-center text-sm text-gray-700 dark:text-gray-300">
+                Token authentication enabled
+                <HelpTip
+                  text="Lets scripts call the bridge API with Authorization: Bearer or X-API-Key instead of a login cookie."
+                  learnMoreHref="/docs/security"
+                />
+              </span>
               <button
                 type="button"
                 onClick={() => void handleTokenToggle()}

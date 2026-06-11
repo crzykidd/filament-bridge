@@ -15,6 +15,7 @@ import {
 } from '../api/client'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DeepLinks } from '../components/DeepLinks'
+import { HelpTip } from '../components/HelpTip'
 import type {
   OpenTagApplyRequest,
   OpenTagCacheStatus,
@@ -119,17 +120,22 @@ function FieldReviewRow({ row, decision, onChange }: FieldRowProps) {
         )}
       </td>
       <td className="px-3 py-2">
-        <button
-          type="button"
-          className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-            decision.keep_mine
-              ? 'bg-gray-100 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
-              : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
-          }`}
-          onClick={() => onChange({ ...decision, keep_mine: !decision.keep_mine })}
-        >
-          {decision.keep_mine ? 'undo' : 'keep mine'}
-        </button>
+        <span className="inline-flex items-center">
+          <button
+            type="button"
+            className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+              decision.keep_mine
+                ? 'bg-gray-100 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600'
+                : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+            }`}
+            onClick={() => onChange({ ...decision, keep_mine: !decision.keep_mine })}
+          >
+            {decision.keep_mine ? 'undo' : 'keep mine'}
+          </button>
+          {!decision.keep_mine && (
+            <HelpTip text="Skips this field when applying — your current Spoolman value stays." />
+          )}
+        </span>
       </td>
     </tr>
   )
@@ -325,7 +331,13 @@ function FilamentCard({
             </span>
           )}
           <OpenTagStampedBadge existingUuid={existingUuid} dataDiffers={dataDiffers} />
-          {confidenceBadge(displayConfidence)}
+          <span className="inline-flex items-center">
+            {confidenceBadge(displayConfidence)}
+            <HelpTip
+              text="Match score vs the OpenTag entry: material, brand, color name, color hex, and finish all contribute. Below 30% = unmatched."
+              learnMoreHref="/docs/opentag-cleanup"
+            />
+          </span>
           {(activeCandidate?.opt_slug ?? match.opt_slug) && (
             <span className="text-xs text-gray-600 dark:text-gray-400 font-mono">
               {activeCandidate?.opt_slug ?? match.opt_slug}
@@ -334,17 +346,22 @@ function FilamentCard({
           {activeCandidate?.opt_color_hex && (
             <ColorSwatch hex={activeCandidate.opt_color_hex} />
           )}
-          <button
-            type="button"
-            className={`text-xs px-2 py-0.5 rounded border ml-2 ${
-              ignored
-                ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-200'
-                : 'bg-white dark:bg-gray-800 border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
-            }`}
-            onClick={e => { e.stopPropagation(); onIgnore(!ignored) }}
-          >
-            {ignored ? 'unignore' : 'ignore match'}
-          </button>
+          <span className="inline-flex items-center ml-2" onClick={e => e.stopPropagation()}>
+            <button
+              type="button"
+              className={`text-xs px-2 py-0.5 rounded border ${
+                ignored
+                  ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-200'
+                  : 'bg-white dark:bg-gray-800 border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
+              }`}
+              onClick={() => onIgnore(!ignored)}
+            >
+              {ignored ? 'unignore' : 'ignore match'}
+            </button>
+            {!ignored && (
+              <HelpTip text="Excludes this filament from the apply entirely." />
+            )}
+          </span>
           <span className="text-gray-400 dark:text-gray-500">{expanded ? '▲' : '▼'}</span>
         </div>
       </div>
@@ -1096,6 +1113,7 @@ export default function OpenTagCleanup() {
                   onChange={e => setHideAlreadyTagged(e.target.checked)}
                 />
                 Hide already-tagged
+                <HelpTip text="Hides filaments that already carry an OpenPrintTag UUID." />
               </label>
             </div>
           </div>

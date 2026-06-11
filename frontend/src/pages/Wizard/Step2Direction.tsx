@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { postWizardDirection } from '../../api/client'
 import type { SourceOfTruth } from '../../api/types'
 import type { WizardCtx } from './index'
+import { HelpTip } from '../../components/HelpTip'
 
 type SOT = SourceOfTruth
 
@@ -35,7 +36,10 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5 space-y-2">
-        <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Initial import direction</p>
+        <p className="flex items-center text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+          Initial import direction
+          <HelpTip text="One-time import direction for THIS run. Ongoing sync direction lives in Settings." />
+        </p>
         <div className="grid grid-cols-2 gap-3">
           {([
             { value: 'spoolman', label: 'Spoolman → Filament DB', desc: 'Import Spoolman filaments/spools into Filament DB' },

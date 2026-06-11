@@ -3,6 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { getWizardMatches, postWizardMatches } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
+import { HelpTip } from '../../components/HelpTip'
 import type { FilamentRef, MatchDecision } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -222,7 +223,12 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
           )}
         </div>
         <span className="text-xs text-gray-500 pt-0.5">{rMaterial(row) || '—'}</span>
-        <div>{showStatus && <StatusPill status={row.status} />}</div>
+        <div className="flex items-center gap-1">
+          {showStatus && <StatusPill status={row.status} />}
+          {showStatus && row.status === 'master_fdb' && (
+            <HelpTip text="A parent record owned by the bridge (or an existing FDB parent). Nothing to do here — it never syncs directly." />
+          )}
+        </div>
       </div>
     )
   }
@@ -592,7 +598,10 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
             <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Spoolman</span>
             <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Filament DB</span>
             <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Material</span>
-            <span className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">Status</span>
+            <span className="flex items-center text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-300">
+              Status / %
+              <HelpTip text="Fuzzy match score on vendor + name + color. 100% = exact or already cross-referenced." />
+            </span>
           </div>
           <div className={`${G} pb-2 items-center`}>
             <div />

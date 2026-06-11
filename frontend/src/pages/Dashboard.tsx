@@ -5,6 +5,7 @@ import { usePoll } from '../api/hooks'
 import { SystemStatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
+import { HelpTip } from '../components/HelpTip'
 import type { CycleResultResponse, SyncPreviewEntry } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
@@ -171,13 +172,16 @@ export default function Dashboard() {
       {/* Sync state */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
-          { label: 'In Sync', value: counts['in_sync'] ?? 0, color: 'text-green-600 dark:text-green-400' },
-          { label: 'Pending', value: counts['pending'] ?? 0, color: 'text-yellow-600 dark:text-yellow-400' },
-          { label: 'Conflicts', value: counts['conflict'] ?? 0, color: 'text-red-600 dark:text-red-400' },
-          { label: 'Unlinked', value: counts['unlinked'] ?? 0, color: 'text-gray-500 dark:text-gray-400' },
+          { label: 'In Sync', value: counts['in_sync'] ?? 0, color: 'text-green-600 dark:text-green-400', tip: 'Both sides match the last-synced state.' },
+          { label: 'Pending', value: counts['pending'] ?? 0, color: 'text-yellow-600 dark:text-yellow-400', tip: 'Linked but not yet baselined by a sync cycle.' },
+          { label: 'Conflicts', value: counts['conflict'] ?? 0, color: 'text-red-600 dark:text-red-400', tip: 'Has an open conflict — see the Conflicts page.' },
+          { label: 'Unlinked', value: counts['unlinked'] ?? 0, color: 'text-gray-500 dark:text-gray-400', tip: 'Spool mapping lost its filament mapping; relink or unlink in Synced Records.' },
         ].map(c => (
           <div key={c.label} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-            <p className="text-sm text-gray-500 dark:text-gray-400">{c.label}</p>
+            <p className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+              {c.label}
+              <HelpTip text={c.tip} />
+            </p>
             <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
           </div>
         ))}
@@ -191,28 +195,37 @@ export default function Dashboard() {
             <p className="font-medium text-gray-900 dark:text-gray-100">{formatLocal(data?.last_sync_at)}</p>
           </div>
           <div>
-            <span className="text-gray-500 dark:text-gray-400">Next sync</span>
+            <span className="flex items-center text-gray-500 dark:text-gray-400">
+              Next sync
+              <HelpTip text="Approximate — actual time comes from the scheduler." />
+            </span>
             <p className="font-medium text-gray-900 dark:text-gray-100">{formatLocal(data?.next_sync_at)}</p>
           </div>
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <button
-            onClick={handleManualSync}
-            disabled={syncing || data?.sync_blocked}
-            title={data?.sync_blocked ? 'Sync disabled — upgrade the upstream version' : undefined}
-            className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {syncing ? 'Syncing…' : 'Sync now'}
-          </button>
-          <button
-            onClick={handleDryRun}
-            disabled={syncing || data?.sync_blocked}
-            title={data?.sync_blocked ? 'Sync disabled — upgrade the upstream version' : undefined}
-            className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Dry run
-          </button>
+          <span className="inline-flex items-center">
+            <button
+              onClick={handleManualSync}
+              disabled={syncing || data?.sync_blocked}
+              title={data?.sync_blocked ? 'Sync disabled — upgrade the upstream version' : undefined}
+              className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+            <HelpTip text="Runs one live sync cycle immediately — same as a scheduled cycle." />
+          </span>
+          <span className="inline-flex items-center">
+            <button
+              onClick={handleDryRun}
+              disabled={syncing || data?.sync_blocked}
+              title={data?.sync_blocked ? 'Sync disabled — upgrade the upstream version' : undefined}
+              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Dry run
+            </button>
+            <HelpTip text="Computes everything a cycle WOULD do — creates, updates, conflicts — without writing anything. Safe to run anytime." />
+          </span>
           <button
             onClick={handleAutoSyncToggle}
             disabled={togglingAuto || (data?.sync_blocked && !data?.auto_sync_enabled)}

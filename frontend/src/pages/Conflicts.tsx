@@ -4,6 +4,7 @@ import { getConflicts, resolveConflict, bulkResolveConflicts, getDivergenceConte
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
 import { ColorDisplay } from '../components/ColorDisplay'
+import { HelpTip } from '../components/HelpTip'
 import type { ConflictResponse, DivergenceContextResponse, DivergenceVariantEntry } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
@@ -680,17 +681,24 @@ export default function Conflicts() {
                 All ({allRows.length})
               </button>
               {typeCounts.map(({ type, label, count }) => (
-                <button
-                  key={type}
-                  onClick={() => { setTypeFilter(type); setSelected([]) }}
-                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                    activeFilter === type
-                      ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
-                      : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
-                  }`}
-                >
-                  {label} ({count})
-                </button>
+                <span key={type} className="inline-flex items-center">
+                  <button
+                    onClick={() => { setTypeFilter(type); setSelected([]) }}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                      activeFilter === type
+                        ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-gray-900'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    {label} ({count})
+                  </button>
+                  {type === 'master_divergence' && (
+                    <HelpTip
+                      text="A Spoolman value would override a setting this variant inherits from its Filament DB parent. Resolving applies your chosen action upstream."
+                      learnMoreHref="/docs/conflicts"
+                    />
+                  )}
+                </span>
               ))}
               <span className="w-px h-5 bg-gray-200 dark:bg-gray-600 mx-1" />
             </>
@@ -755,6 +763,7 @@ export default function Conflicts() {
               Use {r}
             </button>
           ))}
+          <HelpTip text="Records the choice only — no values are written upstream. Make the actual edit in the system you chose, and sync propagates it." />
           <button
             onClick={handleBulk}
             disabled={bulking}

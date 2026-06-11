@@ -1,5 +1,13 @@
 # Decision record
 
+## 2026-06-11 — HelpTip component for in-place UI help
+
+**Component design.** `HelpTip` (`frontend/src/components/HelpTip.tsx`) renders a small circled `?` button (14 px, tabIndex=0) that shows a plain-text tooltip on hover, keyboard focus, and tap/click. Tooltip appears above the icon (`bottom-full`, `z-50`), max width 18 rem, dark-mode aware (`bg-gray-800`/`bg-gray-700`). Escape or blur closes; no layout shift (absolutely positioned). Optional `learnMoreHref` renders a "Learn more ↗" link that navigates in-app (`/docs/<slug>`) or opens externally (`target=_blank`).
+
+**Copy placement.** All tooltip text lives at each call site — no central registry. This keeps the text visible in context and avoids an indirection layer that would complicate future edits. Short copy (1–3 sentences) is the rule; surfaces with good existing sub-text were skipped per the inventory.
+
+**Surfaces covered.** Settings (11 tips), Dashboard (6 tips on counts cards + Sync now + Dry run + Next sync), Synced Records (SM weight header, FDB weight header, Hide empty spools, Snapshot values label), Conflicts (Master divergence chip, Bulk resolve), Wizard Step 2 (direction cards), Step 3 (Status/% column header, Master/Parent pill), Variances (Empty-reel tare, master radio, suggest-standalone chip, attach-to-existing buttons), Preview (4 flag section cards), Execute (tare overrides label), OpenTag Cleanup (confidence badge, keep mine, ignore match, Hide already-tagged).
+
 ## 2026-06-11 — In-app docs viewer at /docs/:slug
 
 **Serving approach.** Markdown files in the repo `docs/` directory are shipped

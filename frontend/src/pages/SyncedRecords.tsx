@@ -5,6 +5,7 @@ import { useApi } from '../api/hooks'
 import { StatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
 import { ColorDisplay } from '../components/ColorDisplay'
+import { HelpTip } from '../components/HelpTip'
 import type { MappingDetailField, MappingRow, MappingStatus } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
@@ -121,6 +122,7 @@ export default function SyncedRecords() {
             className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-400"
           />
           Hide empty spools
+          <HelpTip text="Hides spools with 0 g remaining in Spoolman." />
         </label>
       </div>
 
@@ -143,9 +145,19 @@ export default function SyncedRecords() {
               <thead className="bg-gray-50 dark:bg-gray-750">
                 <tr>
                   <th className="w-8 px-2 py-3" />
-                  {['Name', 'Vendor', 'Color', 'SM weight', 'FDB weight', 'Status', 'Last synced', 'Links'].map(h => (
+                  {(['Name', 'Vendor', 'Color', 'SM weight', 'FDB weight', 'Status', 'Last synced', 'Links'] as const).map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                      {h}
+                      {h === 'SM weight' ? (
+                        <span className="inline-flex items-center">
+                          SM weight
+                          <HelpTip text="Net filament weight from Spoolman (reel excluded), as of the last sync." />
+                        </span>
+                      ) : h === 'FDB weight' ? (
+                        <span className="inline-flex items-center">
+                          FDB weight
+                          <HelpTip text="Gross weight from Filament DB (filament + empty reel), as of the last sync." />
+                        </span>
+                      ) : h}
                     </th>
                   ))}
                 </tr>
@@ -208,6 +220,10 @@ export default function SyncedRecords() {
                       {expanded && (
                         <tr className="bg-gray-50/60 dark:bg-gray-900/30">
                           <td colSpan={9} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700">
+                            <div className="flex items-center gap-1 mb-2">
+                              <span className="text-xs text-gray-400 dark:text-gray-500">Snapshot values</span>
+                              <HelpTip text="Last-known values per side from the bridge's snapshots — '—' means the field hasn't been baselined by a sync yet." />
+                            </div>
                             <DetailGrid detail={row.detail} />
                           </td>
                         </tr>
