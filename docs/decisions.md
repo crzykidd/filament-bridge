@@ -1,5 +1,37 @@
 # Decision record
 
+## 2026-06-11 — Backup export/import fidelity: `is_synthetic_parent`, `conflict_type`, and auth secrets
+
+**Bug A — `is_synthetic_parent` round-trip loss.**
+`api/backup.py` export omitted `FilamentMapping.is_synthetic_parent`, so restoring a
+`generic_container`-mode backup turned bridge-owned container parents into ordinary
+mappings — synthetic-parent exclusions and the "spool on container parent" guard stopped
+applying. Additionally, the import upsert keyed synthetic rows on `spoolman_filament_id`
+(which is `NULL` for every synthetic parent), causing `filter_by(spoolman_filament_id=None)
+.first()` to match an arbitrary existing synthetic row. Fixed: synthetic-parent rows are
+now upserted on `filamentdb_id + is_synthetic_parent=True`; regular rows continue to use
+`spoolman_filament_id`. Old backups without the key import as `is_synthetic_parent=False`
+(safe default for pre-existing non-synthetic mappings).
+
+**Bug B — `conflict_type` round-trip loss.**
+`open_conflicts` export omitted `Conflict.conflict_type`, so restored `master_divergence`
+conflicts came back as `cross_system` — the resolve endpoint treated them as record-only
+and the UI lost the action workflow. Fixed: `conflict_type` is now included in the export
+dict and in the `Conflict(...)` insert. Old backups without the key default to
+`"cross_system"` (`.get("conflict_type", "cross_system")`), preserving backwards
+compatibility without a schema-version bump. `BACKUP_SCHEMA_VERSION` stays at 1.
+
+**Decision — schema compatibility over version bump.**
+Both new keys are optional on import (`.get(..., default)`), so v1 backups produced by
+older bridge versions still import without error. A version bump would have made old
+backups unimportable for a pure additive change; that tradeoff was not worth it.
+
+**Decision — auth secrets included in backup export.**
+`auth_secret`, `admin_password_hash`, and `api_token` are intentionally included in
+`GET /api/backup/export` so a restore is fully fidelity (no re-setup of credentials
+required). `docs/security.md` now notes that backup files should be stored with the same
+care as the bridge database volume.
+
 ## 2026-06-11 — Honor configured cross-reference field names in ensure_extra_fields + engine orphan guard
 
 Two bugs only affecting users who override the cross-ref field env vars (`SPOOLMAN_FIELD_FILAMENTDB_ID`, `SPOOLMAN_FIELD_FILAMENTDB_PARENT_ID`, `SPOOLMAN_FIELD_FILAMENTDB_SPOOL_ID`, `FILAMENTDB_SPOOLMAN_ID_FIELD`).

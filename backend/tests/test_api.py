@@ -1497,6 +1497,141 @@ def test_backup_import_rejects_bad_version(db):
     assert resp.json()["detail"]["code"] == "unsupported_schema_version"
 
 
+def test_backup_roundtrip_preserves_is_synthetic_parent(db):
+    """is_synthetic_parent survives export → import round-trip."""
+    # A synthetic container parent has spoolman_filament_id=None.
+    db.add(FilamentMapping(
+        spoolman_filament_id=None,
+        filamentdb_id="par-abc",
+        filamentdb_parent_id=None,
+        is_synthetic_parent=True,
+    ))
+    # A regular mapping.
+    db.add(FilamentMapping(
+        spoolman_filament_id=20,
+        filamentdb_id="fil-xyz",
+        filamentdb_parent_id="par-abc",
+        is_synthetic_parent=False,
+    ))
+    db.commit()
+
+    export = _client(db).get("/api/backup/export").json()
+    synth = next(m for m in export["filament_mappings"] if m["spoolman_filament_id"] is None)
+    regular = next(m for m in export["filament_mappings"] if m["spoolman_filament_id"] == 20)
+    assert synth["is_synthetic_parent"] is True
+    assert regular["is_synthetic_parent"] is False
+
+    fresh = _fresh_db()
+    resp = _client(fresh).post("/api/backup/import", json=export)
+    assert resp.status_code == 200
+    assert resp.json()["filament_mappings"] == 2
+
+    restored_synth = (
+        fresh.query(FilamentMapping)
+        .filter_by(filamentdb_id="par-abc", is_synthetic_parent=True)
+        .first()
+    )
+    assert restored_synth is not None
+    assert restored_synth.spoolman_filament_id is None
+    assert restored_synth.is_synthetic_parent is True
+
+    restored_regular = fresh.query(FilamentMapping).filter_by(spoolman_filament_id=20).first()
+    assert restored_regular is not None
+    assert restored_regular.is_synthetic_parent is False
+
+
+def test_backup_synthetic_parent_upsert_no_cross_match(db):
+    """Importing two distinct synthetic parents does not cross-match on NULL spoolman_filament_id."""
+    # Seed two synthetic parents for two different FDB filaments.
+    db.add(FilamentMapping(
+        spoolman_filament_id=None, filamentdb_id="par-A", is_synthetic_parent=True,
+    ))
+    db.add(FilamentMapping(
+        spoolman_filament_id=None, filamentdb_id="par-B", is_synthetic_parent=True,
+    ))
+    db.commit()
+
+    export = _client(db).get("/api/backup/export").json()
+    assert len([m for m in export["filament_mappings"] if m["is_synthetic_parent"]]) == 2
+
+    fresh = _fresh_db()
+    resp = _client(fresh).post("/api/backup/import", json=export)
+    assert resp.status_code == 200
+    # Both rows must be importable — no cross-match collision.
+    assert resp.json()["filament_mappings"] == 2
+    assert fresh.query(FilamentMapping).filter_by(is_synthetic_parent=True).count() == 2
+
+
+def test_backup_roundtrip_preserves_conflict_type(db):
+    """conflict_type survives export → import round-trip."""
+    db.add(Conflict(
+        entity_type="spool", spoolman_id=5, filamentdb_spool_id="sp5",
+        field_name="material",
+        spoolman_value=json.dumps("PLA"), filamentdb_value=json.dumps("PLA+"),
+        conflict_type="master_divergence",
+    ))
+    db.add(Conflict(
+        entity_type="spool", spoolman_id=6, filamentdb_spool_id="sp6",
+        field_name="color",
+        spoolman_value=json.dumps("#FF0000"), filamentdb_value=json.dumps("#EE0000"),
+        conflict_type="cross_system",
+    ))
+    db.commit()
+
+    export = _client(db).get("/api/backup/export").json()
+    conflict_types = {c["field_name"]: c["conflict_type"] for c in export["open_conflicts"]}
+    assert conflict_types["material"] == "master_divergence"
+    assert conflict_types["color"] == "cross_system"
+
+    fresh = _fresh_db()
+    resp = _client(fresh).post("/api/backup/import", json=export)
+    assert resp.status_code == 200
+    assert resp.json()["conflicts"] == 2
+
+    restored = (
+        fresh.query(Conflict).filter_by(field_name="material", resolved_at=None).first()
+    )
+    assert restored is not None
+    assert restored.conflict_type == "master_divergence"
+
+
+def test_backup_old_shape_imports_without_conflict_type(db):
+    """Old backups without conflict_type or is_synthetic_parent still import correctly."""
+    old_shape_export = {
+        "schema_version": 1,
+        "exported_at": "2026-01-01T00:00:00Z",
+        "config": {},
+        "filament_mappings": [
+            # No is_synthetic_parent key — old backup shape.
+            {"id": 1, "spoolman_filament_id": 99, "filamentdb_id": "old-fil", "filamentdb_parent_id": None},
+        ],
+        "spool_mappings": [],
+        "open_conflicts": [
+            # No conflict_type key — old backup shape.
+            {
+                "entity_type": "spool", "spoolman_id": 7, "filamentdb_filament_id": None,
+                "filamentdb_spool_id": "old-sp", "field_name": "weight",
+                "spoolman_value": 500.0, "filamentdb_value": 700.0,
+            },
+        ],
+    }
+    resp = _client(db).post("/api/backup/import", json=old_shape_export)
+    assert resp.status_code == 200
+    counts = resp.json()
+    assert counts["filament_mappings"] == 1
+    assert counts["conflicts"] == 1
+
+    # Mapping defaults to is_synthetic_parent=False.
+    fm = db.query(FilamentMapping).filter_by(spoolman_filament_id=99).first()
+    assert fm is not None
+    assert fm.is_synthetic_parent is False
+
+    # Conflict defaults to conflict_type="cross_system".
+    conflict = db.query(Conflict).filter_by(field_name="weight").first()
+    assert conflict is not None
+    assert conflict.conflict_type == "cross_system"
+
+
 # ---------------------------------------------------------------------------
 # Fix A — update_spool uses PATCH not PUT
 # ---------------------------------------------------------------------------

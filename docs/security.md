@@ -70,6 +70,14 @@ when `AUTH_ENABLED=true` (a known current password alone is not sufficient).
 | Secret generation | `secrets.token_urlsafe(32)` | Python stdlib CSPRNG |
 | Token comparison | `secrets.compare_digest` | Constant-time to prevent timing attacks |
 
+## Backup export and secrets
+
+A bridge backup export (`GET /api/backup/export`) includes `auth_secret`,
+`admin_password_hash`, and `api_token` alongside mappings and config. This is
+intentional — a restore (`POST /api/backup/import`) must be full-fidelity so
+sessions and API tokens continue to work without requiring the user to re-set
+credentials. Store backup files with the same care as the bridge database volume.
+
 ## What is NOT implemented
 
 - Multi-user support

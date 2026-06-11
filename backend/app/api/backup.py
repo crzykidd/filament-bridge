@@ -141,6 +141,7 @@ def export_backup(db: Session = Depends(get_db)) -> BackupExport:
             "spoolman_filament_id": m.spoolman_filament_id,
             "filamentdb_id": m.filamentdb_id,
             "filamentdb_parent_id": m.filamentdb_parent_id,
+            "is_synthetic_parent": m.is_synthetic_parent,
         }
         for m in db.query(FilamentMapping).all()
     ]
@@ -163,6 +164,7 @@ def export_backup(db: Session = Depends(get_db)) -> BackupExport:
             "field_name": c.field_name,
             "spoolman_value": _decode(c.spoolman_value),
             "filamentdb_value": _decode(c.filamentdb_value),
+            "conflict_type": c.conflict_type,
         }
         for c in db.query(Conflict).filter(Conflict.resolved_at.is_(None)).all()
     ]
@@ -191,17 +193,31 @@ def import_backup(payload: BackupExport, db: Session = Depends(get_db)) -> Backu
         set_config_value(db, key, value)
         config_count += 1
 
-    # Filament mappings — upsert by the unique business key (spoolman_filament_id).
+    # Filament mappings — upsert by the unique business key.
+    # Synthetic parents have spoolman_filament_id = NULL (SQLite allows multiple NULLs
+    # under a UNIQUE constraint), so we cannot key them on that column — a
+    # filter_by(spoolman_filament_id=None) would match an arbitrary synthetic row.
+    # Instead, synthetic-parent rows are keyed on filamentdb_id + is_synthetic_parent=True;
+    # regular rows continue to use spoolman_filament_id.
     fil_count = 0
     for fm in payload.filament_mappings:
-        existing = (
-            db.query(FilamentMapping)
-            .filter_by(spoolman_filament_id=fm["spoolman_filament_id"])
-            .first()
-        )
+        is_synthetic = fm.get("is_synthetic_parent", False)
+        if is_synthetic:
+            existing = (
+                db.query(FilamentMapping)
+                .filter_by(filamentdb_id=fm["filamentdb_id"], is_synthetic_parent=True)
+                .first()
+            )
+        else:
+            existing = (
+                db.query(FilamentMapping)
+                .filter_by(spoolman_filament_id=fm["spoolman_filament_id"])
+                .first()
+            )
         if existing is not None:
             existing.filamentdb_id = fm["filamentdb_id"]
             existing.filamentdb_parent_id = fm.get("filamentdb_parent_id")
+            existing.is_synthetic_parent = is_synthetic
         else:
             db.add(
                 FilamentMapping(
@@ -209,6 +225,7 @@ def import_backup(payload: BackupExport, db: Session = Depends(get_db)) -> Backu
                     spoolman_filament_id=fm["spoolman_filament_id"],
                     filamentdb_id=fm["filamentdb_id"],
                     filamentdb_parent_id=fm.get("filamentdb_parent_id"),
+                    is_synthetic_parent=is_synthetic,
                 )
             )
         fil_count += 1
@@ -265,6 +282,7 @@ def import_backup(payload: BackupExport, db: Session = Depends(get_db)) -> Backu
                 field_name=c["field_name"],
                 spoolman_value=json.dumps(sm_val) if sm_val is not None else None,
                 filamentdb_value=json.dumps(fdb_val) if fdb_val is not None else None,
+                conflict_type=c.get("conflict_type", "cross_system"),
             )
         )
         conflict_count += 1
