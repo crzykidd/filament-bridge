@@ -16,6 +16,7 @@ import type {
   ConflictResponse,
   CycleResultResponse,
   DivergenceContextResponse,
+  FullResetResponse,
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
@@ -247,6 +248,9 @@ export const clearSpoolmanFdbRefs = () =>
 
 export const resetBridgeState = () =>
   request<ResetStateResponse>('/debug/reset-bridge-state', { method: 'POST' })
+
+export const fullReset = () =>
+  request<FullResetResponse>('/debug/full-reset', { method: 'POST' })
 
 // ---------------------------------------------------------------------------
 // Auth

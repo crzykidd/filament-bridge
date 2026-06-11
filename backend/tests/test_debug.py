@@ -290,3 +290,123 @@ def test_reset_bridge_state_works_on_empty_tables(db):
     assert body["snapshots"] == 0
     assert body["conflicts"] == 0
     assert body["sync_log"] == 0
+
+
+# ---------------------------------------------------------------------------
+# full-reset with debug_mode=true
+# ---------------------------------------------------------------------------
+
+
+def test_full_reset_403_when_debug_mode_off(db):
+    """full-reset returns 403 when debug_mode is false (default)."""
+    client = _client(db)
+    resp = client.post("/api/debug/full-reset")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "debug_mode_required"
+
+
+def test_full_reset_clears_bridge_tables_and_blanks_spoolman_xrefs(db):
+    """full-reset deletes all five bridge state tables AND blanks Spoolman cross-refs."""
+    set_config_value(db, "debug_mode", True)
+    set_config_value(db, "wizard_completed", True)
+    db.commit()
+
+    # Seed bridge state rows
+    fm = FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1")
+    db.add(fm)
+    db.flush()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1",
+                        filamentdb_spool_id="sp-1", filament_mapping_id=fm.id))
+    db.add(Snapshot(source="spoolman", entity_type="spool", entity_id="1",
+                    data=json.dumps({"remaining_weight": 500})))
+    db.add(Conflict(entity_type="spool", spoolman_id=1, field_name="weight"))
+    db.add(SyncLog(cycle_id="c1", direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool"))
+    db.commit()
+
+    # Spoolman: one spool with xrefs set
+    blank = encode_extra_value("")
+    spool = _sm_spool(1, extra={"filamentdb_id": encode_extra_value("fil-1")})
+    spoolman = _fake_spoolman(spools=[spool])
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/full-reset")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Bridge DB side
+    assert body["filament_mappings"] == 1
+    assert body["spool_mappings"] == 1
+    assert body["snapshots"] == 1
+    assert body["conflicts"] == 1
+    assert body["sync_log"] == 1
+    assert body["wizard_completed_reset"] is True
+
+    # Spoolman side
+    assert body["spoolman_cleared"] == 1
+    assert body["spoolman_failed"] == 0
+    assert body["spoolman_error"] is None
+
+    # DB actually empty
+    assert db.query(FilamentMapping).count() == 0
+    assert db.query(SpoolMapping).count() == 0
+    assert db.query(Snapshot).count() == 0
+    assert db.query(Conflict).count() == 0
+    assert db.query(SyncLog).count() == 0
+    assert get_config_value(db, "wizard_completed") is False
+
+    # Spoolman update_spool was called once
+    assert spoolman.update_spool.await_count == 1
+    call_args = spoolman.update_spool.await_args_list[0]
+    assert call_args.args[0] == 1
+    assert call_args.args[1]["extra"]["filamentdb_id"] == blank
+
+
+def test_full_reset_still_resets_bridge_db_when_spoolman_fetch_fails(db):
+    """If Spoolman fetch fails, bridge DB reset still completes and error is in response."""
+    set_config_value(db, "debug_mode", True)
+    set_config_value(db, "wizard_completed", True)
+    db.commit()
+
+    # Seed one bridge state row
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
+    db.commit()
+
+    # Spoolman get_spools raises an error
+    spoolman = _fake_spoolman()
+    spoolman.get_spools = AsyncMock(side_effect=RuntimeError("connection refused"))
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/full-reset")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Spoolman side reported failure
+    assert body["spoolman_cleared"] == 0
+    assert body["spoolman_failed"] == 0
+    assert "connection refused" in body["spoolman_error"]
+
+    # Bridge DB side still completed
+    assert body["filament_mappings"] == 1
+    assert body["wizard_completed_reset"] is True
+    assert db.query(FilamentMapping).count() == 0
+    assert get_config_value(db, "wizard_completed") is False
+
+
+def test_full_reset_no_bridge_rows_no_xrefs_returns_zeros(db):
+    """Full reset on clean state returns all zeros without error."""
+    set_config_value(db, "debug_mode", True)
+    db.commit()
+
+    spoolman = _fake_spoolman(spools=[_sm_spool(1)])  # no xrefs
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/full-reset")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["filament_mappings"] == 0
+    assert body["spool_mappings"] == 0
+    assert body["spoolman_cleared"] == 0
+    assert body["spoolman_failed"] == 0
+    assert body["spoolman_error"] is None

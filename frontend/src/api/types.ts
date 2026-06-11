@@ -752,6 +752,21 @@ export interface ResetStateResponse {
   wizard_completed_reset: boolean
 }
 
+export interface FullResetResponse {
+  // Bridge DB side
+  filament_mappings: number
+  spool_mappings: number
+  snapshots: number
+  conflicts: number
+  sync_log: number
+  wizard_completed_reset: boolean
+  // Spoolman cross-ref side
+  spoolman_cleared: number
+  spoolman_failed: number
+  // Non-null when the Spoolman fetch failed (bridge DB reset still completed)
+  spoolman_error: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Version / update check
 // ---------------------------------------------------------------------------

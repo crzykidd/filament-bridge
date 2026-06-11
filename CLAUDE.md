@@ -150,7 +150,7 @@ filament-bridge/
 │   │   │   ├── opentag.py                  — OpenTag cleanup tool (matches, refresh, apply)
 │   │   │   ├── sync_log.py                 — audit log viewer (FR-17)
 │   │   │   ├── wizard.py                   — Bulk Import Wizard read/decision endpoints (FR-1–FR-6)
-│   │   │   ├── debug.py                    — gated reset tools (403 unless debug_mode is on)
+│   │   │   ├── debug.py                    — gated reset tools (403 unless debug_mode is on): clear-spoolman-fdb-refs, reset-bridge-state, full-reset
 │   │   │   ├── version.py                  — public GET /api/version (current, build, GitHub update check)
 │   │   │   └── errors.py                   — consistent error envelope for the bridge API
 │   │   ├── core/
@@ -246,7 +246,7 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | Setting | Default | Description |
 |---|---|---|
 | `sync_interval_seconds` | env fallback (`120`) | Auto-sync interval; applied immediately on save |
-| `debug_mode` | `false` | Enables `POST /api/debug/clear-spoolman-fdb-refs` and `POST /api/debug/reset-bridge-state` (403 when off) |
+| `debug_mode` | `false` | Enables `POST /api/debug/clear-spoolman-fdb-refs`, `POST /api/debug/reset-bridge-state`, and `POST /api/debug/full-reset` (403 when off) |
 | `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |

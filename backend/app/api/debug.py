@@ -1,6 +1,6 @@
 """POST /api/debug/* — gated reset tools for clean re-testing.
 
-Both endpoints return 403 unless debug_mode is currently true in BridgeConfig.
+All endpoints return 403 unless debug_mode is currently true in BridgeConfig.
 They are intended for development/testing only and must never be exposed in
 production. Debug mode is off by default and must be explicitly enabled via
 PUT /api/config.
@@ -16,6 +16,15 @@ Endpoints:
     SyncLog — local only, no upstream writes. Resets wizard_completed to false so
     the user can cleanly re-run the wizard. Does NOT clear BridgeConfig beyond
     wizard_completed. Returns per-table deleted counts.
+
+  POST /api/debug/full-reset
+    Performs BOTH cleanups in one call: blanks the Spoolman cross-ref extras
+    (Spoolman side) AND deletes all five bridge state tables + resets
+    wizard_completed (bridge DB side). Returns combined counts. The Spoolman
+    side runs first so that a Spoolman error is reported before the local state
+    has been destroyed; if the Spoolman side fails the bridge DB reset still
+    runs and the Spoolman error is reported in the response rather than as a
+    502.
 """
 
 from __future__ import annotations
@@ -81,6 +90,96 @@ class ResetStateResponse(BaseModel):
     wizard_completed_reset: bool
 
 
+class FullResetResponse(BaseModel):
+    # Bridge DB side (same fields as ResetStateResponse)
+    filament_mappings: int
+    spool_mappings: int
+    snapshots: int
+    conflicts: int
+    sync_log: int
+    wizard_completed_reset: bool
+    # Spoolman cross-ref side (same fields as ClearRefsResponse)
+    spoolman_cleared: int
+    spoolman_failed: int
+    # Non-None when the Spoolman fetch or a per-spool error caused a partial
+    # failure — bridge DB reset still completed when this is set.
+    spoolman_error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shared helper implementations (called by all three endpoints)
+# ---------------------------------------------------------------------------
+
+
+async def _blank_spoolman_xrefs(spoolman: object) -> tuple[int, int, str | None]:
+    """Fetch all Spoolman spools and blank the three cross-ref extras on each.
+
+    Returns ``(cleared, failed, error_message)``.  ``error_message`` is non-None
+    only when the initial spool fetch fails (in which case cleared=0, failed=0).
+    Per-spool write failures are counted in ``failed`` but do not abort the batch.
+    """
+    blank = encode_extra_value("")
+
+    try:
+        spools = await spoolman.get_spools()  # type: ignore[attr-defined]
+    except Exception as exc:
+        logger.error("blank-spoolman-xrefs: could not fetch spools: %s", exc)
+        return 0, 0, str(exc)
+
+    cleared = 0
+    failed = 0
+
+    for spool in spools:
+        extra = spool.extra or {}
+        keys_to_blank = [
+            k for k in _XREF_EXTRAS
+            if k in extra and extra[k] not in (None, blank, '""', "")
+        ]
+        if not keys_to_blank:
+            continue
+        try:
+            await spoolman.update_spool(  # type: ignore[attr-defined]
+                spool.id,
+                {"extra": {k: blank for k in keys_to_blank}},
+            )
+            logger.info(
+                "blank-spoolman-xrefs: blanked extras %s on spool %d",
+                keys_to_blank, spool.id,
+            )
+            cleared += 1
+        except Exception as exc:
+            logger.warning(
+                "blank-spoolman-xrefs: failed to blank extras on spool %d: %s",
+                spool.id, exc,
+            )
+            failed += 1
+
+    return cleared, failed, None
+
+
+def _reset_bridge_tables(db: Session) -> tuple[int, int, int, int, int]:
+    """Delete all rows from the five bridge state tables and reset wizard_completed.
+
+    Returns ``(filament_mappings, spool_mappings, snapshots, conflicts, sync_log)``.
+    Commits the transaction.
+    """
+    fm_deleted = db.query(FilamentMapping).delete(synchronize_session=False)
+    sm_deleted = db.query(SpoolMapping).delete(synchronize_session=False)
+    snap_deleted = db.query(Snapshot).delete(synchronize_session=False)
+    conflict_deleted = db.query(Conflict).delete(synchronize_session=False)
+    log_deleted = db.query(SyncLog).delete(synchronize_session=False)
+
+    set_config_value(db, "wizard_completed", False)
+    db.commit()
+
+    logger.info(
+        "reset-bridge-tables: filament_mappings=%d spool_mappings=%d "
+        "snapshots=%d conflicts=%d sync_log=%d",
+        fm_deleted, sm_deleted, snap_deleted, conflict_deleted, log_deleted,
+    )
+    return fm_deleted, sm_deleted, snap_deleted, conflict_deleted, log_deleted
+
+
 # ---------------------------------------------------------------------------
 # POST /api/debug/clear-spoolman-fdb-refs
 # ---------------------------------------------------------------------------
@@ -93,48 +192,15 @@ async def clear_spoolman_fdb_refs(
 ) -> ClearRefsResponse:
     """Blank the three FDB cross-ref extras on every Spoolman spool that has any set.
 
-    Writes to Spoolman — requires debug_mode=true.
+    Writes to Spoolman only — requires debug_mode=true.
+    Does NOT touch the bridge DB.
     Errors per spool are logged but do not abort the batch.
     """
     _require_debug_mode(db)
 
-    spoolman = request.app.state.spoolman
-    blank = encode_extra_value("")
-
-    try:
-        spools = await spoolman.get_spools()
-    except Exception as exc:
-        logger.error("clear-spoolman-fdb-refs: could not fetch spools: %s", exc)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-    cleared = 0
-    failed = 0
-
-    for spool in spools:
-        extra = spool.extra or {}
-        # Collect which of the three keys are present and non-blank.
-        keys_to_blank = [
-            k for k in _XREF_EXTRAS
-            if k in extra and extra[k] not in (None, blank, '""', "")
-        ]
-        if not keys_to_blank:
-            continue
-        try:
-            await spoolman.update_spool(
-                spool.id,
-                {"extra": {k: blank for k in keys_to_blank}},
-            )
-            logger.info(
-                "clear-spoolman-fdb-refs: blanked extras %s on spool %d",
-                keys_to_blank, spool.id,
-            )
-            cleared += 1
-        except Exception as exc:
-            logger.warning(
-                "clear-spoolman-fdb-refs: failed to blank extras on spool %d: %s",
-                spool.id, exc,
-            )
-            failed += 1
+    cleared, failed, error = await _blank_spoolman_xrefs(request.app.state.spoolman)
+    if error is not None:
+        raise HTTPException(status_code=502, detail=error)
 
     return ClearRefsResponse(cleared=cleared, failed=failed)
 
@@ -156,20 +222,8 @@ def reset_bridge_state(
     """
     _require_debug_mode(db)
 
-    fm_deleted = db.query(FilamentMapping).delete(synchronize_session=False)
-    sm_deleted = db.query(SpoolMapping).delete(synchronize_session=False)
-    snap_deleted = db.query(Snapshot).delete(synchronize_session=False)
-    conflict_deleted = db.query(Conflict).delete(synchronize_session=False)
-    log_deleted = db.query(SyncLog).delete(synchronize_session=False)
-
-    # Reset wizard_completed so the user can cleanly re-run the wizard.
-    set_config_value(db, "wizard_completed", False)
-    db.commit()
-
-    logger.info(
-        "reset-bridge-state: filament_mappings=%d spool_mappings=%d "
-        "snapshots=%d conflicts=%d sync_log=%d",
-        fm_deleted, sm_deleted, snap_deleted, conflict_deleted, log_deleted,
+    fm_deleted, sm_deleted, snap_deleted, conflict_deleted, log_deleted = (
+        _reset_bridge_tables(db)
     )
 
     return ResetStateResponse(
@@ -179,4 +233,58 @@ def reset_bridge_state(
         conflicts=conflict_deleted,
         sync_log=log_deleted,
         wizard_completed_reset=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/debug/full-reset
+# ---------------------------------------------------------------------------
+
+
+@router.post("/debug/full-reset", response_model=FullResetResponse)
+async def full_reset(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> FullResetResponse:
+    """Perform BOTH cleanups in one call: blank Spoolman cross-refs AND reset the bridge DB.
+
+    Requires debug_mode=true.  Does NOT delete any records in Spoolman or Filament DB.
+
+    Order of operations:
+      1. Blank the Spoolman cross-ref extras (so any failure is reported before the
+         local state is destroyed).
+      2. Delete all five bridge state tables + reset wizard_completed.
+
+    If the Spoolman fetch fails, the bridge DB reset still runs and the error is
+    reported in ``spoolman_error`` rather than returning 502.
+    """
+    _require_debug_mode(db)
+
+    # Step 1 — Spoolman side (run first; failure is non-fatal for the local reset).
+    sm_cleared, sm_failed, sm_error = await _blank_spoolman_xrefs(
+        request.app.state.spoolman
+    )
+
+    # Step 2 — Bridge DB side (always runs even if Spoolman side had errors).
+    fm_deleted, sm_del, snap_deleted, conflict_deleted, log_deleted = (
+        _reset_bridge_tables(db)
+    )
+
+    logger.info(
+        "full-reset: spoolman_cleared=%d spoolman_failed=%d spoolman_error=%s | "
+        "filament_mappings=%d spool_mappings=%d snapshots=%d conflicts=%d sync_log=%d",
+        sm_cleared, sm_failed, sm_error,
+        fm_deleted, sm_del, snap_deleted, conflict_deleted, log_deleted,
+    )
+
+    return FullResetResponse(
+        filament_mappings=fm_deleted,
+        spool_mappings=sm_del,
+        snapshots=snap_deleted,
+        conflicts=conflict_deleted,
+        sync_log=log_deleted,
+        wizard_completed_reset=True,
+        spoolman_cleared=sm_cleared,
+        spoolman_failed=sm_failed,
+        spoolman_error=sm_error,
     )

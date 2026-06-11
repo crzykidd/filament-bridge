@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBlocker } from 'react-router-dom'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy, VariantParentMode } from '../api/types'
@@ -212,6 +212,9 @@ export default function Settings() {
   const [clearingRefs, setClearingRefs] = useState(false)
   const [resettingState, setResettingState] = useState(false)
   const [resetStateMsg, setResetStateMsg] = useState('')
+  const [showFullResetDialog, setShowFullResetDialog] = useState(false)
+  const [fullResetting, setFullResetting] = useState(false)
+  const [fullResetMsg, setFullResetMsg] = useState('')
 
   // Security section state
   const [authEnabled, setAuthEnabled] = useState(false)
@@ -356,6 +359,32 @@ export default function Settings() {
       setResetStateMsg(e instanceof Error ? e.message : 'Error resetting state.')
     } finally {
       setResettingState(false)
+    }
+  }
+
+  async function doFullReset() {
+    setFullResetting(true)
+    setFullResetMsg('')
+    try {
+      const result = await fullReset()
+      let msg =
+        `Reset complete: ${result.filament_mappings} filament mapping(s), ` +
+        `${result.spool_mappings} spool mapping(s), ` +
+        `${result.snapshots} snapshot(s), ` +
+        `${result.conflicts} conflict(s), ` +
+        `${result.sync_log} sync log entry/entries deleted. Wizard reset. ` +
+        `Spoolman: ${result.spoolman_cleared} spool(s) cleared` +
+        (result.spoolman_failed > 0 ? `, ${result.spoolman_failed} failed (see logs)` : '') +
+        '.'
+      if (result.spoolman_error) {
+        msg += ` Spoolman error: ${result.spoolman_error}`
+      }
+      setFullResetMsg(msg)
+      void reload()
+    } catch (e) {
+      setFullResetMsg(e instanceof Error ? e.message : 'Error during full reset.')
+    } finally {
+      setFullResetting(false)
     }
   }
 
@@ -528,6 +557,43 @@ export default function Settings() {
       onCancel={() => setShowClearRefsDialog(false)}
       onProceed={() => { setShowClearRefsDialog(false); void doClearRefs() }}
     />
+    {showFullResetDialog && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/70">
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-red-300 dark:border-red-700 max-w-md w-full mx-4 p-6 space-y-4">
+          <h2 className="text-base font-semibold text-red-700 dark:text-red-400">Full reset — confirm</h2>
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            This will perform <strong>both</strong> cleanup actions at once:
+          </p>
+          <ul className="text-sm text-gray-700 dark:text-gray-300 list-disc pl-5 space-y-1">
+            <li>Clear all bridge mappings, snapshots, conflicts, and the sync log</li>
+            <li>Re-arm the setup wizard so it can be run again</li>
+            <li>Blank the Filament DB cross-reference fields on every Spoolman spool</li>
+          </ul>
+          <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+            This does <span className="underline">NOT</span> delete any records in Filament DB or Spoolman.
+          </p>
+          <p className="text-xs text-red-600 dark:text-red-400">
+            This action is irreversible. Use only during testing with a wiped or disposable dataset.
+          </p>
+          <div className="flex gap-3 justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => setShowFullResetDialog(false)}
+              className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowFullResetDialog(false); void doFullReset() }}
+              className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700"
+            >
+              Full reset
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     <div className="p-8 space-y-6 max-w-2xl">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
 
@@ -1049,16 +1115,16 @@ export default function Settings() {
               disposable dataset.
             </p>
 
-            {/* Clear Spoolman FDB refs */}
+            {/* Clear Spoolman cross-refs (Spoolman only) */}
             <div className="space-y-2">
               <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                Clear Filament DB references from Spoolman
+                Clear Spoolman cross-refs <span className="font-normal text-gray-500 dark:text-gray-400">(Spoolman only)</span>
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 Blanks <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_id</code>,{' '}
                 <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_spool_id</code>, and{' '}
-                <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_parent_id</code> on every Spoolman spool that has any of them
-                set. Writes to Spoolman — irreversible.
+                <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">filamentdb_parent_id</code> on every Spoolman spool that has any set.
+                Writes to Spoolman only — does NOT touch the bridge DB. Use "Full reset" to do both.
               </p>
               <button
                 type="button"
@@ -1066,22 +1132,22 @@ export default function Settings() {
                 disabled={clearingRefs}
                 className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
               >
-                {clearingRefs ? 'Clearing…' : 'Clear Filament DB references from Spoolman'}
+                {clearingRefs ? 'Clearing…' : 'Clear Spoolman cross-refs (Spoolman only)'}
               </button>
               {clearRefsMsg && (
                 <p className="text-xs text-gray-700 dark:text-gray-300">{clearRefsMsg}</p>
               )}
             </div>
 
-            {/* Reset bridge state */}
-            <div className={`space-y-2 border-t border-red-200 dark:border-red-800 pt-4`}>
+            {/* Reset bridge DB (bridge only) */}
+            <div className="space-y-2 border-t border-red-200 dark:border-red-800 pt-4">
               <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
-                Reset bridge sync state
+                Reset bridge DB <span className="font-normal text-gray-500 dark:text-gray-400">(bridge only)</span>
               </p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Clears the bridge's mappings, snapshots, conflicts, and sync log — does NOT
-                touch Spoolman or Filament DB. Also resets the setup wizard so it can be
-                re-run from scratch.
+                Clears the bridge's mappings, snapshots, conflicts, and sync log, and re-arms
+                the setup wizard — does NOT touch Spoolman or Filament DB. Use "Full reset"
+                to also clear the Spoolman cross-refs.
               </p>
               <button
                 type="button"
@@ -1089,10 +1155,33 @@ export default function Settings() {
                 disabled={resettingState}
                 className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
               >
-                {resettingState ? 'Resetting…' : 'Reset bridge sync state'}
+                {resettingState ? 'Resetting…' : 'Reset bridge DB (bridge only)'}
               </button>
               {resetStateMsg && (
                 <p className="text-xs text-gray-700 dark:text-gray-300">{resetStateMsg}</p>
+              )}
+            </div>
+
+            {/* Full reset (bridge DB + Spoolman links) */}
+            <div className="space-y-2 border-t border-red-200 dark:border-red-800 pt-4">
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                Full reset <span className="font-normal text-gray-500 dark:text-gray-400">(bridge DB + Spoolman links)</span>
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Does both cleanups at once: clears all bridge mappings/conflicts/snapshots/log,
+                re-arms the setup wizard, AND blanks the Filament DB cross-reference fields on
+                Spoolman spools. Does NOT delete any records in Filament DB or Spoolman.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowFullResetDialog(true)}
+                disabled={fullResetting}
+                className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {fullResetting ? 'Resetting…' : 'Full reset (bridge DB + Spoolman links)'}
+              </button>
+              {fullResetMsg && (
+                <p className="text-xs text-gray-700 dark:text-gray-300">{fullResetMsg}</p>
               )}
             </div>
           </div>

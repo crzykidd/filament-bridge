@@ -1,5 +1,33 @@
 # Decision record
 
+## 2026-06-10 — Debug: added POST /api/debug/full-reset
+
+Added a third debug endpoint that performs both one-sided cleanups in a single
+call, resolving the half-cleaned state problem when users forget to run both.
+
+**What it does:**
+1. Runs `_blank_spoolman_xrefs()` first (blanks the three cross-ref extras on
+   every Spoolman spool that has any set).
+2. Runs `_reset_bridge_tables()` second (deletes all five bridge state tables —
+   FilamentMapping, SpoolMapping, Snapshot, Conflict, SyncLog — and resets
+   `wizard_completed` to false).
+
+**Failure handling:** If the Spoolman fetch fails, the bridge DB reset still
+completes and the error is reported in the `spoolman_error` field of
+`FullResetResponse` (not a 502). This avoids a stranded state where the user
+cannot reset at all because Spoolman is temporarily unreachable.
+
+**Shared helpers:** `_blank_spoolman_xrefs()` and `_reset_bridge_tables()` are
+now the canonical implementations — the two existing one-sided endpoints
+(`clear-spoolman-fdb-refs` and `reset-bridge-state`) delegate to these helpers.
+No logic is duplicated.
+
+**UI:** Settings Debug zone now shows three buttons with clear scope labels:
+- "Clear Spoolman cross-refs (Spoolman only)" — blanks Spoolman extras only
+- "Reset bridge DB (bridge only)" — resets bridge tables only
+- "Full reset (bridge DB + Spoolman links)" — does both; has a dedicated confirm
+  dialog stating it does NOT delete records in Filament DB or Spoolman.
+
 ## 2026-06-10 — Wizard import: created FDB filament naming rule (variant + standalone)
 
 When the wizard creates a Filament DB filament from Spoolman, the FDB name must always
