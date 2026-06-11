@@ -1,5 +1,15 @@
 # Decision record
 
+## 2026-06-11 — Startup state dump retries the upstream fetch (~2 min) instead of one-shot
+
+`write_startup_dump` initially fetched once, ~2 s after boot — which always lost the race
+when the compose stack starts together (`depends_on` orders container start, not
+readiness), so the dump silently never appeared. It now retries the data fetch
+(12 × 10 s) before giving up, and fetches versions only after the data succeeds (forcing a
+fresh FDB version read past `get_version()`'s first-call cache, which may have cached a
+boot-time failure). Failure after the budget is still swallowed — the dump never blocks
+startup.
+
 ## 2026-06-11 — OpenTag dataset: direct GitHub tarball fetch (no FDB proxy)
 
 **Context.** The bridge originally fetched the OpenTag material list via Filament DB's
