@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.api.errors import api_error
 from app.config import settings as _settings
+from app.core.change_log import record_change as _record_change
 from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import (
@@ -761,6 +762,15 @@ async def opentag_apply(
                     "opentag apply: patched SM filament %d fields=%s",
                     decision.spoolman_filament_id, fields_written,
                 )
+                _record_change(
+                    action="update",
+                    direction="filamentdb_to_spoolman",
+                    entity_type="filament",
+                    spoolman_id=decision.spoolman_filament_id,
+                    field_name="opentag_apply",
+                    new_value=fields_written,
+                    cycle_id="opentag-apply",
+                )
 
             # FDB settings-bag merge (Phase 5 scoped exception)
             if fdb_keys and decision.fdb_filament_id:
@@ -769,6 +779,16 @@ async def opentag_apply(
                 logger.info(
                     "opentag apply: merged OpenTag identity into FDB filament %s: %s",
                     decision.fdb_filament_id, list(fdb_keys.keys()),
+                )
+                _record_change(
+                    action="update",
+                    direction="spoolman_to_filamentdb",
+                    entity_type="filament",
+                    fdb_filament_id=decision.fdb_filament_id,
+                    spoolman_id=decision.spoolman_filament_id,
+                    field_name="opentag_identity",
+                    new_value=list(fdb_keys.keys()),
+                    cycle_id="opentag-apply",
                 )
 
             applied += 1

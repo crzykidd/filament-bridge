@@ -256,6 +256,8 @@ filament-bridge/
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |
 | `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable snapshot of both upstream systems at boot to `{DATA_DIR}/state-dumps/startup-state-<UTC ts>.txt`. Newest 10 dumps are kept. Never enable in production. |
+| `CHANGES_LOG_ENABLED` | No | `true` | When `false`, disables the durable changes.log file. |
+| `CHANGES_LOG_PATH` | No | `{DATA_DIR}/changes.log` | Override the path for the changes.log file. |
 
 ### Runtime-editable settings (BridgeConfig)
 

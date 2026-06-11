@@ -1,10 +1,10 @@
 ---
 name: 2026-06-10-changes-log-file
-status: pending
+status: completed
 created: 2026-06-10
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Implemented core/change_log.py with record_change() hooked into _log() in engine.py; opentag.py apply gets direct calls. Size-based rotation (10 MiB × 3). 18 new tests all green; full suite 942 passed.
 ---
 
 # Task: Durable `changes.log` file recording every write the bridge makes to Spoolman / Filament DB

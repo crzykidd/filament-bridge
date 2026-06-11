@@ -171,6 +171,8 @@ curl http://<bridge-host>:8090/api/backup/export -o bridge-backup.json
 
 Restore with `POST /api/backup/import`.
 
+**Audit log — `changes.log`:** every write the bridge makes to Spoolman or Filament DB is appended to `{DATA_DIR}/changes.log` (default `/data/changes.log`). Each line shows a UTC timestamp, action, target system, entity id, and old → new values for updates — useful for reviewing what changed after a bad release without needing the UI or the SQLite database. The file rotates automatically at ~10 MB (keeps 3 backups). Disable with `CHANGES_LOG_ENABLED=false`. Pairs with `DEBUG_STARTUP_DUMP` (point-in-time boot snapshot) for a full before/after picture.
+
 ---
 
 ## How sync works
@@ -267,6 +269,8 @@ All connection configuration is via environment variables; the service refuses t
 | `DISCORD_WEBHOOK_URL` | No | — | Declared for future conflict/error notifications (delivery not yet implemented) |
 | `LOG_LEVEL` | No | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 | `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable upstream-state snapshot to `{DATA_DIR}/state-dumps/` at boot (newest 10 kept). Development use only. |
+| `CHANGES_LOG_ENABLED` | No | `true` | When `false`, disables the durable per-write audit log at `{DATA_DIR}/changes.log`. |
+| `CHANGES_LOG_PATH` | No | `{DATA_DIR}/changes.log` | Override the path for the changes.log file. |
 
 See **[docs/configuration.md](docs/configuration.md)** for the complete reference, including every runtime-editable setting (sync direction + conflict policy, variant parent mode, weight threshold/precision, log retention, debug mode, API token, and more).
 

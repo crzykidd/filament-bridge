@@ -1,5 +1,49 @@
 # Decision record
 
+## 2026-06-11 — Durable `changes.log` file (`CHANGES_LOG_ENABLED` / `CHANGES_LOG_PATH`)
+
+**Why a file sink vs. the existing SQLite Sync Log.** The Sync Log page in the
+UI queries `SyncLog` rows, which live in the bridge's SQLite database at
+`/data/bridge.db`.  After a bad release or accidental config change, users want
+an independent record they can inspect with a text editor (`tail -f changes.log`,
+`grep spoolman changes.log`) — without needing the UI, the DB, or the bridge
+running at all.  The file is human-readable and survives schema migrations.
+
+**Hook point: `_log()` in `core/engine.py`.** Every upstream mutation (create /
+update / delete / usage) that the engine, wizard execute, and `conflict_apply`
+make goes through `_log()`.  Adding a `record_change()` call at the bottom of
+`_log()` means all write sites are covered for free — including the
+`_mp_*` scalar pass, cost, temps, multicolor, finish tags, new-spool creates,
+and opentag identity merge.  The OpenTag apply endpoint (`api/opentag.py`) does
+not use `_log()`, so it gets direct `_record_change()` calls after each
+successful upstream write.
+
+**Actions recorded.** Only `create`, `update`, `delete`, and `usage`.  `skip` /
+`info` / `conflict` / `error` / dry-run entries are filtered out — they do not
+represent real upstream writes.
+
+**Format (one line per change):**
+```
+2026-06-10T21:45:03Z  UPDATE  filamentdb  spool sp42  weight: 916.9 → 905.1   (cycle abc123)
+2026-06-10T21:45:04Z  CREATE  filamentdb  filament 665f…
+2026-06-10T21:45:05Z  UPDATE  spoolman  filament #7  opentag_apply: ["material","color_hex"]   (opentag-apply)
+```
+
+**Rotation.** Size-based: roll `changes.log → .1 → .2 → .3` past 10 MiB; keep
+3 backups.  Configurable via module constants (`_ROTATION_BYTES`, `_ROTATION_COUNT`).
+
+**Robustness.** All file I/O in `record_change()` is wrapped in `try/except`;
+errors are logged at WARNING level and swallowed — a disk-full or permissions
+failure never breaks sync.
+
+**Relationship to `DEBUG_STARTUP_DUMP`.** The startup dump (`core/state_dump.py`,
+`DEBUG_STARTUP_DUMP=true`) captures a point-in-time snapshot of both systems at
+boot.  `changes.log` records what the bridge writes afterward.  Together they
+give a full before/after picture useful during post-incident review.
+
+**Module:** `backend/app/core/change_log.py`.  Env vars: `CHANGES_LOG_ENABLED`
+(default `true`) and `CHANGES_LOG_PATH` (default `{DATA_DIR}/changes.log`).
+
 ## 2026-06-11 — Debug startup state dump (`DEBUG_STARTUP_DUMP`)
 
 **Why env-level, not runtime BridgeConfig.** The dump runs during the lifespan

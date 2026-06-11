@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     # boot-time behavior without touching the DB.  Never enable in production.
     debug_startup_dump: bool = False
 
+    # Changes log — append every upstream mutation to {data_dir}/changes.log.
+    # CHANGES_LOG_ENABLED: set to "false" / "0" / "no" to disable.
+    # CHANGES_LOG_PATH: override the file path (default: {data_dir}/changes.log).
+    changes_log_enabled: bool = True
+    changes_log_path: str = ""  # empty = use {data_dir}/changes.log
+
     # Notifications
     discord_webhook_url: str | None = None
 

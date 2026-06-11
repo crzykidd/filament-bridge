@@ -173,6 +173,21 @@ def _log(
             error_message=error_message,
         )
     )
+    # Mirror mutations to the durable changes.log file sink.
+    # record_change filters non-mutations (skip/info/conflict/error) internally.
+    from app.core.change_log import record_change
+    record_change(
+        action=action,
+        direction=direction,
+        entity_type=entity_type,
+        spoolman_id=spoolman_id,
+        fdb_filament_id=fdb_filament_id,
+        fdb_spool_id=fdb_spool_id,
+        field_name=field_name,
+        old_value=old_value,
+        new_value=new_value,
+        cycle_id=cycle_id,
+    )
 
 
 def _queue_conflict(
