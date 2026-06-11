@@ -97,6 +97,10 @@ class SyncStatusResponse(BaseModel):
     pending_conflicts: int
     counts: dict[str, int]  # in_sync / pending / conflict / unlinked / total
     systems: dict[str, SystemStatus]
+    # True when an upstream version is below the minimum supported → sync is
+    # refused. blocked_reasons holds the per-system upgrade messages.
+    sync_blocked: bool = False
+    sync_blocked_reasons: list[str] = []
 
 
 # ---------------------------------------------------------------------------

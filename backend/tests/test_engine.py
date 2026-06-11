@@ -554,8 +554,9 @@ async def test_multicolor_first_sight_stores_baseline(db):
 
 
 @pytest.mark.asyncio
-async def test_multicolor_skipped_when_fdb_too_old(db):
-    """FDB < 1.33.0 → multicolor sync skipped, no writes, change recorded as skipped."""
+async def test_sync_blocked_when_fdb_below_minimum(db):
+    """FDB below the minimum supported version (1.33.0) hard-blocks the whole
+    cycle: no upstream fetches/writes, blocked_reasons set."""
     sm_fil = _sm_fil(color_hex="93be2f", multi_hexes="cdde1b,68cc16", direction="coaxial")
     fdb_list = _fdb_list_fil(color="#93be2f")
     fdb_detail = _fdb_detail_fil(color="#93be2f")
@@ -571,9 +572,26 @@ async def test_multicolor_skipped_when_fdb_too_old(db):
         _mc_settings(mock_settings)
         result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
 
+    assert result.blocked_reasons and any("1.33.0" in r for r in result.blocked_reasons)
     fdb_client.update_filament.assert_not_called()
-    fdb_client.get_filament.assert_not_called()  # gated before detail fetch
-    assert result.skipped >= 1
+    fdb_client.get_filaments.assert_not_called()   # blocked before any upstream fetch
+    assert result.updated == 0 and result.created == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_blocked_when_spoolman_below_minimum(db):
+    """Spoolman below the minimum (0.22.0) hard-blocks the cycle."""
+    spoolman = _fake_spoolman(filaments=[])
+    spoolman.health = AsyncMock(return_value={"version": "0.21.0"})
+    fdb_client = _fake_filamentdb(filaments=[], version="1.35.0")
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _mc_settings(mock_settings)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.blocked_reasons and any("0.22.0" in r for r in result.blocked_reasons)
+    spoolman.get_spools.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

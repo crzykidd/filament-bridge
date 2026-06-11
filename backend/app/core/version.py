@@ -6,9 +6,52 @@ requires Filament DB >= 1.33.0).
 
 from __future__ import annotations
 
-# Minimum Filament DB version with structured multicolor support
-# (color/secondaryColors/optTags). Earlier versions lack the fields entirely.
-MULTICOLOR_MIN_FDB = (1, 33, 0)
+# ---------------------------------------------------------------------------
+# Minimum supported upstream versions
+# ---------------------------------------------------------------------------
+# Below these the bridge still starts and core weight/field sync runs, but some
+# features silently degrade — the health check surfaces a warning (it does NOT
+# hard-block, to avoid locking the UI out on a version it can't read).
+#
+# Filament DB 1.33.0 — structured multicolor (color/secondaryColors/optTags),
+#   finish-tag (optTags) sync, and the temperature fields the two-way
+#   material-property passes read/write. Older FDB lacks these entirely.
+# Spoolman 0.22.0 — structured multi-color (multi_color_hexes / multi_color_direction)
+#   plus the stable extra-fields system the bridge stores cross-reference IDs in.
+MIN_FDB = (1, 33, 0)
+MIN_SPOOLMAN = (0, 22, 0)
+
+# Minimum FDB version with structured multicolor support — same floor as MIN_FDB
+# today; kept as its own name where the engine gates the multicolor passes.
+MULTICOLOR_MIN_FDB = MIN_FDB
+
+
+def format_version(target: tuple[int, int, int]) -> str:
+    """Render a version tuple for user-facing messages: (1, 33, 0) → ``"1.33.0"``."""
+    return ".".join(str(p) for p in target)
+
+
+def incompatibilities(fdb_version: str | None, spoolman_version: str | None) -> list[str]:
+    """Return a blocking message per upstream whose KNOWN version is below its
+    minimum (empty list = OK to sync).
+
+    A ``None``/unknown version is NOT treated as incompatible — that means we
+    couldn't read it (a connectivity issue, surfaced separately as health
+    ``degraded``), not that it's old.  We only hard-block when we positively
+    know the version is too old.
+    """
+    msgs: list[str] = []
+    if isinstance(fdb_version, str) and fdb_version and not version_gte(fdb_version, MIN_FDB):
+        msgs.append(
+            f"Filament DB {fdb_version} is below the minimum supported version "
+            f"{format_version(MIN_FDB)} — upgrade Filament DB to use sync"
+        )
+    if isinstance(spoolman_version, str) and spoolman_version and not version_gte(spoolman_version, MIN_SPOOLMAN):
+        msgs.append(
+            f"Spoolman {spoolman_version} is below the minimum supported version "
+            f"{format_version(MIN_SPOOLMAN)} — upgrade Spoolman to use sync"
+        )
+    return msgs
 
 
 def parse_semver(version: str | None) -> tuple[int, int, int]:

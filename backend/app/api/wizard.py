@@ -26,6 +26,7 @@ from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_sm_color
+from app.core.compat import sync_compatibility_errors
 from app.core.dates import spool_provenance_dates
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
 from app.core.material_tags import finish_ids_from_text, strip_finish_words
@@ -2124,6 +2125,14 @@ async def wizard_execute(
     cycle_id = str(uuid.uuid4())
     spoolman = request.app.state.spoolman
     filamentdb = request.app.state.filamentdb
+
+    # Hard-gate on upstream version: the wizard execute writes to both systems.
+    blocked = await sync_compatibility_errors(spoolman, filamentdb)
+    if blocked:
+        raise api_error(
+            409, "upstream_version_unsupported",
+            "Sync disabled — " + "; ".join(blocked) + ".",
+        )
 
     import_direction = get_config_value(db, "import_direction", "spoolman")
     sync_direction = (

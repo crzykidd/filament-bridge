@@ -37,7 +37,7 @@ from app.core.differ import diff_spool_pair
 from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
 from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text, parse_material_tags, serialize_material_tags
 from app.core.sync_policy import SyncAction, resolve_sync_action
-from app.core.version import MULTICOLOR_MIN_FDB, version_gte
+from app.core.version import MULTICOLOR_MIN_FDB, incompatibilities, version_gte
 from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross
 from app.models.config import BridgeConfig
 from app.models.conflict import DELETION_FIELD, Conflict
@@ -62,6 +62,9 @@ class CycleResult:
     skipped: int = 0
     errors: int = 0
     preview: list[dict] = field(default_factory=list)
+    # Non-empty when the cycle was refused because an upstream version is below
+    # the minimum supported (see core/version.py:incompatibilities). No writes happen.
+    blocked_reasons: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1802,8 +1805,27 @@ async def run_sync_cycle(
     precision: int = int(config.get("weight_precision_decimals", 2))
     fdb_field_name: str = _settings.filamentdb_spoolman_id_field  # default "label"
 
+    # ---- Upstream version gate ----
+    # Refuse to sync against a KNOWN below-minimum upstream (no writes). Skips the
+    # whole cycle so auto-sync becomes a no-op until the user upgrades.
+    fdb_version = await filamentdb.get_version()
+    sm_version: str | None = None
+    try:
+        sm_version = (await spoolman.health()).get("version")
+    except Exception:
+        sm_version = None
+    blocked = incompatibilities(fdb_version, sm_version)
+    if blocked:
+        result.blocked_reasons = blocked
+        msg = "Sync disabled — " + "; ".join(blocked)
+        logger.warning("Cycle %s: %s", cycle_id, msg)
+        if not dry_run:
+            _log(db, cycle_id, "auto", "skip", "spool", error_message=msg)
+            db.commit()
+        return result
+
     # Structured multicolor sync requires Filament DB >= 1.33.0 (color/secondaryColors/optTags).
-    multicolor_supported = version_gte(await filamentdb.get_version(), MULTICOLOR_MIN_FDB)
+    multicolor_supported = version_gte(fdb_version, MULTICOLOR_MIN_FDB)
 
     # ---- Fetch upstream state ----
     try:

@@ -157,6 +157,17 @@ export default function Dashboard() {
         )}
       </div>
 
+      {/* Sync disabled — upstream version below minimum supported */}
+      {data?.sync_blocked && (
+        <div className="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3">
+          <p className="text-sm font-semibold text-red-700 dark:text-red-300">⛔ Sync disabled — unsupported upstream version</p>
+          <ul className="mt-1 list-disc list-inside text-sm text-red-700 dark:text-red-400">
+            {data.sync_blocked_reasons.map((r, i) => <li key={i}>{r}.</li>)}
+          </ul>
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">All sync actions are blocked until you upgrade.</p>
+        </div>
+      )}
+
       {/* Sync state */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
@@ -188,21 +199,23 @@ export default function Dashboard() {
         <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={handleManualSync}
-            disabled={syncing}
-            className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            disabled={syncing || data?.sync_blocked}
+            title={data?.sync_blocked ? 'Sync disabled — upgrade the upstream version' : undefined}
+            className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {syncing ? 'Syncing…' : 'Sync now'}
           </button>
           <button
             onClick={handleDryRun}
-            disabled={syncing}
-            className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+            disabled={syncing || data?.sync_blocked}
+            title={data?.sync_blocked ? 'Sync disabled — upgrade the upstream version' : undefined}
+            className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Dry run
           </button>
           <button
             onClick={handleAutoSyncToggle}
-            disabled={togglingAuto}
+            disabled={togglingAuto || (data?.sync_blocked && !data?.auto_sync_enabled)}
             className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
               data?.auto_sync_enabled
                 ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-900/50'

@@ -17,8 +17,10 @@ from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.api.mappings import build_mapping_rows
 from app.config import settings
+from app.core.compat import sync_compatibility_errors
 from app.core.dryrun import plan_dry_run
 from app.core.engine import run_sync_cycle
+from app.core.version import incompatibilities
 from app.db import get_db
 from app.models.conflict import Conflict
 from app.models.sync_log import SyncLog
@@ -46,9 +48,26 @@ def _to_response(result) -> CycleResultResponse:
     )
 
 
+async def _require_compatible_upstreams(request: Request) -> None:
+    """Raise 409 when a known upstream version is below the minimum supported.
+
+    Hard-gates every sync task (trigger, dry-run, auto-sync enable, wizard
+    execute) so nothing runs against an unsupported Filament DB / Spoolman.
+    """
+    blocked = await sync_compatibility_errors(
+        request.app.state.spoolman, request.app.state.filamentdb
+    )
+    if blocked:
+        raise api_error(
+            409, "upstream_version_unsupported",
+            "Sync disabled — " + "; ".join(blocked) + ".",
+        )
+
+
 @router.post("/sync/trigger", response_model=CycleResultResponse)
 async def trigger_sync(request: Request, db: Session = Depends(get_db)) -> CycleResultResponse:
     """Run one live sync cycle now (FR-18)."""
+    await _require_compatible_upstreams(request)
     result = await run_sync_cycle(
         db, request.app.state.spoolman, request.app.state.filamentdb, dry_run=False
     )
@@ -62,6 +81,7 @@ async def dry_run_sync(request: Request, db: Session = Depends(get_db)) -> Cycle
     Uses the unified matcher-driven planner so it reports created/updated/
     conflicted/skipped regardless of bridge state (empty or linked).
     """
+    await _require_compatible_upstreams(request)
     result = await plan_dry_run(
         db, request.app.state.spoolman, request.app.state.filamentdb
     )
@@ -69,11 +89,13 @@ async def dry_run_sync(request: Request, db: Session = Depends(get_db)) -> Cycle
 
 
 @router.post("/sync/auto", response_model=AutoSyncResponse)
-def set_auto_sync(payload: AutoSyncRequest, db: Session = Depends(get_db)) -> AutoSyncResponse:
+async def set_auto_sync(
+    payload: AutoSyncRequest, request: Request, db: Session = Depends(get_db)
+) -> AutoSyncResponse:
     """Enable/disable scheduled auto-sync.
 
-    Refuses to enable until the initial sync wizard has completed (FR-8: auto-sync
-    is off by default and requires explicit user action after initial sync).
+    Refuses to enable until the initial sync wizard has completed (FR-8), and
+    refuses to enable while an upstream version is below the minimum supported.
     """
     if payload.enabled and not get_config_value(db, "wizard_completed", False):
         raise api_error(
@@ -81,6 +103,8 @@ def set_auto_sync(payload: AutoSyncRequest, db: Session = Depends(get_db)) -> Au
             "wizard_incomplete",
             "Auto-sync cannot be enabled until the initial sync wizard has completed.",
         )
+    if payload.enabled:
+        await _require_compatible_upstreams(request)
     set_config_value(db, "auto_sync_enabled", payload.enabled)
     db.commit()
     return AutoSyncResponse(auto_sync_enabled=payload.enabled)
@@ -95,6 +119,8 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
         "spoolman": SystemStatus(**spoolman_health.model_dump()),
         "filamentdb": SystemStatus(**filamentdb_health.model_dump()),
     }
+    # Derive the sync-block state from the versions already fetched above.
+    blocked_reasons = incompatibilities(filamentdb_health.version, spoolman_health.version)
 
     rows = build_mapping_rows(db)
     counts = {"in_sync": 0, "pending": 0, "conflict": 0, "unlinked": 0, "total": len(rows)}
@@ -119,4 +145,6 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
         pending_conflicts=pending_conflicts,
         counts=counts,
         systems=systems,
+        sync_blocked=bool(blocked_reasons),
+        sync_blocked_reasons=blocked_reasons,
     )

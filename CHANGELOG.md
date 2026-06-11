@@ -11,6 +11,15 @@ GitHub release.
 
 ### Added
 
+- **Minimum upstream version enforcement** — the bridge now declares minimum supported
+  versions (Filament DB **1.33.0**, Spoolman **0.22.0**) in `core/version.py`. When a *known*
+  upstream version is below its minimum, **all sync is hard-blocked**: the sync trigger /
+  dry-run endpoints and the wizard execute return `409 upstream_version_unsupported`
+  ("Sync disabled — upgrade …"), auto-sync cannot be enabled, and `run_sync_cycle` skips the
+  cycle (so the scheduler becomes a no-op). `GET /api/sync/status` reports `sync_blocked` +
+  `sync_blocked_reasons`, the Dashboard shows a red "Sync disabled" banner and disables the
+  sync buttons, and `/api/health` warns per system. An unknown/unreadable version does not
+  block (that's a connectivity concern). Minimums are documented in the README Prerequisites.
 - **Expandable Synced Records rows** — each row in Synced Records now expands (collapsed by
   default; with Expand-all / Collapse-all) to a compact side-by-side detail showing the
   per-side last-known values for the things the bridge syncs — Spoolman (emerald) vs

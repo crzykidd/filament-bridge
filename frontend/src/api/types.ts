@@ -100,6 +100,8 @@ export interface SyncStatusResponse {
   pending_conflicts: number
   counts: Record<string, number>
   systems: Record<string, SystemStatus>
+  sync_blocked: boolean
+  sync_blocked_reasons: string[]
 }
 
 // ---------------------------------------------------------------------------

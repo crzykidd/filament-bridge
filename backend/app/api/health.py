@@ -17,7 +17,12 @@ from pydantic import BaseModel
 
 from app import __version__
 from app.config import settings
-from app.core.version import MULTICOLOR_MIN_FDB, version_gte
+from app.core.version import (
+    MIN_FDB,
+    MIN_SPOOLMAN,
+    format_version,
+    version_gte,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,6 +47,12 @@ async def _check_spoolman(request: Request) -> SystemHealth:
     url = settings.spoolman_url
     try:
         info = await request.app.state.spoolman.health()
+        warnings: list[str] = []
+        if not version_gte(info.get("version"), MIN_SPOOLMAN):
+            warnings.append(
+                f"Spoolman < {format_version(MIN_SPOOLMAN)} — the minimum supported version "
+                "(multi-color fields + stable extra fields); upgrade recommended"
+            )
         return SystemHealth(
             status="ok",
             url=url,
@@ -51,6 +62,7 @@ async def _check_spoolman(request: Request) -> SystemHealth:
                 "spools": info["spool_count"],
                 "active_spools": info["active_spool_count"],
             },
+            warnings=warnings,
         )
     except Exception as exc:
         logger.warning("Spoolman health check failed: %s", exc)
@@ -62,9 +74,10 @@ async def _check_filamentdb(request: Request) -> SystemHealth:
     try:
         info = await request.app.state.filamentdb.health()
         warnings: list[str] = []
-        if not version_gte(info.get("version"), MULTICOLOR_MIN_FDB):
+        if not version_gte(info.get("version"), MIN_FDB):
             warnings.append(
-                "Filament DB < 1.33.0 — upgrade for structured multicolor sync"
+                f"Filament DB < {format_version(MIN_FDB)} — the minimum supported version; "
+                "structured multicolor, finish-tag, and temperature sync are disabled below it"
             )
         return SystemHealth(
             status="ok",

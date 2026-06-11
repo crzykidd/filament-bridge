@@ -191,8 +191,19 @@ environment:
 
 ## Prerequisites
 
-- **Filament DB** — any recent version. Structured multicolor/gradient sync requires Filament DB ≥ 1.33.0; the bridge gates that feature automatically.
-- **Spoolman** — any recent version. The bridge creates its required extra fields (`filamentdb_id`, `filamentdb_spool_id`, etc.) automatically on startup if they are missing.
+**Minimum supported versions:**
+
+| System | Minimum | Why |
+|---|---|---|
+| **Filament DB** | **1.33.0** | structured multicolor/gradient, finish-tag, and temperature sync (these features are skipped below it) |
+| **Spoolman** | **0.22.0** | structured multi-color fields (`multi_color_hexes` / `multi_color_direction`) and the stable extra-fields system used for cross-reference IDs |
+
+The bridge still starts and runs core weight/field sync against older versions, but `GET /api/health`
+(and the Dashboard) will show a warning per system that is below its minimum. Filament DB ≥ **1.36.1**
+is recommended (latest tested).
+
+- **Filament DB** — the bridge gates version-specific features automatically.
+- **Spoolman** — the bridge creates its required extra fields (`filamentdb_id`, `filamentdb_spool_id`, etc.) automatically on startup if they are missing.
 - Both APIs are unauthenticated; no API keys or tokens are needed.
 
 ---

@@ -1785,6 +1785,58 @@ def test_health_warns_when_fdb_too_old_for_multicolor(db):
     assert any("1.33.0" in w for w in fdb_sys["warnings"])
 
 
+def test_health_no_spoolman_warning_when_current(db):
+    sm = _fake_spoolman()
+    sm.health = AsyncMock(return_value={
+        "version": "0.22.0", "filament_count": 1, "spool_count": 1, "active_spool_count": 1})
+    body = _client(db, spoolman=sm).get("/api/health").json()
+    sm_sys = body["systems"]["spoolman"]
+    assert sm_sys["version"] == "0.22.0"
+    assert sm_sys["warnings"] == []
+
+
+def test_health_warns_when_spoolman_too_old(db):
+    sm = _fake_spoolman()
+    sm.health = AsyncMock(return_value={
+        "version": "0.21.0", "filament_count": 1, "spool_count": 1, "active_spool_count": 1})
+    body = _client(db, spoolman=sm).get("/api/health").json()
+    sm_sys = body["systems"]["spoolman"]
+    assert sm_sys["version"] == "0.21.0"
+    assert any("0.22.0" in w for w in sm_sys["warnings"])
+
+
+def _client_old_fdb(db):
+    fdb = _fake_filamentdb()
+    fdb.get_version = AsyncMock(return_value="1.32.0")
+    fdb.health = AsyncMock(return_value={"version": "1.32.0", "filament_count": 1, "spool_count": 1})
+    return _client(db, filamentdb=fdb)
+
+
+def test_sync_trigger_blocked_when_upstream_too_old(db):
+    resp = _client_old_fdb(db).post("/api/sync/trigger")
+    assert resp.status_code == 409
+    assert "Sync disabled" in resp.json()["detail"]["message"]
+
+
+def test_sync_dry_run_blocked_when_upstream_too_old(db):
+    assert _client_old_fdb(db).post("/api/sync/dry-run").status_code == 409
+
+
+def test_enable_auto_sync_blocked_when_upstream_too_old(db):
+    set_config_value(db, "wizard_completed", True)
+    db.commit()
+    resp = _client_old_fdb(db).post("/api/sync/auto", json={"enabled": True})
+    assert resp.status_code == 409
+    # Disabling is always allowed.
+    assert _client_old_fdb(db).post("/api/sync/auto", json={"enabled": False}).status_code == 200
+
+
+def test_sync_status_reports_blocked_when_upstream_too_old(db):
+    body = _client_old_fdb(db).get("/api/sync/status").json()
+    assert body["sync_blocked"] is True
+    assert any("1.33.0" in r for r in body["sync_blocked_reasons"])
+
+
 # ---------------------------------------------------------------------------
 # SM variant grouping — pure unit tests (no HTTP)
 # ---------------------------------------------------------------------------
