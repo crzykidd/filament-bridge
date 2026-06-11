@@ -101,7 +101,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
       {actionBar}
 
       {!isSpoolmanImport && (
-        <div className="bg-gray-50 border border-gray-200 rounded p-4 text-sm text-gray-600">
+        <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded p-4 text-sm text-gray-600 dark:text-gray-300">
           The reconcile preview is currently available for the Spoolman → Filament DB import
           direction. The summary below reflects your selected direction
           ({data.direction.replace(/_/g, ' ')}).
@@ -116,8 +116,8 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
           { label: 'Filaments matched', value: matchedFilaments, color: 'text-blue-600' },
           { label: 'Spools matched', value: matchedSpools, color: 'text-blue-600' },
         ].map(c => (
-          <div key={c.label} className="bg-white rounded-lg border border-gray-200 p-3 text-center">
-            <p className="text-xs text-gray-500">{c.label}</p>
+          <div key={c.label} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-center">
+            <p className="text-xs text-gray-500 dark:text-gray-400">{c.label}</p>
             <p className={`text-2xl font-bold ${c.color}`}>{c.value}</p>
           </div>
         ))}
@@ -126,16 +126,16 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
       {/* Flag counts at a glance */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {(Object.keys(FLAG_LABELS) as FlagKey[]).map(key => (
-          <div key={key} className="bg-white rounded-lg border border-amber-200 p-3 text-center">
-            <p className="text-xs text-gray-500">{FLAG_LABELS[key]}</p>
+          <div key={key} className="bg-white dark:bg-gray-800 rounded-lg border border-amber-200 dark:border-amber-700 p-3 text-center">
+            <p className="text-xs text-gray-500 dark:text-gray-400">{FLAG_LABELS[key]}</p>
             <p className="text-2xl font-bold text-amber-600">{data.flag_counts[key]}</p>
           </div>
         ))}
       </div>
 
       {/* Non-blocking notice about flagged items */}
-      <div className="bg-amber-50 border border-amber-200 rounded p-4">
-        <p className="text-amber-800 text-sm">
+      <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded p-4">
+        <p className="text-amber-800 dark:text-amber-200 text-sm">
           The flagged items below need attention before executing. Name collisions will be recorded
           as individual failures per-record (the rest of the batch continues). Fix variant groupings
           or proceed to Execute to handle them per-record.
@@ -149,7 +149,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         open={open.has('name_collision')}
         onToggle={() => toggle('name_collision')}
       >
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.name_collisions.map((c, i) => (
             <CollisionRow
               key={i}
@@ -173,7 +173,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         onToggle={() => toggle('empty_active')}
         infoOnly={config?.never_import_empties ?? false}
       >
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {(config?.never_import_empties ?? false) && (
             <p className="px-4 py-2 text-xs text-amber-600">
               These spools are excluded from the import ("Never import empties" is on in Settings).
@@ -186,7 +186,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
           )}
           {data.empty_active.map((e, i) => (
             <div key={i} className="px-4 py-2 text-sm flex items-center justify-between gap-3">
-              <span className="text-gray-700">{e.name ?? `Spool #${e.spoolman_spool_id}`}</span>
+              <span className="text-gray-700 dark:text-gray-200">{e.name ?? `Spool #${e.spoolman_spool_id}`}</span>
               <DeepLinks
                 spoolmanSpoolId={e.spoolman_spool_id}
                 spoolmanFilamentId={e.spoolman_filament_id}
@@ -203,12 +203,12 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         open={open.has('default_tare')}
         onToggle={() => toggle('default_tare')}
       >
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.default_tare.map((t, i) => (
             <div key={i} className="px-4 py-2 text-sm flex items-center justify-between gap-3">
               <div>
-                <span className="text-gray-700">{t.name ?? `Spool #${t.spoolman_spool_id}`}</span>
-                <span className="ml-2 text-xs text-gray-500">
+                <span className="text-gray-700 dark:text-gray-200">{t.name ?? `Spool #${t.spoolman_spool_id}`}</span>
+                <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
                   gross {t.planned_gross} g (tare {t.default_tare_used} g default)
                 </span>
               </div>
@@ -228,15 +228,15 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         open={open.has('variant_group')}
         onToggle={() => toggle('variant_group')}
       >
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.variant_groups.map((g, i) => (
             <div key={i} className="px-4 py-2 text-sm">
               <div className="flex items-center gap-2">
-                <span className="font-medium text-gray-800">{g.base_name}</span>
-                {g.vendor && <span className="text-xs text-gray-500">{g.vendor}</span>}
-                {g.material && <span className="text-xs text-gray-400">{g.material}</span>}
+                <span className="font-medium text-gray-800 dark:text-gray-100">{g.base_name}</span>
+                {g.vendor && <span className="text-xs text-gray-500 dark:text-gray-400">{g.vendor}</span>}
+                {g.material && <span className="text-xs text-gray-400 dark:text-gray-500">{g.material}</span>}
               </div>
-              <p className="text-xs text-gray-500 mt-0.5">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {g.sm_filament_ids.length} filaments: {g.sm_filament_ids.join(', ')}
               </p>
             </div>
@@ -248,9 +248,9 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
       {isSpoolmanImport && (data.planned_writes?.length ?? 0) > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-medium text-gray-700">
+            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
               Planned writes
-              <span className="ml-2 text-xs text-gray-400">({data.planned_writes.length} total)</span>
+              <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">({data.planned_writes.length} total)</span>
             </h3>
             {/* Filter chips */}
             <div className="flex gap-1">
@@ -261,7 +261,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
                   className={`px-2.5 py-1 text-xs rounded-full border font-medium transition-colors ${
                     plannedWritesFilter === f
                       ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                      : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'
                   }`}
                 >
                   {f === 'all' ? 'All' : f === 'filamentdb' ? 'Filament DB' : 'Spoolman'}
@@ -322,10 +322,10 @@ function CollisionRow({
             Container
           </span>
           <div className="min-w-0">
-            <span className="font-medium text-gray-800">
+            <span className="font-medium text-gray-800 dark:text-gray-100">
               {collision.proposed_name ?? collision.normalized_name}
             </span>
-            <p className="mt-0.5 text-xs text-amber-700">
+            <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
               {collision.vs_existing
                 ? 'This container name already exists in Filament DB — rename it or skip this cluster.'
                 : 'Two clusters in this batch would produce the same container name — rename one.'}
@@ -357,13 +357,13 @@ function CollisionRow({
         </div>
         {!skipped ? (
           <div className="flex items-center gap-2 mt-1 pl-0.5">
-            <label className="text-xs text-gray-500 shrink-0">Rename to:</label>
+            <label className="text-xs text-gray-500 dark:text-gray-400 shrink-0">Rename to:</label>
             <input
               type="text"
               value={nameEdit}
               onChange={e => setNameEdit(e.target.value)}
-              className={`flex-1 border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400 ${
-                stillCollides ? 'border-red-400' : 'border-gray-300'
+              className={`flex-1 border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400 bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 ${
+                stillCollides ? 'border-red-400' : 'border-gray-300 dark:border-gray-600'
               }`}
               placeholder="New container name…"
               disabled={saving}
@@ -380,7 +380,7 @@ function CollisionRow({
               type="button"
               disabled={saving}
               onClick={() => onSaveOverride({ cluster_key: clusterKey, name_override: null, skip: true })}
-              className="px-2.5 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50 shrink-0"
+              className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 shrink-0"
             >
               Skip cluster
             </button>
@@ -393,7 +393,7 @@ function CollisionRow({
           </div>
         ) : (
           <div className="flex items-center gap-2 mt-1 pl-0.5">
-            <span className="text-xs text-gray-500 italic">This cluster will be skipped.</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400 italic">This cluster will be skipped.</span>
             <button
               type="button"
               disabled={saving}
@@ -402,7 +402,7 @@ function CollisionRow({
                 setNameEdit(resetName)
                 onSaveOverride({ cluster_key: clusterKey, name_override: null, skip: false })
               }}
-              className="px-2 py-0.5 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+              className="px-2 py-0.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
             >
               Undo skip
             </button>
@@ -417,13 +417,13 @@ function CollisionRow({
     <div className="px-4 py-3 text-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <span className="font-medium text-gray-800">{collision.normalized_name}</span>
+          <span className="font-medium text-gray-800 dark:text-gray-100">{collision.normalized_name}</span>
           {collision.sm_filament_ids.length > 0 && (
-            <span className="ml-2 text-xs text-gray-500">
+            <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
               SM filament{collision.sm_filament_ids.length !== 1 ? 's' : ''}: {collision.sm_filament_ids.join(', ')}
             </span>
           )}
-          <p className="mt-0.5 text-xs text-amber-700">
+          <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
             {collision.vs_existing
               ? 'This name already exists in Filament DB — the create will fail with a 409. Go back to Variances to fix grouping, or this record will be skipped.'
               : 'Two items in this batch share the same name — only one will be created.'}
@@ -473,7 +473,7 @@ function PlannedWritesList({
     return <p className="text-xs text-gray-400">No writes planned for this filter.</p>
   }
   return (
-    <div className="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
       {filtered.map((w, i) => (
         <div key={i} className="px-4 py-3">
           <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -489,19 +489,19 @@ function PlannedWritesList({
             }`}>
               {w.action}
             </span>
-            <span className="text-xs text-gray-500 capitalize">{w.entity_type}</span>
-            <span className="text-sm text-gray-800 font-medium truncate">{w.target_label}</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400 capitalize">{w.entity_type}</span>
+            <span className="text-sm text-gray-800 dark:text-gray-100 font-medium truncate">{w.target_label}</span>
           </div>
           {w.fields.length > 0 && (
             <div className="flex flex-wrap gap-x-4 gap-y-0.5 pl-1">
               {w.fields.map((f, fi) => (
-                <span key={fi} className="text-xs text-gray-500">
-                  <span className="font-medium text-gray-700">{f.name}</span>
+                <span key={fi} className="text-xs text-gray-500 dark:text-gray-400">
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{f.name}</span>
                   {f.old != null && (
-                    <span className="text-gray-400"> {String(f.old)} →</span>
+                    <span className="text-gray-400 dark:text-gray-500"> {String(f.old)} →</span>
                   )}
                   {' '}
-                  <span className="text-gray-800">{f.new != null ? String(f.new) : '—'}</span>
+                  <span className="text-gray-800 dark:text-gray-200">{f.new != null ? String(f.new) : '—'}</span>
                 </span>
               ))}
             </div>
@@ -528,21 +528,21 @@ function FlagSection({
     ? (infoOnly ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700')
     : 'bg-gray-100 text-gray-500'
   return (
-    <div className="bg-white rounded-lg border border-gray-200">
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
       <button
         onClick={onToggle}
         disabled={count === 0}
         className="w-full flex items-center justify-between px-4 py-3 text-left disabled:opacity-60"
       >
-        <span className="font-medium text-gray-800">{displayLabel}</span>
+        <span className="font-medium text-gray-800 dark:text-gray-200">{displayLabel}</span>
         <span className="flex items-center gap-2">
           <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}>
             {count}
           </span>
-          {count > 0 && <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>}
+          {count > 0 && <span className="text-gray-400 dark:text-gray-500 text-xs">{open ? '▲' : '▼'}</span>}
         </span>
       </button>
-      {open && count > 0 && <div className="border-t border-gray-100">{children}</div>}
+      {open && count > 0 && <div className="border-t border-gray-100 dark:border-gray-700">{children}</div>}
     </div>
   )
 }
