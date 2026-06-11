@@ -20,8 +20,6 @@ from sqlalchemy.orm import Session
 from app.core.engine import _log, _merge_snapshot
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
-from app.models.sync_log import SyncLog
-from app.models.snapshot import Snapshot
 from app.services.filamentdb import FilamentDBClient
 from app.services.spoolman import SpoolmanClient
 
@@ -267,6 +265,9 @@ async def _action_apply_all(
     """
     master_id, variant_ids = await _get_variant_line(fdb_variant_id, filamentdb, db)
 
+    failed_fdb_ids: set[str] = set()
+    failed_sm_ids: set[int] = set()
+
     # --- FDB writes ---
     # 1. Write master.
     _build_fdb_payload_and_write = _make_fdb_write(fdb_path, new_value)
@@ -293,6 +294,7 @@ async def _action_apply_all(
                 )
         except Exception as exc:
             logger.warning("apply_all: could not write FDB variant %s: %s", vid, exc)
+            failed_fdb_ids.add(vid)
             _log(
                 db, cycle_id, "conflict_apply", "error", "filament",
                 fdb_filament_id=vid, field_name=sm_field,
@@ -320,6 +322,7 @@ async def _action_apply_all(
             )
         except Exception as exc:
             logger.warning("apply_all: could not write SM filament %s: %s", sid, exc)
+            failed_sm_ids.add(sid)
             _log(
                 db, cycle_id, "conflict_apply", "error", "filament",
                 spoolman_id=sid, field_name=sm_field,
@@ -328,10 +331,18 @@ async def _action_apply_all(
 
     # --- Snapshot refresh (anti-ping-pong) ---
     # Refresh snapshots for master + all variants (both sides) to agreed new_value.
+    # Records whose upstream write failed are skipped: they keep their old baseline so the
+    # next sync cycle re-detects and retries the write. Inherited variants (never written
+    # directly) still resolve to the master's new_value via inheritance, so refreshing
+    # their snapshot here is correct even though no individual write was made for them.
     fdb_ids_to_refresh = [master_id] + list(variant_ids)
     for fid in fdb_ids_to_refresh:
+        if fid in failed_fdb_ids:
+            continue
         _merge_snapshot(db, "filamentdb", "filament", fid, {snap_key: new_value})
     for sid in sm_ids_in_line:
+        if sid in failed_sm_ids:
+            continue
         _merge_snapshot(db, "spoolman", "filament", str(sid), {snap_key: new_value})
 
     # --- Resolve this conflict ---
@@ -399,7 +410,6 @@ async def _action_ignore(
     try:
         vd = await filamentdb.get_filament(fdb_variant_id)
         # The resolved (inherited or overridden) value for this field.
-        from app.schemas.filamentdb import FDBFilamentDetail
         current_fdb_value = _get_fdb_field_value(vd, sm_field)
     except Exception as exc:
         logger.warning("ignore: could not fetch FDB detail for baseline: %s", exc)

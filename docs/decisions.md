@@ -30,6 +30,13 @@ post-weight-write snapshot refresh (see weight-propagation note in decisions.md)
 this, the next sync cycle would re-detect the change as a fresh divergence and re-queue
 the conflict.
 
+`apply_all` skips the snapshot refresh for any record whose upstream write failed (tracked
+in `failed_fdb_ids` / `failed_sm_ids`). The prior behavior stamped a "synced" baseline on
+those records even though the write never landed, suppressing re-detection. With the fix,
+failed records keep their old baseline so the next cycle re-detects and retries the write.
+Inherited variants (never written individually) are still refreshed correctly because their
+effective value resolves from the master via FDB inheritance.
+
 ### D — Sibling auto-resolve for apply_all
 
 `apply_all` writes the new value to the entire filament line. Any other open

@@ -28,7 +28,7 @@ from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
 from app.models.snapshot import Snapshot
 from app.schemas.filamentdb import FDBFilament, FDBFilamentDetail
-from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
+from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor
 
 CYCLE_ID = "scalars-test-cycle"
 

@@ -16,7 +16,7 @@ Covers:
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -32,12 +32,11 @@ from app.core.conflict_apply import (
     _make_fdb_write,
     _snap_key,
     apply_master_divergence,
-    build_divergence_context,
 )
 from app.db import Base, get_db
 from app.models.config import seed_defaults
 from app.models.conflict import Conflict
-from app.models.mapping import FilamentMapping, SpoolMapping
+from app.models.mapping import FilamentMapping
 from app.models.snapshot import Snapshot
 from app.schemas.filamentdb import FDBFilamentDetail
 
@@ -321,6 +320,32 @@ async def test_apply_all_refreshes_snapshots(db):
     variant_snap = _get_snap(db, "filamentdb", "filament", VARIANT_FDB_ID)
     assert variant_snap is not None
     assert variant_snap.get("_mp_density") == 1.38
+
+
+@pytest.mark.asyncio
+async def test_apply_all_skips_snapshot_refresh_for_failed_write(db):
+    """apply_all: a record whose downstream write fails is NOT snapshot-refreshed,
+    so it re-detects next cycle. The successful master is still refreshed and the
+    conflict still resolves."""
+    _add_filament_mapping(db, VARIANT_FDB_ID, SM_FIL_ID, parent_id=MASTER_FDB_ID)
+    conflict = _add_conflict(db, field_name="density", sm_value=1.38)
+    db.commit()
+
+    master = _fdb_master_detail(density=1.30, variant_ids=[VARIANT_FDB_ID])
+    variant = _fdb_variant_detail(density=1.24, inherited=["density"])
+    fdb = _fake_fdb_client(variant_detail=variant, master_detail=master)
+    sm = _fake_spoolman_client()
+    sm.update_filament = AsyncMock(side_effect=RuntimeError("spoolman down"))
+
+    await apply_master_divergence(conflict, "apply_all", db, sm, fdb)
+    db.commit()
+
+    sm_snap = _get_snap(db, "spoolman", "filament", str(SM_FIL_ID))
+    assert (sm_snap or {}).get("_mp_density") != 1.38      # failed write → not stamped
+    master_snap = _get_snap(db, "filamentdb", "filament", MASTER_FDB_ID)
+    assert (master_snap or {}).get("_mp_density") == 1.38  # master succeeded → refreshed
+    db.refresh(conflict)
+    assert conflict.resolved_at is not None                # still resolves
 
 
 @pytest.mark.asyncio
