@@ -601,8 +601,10 @@ async def test_sync_blocked_when_spoolman_below_minimum(db):
 
 @pytest.mark.asyncio
 async def test_fdb_deletion_queues_conflict(db):
-    """FDB spool absent from fetch → exactly one deletion conflict queued."""
-    sm_spool = _sm_spool(1, 800.0)
+    """FDB spool absent AND SM cross-ref still set → deletion conflict queued (live linked counterpart)."""
+    import json
+    # SM spool still carries the filamentdb_spool_id cross-ref — still linked.
+    sm_spool = _sm_spool(1, 800.0, extra={"filamentdb_spool_id": json.dumps("spool-1")})
     _add_spool_mapping(db, 1, "fil-1", "spool-1")
     _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
     _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
@@ -624,8 +626,10 @@ async def test_fdb_deletion_queues_conflict(db):
 
 @pytest.mark.asyncio
 async def test_fdb_deletion_no_duplicate(db):
-    """Second cycle after FDB deletion does not create a second conflict."""
-    sm_spool = _sm_spool(1, 800.0)
+    """Second cycle after FDB deletion (SM cross-ref set) does not create a second conflict."""
+    import json
+    # SM spool still carries the cross-ref so the stale-purge path is NOT taken.
+    sm_spool = _sm_spool(1, 800.0, extra={"filamentdb_spool_id": json.dumps("spool-1")})
     _add_spool_mapping(db, 1, "fil-1", "spool-1")
     _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
     _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
@@ -641,10 +645,11 @@ async def test_fdb_deletion_no_duplicate(db):
 
 @pytest.mark.asyncio
 async def test_fdb_deletion_mapping_row_shows_conflict(db):
-    """After deletion conflict is queued, build_mapping_rows returns status='conflict'."""
+    """After deletion conflict is queued (SM cross-ref set), build_mapping_rows returns status='conflict'."""
+    import json
     from app.api.mappings import build_mapping_rows
 
-    sm_spool = _sm_spool(1, 800.0)
+    sm_spool = _sm_spool(1, 800.0, extra={"filamentdb_spool_id": json.dumps("spool-1")})
     _add_spool_mapping(db, 1, "fil-1", "spool-1")
     _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
     _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
@@ -2150,3 +2155,178 @@ async def test_new_spool_dry_run_does_not_create_or_resolve(db):
     # new-spool detection path won't even be reached — but ensure no extras)
     all_conflicts = db.query(Conflict).filter(Conflict.spoolman_id == 5).count()
     assert all_conflicts == 1, f"dry_run must not create new conflict rows (found {all_conflicts})"
+
+
+# ---------------------------------------------------------------------------
+# Stale mapping purge tests (Branch A / Branch B)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_branch_b_fdb_gone_sm_cross_ref_cleared_purges_mapping(db):
+    """Branch B: FDB spool absent + SM cross-ref cleared → stale purge, no conflict.
+
+    Also verifies that a pre-existing open deletion conflict for the same mapping
+    is auto-resolved to 'auto_stale_purge'.
+    """
+    # SM spool has no filamentdb_spool_id extra → cross-ref cleared (unlinked).
+    sm_spool = _sm_spool(1, 800.0, extra={})
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    # Pre-seed an open deletion conflict for this mapping (from a previous cycle).
+    from app.models.conflict import DELETION_FIELD
+    db.add(Conflict(
+        entity_type="spool",
+        spoolman_id=1,
+        filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1",
+        field_name=DELETION_FIELD,
+        spoolman_value=json.dumps({"exists": True, "deleted_side": "filamentdb"}),
+    ))
+    db.flush()
+
+    # FDB returns nothing — FDB spool is gone.
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # Stale purge: skipped incremented, no new conflict.
+    assert result.skipped >= 1
+    assert result.conflicts == 0
+
+    # SpoolMapping row must be gone.
+    assert db.query(SpoolMapping).count() == 0
+
+    # Snapshot rows must be gone.
+    assert db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="1").count() == 0
+    assert db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-1").count() == 0
+
+    # Pre-existing deletion conflict must be auto-resolved.
+    resolved_conflict = db.query(Conflict).filter_by(
+        spoolman_id=1,
+        filamentdb_spool_id="spool-1",
+    ).first()
+    assert resolved_conflict is not None
+    assert resolved_conflict.resolved_at is not None
+    assert resolved_conflict.resolution == "auto_stale_purge"
+
+    # No new open conflict created.
+    assert db.query(Conflict).filter_by(resolved_at=None).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_branch_b_fdb_gone_sm_cross_ref_still_set_queues_conflict(db):
+    """Branch B: FDB spool absent + SM cross-ref still set → deletion conflict queued (still linked)."""
+    import json as _json
+    # SM spool still carries filamentdb_spool_id cross-ref.
+    sm_spool = _sm_spool(1, 800.0, extra={"filamentdb_spool_id": _json.dumps("spool-1")})
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    # FDB returns nothing — FDB spool is gone.
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # Deletion conflict must be queued; mapping must remain.
+    assert result.conflicts == 1
+    assert db.query(SpoolMapping).count() == 1
+
+    conflict = db.query(Conflict).filter_by(resolved_at=None).first()
+    assert conflict is not None
+    from app.models.conflict import DELETION_FIELD
+    assert conflict.field_name == DELETION_FIELD
+    assert conflict.spoolman_id == 1
+    assert conflict.filamentdb_spool_id == "spool-1"
+
+
+@pytest.mark.asyncio
+async def test_branch_a_both_sides_gone_purges_mapping(db):
+    """Branch A: SM spool gone + FDB spool also gone → both sides deleted → stale purge."""
+    # No SM spool returned, no FDB filament returned — both sides gone.
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    spoolman = _fake_spoolman(spools=[])  # SM spool 1 gone entirely
+    fdb_client = _fake_filamentdb(filaments=[])  # FDB spool also gone
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # Stale purge: skipped incremented, no conflict.
+    assert result.skipped >= 1
+    assert result.conflicts == 0
+
+    # SpoolMapping and Snapshots must be gone.
+    assert db.query(SpoolMapping).count() == 0
+    assert db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="1").count() == 0
+    assert db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-1").count() == 0
+
+    # No open conflict.
+    assert db.query(Conflict).filter_by(resolved_at=None).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_branch_a_sm_gone_fdb_present_queues_conflict(db):
+    """Branch A: SM spool gone entirely + FDB spool present → deletion conflict (still linked)."""
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    # SM returns nothing (spool 1 gone entirely), FDB has the spool.
+    spoolman = _fake_spoolman(spools=[])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # Deletion conflict queued; mapping preserved.
+    assert result.conflicts == 1
+    assert db.query(SpoolMapping).count() == 1
+
+    conflict = db.query(Conflict).filter_by(resolved_at=None).first()
+    assert conflict is not None
+    from app.models.conflict import DELETION_FIELD
+    assert conflict.field_name == DELETION_FIELD
+    assert conflict.spoolman_id == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_mapping_dry_run_emits_preview_no_db_change(db):
+    """dry_run=True: stale mapping emits a 'skip' preview entry; DB is NOT mutated."""
+    # Branch B scenario: FDB gone, SM cross-ref cleared → would normally purge.
+    sm_spool = _sm_spool(1, 800.0, extra={})
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+
+    # FDB returns nothing.
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=True, cycle_id=CYCLE_ID)
+
+    # A 'skip' preview entry with the stale-connection reason must be present.
+    stale_previews = [
+        p for p in result.preview
+        if p.get("action") == "skip" and "stale connection" in (p.get("reason") or "")
+    ]
+    assert len(stale_previews) == 1, f"Expected 1 stale-connection preview entry, got: {result.preview}"
+
+    # SpoolMapping must NOT have been deleted (dry_run).
+    assert db.query(SpoolMapping).count() == 1
+
+    # Snapshots must NOT have been deleted (dry_run).
+    assert db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="1").count() == 1
+    assert db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-1").count() == 1
+
+    # No SyncLog rows written (dry_run).
+    assert db.query(SyncLog).count() == 0
+
+    # No conflicts created.
+    assert db.query(Conflict).count() == 0

@@ -256,6 +256,62 @@ def _queue_deletion_conflict(
     )
 
 
+def _purge_stale_mapping(
+    db: Session,
+    cycle_id: str,
+    mapping: SpoolMapping,
+    *,
+    reason: str,
+) -> None:
+    """Purge a stale bridge-local SpoolMapping + its Snapshots and auto-resolve
+    any open deletion conflict for it.
+
+    Called when BOTH sides are gone OR when FDB is gone and the surviving
+    Spoolman spool no longer carries the filamentdb_spool_id cross-reference
+    (user cleared it / unlinked).  In both cases there is no live, still-linked
+    counterpart to protect so no deletion conflict is warranted — the bridge
+    just silently drops its own bookkeeping rows.
+
+    Bridge-local rows ONLY — never deletes upstream records.
+    """
+    # Delete spool-level Snapshots (mirror _cleanup_orphaned_mapping in conflicts.py).
+    db.query(Snapshot).filter_by(
+        source="spoolman", entity_type="spool", entity_id=str(mapping.spoolman_spool_id)
+    ).delete()
+    db.query(Snapshot).filter_by(
+        source="filamentdb", entity_type="spool", entity_id=mapping.filamentdb_spool_id
+    ).delete()
+
+    # Auto-resolve any open __record_deleted__ conflict for this mapping so the
+    # open-conflict queue doesn't accumulate stale entries from previous cycles.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stale_conflicts = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.field_name == DELETION_FIELD,
+            Conflict.spoolman_id == mapping.spoolman_spool_id,
+            Conflict.filamentdb_spool_id == mapping.filamentdb_spool_id,
+        )
+        .all()
+    )
+    for c in stale_conflicts:
+        c.resolved_at = now
+        c.resolution = "auto_stale_purge"
+
+    # Delete the SpoolMapping row itself.
+    db.delete(mapping)
+
+    # Emit an audit log entry.
+    _log(
+        db, cycle_id, "auto", "info", "spool",
+        spoolman_id=mapping.spoolman_spool_id,
+        fdb_filament_id=mapping.filamentdb_filament_id,
+        fdb_spool_id=mapping.filamentdb_spool_id,
+        error_message=reason,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Conflict dedup helper
 # ---------------------------------------------------------------------------
@@ -2246,24 +2302,52 @@ async def run_sync_cycle(
 
         if sm_spool is None:
             if mapping.spoolman_spool_id not in sm_all_ids:
-                # Not archived — gone entirely. Queue a deletion conflict.
-                if dry_run:
-                    fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
-                    result.preview.append({
-                        "action": "conflict",
-                        "entity_type": "spool",
-                        "direction": "conflict",
-                        "label": _preview_label(fdb_filament=fdb_fil),
-                        "field": DELETION_FIELD,
-                        "old": None, "new": None,
-                        "reason": "record deleted upstream (spoolman)",
-                        "spoolman_id": mapping.spoolman_spool_id,
-                        "fdb_filament_id": mapping.filamentdb_filament_id,
-                        "fdb_spool_id": mapping.filamentdb_spool_id,
-                    })
+                # Not archived — gone entirely.
+                # Branch A stale check: if FDB spool is also absent, both sides are
+                # gone → stale connection; purge bridge-local rows instead of
+                # surfacing a deletion conflict.
+                if mapping.filamentdb_spool_id not in fdb_spool_index:
+                    # Both sides gone — stale connection.
+                    if dry_run:
+                        fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
+                        result.preview.append({
+                            "action": "skip",
+                            "entity_type": "spool",
+                            "direction": None,
+                            "label": _preview_label(fdb_filament=fdb_fil),
+                            "field": None,
+                            "old": None, "new": None,
+                            "reason": "stale connection — would remove from bridge (upstream deleted, no live link)",
+                            "spoolman_id": mapping.spoolman_spool_id,
+                            "fdb_filament_id": mapping.filamentdb_filament_id,
+                            "fdb_spool_id": mapping.filamentdb_spool_id,
+                        })
+                    else:
+                        _purge_stale_mapping(
+                            db, cycle_id, mapping,
+                            reason="stale mapping purged: both sides deleted",
+                        )
+                    result.skipped += 1
                 else:
-                    _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="spoolman")
-                result.conflicts += 1
+                    # FDB spool present — still linked counterpart to protect.
+                    # Queue a deletion conflict as before.
+                    if dry_run:
+                        fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
+                        result.preview.append({
+                            "action": "conflict",
+                            "entity_type": "spool",
+                            "direction": "conflict",
+                            "label": _preview_label(fdb_filament=fdb_fil),
+                            "field": DELETION_FIELD,
+                            "old": None, "new": None,
+                            "reason": "record deleted upstream (spoolman)",
+                            "spoolman_id": mapping.spoolman_spool_id,
+                            "fdb_filament_id": mapping.filamentdb_filament_id,
+                            "fdb_spool_id": mapping.filamentdb_spool_id,
+                        })
+                    else:
+                        _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="spoolman")
+                    result.conflicts += 1
             else:
                 # Present but archived — keep existing skip behavior.
                 if dry_run:
@@ -2293,22 +2377,53 @@ async def run_sync_cycle(
 
         if fdb_entry is None:
             # FDB spool absent from current fetch — deleted upstream.
-            if dry_run:
-                result.preview.append({
-                    "action": "conflict",
-                    "entity_type": "spool",
-                    "direction": "conflict",
-                    "label": _preview_label(sm_spool=sm_spool),
-                    "field": DELETION_FIELD,
-                    "old": None, "new": None,
-                    "reason": "record deleted upstream (filamentdb)",
-                    "spoolman_id": mapping.spoolman_spool_id,
-                    "fdb_filament_id": mapping.filamentdb_filament_id,
-                    "fdb_spool_id": mapping.filamentdb_spool_id,
-                })
+            # Branch B stale check: read the surviving Spoolman spool's cross-ref.
+            # If it is empty/None/blank (user cleared it — unlinked), this is a
+            # stale connection → purge bridge-local rows.
+            # If it still carries the FDB spool ID (still linked to the now-deleted
+            # FDB spool), queue a deletion conflict to protect the SM spool.
+            sm_fdb_spool_id_raw = sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
+            sm_fdb_spool_id = decode_extra_value(sm_fdb_spool_id_raw)
+            if not sm_fdb_spool_id:
+                # Cross-ref cleared — stale connection.
+                if dry_run:
+                    result.preview.append({
+                        "action": "skip",
+                        "entity_type": "spool",
+                        "direction": None,
+                        "label": _preview_label(sm_spool=sm_spool),
+                        "field": None,
+                        "old": None, "new": None,
+                        "reason": "stale connection — would remove from bridge (upstream deleted, no live link)",
+                        "spoolman_id": mapping.spoolman_spool_id,
+                        "fdb_filament_id": mapping.filamentdb_filament_id,
+                        "fdb_spool_id": mapping.filamentdb_spool_id,
+                    })
+                else:
+                    _purge_stale_mapping(
+                        db, cycle_id, mapping,
+                        reason="stale mapping purged: FDB spool deleted and Spoolman cross-ref cleared",
+                    )
+                result.skipped += 1
             else:
-                _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="filamentdb")
-            result.conflicts += 1
+                # Cross-ref still set — SM spool is still linked to the deleted FDB
+                # spool; queue a deletion conflict so the user can decide.
+                if dry_run:
+                    result.preview.append({
+                        "action": "conflict",
+                        "entity_type": "spool",
+                        "direction": "conflict",
+                        "label": _preview_label(sm_spool=sm_spool),
+                        "field": DELETION_FIELD,
+                        "old": None, "new": None,
+                        "reason": "record deleted upstream (filamentdb)",
+                        "spoolman_id": mapping.spoolman_spool_id,
+                        "fdb_filament_id": mapping.filamentdb_filament_id,
+                        "fdb_spool_id": mapping.filamentdb_spool_id,
+                    })
+                else:
+                    _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="filamentdb")
+                result.conflicts += 1
             continue
 
         fdb_filament_id, fdb_spool = fdb_entry
@@ -2573,6 +2688,39 @@ async def run_sync_cycle(
                 "fdb_filament_id": fdb_filament_id,
                 "fdb_spool_id": fdb_spool.id,
             })
+
+    # ---- Orphaned FilamentMapping cleanup ----
+    # Prune FilamentMapping rows that are clearly orphaned: not a synthetic parent,
+    # have no remaining SpoolMapping referencing them, AND whose filamentdb_id is
+    # absent from the current FDB fetch.  Also deletes their filament-level Snapshot
+    # rows.  Conservative: only purges when all three conditions are met.
+    if not dry_run:
+        remaining_fm_ids: set[int] = {
+            m.filament_mapping_id
+            for m in db.query(SpoolMapping).all()
+            if m.filament_mapping_id is not None
+        }
+        for fm in filament_mappings:
+            if getattr(fm, "is_synthetic_parent", False):
+                continue  # Synthetic parents are managed separately
+            if fm.id in remaining_fm_ids:
+                continue  # Still has live SpoolMappings
+            if fm.filamentdb_id in fdb_filaments:
+                continue  # FDB filament still exists
+            # Orphaned: no SpoolMappings, FDB filament gone — purge snapshot + mapping.
+            if fm.spoolman_filament_id is not None:
+                db.query(Snapshot).filter_by(
+                    source="spoolman", entity_type="filament", entity_id=str(fm.spoolman_filament_id)
+                ).delete()
+            db.query(Snapshot).filter_by(
+                source="filamentdb", entity_type="filament", entity_id=fm.filamentdb_id
+            ).delete()
+            db.delete(fm)
+            _log(
+                db, cycle_id, "auto", "info", "filament",
+                fdb_filament_id=fm.filamentdb_id,
+                error_message="orphaned FilamentMapping purged: no SpoolMappings and FDB filament absent",
+            )
 
     # ---- Structured multicolor sync (bidirectional, FDB >= 1.33.0) ----
     await _sync_multicolor(

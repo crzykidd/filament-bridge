@@ -1,5 +1,22 @@
 # Decision record
 
+## 2026-06-10 — Engine: stale spool mappings purge instead of queuing deletion conflicts
+
+A deletion conflict is only warranted when there is a **live, still-linked counterpart to protect**. Otherwise the connection is stale and the engine purges it from its own DB (bridge-local rows only — never upstream records).
+
+**Rule (enforced in `core/engine.py`, spool-mapping loop):**
+
+- **One side deleted, the OTHER side still exists AND is still linked** → queue a `__record_deleted__` deletion conflict (ask the user whether to delete the surviving side too). "Still linked" for the surviving Spoolman spool means its `filamentdb_spool_id` extra field is non-empty.
+- **Both sides gone**, OR **FDB spool deleted and the Spoolman spool no longer carries the `filamentdb_spool_id` cross-reference** (user cleared it / unlinked) → **stale connection**: purge the `SpoolMapping` + its `Snapshot` rows, auto-resolve any open `__record_deleted__` conflict for it (`resolution="auto_stale_purge"`), increment `result.skipped`. No conflict surfaced.
+
+**`_purge_stale_mapping` helper** (added to `engine.py`): mirrors `_cleanup_orphaned_mapping` in `api/conflicts.py` — deletes Snapshots, resolves open deletion conflicts, deletes the SpoolMapping, and emits a sync-log audit entry.
+
+**Dry-run behavior:** emits a `{"action":"skip", "reason":"stale connection — would remove from bridge (upstream deleted, no live link)"}` preview entry and mutates nothing.
+
+**Secondary cleanup (same cycle):** after the spool loop, orphaned `FilamentMapping` rows (non-synthetic-parent, no remaining `SpoolMapping` referencing them, FDB filament absent) are also purged with their filament-level `Snapshot` rows. Conservative: all three conditions required.
+
+This self-corrects after a full upstream wipe (like the user scenario that triggered this) so Synced Records matches the Dashboard on the next sync cycle.
+
 ## 2026-06-10 — Wizard planner validates mappings against live FDB; stale → recreate + replace
 
 When the wizard planner (`core/planner.py:_plan_spoolman_to_fdb`) encounters a local
