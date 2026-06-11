@@ -56,9 +56,12 @@ vi.mock('../context/ThemeContext', () => ({
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
-// react-router-dom blocker
+// react-router-dom blocker + Link stub
 vi.mock('react-router-dom', () => ({
   useBlocker: vi.fn(() => ({ state: 'unblocked' })),
+  Link: ({ to, children, ...rest }: { to: string; children: React.ReactNode; [k: string]: unknown }) => (
+    <a href={to} {...rest}>{children}</a>
+  ),
 }))
 
 // ---------------------------------------------------------------------------

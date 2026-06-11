@@ -1,5 +1,30 @@
 # Decision record
 
+## 2026-06-11 — In-app docs viewer at /docs/:slug
+
+**Serving approach.** Markdown files in the repo `docs/` directory are shipped
+inside the Docker image as static files under `static/docs-md/` (a single
+`COPY docs/ ./static/docs-md/` in the Dockerfile Stage 2, placed with the
+other static-file copies so layer caching stays optimal). The existing SPA
+fallback in `backend/app/main.py` already serves arbitrary files under
+`static/`, so `GET /docs-md/variant-parent-mode.md` works with no backend
+changes. In dev mode a minimal `configureServer` vite plugin (15 lines in
+`vite.config.ts`) maps `/docs-md/*.md` requests to `../docs/*.md` directly.
+
+**Dependencies added.** `react-markdown@^10.1.0` and `remark-gfm@^4.0.1`
+(both production deps). Neither drags in vite, esbuild, or vitest peer deps;
+vite stayed at 5.4.21 and vitest stayed at 2.1.9 (confirmed post-install).
+
+**Link rewriting rule.** In the `a` component override, any href matching
+`^([a-z0-9-]+)\.md(#...)?$` is rewritten to `/docs/<slug>` (using
+react-router `Link` for in-app navigation). External `https?://` links open
+in a new tab. All other relative refs (anchor-only, unknown paths) pass
+through as plain `<a>` tags.
+
+**Settings link.** The dead `<a href="/docs/variant-parent-mode" target=_blank>`
+in `Settings.tsx` was replaced with a react-router `<Link to="/docs/variant-parent-mode">`,
+so it navigates in-app (same tab, no SPA fallback needed).
+
 ## 2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)
 
 Five independent bugs fixed in one pass (from the 2026-06-11 full-code audit):

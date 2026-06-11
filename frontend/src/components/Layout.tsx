@@ -289,8 +289,13 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        {/* Settings pinned at bottom, visually separated */}
-        <div className="px-2 pb-2 border-t border-indigo-700 dark:border-indigo-800 pt-2">
+        {/* Docs + Settings pinned at bottom, visually separated */}
+        <div className="px-2 pb-1 border-t border-indigo-700 dark:border-indigo-800 pt-2">
+          <NavLink to="/docs" end={false} className={navClass}>
+            Docs
+          </NavLink>
+        </div>
+        <div className="px-2 pb-2">
           <NavLink to="/settings" end={false} className={navClass}>
             Settings
           </NavLink>

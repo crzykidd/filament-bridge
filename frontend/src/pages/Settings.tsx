@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useBlocker } from 'react-router-dom'
+import { useBlocker, Link } from 'react-router-dom'
 import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
@@ -776,9 +776,9 @@ export default function Settings() {
         <p className="text-xs text-gray-500 dark:text-gray-400">
           Controls how the Bulk Import Wizard builds the parent/variant structure in Filament DB
           from flat Spoolman filaments.{' '}
-          <a href="/docs/variant-parent-mode" target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+          <Link to="/docs/variant-parent-mode" className="text-indigo-600 dark:text-indigo-400 hover:underline">
             Read the details
-          </a>
+          </Link>
         </p>
         <div className="space-y-2">
           {(['promote_color', 'generic_container'] as const).map(mode => (

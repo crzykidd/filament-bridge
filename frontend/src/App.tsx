@@ -14,6 +14,7 @@ import Conflicts from './pages/Conflicts'
 import SyncLog from './pages/SyncLog'
 import Settings from './pages/Settings'
 import OpenTagCleanup from './pages/OpenTagCleanup'
+import DocsViewer from './pages/DocsViewer'
 import { WizardShell } from './pages/Wizard'
 import Login from './pages/Login'
 import { getAuthStatus, register401Handler } from './api/client'
@@ -33,6 +34,8 @@ const router = createBrowserRouter(
       <Route path="settings" element={<Settings />} />
       <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
       <Route path="wizard/*" element={<WizardShell />} />
+      <Route path="docs" element={<DocsViewer />} />
+      <Route path="docs/:slug" element={<DocsViewer />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Route>,
   ),

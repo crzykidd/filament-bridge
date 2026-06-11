@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-serve-docs-in-app
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Shipped. DocsViewer at /docs/:slug, Dockerfile COPY, vite dev plugin, react-markdown+remark-gfm, sidebar Docs nav item, Settings Link fix, decisions.md entry.
 ---
 
 # Task: Serve the docs/ markdown in-app at /docs/<slug>

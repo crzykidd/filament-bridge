@@ -21,6 +21,9 @@ COPY backend/ ./backend/
 # Copy built frontend into the location main.py looks for: /app/static/
 COPY --from=frontend-builder /build/dist ./static/
 
+# Copy repo docs so /docs-md/<slug>.md is serveable by the SPA fallback
+COPY docs/ ./static/docs-md/
+
 # Runtime config
 ENV DATA_DIR=/data
 ENV PYTHONPATH=/app/backend
