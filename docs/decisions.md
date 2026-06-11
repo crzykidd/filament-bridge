@@ -1,5 +1,39 @@
 # Decision record
 
+## 2026-06-11 — OpenTag dataset: direct GitHub tarball fetch (no FDB proxy)
+
+**Context.** The bridge originally fetched the OpenTag material list via Filament DB's
+`GET /api/openprinttag` JSON feed and then made a second request to the raw GitHub tarball
+to recover secondary colors (which FDB's denormalized feed left empty). This created two
+sources of truth, required a live FDB connection for the cache step, and meant the bridge
+broke if FDB was temporarily unreachable even when GitHub was fine.
+
+**Decision.** Fetch the OpenPrintTag tarball directly from
+`https://api.github.com/repos/OpenPrintTag/openprinttag-database/tarball/main` in a single
+download. Brand names, material properties, primary colors, and secondary colors are all
+parsed in one two-pass loop (`_parse_tarball` in `core/opentag_cache.py`):
+
+1. Pass 1 — index `data/brands/<slug>.yaml` → `{slug: name}`.
+2. Pass 2 — parse every `data/materials/**/*.yaml`; skip `class != FFF`; emit one
+   `OPTMaterial` dict per file, with `brandName` resolved from the index, and
+   `secondaryColors` populated directly from `secondary_colors[].color_rgba`.
+
+The emitted dict shape is **backward-compatible** with the old FDB feed shape so all
+downstream consumers (`core/opentag_match.py`, the apply endpoint, the sync engine's
+`_sync_opentag_identity` pass) continue unchanged.
+
+**Consequences.**
+- `core/opentag_secondary.py` is deleted (its `_rgba_to_hex` helper was folded into
+  `opentag_cache.py`; its `fetch_secondary_colors` function is no longer needed).
+- `FilamentDBClient.get_openprinttag()` is deleted (the FDB API proxy is no longer used).
+- `load_opentag_dataset` no longer takes an `fdb_client` argument.
+- Error handling simplified: only GitHub connectivity errors can occur (timeout→504,
+  non-2xx→502 `opentag_fetch_failed`, RequestError→502 `opentag_fetch_failed`).
+  The `opentag_unavailable` error code (previously used for FDB 404 / version-gate) is gone.
+- `_fetch_from_tarball(http=None)` is the injectable seam for tests (the conftest autouse
+  fixture stubs it out; tests that need real parse behavior use the module-level
+  `_real_fetch_from_tarball` alias captured before the patch fires).
+
 ## 2026-06-11 — Durable `changes.log` file (`CHANGES_LOG_ENABLED` / `CHANGES_LOG_PATH`)
 
 **Why a file sink vs. the existing SQLite Sync Log.** The Sync Log page in the

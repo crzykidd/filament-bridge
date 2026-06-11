@@ -760,7 +760,7 @@ export default function OpenTagCleanup() {
         const known = cacheStatus?.last_count || cacheStatus?.count || 0
         const recordHint = known > 0 ? `${known.toLocaleString()}+ records` : 'thousands of records'
         setStatusMsg(
-          'Fetching the OpenTag dataset from Filament DB… ' +
+          'Fetching the OpenTag dataset from OpenPrintTag… ' +
           `(first load downloads ${recordHint} — up to a minute)`,
         )
         await postOpenTagRefresh()
@@ -987,7 +987,7 @@ export default function OpenTagCleanup() {
             className="px-3 py-1 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-50"
             onClick={handleRefresh}
             disabled={working}
-            title="Re-download the OpenTag dataset from Filament DB, then reprocess"
+            title="Re-download the OpenTag dataset from OpenPrintTag, then reprocess"
           >
             {working ? 'Working…' : 'Refresh dataset'}
           </button>

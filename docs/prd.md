@@ -61,8 +61,7 @@ filament-bridge/
 │   │   │   ├── version.py       — semver helpers + MIN_FDB / MIN_SPOOLMAN gates
 │   │   │   ├── compat.py        — shared upstream-version compatibility check
 │   │   │   ├── opentag_match.py — OPTMaterial → Spoolman field mapper + scorer
-│   │   │   ├── opentag_cache.py — local OpenTag dataset cache (JSON, TTL-gated)
-│   │   │   └── opentag_secondary.py — secondary-color recovery from the raw OPT tarball
+│   │   │   └── opentag_cache.py — local OpenTag dataset cache (JSON, TTL-gated); direct tarball fetch + parse
 │   │   ├── models/          — SQLAlchemy models (mapping, conflicts, log, snapshot, config)
 │   │   ├── schemas/         — Pydantic models (bridge API, Filament DB, Spoolman shapes)
 │   │   ├── services/        — Filament DB client, Spoolman client
@@ -429,7 +428,7 @@ Field names are configurable via environment variables.
 #### FR-23b: OpenTag (OpenPrintTag) Cleanup tool
 A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag community dataset and apply corrections.
 
-- **Dataset:** fetched from FDB's `GET /api/openprinttag` endpoint (a denormalized JSON feed), cached locally at `DATA_DIR/opentag_cache.json` with a TTL of `OPENTAG_CACHE_MAX_AGE_HOURS`. Secondary colors are recovered from the raw OPT tarball via `core/opentag_secondary.py`.
+- **Dataset:** fetched directly from the OpenPrintTag GitHub tarball (no FDB involvement), cached locally at `DATA_DIR/opentag_cache.json` with a TTL of `OPENTAG_CACHE_MAX_AGE_HOURS`. Brand names, material properties, and secondary colors are all parsed in a single tarball download by `core/opentag_cache.py` (`_parse_tarball`).
 - **Matching** (`core/opentag_match.py`): per-Spoolman-filament scoring by material family, vendor/brand (via `OPENTAG_VENDOR_ALIASES` map), color name similarity, hex proximity, and finish-tag overlap. Color-profile pre-filter (single/coextruded/gradient) prevents cross-profile matches. UUID exact-match bypasses fuzzy scoring for filaments already tagged by a prior run.
 - **Review UI** (`frontend/src/pages/OpenTagCleanup.tsx`): per-filament card with a best match + up to 5 alternate candidates. Each candidate shows per-field comparison (current Spoolman value vs OpenTag suggestion). User selects a candidate and can mark individual fields "keep mine" or edit the suggested value. The **Manufacturer** field (vendor) shows only when the Spoolman vendor name and OpenTag brand differ after normalization.
 - **Apply** (`POST /api/openprinttag/apply`): writes confirmed fields to Spoolman; for the vendor field, resolves or creates the Spoolman vendor via find-or-create (`_ensure_vendor`). After the Spoolman write, stamps `openprinttag_slug`/`openprinttag_uuid` into the linked FDB filament's `settings{}` bag via `FilamentDBClient.merge_filament_settings()` (the approved scoped exception).

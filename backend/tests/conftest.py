@@ -10,9 +10,9 @@ os.environ.setdefault("FILAMENTDB_URL", "http://filamentdb.test")
 os.environ.setdefault("SPOOLMAN_URL", "http://spoolman.test")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="filament-bridge-test-"))
 
-# Prevent real HTTP calls to api.github.com during tests.  Every test that needs
-# secondary-color recovery mocks fetch_secondary_colors explicitly; all others
-# get an empty map so load_opentag_dataset stays fast and side-effect-free.
+# Prevent real HTTP calls to api.github.com during tests.  Tests that need the
+# tarball fetch mock app.core.opentag_cache._fetch_from_tarball themselves; all
+# others get a fast empty-list stub so load_opentag_dataset stays side-effect-free.
 from unittest.mock import AsyncMock, patch as _patch  # noqa: E402
 
 import pytest
@@ -31,16 +31,16 @@ from app.models.sync_log import SyncLog  # noqa: F401
 
 @pytest.fixture(autouse=True)
 def _no_github_tarball_fetch():
-    """Stub out fetch_secondary_colors for every test.
+    """Stub out _fetch_from_tarball for every test.
 
-    Tests that explicitly need the secondary-color merge behavior patch
-    ``app.core.opentag_cache.fetch_secondary_colors`` themselves; all other tests
-    get an empty map so ``load_opentag_dataset`` stays fast and makes no real
-    network calls to api.github.com.
+    Tests that explicitly need tarball-parsing behavior patch
+    ``app.core.opentag_cache._fetch_from_tarball`` themselves; all other tests
+    get an empty-list stub so ``load_opentag_dataset`` stays fast and makes no
+    real network calls to api.github.com.
     """
     with _patch(
-        "app.core.opentag_cache.fetch_secondary_colors",
-        new=AsyncMock(return_value={}),
+        "app.core.opentag_cache._fetch_from_tarball",
+        new=AsyncMock(return_value=[]),
     ):
         yield
 

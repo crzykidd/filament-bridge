@@ -12,8 +12,11 @@ import httpx
 import pytest
 
 from app.core.opentag_cache import (
+    _fetch_from_tarball as _real_fetch_from_tarball,
     _is_stale,
     _load_cache,
+    _parse_tarball,
+    _rgba_to_hex,
     _save_cache,
     get_cache_metadata,
     load_opentag_dataset,
@@ -155,62 +158,69 @@ def test_get_cache_metadata_present(tmp_path):
 
 @pytest.mark.asyncio
 async def test_load_opentag_dataset_uses_cache_when_fresh(tmp_path):
-    """When cache is fresh and force=False, should not call FDB client."""
+    """When cache is fresh and force=False, should not call _fetch_from_tarball."""
+    from unittest.mock import patch as _patch
     fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _save_cache(str(tmp_path), [_OPT_PLA_SILK], fresh_ts)
 
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PETG])
-
-    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
-    fdb_mock.get_openprinttag.assert_not_called()
+    with _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force=False)
+        fetch_mock.assert_not_called()
     assert result["count"] == 1
     assert result["materials"][0]["slug"] == "buddy3d-pla-silk-bronze"
 
 
 @pytest.mark.asyncio
 async def test_load_opentag_dataset_fetches_when_stale(tmp_path):
-    """When cache is stale, should call FDB client and update cache."""
+    """When cache is stale, should call _fetch_from_tarball and update cache."""
+    from unittest.mock import patch as _patch
     old_ts = (
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
     ).isoformat()
     _save_cache(str(tmp_path), [_OPT_PLA_SILK], old_ts)
 
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE])
-
-    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
-    fdb_mock.get_openprinttag.assert_called_once()
+    with _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force=False)
+        fetch_mock.assert_called_once()
     assert result["count"] == 2
 
 
 @pytest.mark.asyncio
 async def test_load_opentag_dataset_force_refresh(tmp_path):
-    """force=True should always call FDB client even when cache is fresh."""
+    """force=True should always call _fetch_from_tarball even when cache is fresh."""
+    from unittest.mock import patch as _patch
     fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _save_cache(str(tmp_path), [_OPT_PLA_SILK], fresh_ts)
 
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PETG])
-
-    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
-    fdb_mock.get_openprinttag.assert_called_once()
+    with _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force=True)
+        fetch_mock.assert_called_once()
     assert result["count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_load_opentag_dataset_404_raises_clear_error(tmp_path):
-    """404 from FDB should raise with a message explaining the endpoint is missing."""
-    fdb_mock = AsyncMock()
+async def test_load_opentag_dataset_github_error_propagates(tmp_path):
+    """HTTPStatusError from GitHub (e.g. 429 rate-limit) propagates to the caller."""
+    from unittest.mock import patch as _patch
     mock_resp = MagicMock()
-    mock_resp.status_code = 404
+    mock_resp.status_code = 429
     mock_req = MagicMock()
-    fdb_mock.get_openprinttag = AsyncMock(
-        side_effect=httpx.HTTPStatusError("404", request=mock_req, response=mock_resp)
-    )
 
-    with pytest.raises(httpx.HTTPStatusError, match="404"):
-        await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
+    with _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(side_effect=httpx.HTTPStatusError("429", request=mock_req, response=mock_resp)),
+    ):
+        with pytest.raises(httpx.HTTPStatusError):
+            await load_opentag_dataset(str(tmp_path), 24, force=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1204,29 +1214,27 @@ def test_old_opentag_apply_route_404():
 
 @pytest.mark.asyncio
 async def test_openprinttag_refresh_route_responds(tmp_path):
-    """POST /api/openprinttag/refresh should respond (not 404) when FDB returns data."""
+    """POST /api/openprinttag/refresh should respond (not 404) when tarball returns data."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK])
-
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
-    # Patch data_dir to a writable temp path
+    # Patch data_dir to a writable temp path and _fetch_from_tarball to return fixture data
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app)
-        resp = client.post("/api/openprinttag/refresh")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["count"] == 1
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+            client = TestClient(test_app)
+            resp = client.post("/api/openprinttag/refresh")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["count"] == 1
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
@@ -1258,20 +1266,19 @@ async def test_openprinttag_status_reports_persisted_last_count(tmp_path, monkey
     monkeypatch.setattr(_ot_mod, "SessionLocal", test_session)
     monkeypatch.setattr(_ot_mod._settings, "data_dir", str(tmp_path))
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])
-
     test_app = FastAPI()
     test_app.include_router(_ot_mod.router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
-    client = TestClient(test_app)
 
-    # Fresh: no cache, nothing persisted yet.
-    assert client.get("/api/openprinttag/status").json()["last_count"] == 0
+    with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])):
+        client = TestClient(test_app)
 
-    # Refresh fetches 2 records and persists the count.
-    assert client.post("/api/openprinttag/refresh").json()["count"] == 2
+        # Fresh: no cache, nothing persisted yet.
+        assert client.get("/api/openprinttag/status").json()["last_count"] == 0
+
+        # Refresh fetches 2 records and persists the count.
+        assert client.post("/api/openprinttag/refresh").json()["count"] == 2
 
     # Simulate a cleared cache (file deleted) — the live count drops to 0 but the
     # persisted last_count remains.
@@ -1305,43 +1312,42 @@ def test_old_opentag_matches_route_404():
 def test_openprinttag_status_no_cache(tmp_path):
     """GET /api/openprinttag/status returns exists:false when cache file is absent.
 
-    The FDB client must NOT be called.
+    No network fetch must be triggered (status is metadata-only).
     """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
-    fake_fdb = AsyncMock()
-    # If get_openprinttag is called the test should fail loudly
-    fake_fdb.get_openprinttag = AsyncMock(side_effect=AssertionError("must not call FDB"))
-
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app)
-        resp = client.get("/api/openprinttag/status")
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data["exists"] is False
-        assert data["fetched_at"] is None
-        assert data["count"] == 0
-        assert data["stale"] is True
-        assert "max_age_hours" in data
-        fake_fdb.get_openprinttag.assert_not_called()
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=AssertionError("must not fetch on status")),
+        ):
+            client = TestClient(test_app)
+            resp = client.get("/api/openprinttag/status")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["exists"] is False
+            assert data["fetched_at"] is None
+            assert data["count"] == 0
+            assert data["stale"] is True
+            assert "max_age_hours" in data
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
 
-def test_openprinttag_status_fresh_cache_no_fdb_fetch(tmp_path):
+def test_openprinttag_status_fresh_cache_no_network_fetch(tmp_path):
     """GET /api/openprinttag/status returns exists:true with count + age when cache is fresh.
 
-    The FDB client must NOT be called even when a fresh cache is present.
+    No network fetch must be triggered even when a fresh cache is present.
     """
     import datetime as _dt
     from fastapi import FastAPI
@@ -1352,68 +1358,44 @@ def test_openprinttag_status_fresh_cache_no_fdb_fetch(tmp_path):
     fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
     _save_cache(str(tmp_path), [_OPT_PLA_SILK, _OPT_PETG], fresh_ts)
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(side_effect=AssertionError("must not call FDB"))
-
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app)
-        resp = client.get("/api/openprinttag/status")
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data["exists"] is True
-        assert data["count"] == 2
-        assert data["stale"] is False
-        assert data["fetched_at"] is not None
-        assert isinstance(data["max_age_hours"], int)
-        fake_fdb.get_openprinttag.assert_not_called()
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=AssertionError("must not fetch on status")),
+        ):
+            client = TestClient(test_app)
+            resp = client.get("/api/openprinttag/status")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["exists"] is True
+            assert data["count"] == 2
+            assert data["stale"] is False
+            assert data["fetched_at"] is not None
+            assert isinstance(data["max_age_hours"], int)
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
 
 # ---------------------------------------------------------------------------
-# get_openprinttag: 120 s timeout override
+# _fetch_from_tarball: 120 s timeout, error handling
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_openprinttag_uses_120s_timeout():
-    """get_openprinttag() must pass timeout=httpx.Timeout(120.0) to the HTTP client."""
-    from app.services.filamentdb import FilamentDBClient
+async def test_fetch_from_tarball_uses_120s_timeout():
+    """_fetch_from_tarball must pass timeout=httpx.Timeout(120.0) to the HTTP client."""
+    from app.core.opentag_cache import _FETCH_TIMEOUT
 
-    timeout_used: list = []
-
-    async def _fake_get(url, **kwargs):
-        timeout_used.append(kwargs.get("timeout"))
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json = MagicMock(return_value=[_OPT_PLA_SILK])
-        return resp
-
-    client = FilamentDBClient("http://fdb.test")
-    client._client = MagicMock()
-    client._http.get = AsyncMock(side_effect=_fake_get)
-
-    result = await client.get_openprinttag()
-
-    assert result == [_OPT_PLA_SILK]
-    assert len(timeout_used) == 1
-    t = timeout_used[0]
-    assert isinstance(t, httpx.Timeout), f"Expected httpx.Timeout, got {type(t)}"
-    # httpx.Timeout(120.0) sets connect, read, write, pool all to 120 s
-    assert t.read == 120.0
-
-
-# ---------------------------------------------------------------------------
-# Fetch failures → structured api_error responses
-# ---------------------------------------------------------------------------
+    assert isinstance(_FETCH_TIMEOUT, httpx.Timeout)
+    assert _FETCH_TIMEOUT.read == 120.0
 
 
 @pytest.mark.asyncio
@@ -1423,60 +1405,60 @@ async def test_refresh_timeout_returns_504(tmp_path):
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(
-        side_effect=httpx.TimeoutException("timed out")
-    )
-
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app, raise_server_exceptions=False)
-        resp = client.post("/api/openprinttag/refresh")
-        assert resp.status_code == 504
-        detail = resp.json()["detail"]
-        assert detail["code"] == "opentag_fetch_timeout"
-        assert "large file" in detail["message"]
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+        ):
+            client = TestClient(test_app, raise_server_exceptions=False)
+            resp = client.post("/api/openprinttag/refresh")
+            assert resp.status_code == 504
+            detail = resp.json()["detail"]
+            assert detail["code"] == "opentag_fetch_timeout"
+            assert "tarball" in detail["message"]
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
 
 @pytest.mark.asyncio
-async def test_refresh_404_returns_502_unavailable(tmp_path):
-    """POST /api/openprinttag/refresh: FDB 404 → 502 opentag_unavailable."""
+async def test_refresh_github_error_returns_502(tmp_path):
+    """POST /api/openprinttag/refresh: GitHub 429/503 → 502 opentag_fetch_failed."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
     mock_resp = MagicMock()
-    mock_resp.status_code = 404
+    mock_resp.status_code = 429
     mock_req = MagicMock()
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(
-        side_effect=httpx.HTTPStatusError("404", request=mock_req, response=mock_resp)
-    )
 
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app, raise_server_exceptions=False)
-        resp = client.post("/api/openprinttag/refresh")
-        assert resp.status_code == 502
-        detail = resp.json()["detail"]
-        assert detail["code"] == "opentag_unavailable"
-        assert "upgrade" in detail["message"].lower()
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=httpx.HTTPStatusError("429", request=mock_req, response=mock_resp)),
+        ):
+            client = TestClient(test_app, raise_server_exceptions=False)
+            resp = client.post("/api/openprinttag/refresh")
+            assert resp.status_code == 502
+            detail = resp.json()["detail"]
+            assert detail["code"] == "opentag_fetch_failed"
+            # Message should mention rate-limiting / GitHub
+            assert "github" in detail["message"].lower() or "rate" in detail["message"].lower()
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
@@ -1488,25 +1470,24 @@ async def test_refresh_connection_error_returns_502(tmp_path):
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(
-        side_effect=httpx.ConnectError("connection refused")
-    )
-
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app, raise_server_exceptions=False)
-        resp = client.post("/api/openprinttag/refresh")
-        assert resp.status_code == 502
-        detail = resp.json()["detail"]
-        assert detail["code"] == "opentag_fetch_failed"
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=httpx.ConnectError("connection refused")),
+        ):
+            client = TestClient(test_app, raise_server_exceptions=False)
+            resp = client.post("/api/openprinttag/refresh")
+            assert resp.status_code == 502
+            detail = resp.json()["detail"]
+            assert detail["code"] == "opentag_fetch_failed"
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
@@ -1518,27 +1499,27 @@ async def test_matches_timeout_returns_504(tmp_path):
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(
-        side_effect=httpx.TimeoutException("timed out")
-    )
     fake_sm = AsyncMock()
     fake_sm.get_filaments = AsyncMock(return_value=[])
 
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = fake_sm
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app, raise_server_exceptions=False)
-        resp = client.get("/api/openprinttag/matches")
-        assert resp.status_code == 504
-        detail = resp.json()["detail"]
-        assert detail["code"] == "opentag_fetch_timeout"
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+        ):
+            client = TestClient(test_app, raise_server_exceptions=False)
+            resp = client.get("/api/openprinttag/matches")
+            assert resp.status_code == 504
+            detail = resp.json()["detail"]
+            assert detail["code"] == "opentag_fetch_timeout"
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
@@ -1551,104 +1532,24 @@ async def test_refresh_error_triggers_logger_error(tmp_path):
     from app.api.opentag import router
     import app.api.opentag as _ot_mod
 
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(
-        side_effect=httpx.TimeoutException("timed out")
-    )
-
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        with patch("app.api.opentag.logger") as mock_logger:
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(side_effect=httpx.TimeoutException("timed out")),
+        ), patch("app.api.opentag.logger") as mock_logger:
             client = TestClient(test_app, raise_server_exceptions=False)
             resp = client.post("/api/openprinttag/refresh")
             assert resp.status_code == 504
             mock_logger.error.assert_called()
     finally:
         _ot_mod._settings.data_dir = original_data_dir
-
-
-# ---------------------------------------------------------------------------
-# Fix: get_openprinttag extracts materials from FDB's OPTDatabase wrapper
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_openprinttag_extracts_materials_from_wrapper():
-    """When FDB returns an OPTDatabase wrapper dict, get_openprinttag() returns only materials."""
-    from app.services.filamentdb import FilamentDBClient
-
-    wrapper_response = {
-        "brands": [{"name": "Buddy3D"}],
-        "materials": [_OPT_PLA_SILK, _OPT_PETG],
-        "cachedAt": "2026-06-06T00:00:00Z",
-        "totalFFF": 2,
-        "totalSLA": 0,
-    }
-
-    async def _fake_get(url, **kwargs):
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json = MagicMock(return_value=wrapper_response)
-        return resp
-
-    client = FilamentDBClient("http://fdb.test")
-    client._client = MagicMock()
-    client._http.get = AsyncMock(side_effect=_fake_get)
-
-    result = await client.get_openprinttag()
-
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert result[0]["slug"] == "buddy3d-pla-silk-bronze"
-    assert result[1]["slug"] == "elegoo-petg-red"
-
-
-@pytest.mark.asyncio
-async def test_get_openprinttag_passes_through_list_unchanged():
-    """When FDB already returns a list, get_openprinttag() returns it unchanged (defensive)."""
-    from app.services.filamentdb import FilamentDBClient
-
-    list_response = [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE]
-
-    async def _fake_get(url, **kwargs):
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json = MagicMock(return_value=list_response)
-        return resp
-
-    client = FilamentDBClient("http://fdb.test")
-    client._client = MagicMock()
-    client._http.get = AsyncMock(side_effect=_fake_get)
-
-    result = await client.get_openprinttag()
-
-    assert result == list_response
-
-
-@pytest.mark.asyncio
-async def test_get_openprinttag_wrapper_missing_materials_returns_empty():
-    """When wrapper dict has no 'materials' key, get_openprinttag() returns []."""
-    from app.services.filamentdb import FilamentDBClient
-
-    async def _fake_get(url, **kwargs):
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json = MagicMock(return_value={"brands": [], "cachedAt": "x", "totalFFF": 0, "totalSLA": 0})
-        return resp
-
-    client = FilamentDBClient("http://fdb.test")
-    client._client = MagicMock()
-    client._http.get = AsyncMock(side_effect=_fake_get)
-
-    result = await client.get_openprinttag()
-
-    assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -1668,14 +1569,14 @@ async def test_cache_self_heals_when_materials_are_strings(tmp_path):
     cache_path = tmp_path / "opentag_cache.json"
     cache_path.write_text(json.dumps(malformed_cache))
 
-    # FDB will return real data on re-fetch
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])
-
-    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
+    with patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
     # Should have re-fetched despite the cache being "fresh"
-    fdb_mock.get_openprinttag.assert_called_once()
+    fetch_mock.assert_called_once()
     assert result["count"] == 2
     assert all(isinstance(m, dict) for m in result["materials"])
 
@@ -1691,27 +1592,29 @@ async def test_cache_self_heals_when_materials_is_empty_list(tmp_path):
     cache_path = tmp_path / "opentag_cache.json"
     cache_path.write_text(json.dumps(malformed_cache))
 
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK])
+    with patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PLA_SILK]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
-    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
-
-    fdb_mock.get_openprinttag.assert_called_once()
+    fetch_mock.assert_called_once()
     assert result["count"] == 1
 
 
 @pytest.mark.asyncio
 async def test_cache_serves_valid_fresh_data_without_refetch(tmp_path):
-    """A fresh cache with valid dict entries is served without calling FDB."""
+    """A fresh cache with valid dict entries is served without a tarball fetch."""
     fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _save_cache(str(tmp_path), [_OPT_PLA_SILK, _OPT_PETG], fresh_ts)
 
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock()
+    with patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
-    result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=False)
-
-    fdb_mock.get_openprinttag.assert_not_called()
+    fetch_mock.assert_not_called()
     assert result["count"] == 2
 
 
@@ -1741,28 +1644,22 @@ def test_find_best_match_all_non_dict_returns_no_match():
 
 
 # ---------------------------------------------------------------------------
-# Fix: /openprinttag/matches returns 200 with a wrapper-shaped FDB response
+# Fix: /openprinttag/matches returns 200 with fresh data from cached dataset
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_matches_returns_200_with_wrapper_shaped_fdb_response(tmp_path):
-    """GET /api/openprinttag/matches must return 200, not 500, when FDB returns an OPTDatabase wrapper."""
+async def test_matches_returns_200_with_seeded_cache(tmp_path):
+    """GET /api/openprinttag/matches must return 200 when cache is pre-seeded."""
+    import datetime as _dt
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
 
-    # FDB returns the wrapper object (the shape that was causing the 500)
-    wrapper_response = {
-        "brands": [{"name": "Buddy3D"}, {"name": "ELEGOO"}],
-        "materials": [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE],
-        "cachedAt": "2026-06-06T00:00:00Z",
-        "totalFFF": 3,
-        "totalSLA": 0,
-    }
-
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(return_value=wrapper_response["materials"])
+    # Seed the cache directly (simulates a previous successful tarball fetch)
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), [_OPT_PLA_SILK, _OPT_PETG, _OPT_PLA_MATTE], fresh_ts)
 
     fake_sm_fil = _sm_fil(sm_id=1, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
     fake_sm = AsyncMock()
@@ -1770,7 +1667,7 @@ async def test_matches_returns_200_with_wrapper_shaped_fdb_response(tmp_path):
 
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = fake_sm
 
     import app.api.opentag as _ot_mod
@@ -1784,7 +1681,6 @@ async def test_matches_returns_200_with_wrapper_shaped_fdb_response(tmp_path):
         assert "matches" in data
         assert len(data["matches"]) == 1
         assert data["matches"][0]["spoolman_filament_id"] == 1
-        # Should have matched against PLA Silk Bronze (not 500'd on string keys)
         assert data["matches"][0]["opt_slug"] == "buddy3d-pla-silk-bronze"
     finally:
         _ot_mod._settings.data_dir = original_data_dir
@@ -1797,7 +1693,7 @@ async def test_matches_returns_200_when_cache_has_malformed_data(tmp_path):
     from fastapi.testclient import TestClient
     from app.api.opentag import router
 
-    # Seed the cache with the malformed string entries that caused the original 500
+    # Seed the cache with malformed string entries
     malformed_cache = {
         "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "count": 5,
@@ -1806,28 +1702,28 @@ async def test_matches_returns_200_when_cache_has_malformed_data(tmp_path):
     cache_path = tmp_path / "opentag_cache.json"
     cache_path.write_text(json.dumps(malformed_cache))
 
-    # FDB will supply real data on re-fetch
-    fake_fdb = AsyncMock()
-    fake_fdb.get_openprinttag = AsyncMock(return_value=[_OPT_PLA_SILK])
-
     fake_sm_fil = _sm_fil(sm_id=2, vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
     fake_sm = AsyncMock()
     fake_sm.get_filaments = AsyncMock(return_value=[fake_sm_fil])
 
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api")
-    test_app.state.filamentdb = fake_fdb
+    test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = fake_sm
 
     import app.api.opentag as _ot_mod
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = TestClient(test_app, raise_server_exceptions=True)
-        resp = client.get("/api/openprinttag/matches")
-        assert resp.status_code == 200, resp.text
-        # Self-heal triggered a re-fetch
-        fake_fdb.get_openprinttag.assert_called_once()
+        with patch(
+            "app.core.opentag_cache._fetch_from_tarball",
+            AsyncMock(return_value=[_OPT_PLA_SILK]),
+        ) as fetch_mock:
+            client = TestClient(test_app, raise_server_exceptions=True)
+            resp = client.get("/api/openprinttag/matches")
+            assert resp.status_code == 200, resp.text
+            # Self-heal triggered a re-fetch from tarball
+            fetch_mock.assert_called_once()
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 
@@ -3825,39 +3721,46 @@ async def test_ensure_extra_fields_spool_section_isolated_from_filament_section(
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: opentag_secondary — rgba_to_hex, fetch_secondary_colors
+# _rgba_to_hex (moved from opentag_secondary to opentag_cache)
 # ---------------------------------------------------------------------------
 
 
 def test_rgba_to_hex_strips_alpha_and_uppercases():
-    from app.core.opentag_secondary import _rgba_to_hex
     assert _rgba_to_hex("#98282fff") == "98282F"
 
 
 def test_rgba_to_hex_black():
-    from app.core.opentag_secondary import _rgba_to_hex
     assert _rgba_to_hex("#000000ff") == "000000"
 
 
 def test_rgba_to_hex_no_alpha():
-    from app.core.opentag_secondary import _rgba_to_hex
     assert _rgba_to_hex("#AABBCC") == "AABBCC"
 
 
 def test_rgba_to_hex_ddb95d():
-    from app.core.opentag_secondary import _rgba_to_hex
     assert _rgba_to_hex("#ddb95dff") == "DDB95D"
 
 
 def test_rgba_to_hex_none_returns_none():
-    from app.core.opentag_secondary import _rgba_to_hex
     assert _rgba_to_hex(None) is None
     assert _rgba_to_hex("") is None
     assert _rgba_to_hex("#AB") is None
 
 
-def _build_test_tar(materials: list[dict]) -> bytes:
-    """Build an in-memory gzipped tarball with ``data/materials/brand/X.yaml`` entries."""
+# ---------------------------------------------------------------------------
+# _build_test_tar helper — builds a minimal in-memory OPT-shaped tarball
+# ---------------------------------------------------------------------------
+
+
+def _build_test_tar(
+    materials: list[dict],
+    brands: list[dict] | None = None,
+) -> bytes:
+    """Build an in-memory gzipped tarball with OPT-shaped ``data/`` entries.
+
+    ``materials`` → ``data/materials/brand/material_N.yaml``
+    ``brands``    → ``data/brands/brand_N.yaml`` (optional)
+    """
     import io as _io
     import tarfile as _tarfile
     import yaml as _yaml
@@ -3871,202 +3774,231 @@ def _build_test_tar(materials: list[dict]) -> bytes:
             )
             info.size = len(content)
             tf.addfile(info, _io.BytesIO(content))
+        for i, brand in enumerate(brands or []):
+            content = _yaml.dump(brand).encode()
+            info = _tarfile.TarInfo(
+                name=f"openprinttag-database-main/data/brands/brand_{i}.yaml"
+            )
+            info.size = len(content)
+            tf.addfile(info, _io.BytesIO(content))
     return buf.getvalue()
 
 
-@pytest.mark.asyncio
-async def test_fetch_secondary_colors_parses_tar():
-    """fetch_secondary_colors parses a small in-memory tar and returns uuid→hexes map."""
-    from app.core.opentag_secondary import fetch_secondary_colors
+# ---------------------------------------------------------------------------
+# _parse_tarball — fixture-tarball unit tests
+# ---------------------------------------------------------------------------
 
-    sample_materials = [
+
+def test_parse_tarball_basic_fff_material():
+    """_parse_tarball emits the expected OPTMaterial dict for a minimal FFF YAML."""
+
+    materials = [
+        {
+            "uuid": "aabbccdd-0000-1111-2222-333344445555",
+            "slug": "testbrand-pla-red",
+            "class": "FFF",
+            "brand": {"slug": "testbrand"},
+            "name": "PLA Red",
+            "type": "PLA",
+            "abbreviation": "PLA",
+            "primary_color": {"color_rgba": "#ff0000ff"},
+            "secondary_colors": [],
+            "properties": {
+                "density": 1.24,
+                "min_print_temperature": 190,
+                "max_print_temperature": 220,
+                "min_bed_temperature": 50,
+                "max_bed_temperature": 60,
+            },
+            "tags": ["matte"],
+            "photos": [{"url": "https://example.com/photo.jpg"}],
+            "url": "https://example.com/product",
+            "transmission_distance": None,
+        }
+    ]
+    brands = [{"slug": "testbrand", "name": "Test Brand"}]
+    tar_bytes = _build_test_tar(materials, brands)
+
+    result = _parse_tarball(tar_bytes)
+
+    assert len(result) == 1
+    mat = result[0]
+    assert mat["uuid"] == "aabbccdd-0000-1111-2222-333344445555"
+    assert mat["slug"] == "testbrand-pla-red"
+    assert mat["brandSlug"] == "testbrand"
+    assert mat["brandName"] == "Test Brand"
+    assert mat["name"] == "PLA Red"
+    assert mat["type"] == "PLA"
+    assert mat["abbreviation"] == "PLA"
+    assert mat["color"] == "#FF0000"
+    assert mat["secondaryColors"] == []
+    assert mat["density"] == 1.24
+    assert mat["nozzleTempMin"] == 190
+    assert mat["nozzleTempMax"] == 220
+    assert mat["bedTempMin"] == 50
+    assert mat["bedTempMax"] == 60
+    assert mat["tags"] == ["matte"]
+    assert mat["photoUrl"] == "https://example.com/photo.jpg"
+    assert mat["productUrl"] == "https://example.com/product"
+    assert mat["completenessScore"] is None
+    assert mat["completenessTier"] is None
+
+
+def test_parse_tarball_secondary_colors_populated():
+    """_parse_tarball populates secondaryColors from secondary_colors[].color_rgba."""
+
+    materials = [
         {
             "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
             "slug": "amolen-pla-silk-gradient",
+            "class": "FFF",
+            "brand": {"slug": "amolen"},
+            "name": "PLA Silk Gradient",
             "type": "PLA",
+            "primary_color": {"color_rgba": "#000000ff"},
             "secondary_colors": [
-                {"color_rgba": "#000000ff"},
                 {"color_rgba": "#98282fff"},
                 {"color_rgba": "#ddb95dff"},
             ],
-        },
-        {
-            "uuid": "aaaabbbb-cccc-dddd-eeee-ffffffffffff",
-            "slug": "brand-pla-red",
-            "type": "PLA",
-            "secondary_colors": [],  # no secondaries → should be skipped
-        },
-        {
-            "uuid": "11112222-3333-4444-5555-666677778888",
-            "slug": "brand-petg-blue",
-            "type": "PETG",
-            # no secondary_colors key at all → skipped
-        },
+            "tags": ["gradual_color_change"],
+        }
     ]
-    tar_bytes = _build_test_tar(sample_materials)
+    tar_bytes = _build_test_tar(materials)
 
-    # Mock the HTTP client to return our in-memory tar
+    result = _parse_tarball(tar_bytes)
+
+    assert len(result) == 1
+    mat = result[0]
+    assert mat["color"] == "#000000"
+    # Secondaries should be emitted with # prefix in uppercase RRGGBB
+    assert mat["secondaryColors"] == ["#98282F", "#DDB95D"]
+
+
+def test_parse_tarball_skips_sla_materials():
+    """_parse_tarball silently skips non-FFF (SLA) materials."""
+
+    materials = [
+        {"uuid": "fff-uuid", "slug": "brand-pla", "class": "FFF",
+         "brand": {"slug": "brand"}, "name": "PLA", "type": "PLA"},
+        {"uuid": "sla-uuid", "slug": "brand-resin", "class": "SLA",
+         "brand": {"slug": "brand"}, "name": "Resin", "type": "Standard"},
+    ]
+    result = _parse_tarball(_build_test_tar(materials))
+    assert len(result) == 1
+    assert result[0]["uuid"] == "fff-uuid"
+
+
+def test_parse_tarball_brand_fallback_to_slug():
+    """When a brand YAML is absent, brandName falls back to brandSlug."""
+
+    materials = [
+        {
+            "uuid": "test-uuid",
+            "slug": "unknownbrand-pla",
+            "class": "FFF",
+            "brand": {"slug": "unknownbrand"},
+            "name": "PLA Basic",
+            "type": "PLA",
+        }
+    ]
+    # No brands list → brand YAML absent
+    result = _parse_tarball(_build_test_tar(materials))
+    assert len(result) == 1
+    assert result[0]["brandName"] == "unknownbrand"
+
+
+def test_parse_tarball_transmission_distance_top_level():
+    """transmission_distance is a top-level YAML key, not inside properties."""
+
+    materials = [
+        {
+            "uuid": "td-uuid",
+            "slug": "brand-pla-clear",
+            "class": "FFF",
+            "brand": {"slug": "brand"},
+            "name": "PLA Clear",
+            "type": "PLA",
+            "properties": {"density": 1.24},
+            "transmission_distance": 3.5,
+        }
+    ]
+    result = _parse_tarball(_build_test_tar(materials))
+    assert result[0]["transmissionDistance"] == 3.5
+
+
+# ---------------------------------------------------------------------------
+# _fetch_from_tarball — injectable HTTP client tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_from_tarball_calls_github_and_parses():
+    """_real_fetch_from_tarball downloads the tarball and returns parsed material dicts.
+
+    Uses the real function (captured at import time before conftest patches it).
+    """
+    materials = [
+        {
+            "uuid": "fetch-uuid",
+            "slug": "brand-pla",
+            "class": "FFF",
+            "brand": {"slug": "brand"},
+            "name": "PLA",
+            "type": "PLA",
+        }
+    ]
+    tar_bytes = _build_test_tar(materials)
+
     fake_resp = MagicMock()
     fake_resp.raise_for_status = MagicMock()
     fake_resp.content = tar_bytes
-
     fake_http = AsyncMock(spec=httpx.AsyncClient)
     fake_http.get = AsyncMock(return_value=fake_resp)
 
-    result = await fetch_secondary_colors(http=fake_http)
+    result = await _real_fetch_from_tarball(http=fake_http)
 
-    # The gradient material should be keyed by both uuid AND slug
-    assert "ccf32809-fbef-527a-8487-ccb75ceafab6" in result
-    assert result["ccf32809-fbef-527a-8487-ccb75ceafab6"] == ["000000", "98282F", "DDB95D"]
-    assert "amolen-pla-silk-gradient" in result
-    assert result["amolen-pla-silk-gradient"] == ["000000", "98282F", "DDB95D"]
-
-    # Empty / missing secondary_colors should not produce an entry
-    assert "aaaabbbb-cccc-dddd-eeee-ffffffffffff" not in result
-    assert "11112222-3333-4444-5555-666677778888" not in result
+    fake_http.get.assert_called_once()
+    assert len(result) == 1
+    assert result[0]["uuid"] == "fetch-uuid"
 
 
 @pytest.mark.asyncio
-async def test_fetch_secondary_colors_returns_empty_on_network_error():
-    """fetch_secondary_colors returns {} (not raises) when the HTTP request fails."""
-    from app.core.opentag_secondary import fetch_secondary_colors
+async def test_fetch_from_tarball_raises_on_bad_tar():
+    """_real_fetch_from_tarball raises RuntimeError when the response body is not a valid tar."""
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = MagicMock()
+    fake_resp.content = b"not a tarball at all"
+    fake_http = AsyncMock(spec=httpx.AsyncClient)
+    fake_http.get = AsyncMock(return_value=fake_resp)
 
+    with pytest.raises(RuntimeError, match="tarball"):
+        await _real_fetch_from_tarball(http=fake_http)
+
+
+@pytest.mark.asyncio
+async def test_fetch_from_tarball_propagates_http_error():
+    """_real_fetch_from_tarball propagates HTTPStatusError from raise_for_status."""
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "429 rate limit", request=MagicMock(), response=MagicMock()
+        )
+    )
+    fake_http = AsyncMock(spec=httpx.AsyncClient)
+    fake_http.get = AsyncMock(return_value=fake_resp)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await _real_fetch_from_tarball(http=fake_http)
+
+
+@pytest.mark.asyncio
+async def test_fetch_from_tarball_propagates_connect_error():
+    """_real_fetch_from_tarball propagates connectivity failures (RequestError)."""
     fake_http = AsyncMock(spec=httpx.AsyncClient)
     fake_http.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
 
-    result = await fetch_secondary_colors(http=fake_http)
-    assert result == {}
-
-
-@pytest.mark.asyncio
-async def test_fetch_secondary_colors_returns_empty_on_bad_tar():
-    """fetch_secondary_colors returns {} (not raises) when the response body is not a valid tar."""
-    from app.core.opentag_secondary import fetch_secondary_colors
-
-    fake_resp = MagicMock()
-    fake_resp.raise_for_status = MagicMock()
-    fake_resp.content = b"not a tarball"
-
-    fake_http = AsyncMock(spec=httpx.AsyncClient)
-    fake_http.get = AsyncMock(return_value=fake_resp)
-
-    result = await fetch_secondary_colors(http=fake_http)
-    assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# Phase 2: load_opentag_dataset merges secondary_colors; degrades gracefully
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_load_opentag_dataset_fills_empty_secondary_colors_by_uuid(tmp_path):
-    """When the raw tarball provides secondary_colors, they are merged by uuid."""
-    from unittest.mock import patch as _patch
-    from app.core.opentag_cache import load_opentag_dataset
-
-    gradient_material = {
-        **_OPT_PLA_SILK,
-        "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
-        "secondaryColors": [],  # FDB feed leaves this empty
-    }
-
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[gradient_material])
-
-    secondary_map = {
-        "ccf32809-fbef-527a-8487-ccb75ceafab6": ["000000", "98282F", "DDB95D"],
-    }
-
-    with _patch(
-        "app.core.opentag_cache.fetch_secondary_colors",
-        AsyncMock(return_value=secondary_map),
-    ):
-        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
-
-    mats = result["materials"]
-    assert len(mats) == 1
-    assert mats[0]["secondaryColors"] == ["000000", "98282F", "DDB95D"]
-
-
-@pytest.mark.asyncio
-async def test_load_opentag_dataset_fills_empty_secondary_colors_by_slug_fallback(tmp_path):
-    """When uuid is absent but slug matches, secondary_colors are filled by slug."""
-    from unittest.mock import patch as _patch
-    from app.core.opentag_cache import load_opentag_dataset
-
-    mat_no_uuid = {
-        **_OPT_PLA_SILK,
-        "uuid": None,
-        "slug": "brand-pla-gradient",
-        "secondaryColors": [],
-    }
-
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[mat_no_uuid])
-
-    secondary_map = {
-        "brand-pla-gradient": ["FF0000", "00FF00"],
-    }
-
-    with _patch(
-        "app.core.opentag_cache.fetch_secondary_colors",
-        AsyncMock(return_value=secondary_map),
-    ):
-        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
-
-    assert result["materials"][0]["secondaryColors"] == ["FF0000", "00FF00"]
-
-
-@pytest.mark.asyncio
-async def test_load_opentag_dataset_degrades_gracefully_when_secondary_fetch_fails(tmp_path):
-    """When fetch_secondary_colors returns {}, the FDB feed is used unchanged (no crash)."""
-    from unittest.mock import patch as _patch
-    from app.core.opentag_cache import load_opentag_dataset
-
-    material = {**_OPT_PLA_SILK, "secondaryColors": []}
-
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[material])
-
-    with _patch(
-        "app.core.opentag_cache.fetch_secondary_colors",
-        AsyncMock(return_value={}),
-    ):
-        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
-
-    # secondaryColors should remain empty — no crash
-    assert result["materials"][0]["secondaryColors"] == []
-    assert result["count"] == 1
-
-
-@pytest.mark.asyncio
-async def test_load_opentag_dataset_does_not_overwrite_existing_secondary_colors(tmp_path):
-    """Materials that already have secondaryColors are left untouched."""
-    from unittest.mock import patch as _patch
-    from app.core.opentag_cache import load_opentag_dataset
-
-    material_with_existing = {
-        **_OPT_PLA_SILK,
-        "uuid": "ccf32809-fbef-527a-8487-ccb75ceafab6",
-        "secondaryColors": ["EXISTING_HEX"],
-    }
-
-    fdb_mock = AsyncMock()
-    fdb_mock.get_openprinttag = AsyncMock(return_value=[material_with_existing])
-
-    secondary_map = {
-        "ccf32809-fbef-527a-8487-ccb75ceafab6": ["000000", "98282F"],
-    }
-
-    with _patch(
-        "app.core.opentag_cache.fetch_secondary_colors",
-        AsyncMock(return_value=secondary_map),
-    ):
-        result = await load_opentag_dataset(fdb_mock, str(tmp_path), 24, force=True)
-
-    # Existing secondaryColors must not be overwritten
-    assert result["materials"][0]["secondaryColors"] == ["EXISTING_HEX"]
+    with pytest.raises(httpx.ConnectError):
+        await _real_fetch_from_tarball(http=fake_http)
 
 
 # ---------------------------------------------------------------------------

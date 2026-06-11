@@ -1,10 +1,16 @@
 ---
 name: 2026-06-11-opentag-direct-source
-status: pending
+status: completed
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: >
+  Direct tarball fetch implemented. opentag_secondary.py deleted.
+  FilamentDBClient.get_openprinttag() removed. load_opentag_dataset() no longer
+  takes fdb_client. All tests updated + new _parse_tarball/_fetch_from_tarball
+  fixture tests added. UI copy, docs/opentag-cleanup.md, docs/prd.md,
+  README.md, and docs/decisions.md updated. 942 backend tests pass, ruff clean,
+  40 frontend tests pass, tsc clean.
 ---
 
 # Task: Fetch the OpenTag dataset directly from the OpenPrintTag database, not via Filament DB

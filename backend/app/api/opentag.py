@@ -2,8 +2,9 @@
 POST /api/openprinttag/apply.
 
 Standalone tool: match Spoolman filaments against the OpenPrintTag dataset
-(fetched from FDB's GET /api/openprinttag, cached locally), review per-field,
-confirm, and apply writes to Spoolman + push slug/uuid into FDB settings bag.
+(fetched directly from the OpenPrintTag GitHub tarball, cached locally), review
+per-field, confirm, and apply writes to Spoolman + push slug/uuid into FDB
+settings bag.
 
 Route prefix note: the path token "opentag" (without "print") collides with the
 Qubit OpenTag web-analytics product on EasyList/uBlock filter lists and is
@@ -376,44 +377,39 @@ async def opentag_status() -> OpenTagCacheStatus:
 
 @router.post("/openprinttag/refresh", response_model=OpenTagDatasetMeta)
 async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
-    """Force a fresh fetch of the OpenTag dataset from FDB."""
-    fdb = request.app.state.filamentdb
+    """Force a fresh download of the OpenTag dataset from OpenPrintTag."""
     try:
         result = await load_opentag_dataset(
-            fdb,
             _settings.data_dir,
             _settings.opentag_cache_max_age_hours,
             force=True,
         )
     except httpx.TimeoutException as exc:
-        logger.error("opentag refresh: timed out fetching dataset from FDB: %s", exc)
+        logger.error("opentag refresh: timed out downloading dataset from OpenPrintTag: %s", exc)
         raise api_error(
             504,
             "opentag_fetch_timeout",
-            "Timed out fetching the OpenTag dataset from Filament DB — "
-            "it downloads a large file on first load; try again.",
+            "Timed out downloading the OpenTag dataset from OpenPrintTag — "
+            "it downloads a large tarball; try again.",
         ) from exc
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            logger.error("opentag refresh: FDB /api/openprinttag returned 404: %s", exc)
-            raise api_error(
-                502,
-                "opentag_unavailable",
-                "This Filament DB version doesn't expose /api/openprinttag — "
-                "upgrade Filament DB.",
-            ) from exc
-        logger.error("opentag refresh: FDB returned HTTP %d: %s", exc.response.status_code, exc)
+        logger.error(
+            "opentag refresh: OpenPrintTag/GitHub returned HTTP %d: %s",
+            exc.response.status_code, exc,
+        )
         raise api_error(
             502,
             "opentag_fetch_failed",
-            f"Failed to fetch the OpenTag dataset from Filament DB (HTTP {exc.response.status_code}).",
+            f"Failed to download the OpenTag dataset from OpenPrintTag "
+            f"(HTTP {exc.response.status_code} — GitHub may be rate-limiting or unavailable).",
         ) from exc
     except httpx.RequestError as exc:
-        logger.error("opentag refresh: connection error fetching dataset from FDB: %s", exc)
+        logger.error("opentag refresh: connection error downloading dataset from OpenPrintTag: %s", exc)
         raise api_error(
             502,
             "opentag_fetch_failed",
-            "Failed to connect to Filament DB while fetching the OpenTag dataset.",
+            "Could not reach api.github.com to download the OpenTag dataset — "
+            "check that the bridge container has outbound HTTPS access.",
         ) from exc
     _record_last_count(result["count"])
     return OpenTagDatasetMeta(
@@ -426,45 +422,40 @@ async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
 @router.get("/openprinttag/matches", response_model=OpenTagMatchesResponse)
 async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     """Return per-Spoolman-filament OpenTag matches with per-field comparison."""
-    fdb = request.app.state.filamentdb
     sm: Any = request.app.state.spoolman
 
     try:
         dataset = await load_opentag_dataset(
-            fdb,
             _settings.data_dir,
             _settings.opentag_cache_max_age_hours,
             force=False,
         )
     except httpx.TimeoutException as exc:
-        logger.error("opentag matches: timed out fetching dataset from FDB: %s", exc)
+        logger.error("opentag matches: timed out downloading dataset from OpenPrintTag: %s", exc)
         raise api_error(
             504,
             "opentag_fetch_timeout",
-            "Timed out fetching the OpenTag dataset from Filament DB — "
-            "it downloads a large file on first load; try again.",
+            "Timed out downloading the OpenTag dataset from OpenPrintTag — "
+            "it downloads a large tarball; try again.",
         ) from exc
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            logger.error("opentag matches: FDB /api/openprinttag returned 404: %s", exc)
-            raise api_error(
-                502,
-                "opentag_unavailable",
-                "This Filament DB version doesn't expose /api/openprinttag — "
-                "upgrade Filament DB.",
-            ) from exc
-        logger.error("opentag matches: FDB returned HTTP %d: %s", exc.response.status_code, exc)
+        logger.error(
+            "opentag matches: OpenPrintTag/GitHub returned HTTP %d: %s",
+            exc.response.status_code, exc,
+        )
         raise api_error(
             502,
             "opentag_fetch_failed",
-            f"Failed to fetch the OpenTag dataset from Filament DB (HTTP {exc.response.status_code}).",
+            f"Failed to download the OpenTag dataset from OpenPrintTag "
+            f"(HTTP {exc.response.status_code} — GitHub may be rate-limiting or unavailable).",
         ) from exc
     except httpx.RequestError as exc:
-        logger.error("opentag matches: connection error fetching dataset from FDB: %s", exc)
+        logger.error("opentag matches: connection error downloading dataset from OpenPrintTag: %s", exc)
         raise api_error(
             502,
             "opentag_fetch_failed",
-            "Failed to connect to Filament DB while fetching the OpenTag dataset.",
+            "Could not reach api.github.com to download the OpenTag dataset — "
+            "check that the bridge container has outbound HTTPS access.",
         ) from exc
     materials: list[dict[str, Any]] = dataset["materials"]
     _record_last_count(dataset["count"])

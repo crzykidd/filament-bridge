@@ -217,7 +217,7 @@ All conflicts are queued — never silently resolved — and shown on the Confli
 
 The OpenTag tool matches your Spoolman filaments against the [OpenPrintTag](https://openprinttag.org) database, which provides standardized filament identification (slugs, UUIDs, finish tags).
 
-1. Open the OpenTag Cleanup page — the bridge fetches the dataset (via Filament DB, cached locally for 24 h) and scores every Spoolman filament: brand pre-filter (with configurable vendor aliases), color-profile and polymer-family gates, color-name + hex + finish-aware scoring
+1. Open the OpenTag Cleanup page — the bridge fetches the dataset directly from the OpenPrintTag GitHub tarball (cached locally for 24 h) and scores every Spoolman filament: brand pre-filter (with configurable vendor aliases), color-profile and polymer-family gates, color-name + hex + finish-aware scoring
 2. Review per filament: the best match plus up to 5 alternates, each with a field-by-field comparison; accept, edit, mark fields "keep mine", switch candidates, or ignore
 3. Confirm and apply — the bridge writes the confirmed fields to Spoolman (creating vendors via find-or-create where you approved a manufacturer change) and stamps `openprinttag_slug`/`openprinttag_uuid` into both systems
 

@@ -10,18 +10,19 @@ lists, so the routes avoid it).
 
 ## The dataset
 
-The OpenPrintTag dataset is fetched through Filament DB's `GET /api/openprinttag` feed and
+The OpenPrintTag dataset is fetched directly from the
+[OpenPrintTag GitHub tarball](https://github.com/OpenPrintTag/openprinttag-database) and
 cached locally (`DATA_DIR/opentag_cache.json`, TTL `OPENTAG_CACHE_MAX_AGE_HOURS`, default
-24 h). Secondary colors — which the FDB feed leaves empty — are recovered from the raw
-OpenPrintTag GitHub tarball and merged in by UUID/slug; if that fetch fails the tool
-degrades gracefully to the feed data.
+24 h). Brand names, material properties, and secondary colors are all parsed in a single
+tarball download — no Filament DB involvement. Only `class: FFF` materials are included
+(SLA and others are skipped).
 
 Two buttons on the page:
 
 - **Reprocess records** — re-scan Spoolman and re-score against the cached dataset
   (no download).
-- **Refresh dataset** — force a re-download, then reprocess. The first load can take up to
-  a minute (Filament DB extracts a multi-MB tarball server-side).
+- **Refresh dataset** — force a re-download from OpenPrintTag, then reprocess. The first
+  load downloads and parses a multi-MB tarball (typically a few seconds).
 
 ## How matching works
 
