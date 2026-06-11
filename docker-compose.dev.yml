@@ -17,6 +17,8 @@ services:
       FILAMENTDB_URL: http://filament-db:3000
       SPOOLMAN_URL: http://spoolman:7912
       # DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/...
+      DEBUG_STARTUP_DUMP: true
+      CHANGES_LOG_ENABLED: true
     depends_on:
       - filament-db
       - spoolman
