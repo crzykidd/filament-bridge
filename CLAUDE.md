@@ -149,25 +149,30 @@ filament-bridge/
 │   │   │   ├── health.py                   — connectivity check for both upstream APIs
 │   │   │   ├── opentag.py                  — OpenTag cleanup tool (matches, refresh, apply)
 │   │   │   ├── sync_log.py                 — audit log viewer (FR-17)
-│   │   │   ├── wizard.py                   — Bulk Import Wizard read/decision endpoints (FR-1–FR-6)
+│   │   │   ├── wizard.py                   — Bulk Import Wizard read/decision/execute endpoints (FR-1–FR-7)
+│   │   │   ├── auth.py                     — auth router + require_auth dependency (session cookie, API token)
 │   │   │   ├── debug.py                    — gated reset tools (403 unless debug_mode is on): clear-spoolman-fdb-refs, reset-bridge-state, full-reset
 │   │   │   ├── version.py                  — public GET /api/version (current, build, GitHub update check)
 │   │   │   └── errors.py                   — consistent error envelope for the bridge API
 │   │   ├── core/
 │   │   │   ├── engine.py                   — main sync loop: snapshot, diff, apply, log
 │   │   │   ├── sync_policy.py              — two-axis direction+policy resolver (resolve_sync_action)
+│   │   │   ├── conflict_apply.py           — master_divergence resolve→apply actions (apply_all/variant_override/ignore)
 │   │   │   ├── planner.py                  — wizard execution planner (shared by FR-7 and FR-14)
 │   │   │   ├── dryrun.py                   — dry-run preview helpers (FR-14)
 │   │   │   ├── differ.py                   — diff two snapshots, classify changes
-│   │   │   ├── matcher.py                  — fuzzy matching for import wizard (vendor+name+color)
+│   │   │   ├── matcher.py                  — fuzzy matching for import wizard (vendor+name+color), variant cluster keys
 │   │   │   ├── weight.py                   — net↔gross weight conversion logic
 │   │   │   ├── fields.py                   — field mapping resolution (auto-match + explicit)
 │   │   │   ├── color.py                    — multicolor/gradient conversion (FDB ↔ Spoolman)
 │   │   │   ├── material_tags.py            — finish-tag detection and serialization
-│   │   │   ├── version.py                  — FDB semantic-version comparison helpers
+│   │   │   ├── dates.py                    — Spoolman timestamps → FDB purchase/opened dates
+│   │   │   ├── version.py                  — semver helpers + MIN_FDB/MIN_SPOOLMAN gates
+│   │   │   ├── compat.py                   — shared upstream-version compatibility check
 │   │   │   ├── opentag_match.py            — OPTMaterial → Spoolman field mapper + scorer
 │   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated)
 │   │   │   └── opentag_secondary.py        — secondary-color recovery from the raw OPT tarball
+│   │   ├── schemas/                        — Pydantic models (bridge API, Filament DB, Spoolman shapes)
 │   │   ├── models/
 │   │   │   ├── mapping.py                  — SpoolMapping, FilamentMapping (cross-reference IDs)
 │   │   │   ├── conflict.py                 — Conflict queue entries
@@ -202,9 +207,21 @@ filament-bridge/
 │   ├── tailwind.config.js
 │   └── vite.config.ts
 ├── docs/
+│   ├── README.md                           — docs index
 │   ├── prd.md                              — full product requirements (READ THIS)
+│   ├── decisions.md                        — decision log (the "why" record)
+│   ├── configuration.md                    — env vars + runtime settings reference
+│   ├── sync-model.md                       — engine internals: passes, snapshots, anti-ping-pong
+│   ├── wizard.md                           — Bulk Import Wizard guide
+│   ├── conflicts.md                        — conflict types + resolution semantics
+│   ├── variant-parent-mode.md              — promote_color vs generic_container
+│   ├── opentag-cleanup.md                  — OpenTag matcher + apply flow
+│   ├── security.md                         — auth model, API token, lockout recovery
+│   ├── version-update-check.md             — version badge + GitHub update check
 │   ├── spoolman-writes.md                  — every field the bridge writes to Spoolman, and when
 │   └── migration-spoolman-to-filamentdb.md — standalone migration guide
+├── prompts/                                — handoff-prompt queue (TEMPLATE.md, done/, assets/)
+├── standards.md                            — pinned homelab standards this repo implements
 └── private_data/                           — gitignored, user-specific test data
 ```
 
@@ -224,7 +241,7 @@ filament-bridge/
 | `FIELD_MAPPINGS` | No | — | Comma-separated `fdb_field=spoolman_field` pairs |
 | `FIELD_MAPPING_EXCLUDES` | No | — | Comma-separated field names to exclude from auto-match |
 | `VARIANT_LINE_KEYWORDS` | No | (seed list) | Comma-separated words marking distinct variant lines (e.g. `silk,matte,rapid`). Filaments whose names match different keywords won't be grouped together. Overridable at runtime via Settings. |
-| `SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS` | No | `filamentdb_material_tags` | Spoolman filament-level extra field storing finish-tag IDs (JSON list of ints) |
+| `SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS` | No | `filamentdb_material_tags` | Spoolman filament-level extra field storing finish-tag IDs (CSV string of ints, e.g. `16,17`) |
 | `MATERIAL_TAG_IDS` | No | (seed list) | CSV of `keyword=id` pairs overriding the default keyword→OpenPrintTag-ID map for finish detection. Empty = use seed defaults from `core/material_tags.py`. |
 | `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenTag brand pre-filter (e.g. `prusa=prusament`). Normalised on both sides; blank = no aliases. Overridable at runtime via Settings. |
 | `OPENTAG_COLOR_KEYWORDS` | No | — | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher (e.g. `galaxy=black,cool=grey,jet=black`). Merged on top of seed defaults from `core/opentag_match.py:DEFAULT_COLOR_KEYWORDS`; blank = seed defaults only. Overridable at runtime via Settings. |

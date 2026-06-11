@@ -1,10 +1,10 @@
 ---
 name: 2026-06-10-release-prep-docs-overhaul
-status: pending
+status: completed
 created: 2026-06-10
 model: opus            # deep-dive audit + high-quality copywriting — plan/write on Opus
-completed:
-result:
+completed: 2026-06-11
+result: Full-code audit + gap report (prompts/assets/2026-06-11-docs-gap-report.md); PRD/README rewritten, docs area built out (sync-model, wizard, conflicts, opentag, index), 5 fix prompts + tooltip prompt queued. Uncommitted per session flow.
 ---
 
 # Task: Deep-dive docs audit, then rewrite PRD + README to reflect reality (release prep)

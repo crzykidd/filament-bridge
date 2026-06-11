@@ -24,7 +24,7 @@ Created once at startup (`ensure_extra_fields()`). Key names are overridable via
 
 | Field key | Type | Purpose |
 |---|---|---|
-| `filamentdb_material_tags` | text | JSON list of OpenPrintTag finish IDs (e.g. `[17]` for silk) |
+| `filamentdb_material_tags` | text | OpenPrintTag finish IDs as a CSV string (e.g. `17` for silk, `16,17`), JSON-quoted on the wire like all text extras |
 | `openprinttag_slug` | text | OpenPrintTag material slug (e.g. `buddy3d-pla-silk-bronze`) — written by the OpenTag cleanup tool Apply action |
 | `openprinttag_uuid` | text | OpenPrintTag material UUID — written by the OpenTag cleanup tool Apply action |
 
@@ -50,7 +50,7 @@ lone change, one-way FDB→SM, or an FDB-winning conflict policy). See
 | Filament | `diameter` | Native-scalar sync resolves FDB→SM |
 | Filament | `spool_weight` | Native-scalar sync resolves FDB→SM (from FDB `spoolWeight`) |
 | Filament | `weight` | Native-scalar sync resolves FDB→SM (from FDB `netFilamentWeight`) |
-| Filament | `extra.filamentdb_material_tags` | Finish-tag sync resolves FDB→SM (Filament DB ≥ 1.33.0); JSON list of OpenPrintTag IDs from FDB `optTags` |
+| Filament | `extra.filamentdb_material_tags` | Finish-tag sync resolves FDB→SM (Filament DB ≥ 1.33.0); CSV of OpenPrintTag IDs from FDB `optTags` |
 | Spool | `extra.{mapped field}` | Generic field-mapping sync (FR-11) resolves FDB→SM; arbitrary mapped FDB fields stored as spool extras |
 
 New-spool creation during a cycle (gated by `new_spool_sync_direction`):
@@ -77,6 +77,19 @@ New-spool creation during a cycle (gated by `new_spool_sync_direction`):
 | Spool | update | 3 cross-ref extras | After creating the FDB spool — links it back |
 | Filament | update | `extra.filamentdb_material_tags` | Pass 2.6 — writes parsed finish-tag IDs (from SM name/material text) back so SM's extra field matches FDB's `optTags` |
 | Filament | update | `material`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `spool_weight` | Variances **reconcile write-back** — only fields the user corrected, and only where the value differs from current Spoolman |
+
+## Conflict-resolution writes (on-demand, human-approved)
+
+Resolving a **master_divergence** conflict (`POST /api/conflicts/{id}/resolve` with an
+`action`) is the one conflict type that writes upstream — the chosen action is the
+authorisation (see `docs/conflicts.md`):
+
+| Action | Entity | Op | Field(s) |
+|---|---|---|---|
+| `apply_all` | Filament | update | The diverged native field (`material`, `density`, `diameter`, `spool_weight`, `weight`, `settings_bed_temp`, `settings_extruder_temp`) on **every mapped Spoolman filament in the variant line** |
+| `variant_override` / `ignore` | — | — | No Spoolman writes (FDB-only / no-op respectively) |
+
+All other conflict types are record-only — resolving them performs no Spoolman writes.
 
 ## OpenTag cleanup tool writes (on-demand, on Apply)
 
