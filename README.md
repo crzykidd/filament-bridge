@@ -266,6 +266,7 @@ All connection configuration is via environment variables; the service refuses t
 | `BRIDGE_CHANNEL` / `BRIDGE_COMMIT` | No | `release` / — | Build channel + short SHA baked in at image build time (dev builds get a `-dev+sha` version label) |
 | `DISCORD_WEBHOOK_URL` | No | — | Declared for future conflict/error notifications (delivery not yet implemented) |
 | `LOG_LEVEL` | No | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
+| `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable upstream-state snapshot to `{DATA_DIR}/state-dumps/` at boot (newest 10 kept). Development use only. |
 
 See **[docs/configuration.md](docs/configuration.md)** for the complete reference, including every runtime-editable setting (sync direction + conflict policy, variant parent mode, weight threshold/precision, log retention, debug mode, API token, and more).
 

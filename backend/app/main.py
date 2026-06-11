@@ -13,6 +13,7 @@ Startup sequence:
 Phase 4: /static is mounted when the directory exists (built image only)
 """
 
+import asyncio
 import json
 import logging
 import sys
@@ -144,12 +145,28 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.spoolman = SpoolmanClient(settings.spoolman_url)
     app.state.filamentdb = FilamentDBClient(settings.filamentdb_url)
 
+    # Background task reference held so we can cancel it cleanly on shutdown.
+    _dump_task: asyncio.Task | None = None
+
     async with app.state.spoolman, app.state.filamentdb:
         # Ensure Spoolman cross-ref extra fields exist (created once on startup)
         try:
             await app.state.spoolman.ensure_extra_fields()
         except Exception as exc:
             logger.warning("Could not ensure Spoolman extra fields: %s", exc)
+
+        # Optional debug: write a startup state dump of both upstream systems.
+        if settings.debug_startup_dump:
+            from app.core.state_dump import write_startup_dump
+            _dump_task = asyncio.create_task(
+                write_startup_dump(
+                    app.state.spoolman,
+                    app.state.filamentdb,
+                    settings.data_dir,
+                    settings,
+                )
+            )
+            logger.info("state_dump: startup dump scheduled (DEBUG_STARTUP_DUMP=true)")
 
         async def _sync_job() -> None:
             db = SessionLocal()
@@ -197,6 +214,13 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             yield
         finally:
             _scheduler.shutdown(wait=False)
+            # Cancel and await the startup dump task if it hasn't finished yet.
+            if _dump_task is not None and not _dump_task.done():
+                _dump_task.cancel()
+                try:
+                    await _dump_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             logger.info("filament-bridge stopped")
 
 

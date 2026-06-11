@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     # Local OpenTag cache staleness threshold (hours)
     opentag_cache_max_age_hours: int = 24
 
+    # Debug: write a startup state dump of both upstream systems at boot.
+    # Env-level flag (not a runtime BridgeConfig setting) so it can gate
+    # boot-time behavior without touching the DB.  Never enable in production.
+    debug_startup_dump: bool = False
+
     # Notifications
     discord_webhook_url: str | None = None
 

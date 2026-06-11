@@ -1,5 +1,40 @@
 # Decision record
 
+## 2026-06-11 — Debug startup state dump (`DEBUG_STARTUP_DUMP`)
+
+**Why env-level, not runtime BridgeConfig.** The dump runs during the lifespan
+startup sequence (before the scheduler starts), so gating on a SQLite-stored
+runtime flag would require an extra DB round-trip inside the async client
+context — and would add latency before `ensure_extra_fields`. Using an
+env-level bool (`DEBUG_STARTUP_DUMP`, default `false`) keeps the gate at
+configuration time, avoids that round-trip, and makes the boot-time behavior
+visible in the process environment rather than buried in the database.
+
+**Format — human-readable diff-friendly text.** Four sections
+(SPOOLMAN FILAMENTS / SPOOLMAN SPOOLS / FILAMENT DB FILAMENTS / FILAMENT DB
+SPOOLS), one record per line, stable field order.  Sorted by id within each
+section (numeric for Spoolman, lexicographic ObjectId for Filament DB).
+Built entirely in memory before writing (`Path.write_text`) — no partial
+writes possible.
+
+**Extras policy.** Only bridge-controlled extra fields (the six configured key
+names) are printed on Spoolman records.  Decoded via `decode_extra_value`.
+Empty string / `None` / empty list values are omitted to keep lines compact.
+Values longer than 20–24 characters are truncated with `…`.
+
+**Retention: newest 10 dumps.** `prune_dumps(dir, keep=10)` is called after
+each write.  It globs `startup-state-*.txt`, sorts lexicographically (ISO basic
+timestamp prefix → chronological), and unlinks everything beyond the 10 most
+recent.  Non-matching files in the directory are not touched.
+
+**Robustness.** `write_startup_dump` is wrapped in a broad `try/except`; any
+fetch or write error is logged as a warning and swallowed.  The task is
+scheduled via `asyncio.create_task` and a reference is held so it can be
+cleanly cancelled on shutdown if still running.
+
+**Location.** Module is `backend/app/core/state_dump.py`.  Files land in
+`{DATA_DIR}/state-dumps/startup-state-<UTC ISO basic ts>.txt`.
+
 ## 2026-06-11 — HelpTip component for in-place UI help
 
 **Component design.** `HelpTip` (`frontend/src/components/HelpTip.tsx`) renders a small circled `?` button (14 px, tabIndex=0) that shows a plain-text tooltip on hover, keyboard focus, and tap/click. Tooltip appears above the icon (`bottom-full`, `z-50`), max width 18 rem, dark-mode aware (`bg-gray-800`/`bg-gray-700`). Escape or blur closes; no layout shift (absolutely positioned). Optional `learnMoreHref` renders a "Learn more ↗" link that navigates in-app (`/docs/<slug>`) or opens externally (`target=_blank`).

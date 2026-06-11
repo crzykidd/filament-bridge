@@ -117,6 +117,7 @@ cost, color) are synced by dedicated passes and need no mapping — see
 | `BRIDGE_COMMIT` | No | — | Short git SHA baked in at image build time (`GIT_COMMIT` build arg); shown in the dev version label. |
 | `LOG_LEVEL` | No | `info` | Logging verbosity: `debug`, `info`, `warn`, `error`. JSON logs go to stdout; rotation is your Docker logging driver's job. |
 | `DISCORD_WEBHOOK_URL` | No | — | Declared for future conflict/error notifications; delivery is not yet implemented. |
+| `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable snapshot of both upstream systems at boot to `{DATA_DIR}/state-dumps/startup-state-<UTC ts>.txt`. Runs as a background task (never delays startup). The newest 10 dump files are kept; older ones are pruned automatically. **Never enable in production.** |
 
 ---
 

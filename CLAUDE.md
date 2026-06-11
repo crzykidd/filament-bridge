@@ -255,6 +255,7 @@ filament-bridge/
 | `AUTH_ENABLED` | No | `true` | When `false`, auth is fully bypassed (open app). Set to `false` for locked-out recovery: disable → change password in Settings → re-enable. |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `DATA_DIR` | No | `/data` | Directory for SQLite database and backup files |
+| `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable snapshot of both upstream systems at boot to `{DATA_DIR}/state-dumps/startup-state-<UTC ts>.txt`. Newest 10 dumps are kept. Never enable in production. |
 
 ### Runtime-editable settings (BridgeConfig)
 

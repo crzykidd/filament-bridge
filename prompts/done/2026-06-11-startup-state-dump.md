@@ -1,10 +1,13 @@
 ---
 name: 2026-06-11-startup-state-dump
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: >
+  Implemented DEBUG_STARTUP_DUMP — env-gated background task writes
+  {DATA_DIR}/state-dumps/startup-state-<ts>.txt at boot; retains newest 10;
+  17 new tests, 924 suite total green.
 ---
 
 # Task: Debug startup state dump — write a txt snapshot of Spoolman + Filament DB records at boot
