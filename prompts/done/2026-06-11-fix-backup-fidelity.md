@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-fix-backup-fidelity
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Fixed export omissions for is_synthetic_parent and conflict_type; fixed synthetic-parent NULL-upsert key; added security.md note; added decisions.md entry; 5 new tests; 901/901 pass.
 ---
 
 # Task: Backup export/import — preserve `is_synthetic_parent` + `conflict_type`
