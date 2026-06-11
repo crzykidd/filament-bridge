@@ -49,6 +49,7 @@ from app.core.planner import (
 from app.core.weight import DEFAULT_TARE_GRAMS, fdb_to_spoolman_net, spoolman_to_fdb_gross
 from app.db import get_db
 from app.models.mapping import FilamentMapping, SpoolMapping
+from app.models.snapshot import Snapshot
 from app.schemas.api import (
     AmbiguousRow,
     ContainerNameOverride,
@@ -876,6 +877,66 @@ def _seed_snapshots(db: Session, sm_spool, fdb_spool_obj: FDBSpool) -> None:
                        getattr(sm_spool, "id", "?"), sm_spool, exc)
 
 
+def _delete_stale_filament_mapping(db: Session, stale: FilamentMapping) -> None:
+    """Delete a stale FilamentMapping and its associated Snapshot rows.
+
+    Called before writing a fresh mapping so there is exactly one correct mapping
+    afterward and no orphan row remains.  Mirrors _cleanup_orphaned_mapping in
+    api/conflicts.py.  Best-effort: warns on failure but never raises.
+    """
+    try:
+        if stale.spoolman_filament_id is not None:
+            db.query(Snapshot).filter_by(
+                source="spoolman", entity_type="filament",
+                entity_id=str(stale.spoolman_filament_id),
+            ).delete()
+        if stale.filamentdb_id:
+            db.query(Snapshot).filter_by(
+                source="filamentdb", entity_type="filament",
+                entity_id=stale.filamentdb_id,
+            ).delete()
+        db.delete(stale)
+        db.flush()
+        logger.info(
+            "wizard execute: deleted stale FilamentMapping SM %s → FDB %s",
+            stale.spoolman_filament_id, stale.filamentdb_id,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "wizard execute: could not delete stale FilamentMapping SM %s → FDB %s: %s",
+            stale.spoolman_filament_id, stale.filamentdb_id, exc,
+        )
+
+
+def _delete_stale_spool_mapping(db: Session, stale: SpoolMapping) -> None:
+    """Delete a stale SpoolMapping and its associated Snapshot rows.
+
+    Called before writing a fresh spool mapping so there is exactly one correct
+    mapping afterward.  Mirrors _cleanup_orphaned_mapping in api/conflicts.py.
+    Best-effort: warns on failure but never raises.
+    """
+    try:
+        db.query(Snapshot).filter_by(
+            source="spoolman", entity_type="spool",
+            entity_id=str(stale.spoolman_spool_id),
+        ).delete()
+        db.query(Snapshot).filter_by(
+            source="filamentdb", entity_type="spool",
+            entity_id=stale.filamentdb_spool_id,
+        ).delete()
+        db.delete(stale)
+        db.flush()
+        logger.info(
+            "wizard execute: deleted stale SpoolMapping SM spool %s → FDB spool %s",
+            stale.spoolman_spool_id, stale.filamentdb_spool_id,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "wizard execute: could not delete stale SpoolMapping SM spool %s → FDB spool %s: %s",
+            stale.spoolman_spool_id, stale.filamentdb_spool_id, exc,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — Reconcile helpers
 # ---------------------------------------------------------------------------
@@ -1513,6 +1574,12 @@ async def _execute_spoolman_to_fdb(
                 )
 
         fil_map = fil_map_by_sm.get(item.sm_filament.id)
+        # When the planner flagged a stale FilamentMapping (FDB target deleted), the
+        # fil_map_by_sm dict may still contain the stale row (it was loaded before the
+        # plan ran).  Replace it with a fresh mapping pointing to the new FDB filament.
+        if item.stale_filament_mapping is not None and fil_map is item.stale_filament_mapping:
+            _delete_stale_filament_mapping(db, item.stale_filament_mapping)
+            fil_map = None  # fall through to the create-new-mapping branch below
         if fil_map is None:
             fil_map = FilamentMapping(
                 spoolman_filament_id=item.sm_filament.id,
@@ -1557,6 +1624,9 @@ async def _execute_spoolman_to_fdb(
                     spool_item.sm_spool.id,
                     {"extra": _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_fdb_id)}
                 )
+                # Clean up stale SpoolMapping (FDB spool target was deleted) before writing fresh one.
+                if spool_item.stale_spool_mapping is not None:
+                    _delete_stale_spool_mapping(db, spool_item.stale_spool_mapping)
                 db.add(SpoolMapping(
                     spoolman_spool_id=spool_item.sm_spool.id,
                     filamentdb_filament_id=fdb_id,

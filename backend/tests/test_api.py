@@ -1090,9 +1090,26 @@ def test_wizard_execute_creates_missing_fdb_filament(db):
 
 
 def test_wizard_execute_idempotent_rerun_no_duplicates(db):
-    """A re-run over already-linked records creates nothing new."""
-    spoolman, filamentdb = _setup_link_execute(db)
-    # Simulate a prior (partial) run that already persisted the mappings.
+    """A re-run over already-linked records creates nothing new.
+
+    The SpoolMapping must reference a spool that still exists in FDB (fdb-spool-1);
+    otherwise the mapping is treated as stale and a re-create is triggered (correct
+    behaviour for the deleted-FDB-record case — tested separately below).
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", color_hex="red",
+                                    vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0)],
+    )
+    # FDB has the spool that the SpoolMapping references (fdb-spool-1), not a different one.
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "fdb-spool-1", 1000.0)])
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "fdb-spool-1"})
+
+    # Simulate a prior run that already persisted the mappings.
     fm = FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1")
     db.add(fm)
     db.flush()

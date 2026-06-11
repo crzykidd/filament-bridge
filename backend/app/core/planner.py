@@ -163,6 +163,9 @@ class _FilamentPlanItem:
     error: str | None = None
     variant_master_sm_id: int | None = None  # set when this SM filament is a variant
     prop_conflicts: list = dc_field(default_factory=list)  # list[dict] from sm_prop_conflicts
+    # When a FilamentMapping exists but its FDB target is gone, it is recorded here
+    # so wizard_execute can delete it before writing the fresh mapping.
+    stale_filament_mapping: object = None  # FilamentMapping | None
 
 
 @dataclass
@@ -176,6 +179,9 @@ class _SpoolPlanItem:
     tare_source: str = "default"  # "spoolman" | "default"
     used_tare: float = 0.0
     detail: str | None = None
+    # When a SpoolMapping exists but its FDB spool target is gone, it is recorded here
+    # so wizard_execute can delete it before writing the fresh mapping.
+    stale_spool_mapping: object = None  # SpoolMapping | None
 
 
 @dataclass
@@ -313,24 +319,43 @@ def _plan_spoolman_to_fdb(
     fil_map_by_sm: dict[int, FilamentMapping] = {
         m.spoolman_filament_id: m for m in db.query(FilamentMapping).all()
     }
-    mapped_sm_spool_ids: set[int] = {m.spoolman_spool_id for m in db.query(SpoolMapping).all()}
+    # Build a lookup of all SpoolMapping rows keyed by SM spool id for stale validation.
+    spool_map_by_sm_spool_id: dict[int, SpoolMapping] = {
+        m.spoolman_spool_id: m for m in db.query(SpoolMapping).all()
+    }
+    mapped_sm_spool_ids: set[int] = set(spool_map_by_sm_spool_id.keys())
 
     # ---- Phase A: resolve each SM filament → planned FDB action ----
     for sm_fil in sm_filaments:
         existing = fil_map_by_sm.get(sm_fil.id)
         if existing is not None:
-            item = _FilamentPlanItem(
-                sm_filament=sm_fil, action="skip",
-                fdb_id=existing.filamentdb_id, resolved=True, detail="already linked",
+            # Validate that the mapping's FDB target still exists.
+            # If the FDB filament was deleted the mapping is stale: don't skip it,
+            # fall through to the normal decision logic and mark it for cleanup.
+            if existing.filamentdb_id in fdb_by_id:
+                item = _FilamentPlanItem(
+                    sm_filament=sm_fil, action="skip",
+                    fdb_id=existing.filamentdb_id, resolved=True, detail="already linked",
+                )
+                plan.filament_items.append(item)
+                continue
+            # Stale mapping — FDB filament is gone. Fall through to decision logic
+            # and flag the stale mapping for removal on execute.
+            logger.debug(
+                "planner: SM filament %s has FilamentMapping → FDB %s which no longer exists "
+                "(stale); routing through decision logic",
+                sm_fil.id, existing.filamentdb_id,
             )
-            plan.filament_items.append(item)
-            continue
+            _stale_fil_mapping: FilamentMapping | None = existing
+        else:
+            _stale_fil_mapping = None
 
         decision = decisions_by_sm.get(sm_fil.id)
         if decision is None or decision.get("action") == "skip":
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="skip", resolved=False,
                 detail="no decision" if decision is None else "user skipped",
+                stale_filament_mapping=_stale_fil_mapping,
             )
             plan.filament_items.append(item)
             continue
@@ -342,11 +367,13 @@ def _plan_spoolman_to_fdb(
                 item = _FilamentPlanItem(
                     sm_filament=sm_fil, action="skip", fdb_id=fdb_id, resolved=False,
                     error="link target filament not found",
+                    stale_filament_mapping=_stale_fil_mapping,
                 )
             else:
                 item = _FilamentPlanItem(
                     sm_filament=sm_fil, action="link",
                     fdb_id=fdb_id, resolved=True, detail="linked",
+                    stale_filament_mapping=_stale_fil_mapping,
                 )
             plan.filament_items.append(item)
         elif action == "create":
@@ -356,15 +383,22 @@ def _plan_spoolman_to_fdb(
             payload = _fdb_filament_payload_from_sm(
                 sm_fil, effective_cost=cost, spools=fil_spools, resolved_tare=tare,
             )
+            detail = (
+                "stale mapping (FDB filament gone) — recreating"
+                if _stale_fil_mapping else None
+            )
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="create",
                 fdb_id=None, fdb_payload=payload, resolved=True,
+                detail=detail,
+                stale_filament_mapping=_stale_fil_mapping,
             )
             plan.filament_items.append(item)
         else:
             item = _FilamentPlanItem(
                 sm_filament=sm_fil, action="skip", resolved=False,
                 error=f"unknown action '{action}'",
+                stale_filament_mapping=_stale_fil_mapping,
             )
             plan.filament_items.append(item)
 
@@ -426,13 +460,35 @@ def _plan_spoolman_to_fdb(
             xref = decode_extra_value(
                 sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
             )
-            # A live SpoolMapping always causes a skip (the spool is already paired).
+            # A live SpoolMapping causes a skip only when its FDB spool target still exists.
+            # If the SpoolMapping references a deleted FDB spool, it is stale: treat as
+            # create and mark the stale mapping for removal on execute.
+            _stale_spool_mapping: SpoolMapping | None = None
+            if sm_spool.id in mapped_sm_spool_ids:
+                spool_map = spool_map_by_sm_spool_id[sm_spool.id]
+                if spool_map.filamentdb_spool_id in _fdb_spool_ids:
+                    # Valid mapping — skip as already linked.
+                    plan.spool_items.append(_SpoolPlanItem(
+                        sm_spool=sm_spool, fil_item=item, action="skip",
+                        skip_fdb_spool_id=spool_map.filamentdb_spool_id,
+                        fdb_filament_id=item.fdb_id,
+                        detail="already linked",
+                    ))
+                    continue
+                # Stale mapping — FDB spool is gone. Flag for cleanup and fall through.
+                logger.debug(
+                    "planner: SM spool %s has SpoolMapping → FDB spool %s which no longer "
+                    "exists (stale); routing through create",
+                    sm_spool.id, spool_map.filamentdb_spool_id,
+                )
+                _stale_spool_mapping = spool_map
+
             # A cross-ref (filamentdb_spool_id extra) only causes a skip when the
             # referenced FDB spool still exists — a stale xref (pointing at a deleted
             # spool) is treated as a create so the import proceeds normally and the
             # write-back overwrites the stale id automatically.
             xref_is_live = bool(xref) and xref in _fdb_spool_ids
-            if sm_spool.id in mapped_sm_spool_ids or xref_is_live:
+            if xref_is_live:
                 plan.spool_items.append(_SpoolPlanItem(
                     sm_spool=sm_spool, fil_item=item, action="skip",
                     skip_fdb_spool_id=xref or None,
@@ -453,6 +509,7 @@ def _plan_spoolman_to_fdb(
                 planned_gross=gross_res.total_weight,
                 tare_source="default" if gross_res.used_default_tare else "spoolman",
                 used_tare=gross_res.total_weight - (sm_spool.remaining_weight or 0.0),
+                stale_spool_mapping=_stale_spool_mapping,
             ))
 
     return plan

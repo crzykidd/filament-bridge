@@ -7,7 +7,7 @@ Covers:
 """
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -22,6 +22,7 @@ from app.core.planner import _fdb_filament_payload_from_sm, _filament_base_name,
 from app.core.weight import DEFAULT_TARE_GRAMS
 from app.db import Base, get_db
 from app.models.config import seed_defaults
+from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
@@ -705,3 +706,297 @@ def test_patch_fdb_name_plain_color_gets_qualified(db):
     sm = SpoolmanFilament(id=2, name="Light Blue", vendor=elegoo, material="PLA", weight=1000.0)
     result = _patch_fdb_name(sm)
     assert result == "ELEGOO PLA Light Blue"
+
+
+# ---------------------------------------------------------------------------
+# Stale FilamentMapping / SpoolMapping validation
+# ---------------------------------------------------------------------------
+# When a local mapping exists but its FDB target has been deleted, the planner
+# must treat the mapping as stale: route through the normal decision logic
+# (create/link instead of skip) and expose the stale mapping for cleanup on
+# execute.  When the FDB target still exists, the existing "skip / already
+# linked" behaviour must be unchanged.
+# ---------------------------------------------------------------------------
+
+
+def _add_filament_mapping(db, sm_filament_id: int, filamentdb_id: str):
+    """Insert a FilamentMapping row and return it."""
+    fm = FilamentMapping(spoolman_filament_id=sm_filament_id, filamentdb_id=filamentdb_id)
+    db.add(fm)
+    db.flush()
+    return fm
+
+
+def _add_spool_mapping(db, sm_spool_id: int, fdb_filament_id: str, fdb_spool_id: str, fil_map_id=None):
+    """Insert a SpoolMapping row and return it."""
+    sm = SpoolMapping(
+        spoolman_spool_id=sm_spool_id,
+        filamentdb_filament_id=fdb_filament_id,
+        filamentdb_spool_id=fdb_spool_id,
+        filament_mapping_id=fil_map_id,
+    )
+    db.add(sm)
+    db.flush()
+    return sm
+
+
+def test_stale_filament_mapping_routes_to_create(db):
+    """When a FilamentMapping exists but filamentdb_id is NOT in the live FDB fetch,
+    the planner must plan action='create' (not 'skip') and set stale_filament_mapping."""
+    sm_fil = _sm_filament(fid=1, name="ELEGOO PLA Red", weight=1000.0)
+    sm_sp = _sm_spool(101, sm_fil, remaining=500.0)
+    # FDB has no filament with id "deleted-fdb-fil" — the mapping is stale.
+    fdb_fil = _make_fdb_filament("live-fdb-fil", ["live-spool-aaa"])
+    _add_filament_mapping(db, sm_filament_id=1, filamentdb_id="deleted-fdb-fil")
+    db.commit()
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 1, "action": "create"}],
+    )
+
+    assert len(plan.filament_items) == 1
+    item = plan.filament_items[0]
+    assert item.action == "create", (
+        f"Expected 'create' for stale mapping, got '{item.action}'"
+    )
+    assert item.stale_filament_mapping is not None, (
+        "stale_filament_mapping must be set so execute can clean it up"
+    )
+    assert item.stale_filament_mapping.filamentdb_id == "deleted-fdb-fil"
+
+
+def test_valid_filament_mapping_still_skips(db):
+    """When a FilamentMapping exists and filamentdb_id IS in the live FDB fetch,
+    the planner must keep the existing 'skip / already linked' behaviour."""
+    sm_fil = _sm_filament(fid=2, name="ELEGOO PLA Blue", weight=1000.0)
+    sm_sp = _sm_spool(102, sm_fil, remaining=500.0)
+    # FDB has the filament the mapping points to — mapping is valid.
+    fdb_fil = _make_fdb_filament("still-valid-fdb-fil", ["spool-xyz"])
+    _add_filament_mapping(db, sm_filament_id=2, filamentdb_id="still-valid-fdb-fil")
+    db.commit()
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 2, "action": "create"}],
+    )
+
+    assert len(plan.filament_items) == 1
+    item = plan.filament_items[0]
+    assert item.action == "skip", (
+        f"Expected 'skip' for valid mapping, got '{item.action}'"
+    )
+    assert item.detail == "already linked"
+    assert item.stale_filament_mapping is None
+
+
+def test_stale_spool_mapping_routes_to_create(db):
+    """When a SpoolMapping exists but filamentdb_spool_id is NOT in the live FDB spool ids,
+    the planner must plan action='create' (not 'skip') and set stale_spool_mapping."""
+    sm_fil = _sm_filament(fid=3, name="ELEGOO PLA Green", weight=1000.0)
+    sm_sp = _sm_spool(103, sm_fil, remaining=400.0)
+    # FDB has a filament but with a DIFFERENT spool id (simulates user deleting the spool).
+    fdb_fil = _make_fdb_filament("fdb-fil-3", ["current-spool-bbb"])
+    # SpoolMapping points to a spool that no longer exists in FDB.
+    stale_sm = _add_spool_mapping(db, sm_spool_id=103, fdb_filament_id="fdb-fil-3",
+                                   fdb_spool_id="deleted-fdb-spool")
+    db.commit()
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 3, "action": "create"}],
+    )
+
+    spool_items = [si for si in plan.spool_items if si.sm_spool.id == 103]
+    assert len(spool_items) == 1, f"Expected 1 spool item for SM spool 103, got {len(spool_items)}"
+    si = spool_items[0]
+    assert si.action == "create", (
+        f"Expected 'create' for stale spool mapping, got '{si.action}'"
+    )
+    assert si.stale_spool_mapping is not None, (
+        "stale_spool_mapping must be set so execute can clean it up"
+    )
+    assert si.stale_spool_mapping.filamentdb_spool_id == "deleted-fdb-spool"
+
+
+def test_valid_spool_mapping_still_skips(db):
+    """When a SpoolMapping exists and filamentdb_spool_id IS in the live FDB spool ids,
+    the planner must keep the existing 'skip / already linked' behaviour."""
+    sm_fil = _sm_filament(fid=4, name="ELEGOO PLA White", weight=1000.0)
+    sm_sp = _sm_spool(104, sm_fil, remaining=600.0)
+    # FDB has the spool the mapping points to — mapping is valid.
+    fdb_fil = _make_fdb_filament("fdb-fil-4", ["live-fdb-spool-ccc"])
+    _add_spool_mapping(db, sm_spool_id=104, fdb_filament_id="fdb-fil-4",
+                       fdb_spool_id="live-fdb-spool-ccc")
+    db.commit()
+
+    plan = _run_planner(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[fdb_fil],
+        decisions=[{"spoolman_filament_id": 4, "action": "create"}],
+    )
+
+    spool_items = [si for si in plan.spool_items if si.sm_spool.id == 104]
+    assert len(spool_items) == 1
+    si = spool_items[0]
+    assert si.action == "skip", (
+        f"Expected 'skip' for valid spool mapping, got '{si.action}'"
+    )
+    assert si.stale_spool_mapping is None
+
+
+def test_stale_filament_mapping_execute_replaces_mapping(db):
+    """Execute: stale FilamentMapping is deleted; fresh mapping is written; no orphan remains.
+
+    Uses the wizard execute endpoint (via TestClient) to verify end-to-end that:
+    1. The stale FilamentMapping is removed.
+    2. A fresh FilamentMapping pointing to the newly-created FDB filament is written.
+    3. No orphan row is left behind (exactly one FilamentMapping after execute).
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 5, "action": "create"}])
+    db.commit()
+
+    sm_fil = SpoolmanFilament(
+        id=5, name="ELEGOO PLA Yellow",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA", weight=1000.0,
+    )
+    sm_sp = SpoolmanSpool(id=501, filament=sm_fil, remaining_weight=750.0, archived=False, extra={})
+    # FDB has no filament matching the stale mapping target ("old-fdb-fil").
+    fdb_fil_new = _make_fdb_filament("brand-new-fdb-fil", ["new-spool-ddd"])
+
+    spoolman_client = AsyncMock()
+    spoolman_client.get_filaments = AsyncMock(return_value=[sm_fil])
+    spoolman_client.get_spools = AsyncMock(return_value=[sm_sp])
+    spoolman_client.update_spool = AsyncMock(return_value=None)
+    spoolman_client.get_field_definitions = AsyncMock(return_value=[])
+
+    created_fdb_fil = MagicMock()
+    created_fdb_fil.id = "brand-new-fdb-fil"
+
+    filamentdb_client = AsyncMock()
+    filamentdb_client.get_filaments = AsyncMock(return_value=[fdb_fil_new])
+    filamentdb_client.get_filament = AsyncMock(return_value=None)
+    filamentdb_client.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb_client.create_filament = AsyncMock(return_value=created_fdb_fil)
+    filamentdb_client.create_spool = AsyncMock(return_value={"_id": "new-spool-exec"})
+    filamentdb_client.get_locations = AsyncMock(return_value=[])
+
+    # Seed the stale FilamentMapping (points to "old-fdb-fil" which is NOT in FDB).
+    stale_fm = FilamentMapping(spoolman_filament_id=5, filamentdb_id="old-fdb-fil")
+    db.add(stale_fm)
+    db.commit()
+    stale_fm_id = stale_fm.id
+
+    app = FastAPI()
+    app.include_router(wizard.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = spoolman_client
+    app.state.filamentdb = filamentdb_client
+    client = TestClient(app)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed"] == 0
+
+    # Stale mapping must be gone; a fresh one pointing to the new FDB id must exist.
+    # NOTE: SQLite may re-use id=1 after DELETE+INSERT on an empty table, so we
+    # check the filamentdb_id value, not the row id.
+    all_maps = db.query(FilamentMapping).filter_by(is_synthetic_parent=False).all()
+    assert len(all_maps) == 1, f"Expected exactly 1 FilamentMapping, got {len(all_maps)}"
+    fresh = all_maps[0]
+    assert fresh.filamentdb_id == "brand-new-fdb-fil", (
+        f"Fresh mapping should point to 'brand-new-fdb-fil' (stale 'old-fdb-fil' must be "
+        f"gone), got '{fresh.filamentdb_id}'"
+    )
+    assert fresh.spoolman_filament_id == 5, (
+        f"Fresh mapping should be for SM filament 5, got {fresh.spoolman_filament_id}"
+    )
+
+
+def test_stale_spool_mapping_execute_replaces_mapping(db):
+    """Execute: stale SpoolMapping is deleted; fresh mapping is written; no orphan remains.
+
+    Verifies end-to-end that after execute with a stale SpoolMapping:
+    1. The stale SpoolMapping is removed.
+    2. A fresh SpoolMapping is written with the new FDB spool id.
+    3. Exactly one SpoolMapping row remains after execute.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 6, "action": "create"}])
+    db.commit()
+
+    sm_fil = SpoolmanFilament(
+        id=6, name="ELEGOO PLA Orange",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA", weight=1000.0,
+    )
+    sm_sp = SpoolmanSpool(id=601, filament=sm_fil, remaining_weight=800.0, archived=False, extra={})
+    # FDB has a filament with a spool "current-spool-eee" (not the stale "old-spool-fff").
+    fdb_fil = _make_fdb_filament("fdb-fil-6", ["current-spool-eee"])
+
+    spoolman_client = AsyncMock()
+    spoolman_client.get_filaments = AsyncMock(return_value=[sm_fil])
+    spoolman_client.get_spools = AsyncMock(return_value=[sm_sp])
+    spoolman_client.update_spool = AsyncMock(return_value=None)
+    spoolman_client.get_field_definitions = AsyncMock(return_value=[])
+
+    created_fdb_fil = MagicMock()
+    created_fdb_fil.id = "fdb-fil-6"
+
+    filamentdb_client = AsyncMock()
+    filamentdb_client.get_filaments = AsyncMock(return_value=[fdb_fil])
+    filamentdb_client.get_filament = AsyncMock(return_value=None)
+    filamentdb_client.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb_client.create_filament = AsyncMock(return_value=created_fdb_fil)
+    filamentdb_client.create_spool = AsyncMock(return_value={"_id": "fresh-spool-zzz"})
+    filamentdb_client.get_locations = AsyncMock(return_value=[])
+
+    # Seed the stale SpoolMapping (points to "old-spool-fff" which is NOT in FDB).
+    stale_sm = SpoolMapping(
+        spoolman_spool_id=601,
+        filamentdb_filament_id="fdb-fil-6",
+        filamentdb_spool_id="old-spool-fff",
+    )
+    db.add(stale_sm)
+    db.commit()
+    stale_sm_id = stale_sm.id
+
+    app = FastAPI()
+    app.include_router(wizard.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = spoolman_client
+    app.state.filamentdb = filamentdb_client
+    client = TestClient(app)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed"] == 0
+
+    # Stale spool mapping must be gone; a fresh one with the new FDB spool id must exist.
+    # NOTE: SQLite may re-use id=1 after DELETE+INSERT on an empty table, so we
+    # check the filamentdb_spool_id value, not the row id.
+    all_spool_maps = db.query(SpoolMapping).all()
+    assert len(all_spool_maps) == 1, f"Expected exactly 1 SpoolMapping, got {len(all_spool_maps)}"
+    fresh = all_spool_maps[0]
+    assert fresh.filamentdb_spool_id == "fresh-spool-zzz", (
+        f"Fresh spool mapping should point to 'fresh-spool-zzz' (stale 'old-spool-fff' should "
+        f"be gone), got '{fresh.filamentdb_spool_id}'"
+    )
+    assert fresh.spoolman_spool_id == 601, (
+        f"Fresh spool mapping should be for SM spool 601, got {fresh.spoolman_spool_id}"
+    )

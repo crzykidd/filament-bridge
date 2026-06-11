@@ -1,5 +1,31 @@
 # Decision record
 
+## 2026-06-10 — Wizard planner validates mappings against live FDB; stale → recreate + replace
+
+When the wizard planner (`core/planner.py:_plan_spoolman_to_fdb`) encounters a local
+`FilamentMapping` or `SpoolMapping` whose FDB target no longer exists (user deleted the
+FDB record but the bridge mapping lingered), it now treats the mapping as **stale** rather
+than skipping the record as "already linked".
+
+**Phase A (filament):** if `existing.filamentdb_id` is not present in the live `fdb_by_id`
+index → stale: store the mapping on `_FilamentPlanItem.stale_filament_mapping`, skip the
+"already linked" path, and route through the normal decision logic (create/link). The plan
+item carries `detail="stale mapping (FDB filament gone) — recreating"` for logging.
+
+**Phase C (spool):** if a `SpoolMapping` row exists for the SM spool but its
+`filamentdb_spool_id` is not in the live FDB spool-id set → stale: store the mapping on
+`_SpoolPlanItem.stale_spool_mapping` and route as a create instead of a skip.
+
+**Execute cleanup (`api/wizard.py`):** two new helpers — `_delete_stale_filament_mapping`
+and `_delete_stale_spool_mapping` — delete the stale row + its `Snapshot` rows before
+writing the fresh mapping, leaving exactly one correct mapping and no orphan. The filament
+mapping helper also handles the case where `fil_map_by_sm` (loaded before the plan) still
+holds the stale object: the execute path checks `fil_map is item.stale_filament_mapping`
+and replaces it.
+
+This fix is scoped to the wizard re-import path only. Engine-side stale-mapping purging is
+a separate prompt (`prompts/2026-06-10-purge-stale-orphaned-mappings.md`).
+
 ## 2026-06-10 — Debug: added POST /api/debug/full-reset
 
 Added a third debug endpoint that performs both one-sided cleanups in a single
