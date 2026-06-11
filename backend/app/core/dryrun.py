@@ -15,6 +15,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.api.config import get_config_value
 from app.config import settings as _settings
 from app.core.engine import CycleResult, _preview_label, _read_config, run_sync_cycle
 from app.core.matcher import match_filaments
@@ -29,6 +30,19 @@ def _filament_label(sm: SpoolmanFilament) -> str:
     vendor = sm.vendor.name if sm.vendor else ""
     base = " ".join(p for p in [vendor, sm.name, sm.color_hex] if p)
     return base or f"SM filament #{sm.id}"
+
+
+def _resolve_variant_keywords(db) -> list[str]:
+    """Return the effective variant-line keyword list (BridgeConfig override > env default)."""
+    raw: str = get_config_value(db, "variant_line_keywords", _settings.variant_line_keywords)
+    seen: set[str] = set()
+    result: list[str] = []
+    for kw in raw.split(","):
+        kw = kw.strip().lower()
+        if kw and kw not in seen:
+            seen.add(kw)
+            result.append(kw)
+    return result
 
 
 async def plan_dry_run(db: Session, spoolman, filamentdb) -> CycleResult:
@@ -124,6 +138,11 @@ async def plan_dry_run(db: Session, spoolman, filamentdb) -> CycleResult:
     # 6. Matcher-driven plan for unlinked SM filaments (spoolman→filamentdb only).
     config = _read_config(db)
     import_direction = config.get("import_direction", "spoolman")
+    # Read wizard-consistent settings from BridgeConfig so the dry-run preview
+    # matches what the wizard preview and execute would do.
+    never_import_empties = bool(get_config_value(db, "never_import_empties", False))
+    include_empty_spools = not never_import_empties
+    variant_keywords = _resolve_variant_keywords(db)
     unlinked_sm_filaments = [f for f in sm_filaments if f.id not in mapped_sm_filament_ids]
 
     if not unlinked_sm_filaments or import_direction != "spoolman":
@@ -188,6 +207,8 @@ async def plan_dry_run(db: Session, spoolman, filamentdb) -> CycleResult:
         db, sm_filaments, sm_spools, fdb_filaments,
         decisions_by_sm, {}, {},
         precision=precision,
+        include_empty_spools=include_empty_spools,
+        variant_keywords=variant_keywords,
     )
 
     # Emit filament-level plan entries.

@@ -81,15 +81,36 @@ class SpoolmanClient:
     # Read methods
     # ------------------------------------------------------------------
 
+    _PAGE_SIZE = 1000  # records per page for paginated list endpoints
+
+    async def _paginate(self, path: str, extra_params: dict | None = None) -> list[dict]:
+        """Fetch all pages from a Spoolman list endpoint using offset pagination.
+
+        Requests pages of _PAGE_SIZE until a page shorter than _PAGE_SIZE is returned,
+        then concatenates all pages.  ``extra_params`` are merged into every request.
+        """
+        base_params = dict(extra_params or {})
+        results: list[dict] = []
+        offset = 0
+        while True:
+            params = {**base_params, "limit": self._PAGE_SIZE, "offset": offset}
+            resp = await self._http.get(path, params=params)
+            resp.raise_for_status()
+            page: list[dict] = resp.json()
+            results.extend(page)
+            if len(page) < self._PAGE_SIZE:
+                break
+            offset += self._PAGE_SIZE
+        return results
+
     async def get_spools(self) -> list[SpoolmanSpool]:
-        """Fetch all spools (active + archived).
+        """Fetch all spools (active + archived), handling pagination transparently.
 
         Caller is responsible for filtering archived spools:
             active = [s for s in spools if not s.archived]
         """
-        resp = await self._http.get("/api/v1/spool", params={"limit": 1000})
-        resp.raise_for_status()
-        return [SpoolmanSpool.model_validate(s) for s in resp.json()]
+        rows = await self._paginate("/api/v1/spool")
+        return [SpoolmanSpool.model_validate(s) for s in rows]
 
     async def get_spool(self, spool_id: int) -> SpoolmanSpool:
         resp = await self._http.get(f"/api/v1/spool/{spool_id}")
@@ -97,14 +118,12 @@ class SpoolmanClient:
         return SpoolmanSpool.model_validate(resp.json())
 
     async def get_filaments(self) -> list[SpoolmanFilament]:
-        resp = await self._http.get("/api/v1/filament", params={"limit": 1000})
-        resp.raise_for_status()
-        return [SpoolmanFilament.model_validate(f) for f in resp.json()]
+        rows = await self._paginate("/api/v1/filament")
+        return [SpoolmanFilament.model_validate(f) for f in rows]
 
     async def get_vendors(self) -> list[SpoolmanVendor]:
-        resp = await self._http.get("/api/v1/vendor", params={"limit": 1000})
-        resp.raise_for_status()
-        return [SpoolmanVendor.model_validate(v) for v in resp.json()]
+        rows = await self._paginate("/api/v1/vendor")
+        return [SpoolmanVendor.model_validate(v) for v in rows]
 
     async def get_field_definitions(self, entity_type: str) -> list[SpoolmanFieldDef]:
         """Fetch extra-field definitions for the given entity type (spool, filament, vendor)."""

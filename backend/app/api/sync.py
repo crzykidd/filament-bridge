@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-from app.api.config import get_config_value, set_config_value
+from app.api.config import _effective_sync_interval, get_config_value, set_config_value
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.api.mappings import build_mapping_rows
@@ -133,9 +133,11 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
     auto_enabled = bool(get_config_value(db, "auto_sync_enabled", False))
     # next_sync_at is approximated as last_sync + interval when auto-sync is on;
     # the APScheduler job is the real authority (see docs/decisions.md).
+    # Use _effective_sync_interval so the DB-overridden interval (from Settings) is
+    # reflected rather than the env-var default.
     next_sync_at: datetime.datetime | None = None
     if auto_enabled and last_sync_at is not None:
-        next_sync_at = last_sync_at + datetime.timedelta(seconds=settings.sync_interval_seconds)
+        next_sync_at = last_sync_at + datetime.timedelta(seconds=_effective_sync_interval(db))
 
     return SyncStatusResponse(
         last_sync_at=last_sync_at,

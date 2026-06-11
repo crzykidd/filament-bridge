@@ -317,4 +317,4 @@ GitHub release.
 - docker-compose made fully deployable; SPA route fallback added so browser-side navigation
   does not return 404.
 
-[Unreleased]: https://github.com/hyiger/filament-bridge/compare/HEAD...HEAD
+[Unreleased]: https://github.com/crzykidd/filament-bridge/compare/HEAD...HEAD

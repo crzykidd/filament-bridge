@@ -4,7 +4,7 @@
 # development/testing, use docker-compose.dev.yml instead.
 services:
   filament-bridge:
-    image: ghcr.io/hyiger/filament-bridge:latest
+    image: ghcr.io/crzykidd/filament-bridge:latest
     ports:
       - "8090:8090"
     volumes:

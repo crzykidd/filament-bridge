@@ -1,5 +1,39 @@
 # Decision record
 
+## 2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)
+
+Five independent bugs fixed in one pass (from the 2026-06-11 full-code audit):
+
+**B9 — Wrong published image in docker-compose.yml.**
+`docker-compose.yml` referenced `ghcr.io/hyiger/filament-bridge:latest` (the Filament DB
+author's namespace). Corrected to `ghcr.io/crzykidd/filament-bridge:latest` to match the
+registry declared in `.github/workflows/publish.yml` and `standards.md`. The same stale
+reference was fixed in `docs/decisions.md` and `CHANGELOG.md`.
+
+**B5 — Dashboard `next_sync_at` ignored the runtime interval.**
+`api/sync.py:sync_status` computed `next_sync_at` using `settings.sync_interval_seconds`
+(the env-var default), not the DB-overridden value stored in BridgeConfig. Fixed to use
+`_effective_sync_interval(db)` from `api/config.py`, the same helper used by the scheduler
+reschedule logic.
+
+**B7 — Spoolman pagination cap.**
+`services/spoolman.py` fetched a single page of 1 000 records for `get_spools`,
+`get_filaments`, and `get_vendors`. Libraries larger than 1 000 entries were silently
+truncated. Added a `_paginate()` helper that loops `limit=1000, offset=n*1000` until a
+short page is returned, and updated all three methods to use it.
+
+**Dashboard dry-run inconsistency with wizard settings.**
+`core/dryrun.py:plan_dry_run` called `_plan_spoolman_to_fdb` without
+`include_empty_spools` or `variant_keywords`, so empty-spool filtering and variant grouping
+diverged from what the wizard preview shows. Fixed to read both from BridgeConfig via
+`get_config_value` and `_resolve_variant_keywords` (inlined to avoid api→core cross-import),
+matching the logic in `api/wizard.py:wizard_preview`.
+
+**Settings interval copy mismatch.**
+The Settings page said "Minimum 30 seconds (0.5 min)…" but the input's `min` is 1 minute
+(values are whole minutes). Updated copy to "Minimum 1 minute. Takes effect immediately
+without a restart." (The 30 s API floor is irrelevant for UI callers.)
+
 ## 2026-06-11 — Backup export/import fidelity: `is_synthetic_parent`, `conflict_type`, and auth secrets
 
 **Bug A — `is_synthetic_parent` round-trip loss.**
@@ -774,7 +808,7 @@ which it does not.
 **Split:**
 
 - `docker-compose.yml` — bridge-only standard deployment. Uses the published image
-  (`ghcr.io/hyiger/filament-bridge:latest`), a single `bridge-data:/data` volume, and
+  (`ghcr.io/crzykidd/filament-bridge:latest`), a single `bridge-data:/data` volume, and
   placeholder `FILAMENTDB_URL` / `SPOOLMAN_URL` env vars pointing at the user's existing
   Spoolman and Filament DB instances. No `depends_on`, no upstream service definitions.
 - `docker-compose.dev.yml` — full local stack for development and testing. Builds the

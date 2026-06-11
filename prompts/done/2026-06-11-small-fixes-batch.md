@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-small-fixes-batch
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: All 5 fixes applied (compose image, interval, pagination, dry-run, Settings copy). 907 backend + 30 frontend tests green.
 ---
 
 # Task: Small-fix batch from the 2026-06-11 full-code audit

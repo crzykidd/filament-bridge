@@ -1333,6 +1333,41 @@ def test_sync_status_payload(db):
     assert set(body["systems"].keys()) == {"spoolman", "filamentdb"}
 
 
+def test_sync_status_next_sync_at_uses_db_interval(db):
+    """next_sync_at reflects the DB-overridden interval, not the env-var default."""
+    import datetime
+
+    # Enable auto-sync and store a fake last_sync timestamp.
+    set_config_value(db, "auto_sync_enabled", True)
+    set_config_value(db, "wizard_completed", True)
+    # Store a custom interval of 600 seconds in BridgeConfig.
+    set_config_value(db, "sync_interval_seconds", 600)
+    # Seed a sync log row so last_sync_at is not None.
+    ts = datetime.datetime(2025, 1, 1, 12, 0, 0)
+    db.add(SyncLog(
+        cycle_id="c1", direction="spoolman_to_filamentdb",
+        action="update", entity_type="spool", spoolman_id=1,
+        timestamp=ts,
+    ))
+    db.commit()
+
+    body = _client(db).get("/api/sync/status").json()
+    assert body["auto_sync_enabled"] is True
+    assert body["next_sync_at"] is not None
+    assert body["last_sync_at"] is not None
+    # next_sync_at should be last_sync + 600 s, not last_sync + env default (120 s).
+    # Parse both as naive datetimes and compare the delta.
+    def _naive(s: str) -> datetime.datetime:
+        return datetime.datetime.fromisoformat(s.replace("Z", "").split("+")[0])
+
+    last_sync = _naive(body["last_sync_at"])
+    next_sync = _naive(body["next_sync_at"])
+    delta = next_sync - last_sync
+    assert abs(delta.total_seconds() - 600) < 2, (
+        f"expected ~600 s interval, got {delta.total_seconds()}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sync log (FR-17)
 # ---------------------------------------------------------------------------

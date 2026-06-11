@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.api.config import set_config_value
 from app.config import settings
 from app.core.dryrun import plan_dry_run
 from app.core.engine import run_sync_cycle
@@ -381,3 +382,56 @@ async def test_run_sync_cycle_live_still_writes(db):
     assert fdb.log_usage.called, "live sync must call log_usage for weight decrease"
     assert result.dry_run is False
     assert result.updated >= 1
+
+
+# ---------------------------------------------------------------------------
+# Fix #6 — dry-run respects never_import_empties from BridgeConfig
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_respects_never_import_empties(db):
+    """Dry-run preview omits zero-weight spools when never_import_empties is on."""
+    set_config_value(db, "never_import_empties", True)
+    db.commit()
+
+    sm_fil = _sm_filament(1, "PLA Blue", vendor="ACME", color="#0000FF")
+    # One spool with remaining weight, one empty (0.0).
+    sm_sp_with_weight = _sm_spool(10, sm_fil, remaining=200.0)
+    sm_sp_empty = _sm_spool(11, sm_fil, remaining=0.0)
+
+    sm = _fake_spoolman(spools=[sm_sp_with_weight, sm_sp_empty], filaments=[sm_fil])
+    fdb = _fake_filamentdb(filaments=[])
+
+    result = await plan_dry_run(db, sm, fdb)
+
+    # Only the non-empty spool should appear as a create; the empty one is skipped.
+    spool_creates = [
+        p for p in result.preview
+        if p["action"] == "create" and p["entity_type"] == "spool"
+    ]
+    spool_spoolman_ids = {p.get("spoolman_id") for p in spool_creates}
+    assert 10 in spool_spoolman_ids, "non-empty spool should be a create"
+    assert 11 not in spool_spoolman_ids, "empty spool must be skipped when never_import_empties=True"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_includes_empties_when_setting_off(db):
+    """Dry-run preview includes zero-weight spools when never_import_empties is off (default)."""
+    # never_import_empties defaults to False — no explicit set needed.
+    sm_fil = _sm_filament(1, "PLA Blue", vendor="ACME", color="#0000FF")
+    sm_sp_with_weight = _sm_spool(10, sm_fil, remaining=200.0)
+    sm_sp_empty = _sm_spool(11, sm_fil, remaining=0.0)
+
+    sm = _fake_spoolman(spools=[sm_sp_with_weight, sm_sp_empty], filaments=[sm_fil])
+    fdb = _fake_filamentdb(filaments=[])
+
+    result = await plan_dry_run(db, sm, fdb)
+
+    spool_creates = [
+        p for p in result.preview
+        if p["action"] == "create" and p["entity_type"] == "spool"
+    ]
+    spool_spoolman_ids = {p.get("spoolman_id") for p in spool_creates}
+    assert 10 in spool_spoolman_ids
+    assert 11 in spool_spoolman_ids, "empty spool should be included when never_import_empties=False"

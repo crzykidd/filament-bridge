@@ -650,7 +650,7 @@ export default function Settings() {
             </p>
           )}
           <p className={subTextCls}>
-            Minimum 30 seconds (0.5 min). Takes effect immediately without a restart.
+            Minimum 1 minute. Takes effect immediately without a restart.
           </p>
         </div>
 
