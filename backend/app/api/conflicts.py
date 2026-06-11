@@ -145,6 +145,7 @@ def _to_response(c: Conflict, db: Session | None = None) -> ConflictResponse:
         status="resolved" if c.resolved_at is not None else "open",
         entity_type=c.entity_type,
         field_name=c.field_name,
+        conflict_type=getattr(c, "conflict_type", "cross_system") or "cross_system",
         spoolman_id=c.spoolman_id,
         filamentdb_filament_id=c.filamentdb_filament_id,
         filamentdb_spool_id=c.filamentdb_spool_id,

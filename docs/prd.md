@@ -227,6 +227,20 @@ Field names are configurable via environment variables.
 - Auto-match: if a Spoolman extra field name matches a Filament DB field name exactly, sync automatically (unless excluded via `FIELD_MAPPING_EXCLUDES`)
 - Explicit mapping: `FIELD_MAPPINGS=density=sm_density,temperatures.nozzle=nozzle_temp` overrides auto-match
 - Direction follows source-of-truth config for material properties
+- **Native shared filament scalars** — five fields with a direct FDB↔SM counterpart are synced by the dedicated `_sync_material_scalars` pass (Phase A, 2026-06-10):
+  - SM `material` ↔ FDB `type` (name remap)
+  - SM `density` ↔ FDB `density`
+  - SM `diameter` ↔ FDB `diameter`
+  - SM `spool_weight` ↔ FDB `spoolWeight`
+  - SM `weight` ↔ FDB `netFilamentWeight`
+  - These fields are handled OUTSIDE the generic extra-field mapper (they are native, not extra-field)
+  - Snapshots keyed `_mp_<sm_field>` coexist with `_mc_sig`, `_cost`, `_finish_sig` via `_merge_snapshot`
+  - **Master/variant gate (PUSH_SM_TO_FDB):**
+    - Standalone or already-overridden variant → write directly
+    - Inherited AND SM value matches resolved (inherited) value → skip (no redundant override)
+    - Inherited AND SM value diverges → queue `master_divergence` conflict (record-only; no write; Phase B owns apply)
+  - `conflict_type` column on `Conflict`: `"cross_system"` (standard both-sides-changed) or `"master_divergence"` (inherited-field divergence, pending Phase B)
+  - Per-field dedup: `_has_open_conflict` accepts `conflict_type` so cross_system and master_divergence conflicts on the same field+ids deduplicate independently
 
 #### FR-12: New record detection
 - When a new spool appears in Spoolman (no `filamentdb_spool_id` extra field):

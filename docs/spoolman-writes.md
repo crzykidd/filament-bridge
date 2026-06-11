@@ -43,6 +43,13 @@ lone change, one-way FDB→SM, or an FDB-winning conflict policy). See
 | Spool | `remaining_weight` (net; converted from FDB gross via `fdb_to_spoolman_net`) | Weight sync resolves FDB→SM for the pair |
 | Filament | `color_hex`, `multi_color_hexes`, `multi_color_direction` | Multicolor sync resolves FDB→SM (Filament DB ≥ 1.33.0) |
 | Filament | `price` | Cost sync resolves FDB→SM (filament price only — never per-spool price) |
+| Filament | `settings_bed_temp` | Temperature sync resolves FDB→SM (from FDB `temperatures.bed`) |
+| Filament | `settings_extruder_temp` | Temperature sync resolves FDB→SM (from FDB `temperatures.nozzle`) |
+| Filament | `material` | Native-scalar sync (FR-11 Phase A) resolves FDB→SM (`type` → `material` name remap) |
+| Filament | `density` | Native-scalar sync resolves FDB→SM |
+| Filament | `diameter` | Native-scalar sync resolves FDB→SM |
+| Filament | `spool_weight` | Native-scalar sync resolves FDB→SM (from FDB `spoolWeight`) |
+| Filament | `weight` | Native-scalar sync resolves FDB→SM (from FDB `netFilamentWeight`) |
 | Filament | `extra.filamentdb_material_tags` | Finish-tag sync resolves FDB→SM (Filament DB ≥ 1.33.0); JSON list of OpenPrintTag IDs from FDB `optTags` |
 | Spool | `extra.{mapped field}` | Generic field-mapping sync (FR-11) resolves FDB→SM; arbitrary mapped FDB fields stored as spool extras |
 

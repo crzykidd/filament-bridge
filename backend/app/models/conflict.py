@@ -22,3 +22,7 @@ class Conflict(Base):
     resolved_at: Mapped[object | None] = mapped_column(DateTime, nullable=True)
     resolution: Mapped[str | None] = mapped_column(String, nullable=True)  # "spoolman" | "filamentdb" | "manual"
     resolved_value: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-encoded
+    # "cross_system" (default) — both sides changed the same field.
+    # "master_divergence" — SM→FDB write would set a value on a variant that diverges
+    # from its inherited master; requires manual approval (Phase B) before applying.
+    conflict_type: Mapped[str] = mapped_column(String, nullable=False, server_default="cross_system")

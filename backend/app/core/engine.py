@@ -186,6 +186,7 @@ def _queue_conflict(
     fdb_spool_id: str | None = None,
     spoolman_value: Any = None,
     filamentdb_value: Any = None,
+    conflict_type: str = "cross_system",
 ) -> None:
     db.add(
         Conflict(
@@ -196,6 +197,7 @@ def _queue_conflict(
             field_name=field_name,
             spoolman_value=json.dumps(spoolman_value) if spoolman_value is not None else None,
             filamentdb_value=json.dumps(filamentdb_value) if filamentdb_value is not None else None,
+            conflict_type=conflict_type,
         )
     )
     _log(
@@ -267,6 +269,7 @@ def _has_open_conflict(
     spoolman_id: int | None = None,
     fdb_filament_id: str | None = None,
     fdb_spool_id: str | None = None,
+    conflict_type: str | None = None,
 ) -> bool:
     """Return True if there is already an open (unresolved) conflict for this combination.
 
@@ -274,6 +277,10 @@ def _has_open_conflict(
     when a both-changed pair cannot be auto-resolved (policy=manual or newest_wins
     fallback).  Mirrors the existing deletion-conflict dedup in
     ``_queue_deletion_conflict``.
+
+    When ``conflict_type`` is provided, the check is scoped to conflicts of that
+    type only — so a ``cross_system`` and a ``master_divergence`` conflict on the
+    same field+ids are treated as distinct and deduped independently.
     """
     q = (
         db.query(Conflict)
@@ -289,6 +296,8 @@ def _has_open_conflict(
         q = q.filter(Conflict.filamentdb_filament_id == fdb_filament_id)
     if fdb_spool_id is not None:
         q = q.filter(Conflict.filamentdb_spool_id == fdb_spool_id)
+    if conflict_type is not None:
+        q = q.filter(Conflict.conflict_type == conflict_type)
     return q.first() is not None
 
 
@@ -749,9 +758,16 @@ async def _sync_multicolor(
         sm_sig_then = sm_snap.get("_mc_sig") if sm_snap else None
         fdb_sig_then = fdb_snap.get("_mc_sig") if fdb_snap else None
 
+        # Capture the resolved FDB color hex for the Synced Records display (§3 in Phase A).
+        # Stored as _mc_color in the FDB filament snapshot alongside _mc_sig.
+        fdb_color_now = fdb_detail.color if fdb_detail else None
+
         def _store(sm_sig: str, fdb_sig: str) -> None:
             _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_mc_sig": sm_sig})
-            _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {"_mc_sig": fdb_sig})
+            _merge_snapshot(
+                db, "filamentdb", "filament", m.filamentdb_id,
+                {"_mc_sig": fdb_sig, "_mc_color": fdb_color_now},
+            )
 
         # First sight — store baseline, no write (matches the spool-pair baseline rule).
         if sm_sig_then is None or fdb_sig_then is None:
@@ -1108,6 +1124,13 @@ MATERIAL_PROP_TEMP_PAIRS: list[tuple[str, str, str]] = [
     ("nozzle_temp", "nozzle", "settings_extruder_temp"),
 ]
 
+# (label, FDB field name, Spoolman native filament field, normalizer).
+# These are the five native Spoolman filament fields that have a direct FDB filament
+# counterpart — synced as plain scalars (no sub-object read-modify-write needed).
+# FDB "type" maps to SM "material" (name remap); all others are same-unit numerics.
+# NOTE: the snapshot key for each is "_mp_<sm_field>" (matching the temp convention).
+MATERIAL_PROP_SCALAR_PAIRS: list[tuple[str, str, str, Any]] = []  # populated below
+
 
 def _norm_temp(v: Any) -> int | None:
     """Normalise a temperature for comparison/storage (FDB float ↔ SM int)."""
@@ -1117,6 +1140,35 @@ def _norm_temp(v: Any) -> int | None:
         return int(round(float(v)))
     except (TypeError, ValueError):
         return None
+
+
+def _norm_float2(v: Any) -> float | None:
+    """Normalise a float to 2 decimal places for stable comparison (density, diameter, etc.)."""
+    if v is None:
+        return None
+    try:
+        return round(float(v), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _norm_str(v: Any) -> str | None:
+    """Normalise a string by stripping whitespace; None/empty → None."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s if s else None
+
+
+# Populate after the normalizer functions are defined.
+MATERIAL_PROP_SCALAR_PAIRS = [
+    # (label,    fdb_path,           sm_field,           normalizer)
+    ("material", "type",             "material",         _norm_str),
+    ("density",  "density",          "density",          _norm_float2),
+    ("diameter", "diameter",         "diameter",         _norm_float2),
+    ("spool_weight", "spoolWeight",  "spool_weight",     _norm_float2),
+    ("net_filament_weight", "netFilamentWeight", "weight", _norm_float2),
+]
 
 
 async def _sync_material_props(
@@ -1266,6 +1318,275 @@ async def _sync_material_props(
                         result.updated += 1
                     except Exception as exc:
                         logger.error("Cycle %s: %s FDB→SM failed %s: %s", cycle_id, label, m.spoolman_filament_id, exc)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=label, error_message=str(exc),
+                        )
+                        result.errors += 1
+                else:
+                    result.preview.append({
+                        "action": "update", "entity_type": "filament",
+                        "direction": "filamentdb_to_spoolman", "label": label_name,
+                        "field": label, "old": sm_now, "new": fdb_now, "reason": None,
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.updated += 1
+
+
+# ---------------------------------------------------------------------------
+# Material scalar sync — material/density/diameter/spool_weight/weight (bidirectional)
+# ---------------------------------------------------------------------------
+
+
+async def _sync_material_scalars(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    dry_run: bool,
+    *,
+    filament_mappings: list[FilamentMapping],
+    sm_filaments: dict[int, Any],
+    fdb_filaments: dict[str, Any],
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
+) -> None:
+    """Bidirectional sync of native shared filament scalar fields.
+
+    Covers the five fields with a direct FDB↔SM counterpart that are NOT handled
+    by the temperature pass or the extra-field mapper:
+
+        SM ``material``        ↔ FDB ``type``
+        SM ``density``         ↔ FDB ``density``
+        SM ``diameter``        ↔ FDB ``diameter``
+        SM ``spool_weight``    ↔ FDB ``spoolWeight``
+        SM ``weight``          ↔ FDB ``netFilamentWeight``
+
+    Per-field baseline keyed ``_mp_<sm_field>`` (coexists with temp/cost/_mc_sig
+    keys via ``_merge_snapshot``).  Snapshot stores the resolved FDB value on the
+    FDB side.
+
+    **PUSH_SM_TO_FDB master/variant gate:**
+    - Standalone (no parentId) OR field already overridden (not in inherited_fields):
+      write directly.
+    - Inherited AND sm_now == resolved: skip — value already matches the master,
+      leave it inherited (no redundant override).
+    - Inherited AND sm_now != resolved: queue a ``master_divergence`` conflict
+      (record-only; Phase B owns the apply workflow).
+    """
+    for m in filament_mappings:
+        sm_fil = sm_filaments.get(m.spoolman_filament_id)
+        fdb_fil = fdb_filaments.get(m.filamentdb_id)
+        if sm_fil is None or fdb_fil is None:
+            continue
+        label_name = getattr(sm_fil, "name", None) or getattr(fdb_fil, "name", None)
+
+        # Fetch the detail view once per filament pair (needed for inherited_fields).
+        # We cache it on the first field that needs it to avoid O(fields * n) fetches.
+        fdb_detail: Any = None
+
+        for label, fdb_path, sm_field, normalizer in MATERIAL_PROP_SCALAR_PAIRS:
+            # Read current SM value.
+            sm_now = normalizer(getattr(sm_fil, sm_field, None))
+
+            # We need the detail view to read the resolved FDB value (variant
+            # inheritance resolves in the detail view but NOT in the list view).
+            if fdb_detail is None:
+                try:
+                    fdb_detail = await filamentdb.get_filament(m.filamentdb_id)
+                except Exception as exc:
+                    logger.error(
+                        "Cycle %s: material-scalar detail fetch failed %s: %s",
+                        cycle_id, m.filamentdb_id, exc,
+                    )
+                    result.errors += 1
+                    break  # Skip all fields for this pair; fetch error.
+
+            from app.core.fields import get_fdb_field_value
+            fdb_now = normalizer(get_fdb_field_value(fdb_detail, fdb_path))
+
+            if fdb_now is None and sm_now is None:
+                continue
+
+            snap_key = f"_mp_{sm_field}"
+            sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
+            fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
+            sm_then = sm_snap.get(snap_key) if sm_snap else None
+            fdb_then = fdb_snap.get(snap_key) if fdb_snap else None
+
+            def _store(sv: Any, fv: Any, _k: str = snap_key) -> None:
+                _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {_k: sv})
+                _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {_k: fv})
+
+            # First sight — store baseline, no write.
+            if sm_then is None and fdb_then is None:
+                if not dry_run:
+                    _store(sm_now, fdb_now)
+                else:
+                    result.preview.append({
+                        "action": "skip", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": label, "old": None, "new": None,
+                        "reason": "first sync of this pair — baseline stored, no diff yet",
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.skipped += 1
+                continue
+
+            sm_changed = sm_then != sm_now
+            fdb_changed = fdb_then != fdb_now
+            if not sm_changed and not fdb_changed:
+                continue
+            # Both changed into agreement → refresh baseline silently.
+            if sm_changed and fdb_changed and sm_now == fdb_now:
+                if not dry_run:
+                    _store(sm_now, fdb_now)
+                continue
+
+            action = resolve_sync_action(
+                sm_changed=sm_changed, fdb_changed=fdb_changed,
+                direction=matprop_direction, policy=matprop_policy,
+            )
+
+            if action == SyncAction.NOOP:
+                continue
+
+            if action == SyncAction.QUEUE_CONFLICT:
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "filament", label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        conflict_type="cross_system",
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "filament", label,
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            spoolman_value=sm_now, filamentdb_value=fdb_now,
+                            conflict_type="cross_system",
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": label, "old": sm_now, "new": fdb_now,
+                        "reason": f"both sides changed {label}",
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.conflicts += 1
+                continue
+
+            if action == SyncAction.PUSH_SM_TO_FDB:
+                # Master/variant gate (see module docstring for the three cases).
+                top_field = fdb_path.split(".")[0]
+                has_parent = fdb_detail.parentId is not None
+                inherited = top_field in fdb_detail.inherited_fields
+
+                if not has_parent or not inherited:
+                    # Standalone OR already overridden — write directly.
+                    if not dry_run:
+                        try:
+                            await filamentdb.update_filament(m.filamentdb_id, {fdb_path: sm_now})
+                            _store(sm_now, sm_now)
+                            _log(
+                                db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                                field_name=label, old_value=fdb_now, new_value=sm_now,
+                            )
+                            result.updated += 1
+                        except Exception as exc:
+                            logger.error(
+                                "Cycle %s: %s SM→FDB failed %s: %s",
+                                cycle_id, label, m.filamentdb_id, exc,
+                            )
+                            _log(
+                                db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                                field_name=label, error_message=str(exc),
+                            )
+                            result.errors += 1
+                    else:
+                        result.preview.append({
+                            "action": "update", "entity_type": "filament",
+                            "direction": "spoolman_to_filamentdb", "label": label_name,
+                            "field": label, "old": fdb_now, "new": sm_now, "reason": None,
+                            "spoolman_id": m.spoolman_filament_id,
+                            "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                        })
+                        result.updated += 1
+                    continue
+
+                # Field is inherited — compare SM value against the resolved (inherited) value.
+                if sm_now == fdb_now:
+                    # Matches the inherited master — no redundant override needed.
+                    logger.info(
+                        "Cycle %s: skip %s SM→FDB for FDB filament %s "
+                        "— matches inherited master, left inherited",
+                        cycle_id, label, m.filamentdb_id,
+                    )
+                    if dry_run:
+                        result.preview.append({
+                            "action": "skip", "entity_type": "filament",
+                            "direction": "spoolman_to_filamentdb", "label": label_name,
+                            "field": label, "old": None, "new": None,
+                            "reason": "matches inherited master — left inherited",
+                            "spoolman_id": m.spoolman_filament_id,
+                            "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                        })
+                        result.skipped += 1
+                    else:
+                        result.skipped += 1
+                    continue
+
+                # Inherited AND diverges from master — queue master_divergence (no write).
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "filament", label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        conflict_type="master_divergence",
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "filament", label,
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            spoolman_value=sm_now, filamentdb_value=fdb_now,
+                            conflict_type="master_divergence",
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": label, "old": sm_now, "new": fdb_now,
+                        "reason": (
+                            f"SM→FDB would override inherited master field {label!r} "
+                            "— master_divergence queued (approval required, Phase B)"
+                        ),
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.conflicts += 1
+                continue
+
+            if action == SyncAction.PUSH_FDB_TO_SM:
+                # FDB→SM — write to the native SM filament field.  No master concern:
+                # the SM side is flat; any resolved (inherited) FDB value is valid.
+                if not dry_run:
+                    try:
+                        await spoolman.update_filament(m.spoolman_filament_id, {sm_field: fdb_now})
+                        _store(fdb_now, fdb_now)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=label, old_value=sm_now, new_value=fdb_now,
+                        )
+                        result.updated += 1
+                    except Exception as exc:
+                        logger.error(
+                            "Cycle %s: %s FDB→SM failed %s: %s",
+                            cycle_id, label, m.spoolman_filament_id, exc,
+                        )
                         _log(
                             db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
                             spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -2286,6 +2607,20 @@ async def run_sync_cycle(
 
     # ---- Material-property sync (native bed/nozzle temperatures, bidirectional) ----
     await _sync_material_props(
+        db, cycle_id, result, dry_run,
+        filament_mappings=filament_mappings,
+        sm_filaments=sm_filaments,
+        fdb_filaments=fdb_filaments,
+        spoolman=spoolman,
+        filamentdb=filamentdb,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
+    )
+
+    # ---- Native shared-field sync (material/density/diameter/spool_weight/weight) ----
+    # These five fields have direct FDB↔SM counterparts that the generic extra-field mapper
+    # (FR-11) cannot reach. SM→FDB writes are master/variant-gated; see _sync_material_scalars.
+    await _sync_material_scalars(
         db, cycle_id, result, dry_run,
         filament_mappings=filament_mappings,
         sm_filaments=sm_filaments,

@@ -57,16 +57,26 @@ def _build_detail(sm_filament: dict, fdb_snap: dict | None, fdb_fil_snap: dict |
 
     Spoolman side comes straight from the spool snapshot's nested filament block;
     Filament DB side comes from the FDB spool snapshot (gross weight) and the FDB
-    *filament* snapshot's synced signatures (``_mp_*`` temps, ``_cost``) that the
-    engine's material-property / cost passes persist.  Fields with no stored FDB
-    counterpart show ``None`` (rendered as "—").
+    *filament* snapshot keys that the engine's passes persist via _merge_snapshot:
+
+      ``_mp_settings_bed_temp``    — bed temperature (temp pass)
+      ``_mp_settings_extruder_temp`` — nozzle temperature (temp pass)
+      ``_mp_material``             — material/type (scalar pass)
+      ``_mp_density``              — density (scalar pass)
+      ``_mp_diameter``             — diameter (scalar pass)
+      ``_cost``                    — cost (cost pass)
+      ``_mc_color``                — resolved color hex (multicolor pass)
+
+    Fields with no stored FDB counterpart (not yet baselined) show ``None``
+    (rendered as "—" in the UI).
     """
     fdb_fil = fdb_fil_snap or {}
     return [
         MappingDetailField(field="weight", label="Weight",
                            spoolman=remaining, filamentdb=(fdb_snap or {}).get("totalWeight")),
         MappingDetailField(field="material", label="Material",
-                           spoolman=sm_filament.get("material"), filamentdb=None),
+                           spoolman=sm_filament.get("material"),
+                           filamentdb=fdb_fil.get("_mp_material")),
         MappingDetailField(field="bed_temp", label="Bed temp",
                            spoolman=sm_filament.get("settings_bed_temp"),
                            filamentdb=fdb_fil.get("_mp_settings_bed_temp")),
@@ -74,13 +84,16 @@ def _build_detail(sm_filament: dict, fdb_snap: dict | None, fdb_fil_snap: dict |
                            spoolman=sm_filament.get("settings_extruder_temp"),
                            filamentdb=fdb_fil.get("_mp_settings_extruder_temp")),
         MappingDetailField(field="density", label="Density",
-                           spoolman=sm_filament.get("density"), filamentdb=None),
+                           spoolman=sm_filament.get("density"),
+                           filamentdb=fdb_fil.get("_mp_density")),
         MappingDetailField(field="diameter", label="Diameter",
-                           spoolman=sm_filament.get("diameter"), filamentdb=None),
+                           spoolman=sm_filament.get("diameter"),
+                           filamentdb=fdb_fil.get("_mp_diameter")),
         MappingDetailField(field="cost", label="Cost",
                            spoolman=sm_filament.get("price"), filamentdb=fdb_fil.get("_cost")),
         MappingDetailField(field="color", label="Color",
-                           spoolman=sm_filament.get("color_hex"), filamentdb=None),
+                           spoolman=sm_filament.get("color_hex"),
+                           filamentdb=fdb_fil.get("_mc_color")),
     ]
 
 

@@ -1,5 +1,59 @@
 # Decision record
 
+## 2026-06-10 — Phase A: native shared-filament scalar sync + conflict_type column
+
+### A — Five native scalars synced directly (not via extra-field mapper)
+
+SM `material` / `density` / `diameter` / `spool_weight` / `weight` are **native Spoolman
+filament fields** with direct FDB counterparts (`type`, `density`, `diameter`, `spoolWeight`,
+`netFilamentWeight`).  The generic extra-field mapper (`resolve_field_map` / `_apply_field_changes`)
+handles Spoolman *extra* fields only — it does not reach native SM filament fields.  A new
+dedicated pass `_sync_material_scalars` in `engine.py` handles the five pairs, mirroring
+`_sync_cost` and `_sync_material_props` in structure.
+
+Snapshot keys `_mp_<sm_field>` coexist with `_mc_sig`, `_cost`, `_finish_sig` via
+`_merge_snapshot` (no clobbering).  FDB values are read from the **detail view** (not the list
+view), since inherited values resolve there.
+
+### B — Master/variant gate for PUSH_SM_TO_FDB
+
+The blanket `should_skip_inherited` rule (used in `_apply_field_changes`) was too coarse for
+the native-scalar pass — it silently skipped any inherited field regardless of whether the SM
+value matched or diverged from the master.  The scalar pass instead implements a three-way
+gate:
+
+1. **Standalone OR already overridden** (`not has_parent OR not inherited`) → write directly.
+2. **Inherited AND SM value matches resolved (inherited) value** → skip (no redundant override
+   that would detach the field from the master for zero benefit).
+3. **Inherited AND SM value diverges** → queue `master_divergence` conflict (record-only; no
+   write; Phase B owns the apply workflow).
+
+### C — conflict_type column: "cross_system" vs "master_divergence"
+
+A new `conflict_type` column (SQLite `server_default="cross_system"`) was added to the
+`conflicts` table (Alembic migration `f8d3e9c1a7b2`).
+
+- `"cross_system"` — standard both-sides-changed conflict (all prior passes; remains the
+  default so existing rows are unaffected).
+- `"master_divergence"` — SM→FDB would override an inherited field that differs from the SM
+  value; record-only pending Phase B (no upstream write).
+
+`_has_open_conflict` accepts an optional `conflict_type` parameter so cross_system and
+master_divergence conflicts on the same `(entity_type, field, spoolman_id, fdb_filament_id)`
+tuple are deduplicated independently — a resolved master_divergence does not suppress a
+subsequent cross_system conflict on the same field, and vice versa.
+
+### D — Synced Records display fixed: _mp_* and _mc_color from snapshots
+
+`_build_detail` in `api/mappings.py` previously returned `None` for material, density,
+diameter, and color on the FDB side (hard-coded).  It now reads:
+
+- `_mp_material`, `_mp_density`, `_mp_diameter` from the FDB filament snapshot (populated by
+  `_sync_material_scalars`).
+- `_mc_color` from the FDB filament snapshot (populated by `_sync_multicolor`, added in Phase A).
+
+Values are `None` until the first sync baseline is stored — displayed as "—" in the UI.
+
 ## 2026-06-09 — Light/dark/system theme infrastructure
 
 ### A — localStorage-only persistence, no backend config entry

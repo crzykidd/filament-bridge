@@ -113,6 +113,10 @@ class ConflictResponse(BaseModel):
     status: Literal["open", "resolved"]
     entity_type: str
     field_name: str
+    # "cross_system" — both sides changed the same field (the standard conflict).
+    # "master_divergence" — SM→FDB write would override a variant's inherited master value;
+    #   requires Phase B approval before applying. Record-only in Phase A.
+    conflict_type: str = "cross_system"
     # For spool conflicts spoolman_id is the Spoolman spool id (deep-link id).
     spoolman_id: int | None = None
     filamentdb_filament_id: str | None = None
