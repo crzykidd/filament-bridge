@@ -543,6 +543,9 @@ class WizardExecuteRecord(BaseModel):
     spoolman_spool_id: int | None = None
     filamentdb_filament_id: str | None = None
     filamentdb_spool_id: str | None = None
+    # Human-readable label for display in the execute result (e.g. "ELEGOO PLA Red").
+    # Set to whichever name/identifier is available at the call site.
+    label: str | None = None
     detail: str | None = None
     error: str | None = None
 

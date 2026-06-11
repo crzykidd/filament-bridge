@@ -1141,6 +1141,35 @@ def test_wizard_execute_per_record_error_isolation(db):
     assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
 
 
+def test_wizard_execute_failed_record_carries_label_and_error(db):
+    """Failed execute record carries a human-readable label and the exact error message."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA Red", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+    filamentdb.create_spool = AsyncMock(side_effect=RuntimeError("upstream 503: Service Unavailable"))
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 1
+
+    failed_records = [r for r in body["records"] if r["action"] == "failed"]
+    assert len(failed_records) == 1
+    rec = failed_records[0]
+    # The label must contain the filament name so the user can identify the record.
+    assert rec["label"] is not None
+    assert "ELEGOO" in rec["label"]
+    assert "PLA Red" in rec["label"]
+    # The exact error text must be present so the user knows why it failed.
+    assert rec["error"] is not None
+    assert "upstream 503" in rec["error"]
+
+
 def test_wizard_execute_spool_location_included_in_payload(db):
     """SM spool with a location → FDB create_spool payload includes locationId."""
     set_config_value(db, "import_direction", "spoolman")

@@ -484,6 +484,8 @@ export interface WizardExecuteRecord {
   spoolman_spool_id: number | null
   filamentdb_filament_id: string | null
   filamentdb_spool_id: string | null
+  /** Human-readable record label (e.g. "ELEGOO PLA Red") — present in backend responses. */
+  label: string | null
   detail: string | null
   error: string | null
 }

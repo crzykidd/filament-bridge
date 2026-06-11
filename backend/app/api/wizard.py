@@ -803,6 +803,7 @@ class _ExecResult:
         entity_type: str,
         action: str,
         *,
+        label: str | None = None,
         detail: str | None = None,
         error: str | None = None,
         sm_filament_id: int | None = None,
@@ -818,6 +819,7 @@ class _ExecResult:
                 spoolman_spool_id=sm_spool_id,
                 filamentdb_filament_id=fdb_filament_id,
                 filamentdb_spool_id=fdb_spool_id,
+                label=label,
                 detail=detail,
                 error=error,
             )
@@ -834,6 +836,18 @@ class _ExecResult:
             error_message=error,
         )
 
+
+def _sm_label(sm: SpoolmanFilament) -> str:
+    """Build a compact human-readable label for a Spoolman filament (for execute result rows)."""
+    vendor = sm.vendor.name if sm.vendor else None
+    parts = [vendor, sm.name] if vendor else [sm.name]
+    return " ".join(p for p in parts if p)
+
+
+def _fdb_label(fdb: FDBFilament) -> str:
+    """Build a compact human-readable label for a Filament DB filament (for execute result rows)."""
+    parts = [fdb.vendor, fdb.name] if fdb.vendor else [fdb.name]
+    return " ".join(p for p in parts if p)
 
 
 def _sm_filament_payload_from_fdb(fdb: FDBFilament, vendor_id: int | None) -> dict:
@@ -1167,6 +1181,7 @@ async def _execute_spoolman_to_fdb(
                     res.add(
                         db, "filament", "created",
                         fdb_filament_id=container_fdb_id,
+                        label=display_name,
                         detail=f"synthetic container parent: {display_name}",
                     )
                 except Exception as exc:
@@ -1183,6 +1198,7 @@ async def _execute_spoolman_to_fdb(
                             res.cycle_id, cluster_key, exc,
                         )
                     res.add(db, "filament", "failed", error=err_msg,
+                            label=display_name,
                             detail=f"failed to create container: {display_name}")
                     continue  # skip setting parent for this cluster
                 # Record the synthetic FilamentMapping.
@@ -1216,15 +1232,17 @@ async def _execute_spoolman_to_fdb(
         # Skip entire cluster if the user chose "skip" on the container-name collision.
         if item.sm_filament.id in _skipped_gc_sm_ids:
             res.add(db, "filament", "skipped", detail="cluster skipped per container-name override",
-                    sm_filament_id=item.sm_filament.id)
+                    label=_sm_label(item.sm_filament), sm_filament_id=item.sm_filament.id)
             continue
         attach_parent = attach_parent_for_sm.get(item.sm_filament.id)
         if item.action == "skip":
             if item.error:
                 res.add(db, "filament", "failed", error=item.error,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
             else:
                 res.add(db, "filament", "skipped", detail=item.detail,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "link":
             if attach_parent:
@@ -1232,15 +1250,18 @@ async def _execute_spoolman_to_fdb(
                 try:
                     await filamentdb.update_filament(item.fdb_id, {"parentId": attach_parent})
                     res.add(db, "filament", "updated", detail="variant parent set (attach)",
+                            label=_sm_label(item.sm_filament),
                             sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
                 except Exception as exc:
                     logger.error("wizard execute %s: set parentId (attach) on FDB %s failed: %s",
                                  res.cycle_id, item.fdb_id, exc)
                     res.add(db, "filament", "failed", error=str(exc),
+                            label=_sm_label(item.sm_filament),
                             sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
                     item.error = str(exc)
             else:
                 res.add(db, "filament", "updated", detail=item.detail,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "create":
             payload = dict(item.fdb_payload)
@@ -1261,6 +1282,7 @@ async def _execute_spoolman_to_fdb(
                 fdb_by_id[created.id] = created
                 just_created_fdb_ids.add(created.id)
                 res.add(db, "filament", "created",
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
                 if _is_409(exc):
@@ -1274,6 +1296,7 @@ async def _execute_spoolman_to_fdb(
                     logger.error("wizard execute %s: create FDB filament failed (SM %s): %s",
                                  res.cycle_id, item.sm_filament.id, exc)
                 res.add(db, "filament", "failed", error=err_msg,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id)
                 item.error = err_msg
         if item.fdb_id and not item.error:
@@ -1288,30 +1311,35 @@ async def _execute_spoolman_to_fdb(
         # Skip entire cluster if the user chose "skip" on the container-name collision.
         if item.sm_filament.id in _skipped_gc_sm_ids:
             res.add(db, "filament", "skipped", detail="cluster skipped per container-name override",
-                    sm_filament_id=item.sm_filament.id)
+                    label=_sm_label(item.sm_filament), sm_filament_id=item.sm_filament.id)
             continue
         master_fdb_id = master_map.get(item.variant_master_sm_id)
         if master_fdb_id is None:
             err = f"master SM filament {item.variant_master_sm_id} failed or was not resolved"
-            res.add(db, "filament", "failed", error=err, sm_filament_id=item.sm_filament.id)
+            res.add(db, "filament", "failed", error=err,
+                    label=_sm_label(item.sm_filament), sm_filament_id=item.sm_filament.id)
             item.error = err
             continue
         if item.action == "skip":
             if item.error:
                 res.add(db, "filament", "failed", error=item.error,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
             else:
                 res.add(db, "filament", "skipped", detail=item.detail,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "link":
             try:
                 await filamentdb.update_filament(item.fdb_id, {"parentId": master_fdb_id})
                 res.add(db, "filament", "updated", detail="variant parent set",
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
             except Exception as exc:
                 logger.error("wizard execute %s: set parentId on FDB %s failed: %s",
                              res.cycle_id, item.fdb_id, exc)
                 res.add(db, "filament", "failed", error=str(exc),
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
                 item.error = str(exc)
         elif item.action == "create":
@@ -1327,6 +1355,7 @@ async def _execute_spoolman_to_fdb(
                 fdb_by_id[created.id] = created
                 just_created_fdb_ids.add(created.id)
                 res.add(db, "filament", "created",
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
                 if _is_409(exc):
@@ -1340,6 +1369,7 @@ async def _execute_spoolman_to_fdb(
                     logger.error("wizard execute %s: create FDB variant failed (SM %s): %s",
                                  res.cycle_id, item.sm_filament.id, exc)
                 res.add(db, "filament", "failed", error=err_msg,
+                        label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id)
                 item.error = err_msg
 
@@ -1506,8 +1536,10 @@ async def _execute_spoolman_to_fdb(
             fil_map.filamentdb_parent_id = parent_fdb_id
 
         for spool_item in spool_items_by_fil.get(id(item), []):
+            _spool_label = f"{_sm_label(item.sm_filament)} (spool {spool_item.sm_spool.id})"
             if spool_item.action == "skip":
                 res.add(db, "spool", "skipped", detail=spool_item.detail,
+                        label=_spool_label,
                         sm_spool_id=spool_item.sm_spool.id, fdb_filament_id=fdb_id,
                         fdb_spool_id=spool_item.skip_fdb_spool_id)
                 continue
@@ -1547,12 +1579,14 @@ async def _execute_spoolman_to_fdb(
                     "_id": new_fdb_spool_id, "label": str(spool_item.sm_spool.id),
                     "totalWeight": spool_item.planned_gross, "retired": False,
                 }))
-                res.add(db, "spool", "created", sm_spool_id=spool_item.sm_spool.id,
+                res.add(db, "spool", "created", label=_spool_label,
+                        sm_spool_id=spool_item.sm_spool.id,
                         fdb_filament_id=fdb_id, fdb_spool_id=new_fdb_spool_id)
             except Exception as exc:
                 logger.error("wizard execute %s: create FDB spool failed (SM spool %s): %s",
                              res.cycle_id, spool_item.sm_spool.id, exc)
                 res.add(db, "spool", "failed", error=str(exc),
+                        label=_spool_label,
                         sm_spool_id=spool_item.sm_spool.id, fdb_filament_id=fdb_id)
 
 
@@ -1610,6 +1644,7 @@ async def _execute_fdb_to_spoolman(
 
     for fdb_fil in fdb_filaments:
         parent_id = parent_of_fdb.get(fdb_fil.id)
+        _fil_label = _fdb_label(fdb_fil)
 
         # ---- resolve the Spoolman filament id (link to existing, or create) ----
         existing_map = fil_map_by_fdb.get(fdb_fil.id)
@@ -1617,14 +1652,14 @@ async def _execute_fdb_to_spoolman(
             sm_filament_id = existing_map.spoolman_filament_id
             fil_map = existing_map
             res.add(db, "filament", "skipped", detail="already linked",
-                    sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
+                    label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
         else:
             linked_sm_id = linked_sm_by_fdb.get(fdb_fil.id)
             try:
                 if linked_sm_id is not None and linked_sm_id in sm_filament_by_id:
                     sm_filament_id = linked_sm_id
                     res.add(db, "filament", "updated", detail="linked",
-                            sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
+                            label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
                 else:
                     vendor_id = await _ensure_vendor(fdb_fil.vendor)
                     created = await spoolman.create_filament(
@@ -1632,11 +1667,12 @@ async def _execute_fdb_to_spoolman(
                     )
                     sm_filament_id = created.id
                     res.add(db, "filament", "created",
-                            sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
+                            label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
             except Exception as exc:
                 logger.error("wizard execute %s: seed Spoolman filament from FDB %s failed: %s",
                              res.cycle_id, fdb_fil.id, exc)
-                res.add(db, "filament", "failed", error=str(exc), fdb_filament_id=fdb_fil.id)
+                res.add(db, "filament", "failed", error=str(exc),
+                        label=_fil_label, fdb_filament_id=fdb_fil.id)
                 continue
 
             fil_map = FilamentMapping(
@@ -1650,8 +1686,10 @@ async def _execute_fdb_to_spoolman(
 
         # ---- seed spools ----
         for fdb_spool in fdb_fil.spools:
+            _spool_label = f"{_fil_label} (spool {fdb_spool.id[:8]})"
             if fdb_spool.id in mapped_fdb_spool_ids:
                 res.add(db, "spool", "skipped", detail="already linked",
+                        label=_spool_label,
                         fdb_filament_id=fdb_fil.id, fdb_spool_id=fdb_spool.id)
                 continue
 
@@ -1676,12 +1714,14 @@ async def _execute_fdb_to_spoolman(
                 ))
                 mapped_fdb_spool_ids.add(fdb_spool.id)
                 _seed_snapshots(db, new_sm_spool, fdb_spool)
-                res.add(db, "spool", "created", sm_spool_id=new_sm_spool.id,
+                res.add(db, "spool", "created", label=_spool_label,
+                        sm_spool_id=new_sm_spool.id,
                         fdb_filament_id=fdb_fil.id, fdb_spool_id=fdb_spool.id)
             except Exception as exc:
                 logger.error("wizard execute %s: seed Spoolman spool from FDB spool %s failed: %s",
                              res.cycle_id, fdb_spool.id, exc)
                 res.add(db, "spool", "failed", error=str(exc),
+                        label=_spool_label,
                         fdb_filament_id=fdb_fil.id, fdb_spool_id=fdb_spool.id)
 
 

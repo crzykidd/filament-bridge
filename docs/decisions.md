@@ -1,5 +1,18 @@
 # Decision record
 
+## 2026-06-10 — Wizard execute response: added `label` field to `WizardExecuteRecord`
+
+`WizardExecuteRecord` (in `schemas/api.py` and `api/types.ts`) gained a new optional
+`label: str | None` field carrying a human-readable record identifier (e.g. "ELEGOO PLA Red"
+or "ELEGOO PLA Red (spool 42)"). The field is populated at every `res.add()` call site in
+`api/wizard.py` using the new `_sm_label()` and `_fdb_label()` helpers. It is `null` on
+records from older clients / preview plan rows (`WizardPreviewResponse.plan_rows` reuses the
+same model but those rows are written by `planner.py` which is out of scope). Any consumer
+may treat a null `label` as "use the ID fallback".
+
+Motivation: the previous response carried only IDs and a free-text `error` string. A failed
+re-import showed only a count; the user could not identify which records failed or why.
+
 ## 2026-06-10 — Phase B: master_divergence resolve→apply workflow
 
 ### A — Resolve endpoint is now async and writes upstream for master_divergence conflicts
