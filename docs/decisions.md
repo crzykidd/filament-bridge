@@ -1,5 +1,9 @@
 # Decision record
 
+## 2026-06-11 — Fix wizard Pass-2.6 finish-tag wire format (CSV not JSON array)
+
+`api/wizard.py` Pass 2.6 was calling `encode_extra_value(finish_ids)` where `finish_ids` is a Python list, producing a JSON-array wire value (`[17]`) that Spoolman 400s on. Fixed to `encode_extra_value(serialize_material_tags(finish_ids))` matching the engine path. The failure was silently swallowed as a warning, so the `filamentdb_material_tags` extra field was never stamped during wizard import.
+
 ## 2026-06-11 — FR-11 fix: FDB `_field_values` now persisted in spool snapshots
 
 **Bug:** `engine.py:_fdb_snapshot_dict` requires both `filament_detail` and `field_maps`

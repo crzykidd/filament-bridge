@@ -10,6 +10,7 @@ from app.core.material_tags import (
     serialize_material_tags,
     strip_finish_words,
 )
+from app.schemas.spoolman import encode_extra_value
 
 
 # ---------------------------------------------------------------------------
@@ -299,3 +300,35 @@ class TestStripFinishWords:
         # The core flap-safety property: strip_finish_words("PLA Silk") == "PLA"
         # so "PLA Silk" (SM) vs "PLA" (FDB type) do not cause a perpetual diff.
         assert strip_finish_words("PLA Silk") == "PLA"
+
+
+# ---------------------------------------------------------------------------
+# Wire-format contract: serialize_material_tags + encode_extra_value
+# Spoolman text extras must be JSON-quoted CSV strings, NOT JSON arrays.
+# Regression guard for the wizard Pass-2.6 bug where encode_extra_value was
+# called directly on a Python list → "[17]" wire value → Spoolman 400.
+# ---------------------------------------------------------------------------
+
+
+class TestWireFormat:
+    def test_single_id_wire_format(self):
+        # encode_extra_value(serialize_material_tags([17])) → '"17"' (JSON-quoted CSV)
+        # NOT encode_extra_value([17])               → '"[17]"' or '[17]'
+        wire = encode_extra_value(serialize_material_tags([17]))
+        assert wire == '"17"'
+
+    def test_two_ids_wire_format(self):
+        wire = encode_extra_value(serialize_material_tags([17, 28]))
+        assert wire == '"17,28"'
+
+    def test_bare_list_encoding_is_wrong(self):
+        # Confirm the old (broken) path produces the wrong format.
+        wrong = encode_extra_value([17])
+        assert wrong == "[17]"  # JSON array — NOT what Spoolman text fields expect
+
+    def test_wire_not_json_array(self):
+        # The correct wire value must not start with '['.
+        wire = encode_extra_value(serialize_material_tags([16, 17]))
+        decoded_outer = __import__("json").loads(wire)
+        assert isinstance(decoded_outer, str), "outer JSON must decode to a string, not a list"
+        assert "," in decoded_outer or decoded_outer.isdigit()  # CSV form

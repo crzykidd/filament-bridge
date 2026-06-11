@@ -29,7 +29,7 @@ from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.compat import sync_compatibility_errors
 from app.core.dates import spool_provenance_dates
 from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
-from app.core.material_tags import finish_ids_from_text, strip_finish_words
+from app.core.material_tags import finish_ids_from_text, serialize_material_tags, strip_finish_words
 from app.core.matcher import (
     extract_finish_line,
     match_filaments,
@@ -1477,7 +1477,7 @@ async def _execute_spoolman_to_fdb(
     if _finish_ids_by_sm:
         mt_field = _settings.spoolman_field_filamentdb_material_tags
         for sm_fil_id, finish_ids in _finish_ids_by_sm.items():
-            encoded = encode_extra_value(finish_ids)
+            encoded = encode_extra_value(serialize_material_tags(finish_ids))
             try:
                 await spoolman.update_filament(sm_fil_id, {"extra": {mt_field: encoded}})
                 logger.info(

@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-fix-finish-tag-wire-format
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Fixed wizard Pass-2.6 to use encode_extra_value(serialize_material_tags(finish_ids)). 895 tests green.
 ---
 
 # Task: Fix wizard finish-tag write-back — JSON-array encoding where CSV is required
