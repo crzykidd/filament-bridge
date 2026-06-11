@@ -1,10 +1,10 @@
 ---
 name: 2026-06-10-shared-field-sync-phase-b-master-divergence
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-06-10
 model: sonnet            # opus = research/planning, sonnet = coding
-completed:               # filled when the work is done
-result:                  # one-line summary of the outcome
+completed: 2026-06-10
+result: resolve→apply workflow for master_divergence: 3 actions (apply_all/variant_override/ignore), snapshot refresh, sibling auto-resolve, divergence-context endpoint, specialized UI card; 25 backend + 10 frontend tests passing
 ---
 
 # Task: Phase B — master-divergence resolution workflow (resolve → apply, with three actions)

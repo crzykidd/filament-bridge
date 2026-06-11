@@ -2,9 +2,12 @@
 
 Conflicts are NEVER auto-resolved (hard rule). These endpoints let a human record
 a resolution choice; the chosen value is stored on the Conflict row and the
-conflict leaves the open queue. The sync engine pushing the resolved value
-upstream is a Phase 2 follow-up — see docs/decisions.md ("resolve = record, apply
-next cycle"). This router performs no upstream writes.
+conflict leaves the open queue.
+
+For `master_divergence` conflicts the endpoint additionally writes upstream
+when the human chooses an action (apply_all / variant_override / ignore) — this
+is human-approved resolution, not silent auto-apply.  All other conflict types
+remain record-only (no upstream writes).
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ import datetime
 import json
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.errors import api_error
@@ -26,6 +29,8 @@ from app.schemas.api import (
     BulkResolveResponse,
     ConflictResolveRequest,
     ConflictResponse,
+    DivergenceContextResponse,
+    DivergenceVariantEntry,
 )
 
 router = APIRouter()
@@ -183,9 +188,10 @@ def list_conflicts(
 
 
 @router.post("/conflicts/{conflict_id}/resolve", response_model=ConflictResponse)
-def resolve_conflict(
+async def resolve_conflict(
     conflict_id: int,
     payload: ConflictResolveRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> ConflictResponse:
     c = db.query(Conflict).filter_by(id=conflict_id).first()
@@ -193,6 +199,36 @@ def resolve_conflict(
         raise api_error(404, "conflict_not_found", f"No conflict with id {conflict_id}")
     if c.resolved_at is not None:
         raise api_error(409, "already_resolved", f"Conflict {conflict_id} is already resolved")
+
+    conflict_type = getattr(c, "conflict_type", "cross_system") or "cross_system"
+
+    if conflict_type == "master_divergence":
+        # For master_divergence conflicts the `action` field is required.
+        if payload.action is None:
+            raise api_error(
+                422, "action_required",
+                "master_divergence conflicts require an action: apply_all, variant_override, or ignore"
+            )
+        # Perform upstream writes via conflict_apply.
+        from app.core.conflict_apply import apply_master_divergence
+        spoolman = request.app.state.spoolman
+        filamentdb = request.app.state.filamentdb
+        try:
+            await apply_master_divergence(c, payload.action, db, spoolman, filamentdb)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "apply_master_divergence failed for conflict %d: %s", conflict_id, exc
+            )
+            raise api_error(
+                502, "upstream_write_failed",
+                f"Upstream write failed; conflict not resolved. Detail: {exc}"
+            )
+        db.commit()
+        db.refresh(c)
+        return _to_response(c, db)
+
+    # All other conflict types: record-only resolution (no upstream writes).
     if payload.resolution == "manual" and payload.value is None:
         raise api_error(422, "manual_value_required", "A manual resolution requires a value")
 
@@ -204,6 +240,54 @@ def resolve_conflict(
     db.commit()
     db.refresh(c)
     return _to_response(c, db)
+
+
+@router.get("/conflicts/{conflict_id}/divergence-context", response_model=DivergenceContextResponse)
+async def get_divergence_context(
+    conflict_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> DivergenceContextResponse:
+    """Return master + variant line context for a master_divergence conflict.
+
+    Only valid for conflicts with conflict_type == 'master_divergence'.
+    Fetches live data from Filament DB to show current values.
+    """
+    c = db.query(Conflict).filter_by(id=conflict_id).first()
+    if c is None:
+        raise api_error(404, "conflict_not_found", f"No conflict with id {conflict_id}")
+    conflict_type = getattr(c, "conflict_type", "cross_system") or "cross_system"
+    if conflict_type != "master_divergence":
+        raise api_error(
+            400, "not_master_divergence",
+            f"Conflict {conflict_id} is type '{conflict_type}', not 'master_divergence'"
+        )
+
+    from app.core.conflict_apply import build_divergence_context
+    filamentdb = request.app.state.filamentdb
+    try:
+        ctx = await build_divergence_context(c, db, filamentdb)
+    except Exception as exc:
+        raise api_error(502, "upstream_fetch_failed", f"Could not fetch divergence context: {exc}")
+
+    return DivergenceContextResponse(
+        master_fdb_id=ctx["master_fdb_id"],
+        master_name=ctx.get("master_name"),
+        master_current_value=ctx.get("master_current_value"),
+        field_name=ctx["field_name"],
+        fdb_path=ctx["fdb_path"],
+        variants=[
+            DivergenceVariantEntry(
+                fdb_id=v["fdb_id"],
+                name=v.get("name"),
+                color_hex=v.get("color_hex"),
+                spoolman_filament_id=v.get("spoolman_filament_id"),
+                current_value=v.get("current_value"),
+                inherited=v.get("inherited", True),
+            )
+            for v in ctx.get("variants", [])
+        ],
+    )
 
 
 @router.post("/conflicts/bulk-resolve", response_model=BulkResolveResponse)

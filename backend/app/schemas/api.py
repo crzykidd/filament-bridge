@@ -140,6 +140,27 @@ class ConflictResponse(BaseModel):
 class ConflictResolveRequest(BaseModel):
     resolution: Literal["spoolman", "filamentdb", "manual"]
     value: Any = None  # required when resolution == "manual"
+    # Required for master_divergence conflicts; ignored for all other conflict types.
+    action: Literal["apply_all", "variant_override", "ignore"] | None = None
+
+
+class DivergenceVariantEntry(BaseModel):
+    fdb_id: str
+    name: str | None = None
+    color_hex: str | None = None
+    spoolman_filament_id: int | None = None
+    current_value: Any = None
+    inherited: bool
+
+
+class DivergenceContextResponse(BaseModel):
+    """Context for a master_divergence conflict: master + full variant line."""
+    master_fdb_id: str
+    master_name: str | None = None
+    master_current_value: Any = None
+    field_name: str   # SM field name (e.g. "density", "material")
+    fdb_path: str     # FDB path (e.g. "density", "type")
+    variants: list[DivergenceVariantEntry] = Field(default_factory=list)
 
 
 class BulkResolveRequest(BaseModel):

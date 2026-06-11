@@ -113,6 +113,9 @@ export interface ConflictResponse {
   status: 'open' | 'resolved'
   entity_type: string
   field_name: string
+  // "cross_system" — both sides changed. "master_divergence" — SM→FDB would override
+  // an inherited variant field; requires action before applying.
+  conflict_type: string
   spoolman_id: number | null
   filamentdb_filament_id: string | null
   filamentdb_spool_id: string | null
@@ -135,6 +138,26 @@ export interface ConflictResponse {
 export interface ConflictResolveRequest {
   resolution: 'spoolman' | 'filamentdb' | 'manual'
   value?: unknown
+  // Required for master_divergence conflicts; ignored for other types.
+  action?: 'apply_all' | 'variant_override' | 'ignore'
+}
+
+export interface DivergenceVariantEntry {
+  fdb_id: string
+  name: string | null
+  color_hex: string | null
+  spoolman_filament_id: number | null
+  current_value: unknown
+  inherited: boolean
+}
+
+export interface DivergenceContextResponse {
+  master_fdb_id: string
+  master_name: string | null
+  master_current_value: unknown
+  field_name: string   // SM field name (e.g. "density", "material")
+  fdb_path: string     // FDB path (e.g. "density", "type")
+  variants: DivergenceVariantEntry[]
 }
 
 export interface BulkResolveRequest {

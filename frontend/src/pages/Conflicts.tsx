@@ -1,9 +1,9 @@
-import { useState, useMemo } from 'react'
-import { getConflicts, resolveConflict, bulkResolveConflicts } from '../api/client'
+import { useState, useMemo, useEffect } from 'react'
+import { getConflicts, resolveConflict, bulkResolveConflicts, getDivergenceContext } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
 import { ColorDisplay } from '../components/ColorDisplay'
-import type { ConflictResponse } from '../api/types'
+import type { ConflictResponse, DivergenceContextResponse, DivergenceVariantEntry } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
 type Resolution = 'spoolman' | 'filamentdb' | 'manual'
@@ -13,7 +13,7 @@ type SortKey = 'detected' | 'type' | 'label'
 // Conflict type classification
 // ---------------------------------------------------------------------------
 
-type ConflictType = 'deleted' | 'new_spool_sm' | 'new_spool_fdb' | 'weight' | 'multicolor' | 'property'
+type ConflictType = 'deleted' | 'new_spool_sm' | 'new_spool_fdb' | 'weight' | 'multicolor' | 'property' | 'master_divergence'
 
 const TYPE_LABELS: Record<ConflictType, string> = {
   deleted: 'Deleted record',
@@ -22,6 +22,7 @@ const TYPE_LABELS: Record<ConflictType, string> = {
   weight: 'Weight',
   multicolor: 'Multicolor',
   property: 'Property',
+  master_divergence: 'Master divergence',
 }
 
 const TYPE_BADGE_COLORS: Record<ConflictType, string> = {
@@ -31,13 +32,15 @@ const TYPE_BADGE_COLORS: Record<ConflictType, string> = {
   weight: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
   multicolor: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400',
   property: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
+  master_divergence: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400',
 }
 
-const TYPE_ORDER: ConflictType[] = ['deleted', 'new_spool_sm', 'new_spool_fdb', 'weight', 'multicolor', 'property']
+const TYPE_ORDER: ConflictType[] = ['deleted', 'new_spool_sm', 'new_spool_fdb', 'weight', 'multicolor', 'property', 'master_divergence']
 
 const DELETION_FIELD = '__record_deleted__'
 
 function classifyConflict(c: ConflictResponse): ConflictType {
+  if (c.conflict_type === 'master_divergence') return 'master_divergence'
   if (c.field_name === DELETION_FIELD) return 'deleted'
   if (c.field_name === 'new_spool') return c.spoolman_id != null ? 'new_spool_sm' : 'new_spool_fdb'
   if (c.field_name === 'weight' || c.field_name === 'remaining_weight') return 'weight'
@@ -59,6 +62,191 @@ function deletedSideLabel(conflict: ConflictResponse): string {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Master-divergence specialized card
+// ---------------------------------------------------------------------------
+
+function VariantRow({ v, fieldName }: { v: DivergenceVariantEntry; fieldName: string }) {
+  return (
+    <div className="flex items-center gap-3 py-1.5 border-b border-gray-100 dark:border-gray-700 last:border-0">
+      {/* Color swatch (small) */}
+      {v.color_hex && (
+        <span
+          className="shrink-0 w-4 h-4 rounded-full border border-gray-200 dark:border-gray-600"
+          style={{ backgroundColor: `#${v.color_hex.replace(/^#/, '')}` }}
+        />
+      )}
+      <span className="flex-1 text-sm text-gray-800 dark:text-gray-200 truncate min-w-0">
+        {v.name ?? v.fdb_id}
+        {v.inherited && (
+          <span className="ml-1.5 text-xs text-gray-400 dark:text-gray-500">(inherited)</span>
+        )}
+      </span>
+      <span className="shrink-0 font-mono text-xs text-gray-500 dark:text-gray-400">
+        {String(v.current_value ?? '—')}
+      </span>
+      <span onClick={e => e.stopPropagation()}>
+        <DeepLinks
+          filamentdbFilamentId={v.fdb_id}
+          spoolmanFilamentId={v.spoolman_filament_id ?? undefined}
+        />
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Specialized resolution panel for master_divergence conflicts.
+ * Shows the variant list fetched from GET /conflicts/:id/divergence-context
+ * and three action buttons.
+ */
+function MasterDivergenceDetail({
+  conflict,
+  onResolved,
+}: {
+  conflict: ConflictResponse
+  onResolved: () => void
+}) {
+  const [ctx, setCtx] = useState<DivergenceContextResponse | null>(null)
+  const [loadingCtx, setLoadingCtx] = useState(false)
+  const [ctxErr, setCtxErr] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [confirmAction, setConfirmAction] = useState<'apply_all' | 'variant_override' | 'ignore' | null>(null)
+
+  // Fetch context on first render.
+  useEffect(() => {
+    let cancelled = false
+    setLoadingCtx(true)
+    getDivergenceContext(conflict.id)
+      .then(c => { if (!cancelled) { setCtx(c); setLoadingCtx(false) } })
+      .catch(e => { if (!cancelled) { setCtxErr(e instanceof Error ? e.message : String(e)); setLoadingCtx(false) } })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conflict.id])
+
+  async function submit(action: 'apply_all' | 'variant_override' | 'ignore') {
+    setSubmitting(true)
+    setErr(null)
+    try {
+      await resolveConflict(conflict.id, {
+        resolution: 'spoolman',
+        action,
+      })
+      onResolved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSubmitting(false)
+      setConfirmAction(null)
+    }
+  }
+
+  const variantCount = ctx?.variants.length ?? '?'
+  const masterName = ctx?.master_name ?? conflict.filamentdb_filament_id
+  const fieldLabel = conflict.field_name
+  const incomingValue = String(conflict.spoolman_value ?? '?')
+  const masterValue = ctx != null ? String(ctx.master_current_value ?? '—') : '…'
+
+  return (
+    <div className="border-t border-gray-100 dark:border-gray-700 mt-0 px-4 pb-4 pt-3 space-y-3">
+      {/* Header: field + incoming vs master values */}
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded p-3">
+          <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mb-1">
+            Incoming Spoolman value
+          </p>
+          <span className="font-mono text-xs text-gray-900 dark:text-gray-100">{incomingValue}</span>
+        </div>
+        <div className="bg-blue-50 dark:bg-blue-900/20 rounded p-3">
+          <p className="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1">
+            Master ({masterName}) current value
+          </p>
+          <span className="font-mono text-xs text-gray-900 dark:text-gray-100">{masterValue}</span>
+        </div>
+      </div>
+
+      {/* Explanation */}
+      <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded p-3 text-sm text-orange-800 dark:text-orange-300">
+        This variant inherits <strong>{fieldLabel}</strong> from its master. The incoming Spoolman value
+        differs from the master's value. Choose how to resolve:
+      </div>
+
+      {/* Variant list */}
+      {loadingCtx && <p className="text-sm text-gray-400 dark:text-gray-500">Loading variant list…</p>}
+      {ctxErr && <p className="text-sm text-red-500 dark:text-red-400">{ctxErr}</p>}
+      {ctx && ctx.variants.length > 0 && (
+        <div className="border border-gray-200 dark:border-gray-700 rounded overflow-hidden">
+          <div className="bg-gray-50 dark:bg-gray-750 px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            Variants in this line ({ctx.variants.length})
+          </div>
+          <div className="px-3">
+            {ctx.variants.map(v => (
+              <VariantRow key={v.fdb_id} v={v} fieldName={fieldLabel} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Confirm prompt */}
+      {confirmAction === 'apply_all' && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-3 text-sm text-amber-800 dark:text-amber-300 space-y-2">
+          <p>
+            <strong>Apply to all variants</strong> will write <em>{incomingValue}</em> to the master
+            and all {variantCount} variant(s) in Filament DB, and to their Spoolman filaments.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => submit('apply_all')}
+              disabled={submitting}
+              className="px-3 py-1.5 bg-orange-600 text-white rounded text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
+            >
+              {submitting ? 'Applying…' : 'Confirm apply to all'}
+            </button>
+            <button
+              onClick={() => setConfirmAction(null)}
+              className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirmAction !== 'apply_all' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setConfirmAction('apply_all')}
+            disabled={submitting}
+            className="px-4 py-1.5 bg-orange-600 text-white rounded text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
+            title={`Write ${incomingValue} to master and all variants in FDB and Spoolman`}
+          >
+            Apply to all variants
+          </button>
+          <button
+            onClick={() => submit('variant_override')}
+            disabled={submitting}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            title="Write this value to this variant only; master and siblings unchanged"
+          >
+            {submitting ? 'Saving…' : 'Make variant\'s own setting'}
+          </button>
+          <button
+            onClick={() => submit('ignore')}
+            disabled={submitting}
+            className="px-4 py-1.5 bg-gray-500 text-white rounded text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
+            title="No write; store baselines so this won't re-queue next cycle"
+          >
+            {submitting ? 'Saving…' : 'Ignore'}
+          </button>
+        </div>
+      )}
+
+      {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+    </div>
+  )
+}
 
 function ValueDisplay({ value }: { value: unknown }) {
   if (value == null) return <span className="text-gray-400 dark:text-gray-500">—</span>
@@ -273,7 +461,10 @@ function CollapsibleConflict({
       </div>
 
       {/* Expanded detail */}
-      {expanded && tab === 'open' && (
+      {expanded && tab === 'open' && conflict.conflict_type === 'master_divergence' && (
+        <MasterDivergenceDetail conflict={conflict} onResolved={onResolved} />
+      )}
+      {expanded && tab === 'open' && conflict.conflict_type !== 'master_divergence' && (
         <ConflictDetail conflict={conflict} onResolved={onResolved} />
       )}
       {expanded && tab === 'resolved' && (
@@ -395,9 +586,10 @@ export default function Conflicts() {
       {/* Info banner — explain what Resolve does */}
       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 text-sm text-blue-800 dark:text-blue-300 space-y-1">
         <p>
-          <strong>Resolving a conflict records your choice and removes it from the queue</strong> — it does
-          not write to Spoolman or Filament DB (upstream apply is a planned follow-up). Deletion conflicts
-          remove the bridge mapping only.
+          <strong>Resolving a conflict records your choice and removes it from the queue.</strong> For
+          standard conflicts this is record-only (no upstream writes). Deletion conflicts remove the
+          bridge mapping only. <strong>Master divergence</strong> conflicts apply changes upstream when
+          you choose an action.
         </p>
       </div>
 

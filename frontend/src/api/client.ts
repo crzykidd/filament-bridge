@@ -15,6 +15,7 @@ import type {
   ConflictResolveRequest,
   ConflictResponse,
   CycleResultResponse,
+  DivergenceContextResponse,
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
@@ -131,6 +132,9 @@ export const resolveConflict = (id: number, body: ConflictResolveRequest) =>
 
 export const bulkResolveConflicts = (body: BulkResolveRequest) =>
   json<BulkResolveResponse>('/conflicts/bulk-resolve', 'POST', body)
+
+export const getDivergenceContext = (conflictId: number) =>
+  request<DivergenceContextResponse>(`/conflicts/${conflictId}/divergence-context`)
 
 // ---------------------------------------------------------------------------
 // Mappings

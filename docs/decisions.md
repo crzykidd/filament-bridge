@@ -1,5 +1,67 @@
 # Decision record
 
+## 2026-06-10 — Phase B: master_divergence resolve→apply workflow
+
+### A — Resolve endpoint is now async and writes upstream for master_divergence conflicts
+
+`POST /conflicts/{id}/resolve` was a sync, record-only endpoint. Phase B converts it to
+`async def` and injects `SpoolmanClient` + `FilamentDBClient` from `request.app.state`
+(the same pattern used in `api/sync.py`). For conflicts with `conflict_type == "master_divergence"`
+it now calls `core/conflict_apply.apply_master_divergence()` before marking the conflict
+resolved. All other conflict types continue to be record-only (no upstream writes).
+
+### B — Three resolution actions for master_divergence conflicts
+
+The `ConflictResolveRequest` schema gains an optional `action` field
+(`"apply_all" | "variant_override" | "ignore"`). For `master_divergence` conflicts `action`
+is required (422 if missing); for other types it is silently ignored.
+
+| Action | FDB writes | Spoolman writes |
+|---|---|---|
+| `apply_all` | Master + any variant with explicit override of field F | Every SM filament mapped to a variant in the line |
+| `variant_override` | This variant only (per-variant override) | None (SM is the source) |
+| `ignore` | None | None |
+
+### C — Snapshot refresh anti-ping-pong
+
+After every apply action, `_merge_snapshot` is called for every touched record on both
+sides, setting `_mp_<sm_field>` to the agreed value. This mirrors the engine's
+post-weight-write snapshot refresh (see weight-propagation note in decisions.md). Without
+this, the next sync cycle would re-detect the change as a fresh divergence and re-queue
+the conflict.
+
+### D — Sibling auto-resolve for apply_all
+
+`apply_all` writes the new value to the entire filament line. Any other open
+`master_divergence` conflicts for the same SM field on variants of the same master are
+auto-resolved at the same time (marked `resolution="apply_all"`, `resolved_value=new_value`)
+since the write that satisfies them has already happened.
+
+### E — Upstream failure handling
+
+If any upstream write fails, `apply_master_divergence` re-raises the exception without
+marking the conflict resolved. The router catches it and returns 502 with the error detail.
+The conflict remains open so the user can retry.
+
+### F — GET /conflicts/{id}/divergence-context endpoint
+
+New read-only endpoint for the UI. Fetches live FDB data to show: master id + name + current
+value, plus the full variant list with current value, inherited/overridden status, and
+Spoolman filament id (for deep links). Only valid for `master_divergence` conflicts; returns
+400 for other types.
+
+### G — apply logic in core/conflict_apply.py
+
+All write logic is isolated in `core/conflict_apply.py` (testable async module, no router
+dependency). The router imports and calls `apply_master_divergence()` / `build_divergence_context()`.
+Engine helpers `_log` and `_merge_snapshot` are reused directly.
+
+### H — _variants field uses Pydantic field name
+
+`FDBFilamentDetail._variants` is exposed as `variants` (Pydantic alias). Code that accesses
+the list uses `getattr(detail, "variants", None)` and reads `.id` on each `FDBVariantRef`
+object (not `["_id"]` dict access). `_inherited` similarly maps to `inherited_fields`.
+
 ## 2026-06-10 — Phase A: native shared-filament scalar sync + conflict_type column
 
 ### A — Five native scalars synced directly (not via extra-field mapper)
