@@ -9,9 +9,10 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 # Minimum supported upstream versions
 # ---------------------------------------------------------------------------
-# Below these the bridge still starts and core weight/field sync runs, but some
-# features silently degrade — the health check surfaces a warning (it does NOT
-# hard-block, to avoid locking the UI out on a version it can't read).
+# A *known* below-minimum upstream hard-gates sync: the trigger/dry-run
+# endpoints, wizard execute, and scheduled auto-sync all refuse with a
+# 409/blocking message.  An *unknown* (unreadable) version does NOT block —
+# that is a connectivity concern surfaced as health ``degraded``.
 #
 # Filament DB 1.33.0 — structured multicolor (color/secondaryColors/optTags),
 #   finish-tag (optTags) sync, and the temperature fields the two-way

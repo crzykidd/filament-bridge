@@ -1,5 +1,33 @@
 # Decision record
 
+## 2026-06-11 — FR-11 fix: FDB `_field_values` now persisted in spool snapshots
+
+**Bug:** `engine.py:_fdb_snapshot_dict` requires both `filament_detail` and `field_maps`
+to embed `_field_values`, but every snapshot-refresh call site in `run_sync_cycle` passed
+only the spool object. Result: `fdb_snapshot._field_values` was always absent, so the
+differ saw `fdb_then = None` for every mapped field every cycle — any non-None FDB value
+looked like a perpetual FDB-side change (spurious PATCH to Spoolman every cycle under
+`filamentdb_to_spoolman`; spurious conflicts under `two_way`).
+
+**Fix approach (snapshot-merge after the field-mapping pass):**
+
+- `_apply_field_changes` return type changed from `None` to
+  `tuple[dict, dict] | None` — returning `(fdb_field_values_after, sm_extra_decoded_after)`.
+  Both dicts reflect any writes made this call (anti-ping-pong: FDB→SM writes update
+  `sm_extra_decoded[sm_key]`; SM→FDB writes update `fdb_field_values[fdb_path]`).
+- After `_apply_field_changes`, the caller calls `_merge_snapshot` (read-modify-write)
+  to store `_field_values` into the FDB spool snapshot and `_extra_decoded` into the SM
+  spool snapshot. `_merge_snapshot` was already used by filament-level passes; it's now
+  shared for spool-level use too — safe because spool snapshot rows are also keyed
+  `(source, entity_type, entity_id)`.
+- **First-sight baseline path**: when `field_maps` is non-empty, the engine now fetches
+  `fdb_detail` and passes it to `_fdb_snapshot_dict`, so `_field_values` is stored in
+  the very first baseline. This means the next cycle can diff real changes rather than
+  always seeing None as the prior value.
+
+**Files changed:** `backend/app/core/engine.py`, `backend/app/core/version.py`
+(stale header comment on `MIN_FDB`/`MIN_SPOOLMAN` updated to reflect hard-gate behavior).
+
 ## 2026-06-11 — MappingRow carries `conflict_id`; Synced Records deep-links to Conflicts
 
 `MappingRow` (both `schemas/api.py` and `frontend/src/api/types.ts`) includes `conflict_id: int | None`

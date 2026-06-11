@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-fix-fr11-field-values-snapshot
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Fixed. _field_values now persisted via _merge_snapshot after _apply_field_changes; first-sight baseline fetches fdb_detail when field_maps active. 4 new tests green. 891/891 suite green.
 ---
 
 # Task: Fix FR-11 field-mapping sync — FDB `_field_values` are never persisted (perpetual false changes)

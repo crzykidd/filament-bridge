@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.core.engine import run_sync_cycle
+from app.core.fields import FieldMapping
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.models.snapshot import Snapshot
@@ -2330,3 +2331,224 @@ async def test_stale_mapping_dry_run_emits_preview_no_db_change(db):
 
     # No conflicts created.
     assert db.query(Conflict).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# FR-11 field-mapping snapshot persistence (fix: _field_values never stored)
+# ---------------------------------------------------------------------------
+
+
+def _fdb_detail_with_density(fid: str, spool_id: str, density: float, tare: float = 200.0):
+    from app.schemas.filamentdb import FDBFilamentDetail
+    return FDBFilamentDetail.model_validate({
+        "_id": fid,
+        "name": "PLA",
+        "density": density,
+        "spoolWeight": tare,
+        "_inherited": [],
+        "spools": [{"_id": spool_id, "totalWeight": 1000.0, "retired": False}],
+    })
+
+
+def _density_field_map() -> FieldMapping:
+    """FieldMapping for FDB 'density' ↔ Spoolman extra 'density'."""
+    return FieldMapping(fdb_path="density", sm_key="density", direction="fdb_to_sm")
+
+
+def _patch_settings_fm(mock_settings):
+    """Minimal _settings for field-mapping tests."""
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+def _add_fm_mapping(db, sm_filament_id: int, fdb_filament_id: str):
+    """Add a FilamentMapping for the given SM filament id → FDB filament id."""
+    db.add(FilamentMapping(spoolman_filament_id=sm_filament_id, filamentdb_id=fdb_filament_id))
+    db.flush()
+
+
+@pytest.mark.asyncio
+async def test_fr11_no_change_second_cycle_is_noop(db):
+    """With a field mapping active and values unchanged, the second cycle must
+    not emit any FR-11 writes or sync-log 'update' rows.
+
+    Pre-fix: fdb_snapshot had no _field_values so fdb_then was always None,
+    making every mapped field look like an FDB change every cycle.
+    """
+    fm = _density_field_map()
+    # sm_spool filament id is 10 (see _sm_spool helper); match that in FilamentMapping.
+    # SM carries density=1.24 in its extra field so SM side matches snapshot.
+    sm_spool = _sm_spool(1, 800.0, extra={"density": json.dumps(1.24)})  # spool.filament.id == 10
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    fdb_detail = _fdb_detail_with_density("fil-1", "spool-1", density=1.24, tare=200.0)
+
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _add_fm_mapping(db, 10, "fil-1")  # spoolman filament id 10 → fdb "fil-1"
+    # Pre-seed snapshots with _field_values already set (simulating what the
+    # fixed engine writes after the first cycle).
+    _store_snapshot(db, "spoolman", "spool", "1", {
+        "remaining_weight": 800.0,
+        "_extra_decoded": {"density": 1.24},
+    })
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {
+        "totalWeight": 1000.0,
+        "_field_values": {"density": 1.24},
+    })
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[fm]):
+        _patch_settings_fm(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c1")
+
+    # No writes at all — both sides agree with snapshot
+    spoolman.update_spool.assert_not_called()
+    fdb_client.update_filament.assert_not_called()
+    assert result.updated == 0
+    assert result.errors == 0
+    # No sync-log update rows for field mapping
+    update_logs = db.query(SyncLog).filter_by(action="update").all()
+    assert len(update_logs) == 0
+
+
+@pytest.mark.asyncio
+async def test_fr11_fdb_change_detected_once_then_noop(db):
+    """An FDB-side field change is detected exactly once; cycle after the push
+    produces no further FR-11 writes (snapshot converges).
+
+    Direction: filamentdb_to_spoolman (default).
+    """
+    fm = _density_field_map()
+    # FDB density changed from 1.24 → 1.27 vs snapshot.
+    # SM carries density=1.24 in its extra field so SM side shows no change
+    # (current == snapshot) and only FDB's change is detected.
+    sm_spool = _sm_spool(1, 800.0, extra={"density": json.dumps(1.24)})  # spool.filament.id == 10
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    fdb_detail = _fdb_detail_with_density("fil-1", "spool-1", density=1.27, tare=200.0)
+
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _add_fm_mapping(db, 10, "fil-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {
+        "remaining_weight": 800.0,
+        "_extra_decoded": {"density": 1.24},
+    })
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {
+        "totalWeight": 1000.0,
+        "_field_values": {"density": 1.24},  # snapshot has old value → change detected
+    })
+    _seed_matprop_config(db, direction="filamentdb_to_spoolman", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[fm]):
+        _patch_settings_fm(ms)
+        # Cycle 1: FDB density changed → FDB→SM push
+        result1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c1")
+
+    assert result1.updated == 1
+    spoolman.update_spool.assert_called_once()
+
+    # Snapshot must now carry the updated _field_values and _extra_decoded
+    fdb_snap = json.loads(
+        db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-1").first().data
+    )
+    sm_snap = json.loads(
+        db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="1").first().data
+    )
+    assert fdb_snap.get("_field_values", {}).get("density") == 1.27
+    assert sm_snap.get("_extra_decoded", {}).get("density") == 1.27
+
+    # Cycle 2: same values on both sides → NOOP
+    spoolman.update_spool.reset_mock()
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[fm]):
+        _patch_settings_fm(ms)
+        result2 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c2")
+
+    spoolman.update_spool.assert_not_called()
+    fdb_client.update_filament.assert_not_called()
+    assert result2.updated == 0
+
+
+@pytest.mark.asyncio
+async def test_fr11_sm_change_locked_side_noop(db):
+    """Under default direction (filamentdb_to_spoolman), a Spoolman-side extra
+    field change is the locked side — must be NOOP, not propagated to FDB.
+    """
+    fm = _density_field_map()
+    # SM density changed (extra field on spool), but FDB is unchanged
+    sm_spool = _sm_spool(1, 800.0, extra={"density": json.dumps(1.30)})  # spool.filament.id == 10
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    fdb_detail = _fdb_detail_with_density("fil-1", "spool-1", density=1.24, tare=200.0)
+
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _add_fm_mapping(db, 10, "fil-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {
+        "remaining_weight": 800.0,
+        "_extra_decoded": {"density": 1.24},  # SM changed 1.24 → 1.30 vs snapshot
+    })
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {
+        "totalWeight": 1000.0,
+        "_field_values": {"density": 1.24},
+    })
+    _seed_matprop_config(db, direction="filamentdb_to_spoolman", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[fm]):
+        _patch_settings_fm(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c1")
+
+    # SM side is locked — no write to FDB and no update to SM
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    assert result.updated == 0
+    assert result.conflicts == 0
+
+
+@pytest.mark.asyncio
+async def test_fr11_first_sight_stores_field_values_in_baseline(db):
+    """First cycle for a pair with field mappings active stores _field_values
+    in the FDB spool baseline so the very next cycle can detect real changes
+    rather than always seeing None as the prior value.
+    """
+    fm = _density_field_map()
+    sm_spool = _sm_spool(1, 800.0)  # spool.filament.id == 10
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0, tare=200.0)
+    fdb_detail = _fdb_detail_with_density("fil-1", "spool-1", density=1.24, tare=200.0)
+
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _add_fm_mapping(db, 10, "fil-1")
+    # No snapshots yet — first sight
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[fm]):
+        _patch_settings_fm(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="c1")
+
+    # First sight: skip (no writes)
+    assert result.skipped >= 1
+    fdb_client.update_filament.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+
+    # FDB spool snapshot must have _field_values set (not empty/absent)
+    fdb_snap_row = db.query(Snapshot).filter_by(
+        source="filamentdb", entity_type="spool", entity_id="spool-1"
+    ).first()
+    assert fdb_snap_row is not None
+    fdb_snap_data = json.loads(fdb_snap_row.data)
+    assert "_field_values" in fdb_snap_data
+    assert fdb_snap_data["_field_values"].get("density") == 1.24

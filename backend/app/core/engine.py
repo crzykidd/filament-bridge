@@ -457,12 +457,18 @@ async def _apply_field_changes(
     *,
     matprop_direction: str = "filamentdb_to_spoolman",
     matprop_policy: str = "manual",
-) -> None:
+) -> tuple[dict, dict] | None:
     """Evaluate and apply field-mapping changes for one spool pair (FR-11).
 
     Routes each field through ``resolve_sync_action`` using the material_properties
     direction and conflict policy.  Per-field conflict dedup prevents re-queuing
     on every cycle.
+
+    Returns ``(fdb_field_values_after, sm_extra_decoded_after)`` — the FDB and SM
+    field values as they stand *after* any writes this call made.  The caller
+    should merge these into the respective spool snapshots so the next cycle sees
+    the correct baseline and does not re-detect the same values as changes.
+    Returns ``None`` if the FDB detail fetch fails (error already logged).
     """
     # Fetch FDB detail (needed for _inherited[] and full field surface)
     try:
@@ -470,7 +476,7 @@ async def _apply_field_changes(
     except Exception as exc:
         logger.error("Cycle %s: could not fetch FDB filament detail %s: %s", cycle_id, fdb_filament_id, exc)
         result.errors += 1
-        return
+        return None
 
     # Multicolor filaments: the dedicated multicolor pass owns ``color`` (plus
     # secondaryColors/optTags), so exclude it from the generic field-map sync to
@@ -630,6 +636,9 @@ async def _apply_field_changes(
                         field_name=fdb_path, old_value=fc.old_value, new_value=fc.new_value,
                     )
                     result.updated += 1
+                    # Anti-ping-pong: record the written value so the next cycle
+                    # sees it as the baseline and does not re-detect it.
+                    sm_extra_decoded[fm.sm_key] = write_value
                 except Exception as exc:
                     logger.error("Cycle %s: field sync FDB→SM failed (%s): %s", cycle_id, fdb_path, exc)
                     _log(
@@ -697,6 +706,9 @@ async def _apply_field_changes(
                     spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
                     field_name=fc.field_name, old_value=fc.old_value, new_value=fc.new_value,
                 )
+                # Anti-ping-pong: record the written value so the next cycle
+                # sees it as the baseline and does not re-detect it.
+                fdb_field_values[fc.field_name] = fc.new_value
             result.updated += len(fdb_put_field_changes)
         except Exception as exc:
             logger.error("Cycle %s: field sync SM→FDB failed: %s", cycle_id, exc)
@@ -723,6 +735,8 @@ async def _apply_field_changes(
                 "fdb_spool_id": fdb_spool_id,
             })
         result.updated += len(fdb_put_field_changes) - len(sm_skipped_fields)
+
+    return fdb_field_values, sm_extra_decoded
 
 
 # ---------------------------------------------------------------------------
@@ -2449,7 +2463,18 @@ async def run_sync_cycle(
                 })
             else:
                 _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
-                _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                # Include _field_values in the FDB baseline when field mappings are
+                # active so the very next cycle can compare current vs snapshot
+                # values instead of always seeing None as the baseline.
+                if field_maps:
+                    try:
+                        _fdb_baseline_detail = await filamentdb.get_filament(fdb_filament_id)
+                        _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, _fdb_baseline_detail, field_maps))
+                    except Exception as _exc:
+                        logger.warning("Cycle %s: could not fetch FDB detail for baseline %s: %s", cycle_id, fdb_filament_id, _exc)
+                        _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                else:
+                    _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
             result.skipped += 1
             continue
 
@@ -2661,13 +2686,26 @@ async def run_sync_cycle(
         if field_maps:
             fm_for_spool = filament_mappings_by_sm.get(sm_spool.filament.id)
             if fm_for_spool:
-                await _apply_field_changes(
+                _fr11_result = await _apply_field_changes(
                     db, cycle_id, result, dry_run,
                     sm_spool, fdb_filament_id, fdb_spool.id,
                     field_maps, spoolman, filamentdb, sm_snap, fdb_snap,
                     matprop_direction=matprop_direction,
                     matprop_policy=matprop_policy,
                 )
+                # Persist the field-mapping baselines so the next cycle can
+                # compare current vs snapshot instead of always reading None.
+                # Also reflects any writes made above (anti-ping-pong).
+                if _fr11_result is not None and not dry_run:
+                    _fv_after, _sm_ed_after = _fr11_result
+                    _merge_snapshot(
+                        db, "filamentdb", "spool", fdb_spool.id,
+                        {"_field_values": _fv_after},
+                    )
+                    _merge_snapshot(
+                        db, "spoolman", "spool", str(sm_spool.id),
+                        {"_extra_decoded": _sm_ed_after},
+                    )
 
         # ---- Matched / in-sync entry (dry-run only) ----
         # If no preview entry was appended for this pair during the weight and
