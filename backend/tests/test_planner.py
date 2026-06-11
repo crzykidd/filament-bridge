@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import wizard
 from app.api.config import set_config_value
-from app.core.planner import _fdb_filament_payload_from_sm, _plan_spoolman_to_fdb
+from app.core.planner import _fdb_filament_payload_from_sm, _filament_base_name, _patch_fdb_name, _plan_spoolman_to_fdb
 from app.core.weight import DEFAULT_TARE_GRAMS
 from app.db import Base, get_db
 from app.models.config import seed_defaults
@@ -506,3 +506,202 @@ def test_planner_spool_gross_matches_filament_spool_weight(db):
     assert written_spool_weight == tare_override
     # gross = net + tare
     assert planned_gross == pytest.approx(750.0 + tare_override, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Variant naming — FDB names include vendor + material + color (collision fix)
+# ---------------------------------------------------------------------------
+
+
+def _sm_filament_with_vendor(
+    fid: int,
+    name: str,
+    vendor_name: str,
+    material: str = "PLA",
+) -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=fid,
+        name=name,
+        vendor=SpoolmanVendor(id=fid, name=vendor_name),
+        material=material,
+        weight=1000.0,
+    )
+
+
+def _run_planner_named(db, sm_filaments, decisions, master_of_sm=None) -> dict:
+    """Run the planner and return {sm_id: planned_fdb_name} for 'create' items."""
+    decisions_by_sm = {d["spoolman_filament_id"]: d for d in decisions}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=sm_filaments,
+        sm_spools=[],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm=master_of_sm or {},
+        tare_by_sm_spool={},
+    )
+    return {
+        item.sm_filament.id: item.fdb_payload.get("name")
+        for item in plan.filament_items
+        if item.action == "create" and item.fdb_payload
+    }
+
+
+def test_variant_names_distinct_across_different_vendors(db):
+    """Two SM filaments with the same bare color from different vendors → distinct FDB names.
+
+    Before fix: both became "Light Blue" → 409 collision.
+    After fix: "Hatchbox PLA Light Blue" vs "SUNLU PLA Light Blue" → no collision.
+    """
+    hatchbox_lb = _sm_filament_with_vendor(1, "Light Blue", "Hatchbox", "PLA")
+    sunlu_lb = _sm_filament_with_vendor(2, "Light Blue", "SUNLU", "PLA")
+    decisions = [
+        {"spoolman_filament_id": 1, "action": "create"},
+        {"spoolman_filament_id": 2, "action": "create"},
+    ]
+    names = _run_planner_named(db, [hatchbox_lb, sunlu_lb], decisions)
+
+    assert names[1] != names[2], "same-color names from different vendors must be distinct"
+    assert "Hatchbox" in names[1] or "hatchbox" in names[1].lower()
+    assert "SUNLU" in names[2] or "sunlu" in names[2].lower()
+    assert "Light Blue" in names[1]
+    assert "Light Blue" in names[2]
+
+
+def test_variant_name_equals_master_base_plus_color(db):
+    """A variant's planned FDB name = master's base name (no marker) + variant's sm.name.
+
+    Master SM: name="Red", material="PLA", vendor="Hatchbox"
+    Variant SM: name="Light Blue", material="PLA", vendor="Hatchbox"
+    Expected variant name: "Hatchbox PLA Light Blue"
+    """
+    master = _sm_filament_with_vendor(10, "Red", "Hatchbox", "PLA")
+    variant = _sm_filament_with_vendor(11, "Light Blue", "Hatchbox", "PLA")
+    decisions = [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ]
+    names = _run_planner_named(
+        db, [master, variant], decisions, master_of_sm={11: 10},
+    )
+
+    # Both carry vendor+material
+    assert names[10] == "Hatchbox PLA Red"
+    assert names[11] == "Hatchbox PLA Light Blue"
+
+    # Variant and master share the base ("Hatchbox PLA"); only color differs
+    assert names[11].startswith("Hatchbox PLA ")
+    assert names[10].startswith("Hatchbox PLA ")
+
+
+def test_variant_name_shares_base_with_container_display_name(db):
+    """Variant base name (no marker) must match what _container_display_name builds (no marker).
+
+    In generic_container mode, the container is "Hatchbox PLA (Master)" and the variants are
+    "Hatchbox PLA Red", "Hatchbox PLA Light Blue" — they share the base "Hatchbox PLA".
+    The variant's planned name must start with the same base that _container_display_name
+    produces (minus the marker).
+    """
+    from app.api.wizard import _container_display_name
+
+    master = _sm_filament_with_vendor(20, "Red", "Hatchbox", "PLA")
+    variant = _sm_filament_with_vendor(21, "Light Blue", "Hatchbox", "PLA")
+
+    # Container display name (what the synthetic parent in generic_container mode gets)
+    container_name = _container_display_name([master], [], marker="(Master)")
+    container_base = container_name.replace(" (Master)", "")  # strip marker → "Hatchbox PLA"
+
+    decisions = [
+        {"spoolman_filament_id": 20, "action": "create"},
+        {"spoolman_filament_id": 21, "action": "create"},
+    ]
+    names = _run_planner_named(db, [master, variant], decisions, master_of_sm={21: 20})
+
+    # The variant name must start with the same base as the container (minus marker)
+    assert names[21].startswith(container_base), (
+        f"Variant '{names[21]}' does not start with container base '{container_base}'"
+    )
+    # The master (promote_color mode: the master is itself a color member, e.g. "Red")
+    # also starts with the container base (vendor+material), just with its own color.
+    assert names[20].startswith(container_base), (
+        f"Master '{names[20]}' does not start with container base '{container_base}'"
+    )
+
+
+def test_dedup_guard_sm_name_already_has_vendor_material(db):
+    """Dedup guard: sm.name already contains vendor+material → name not doubled."""
+    # Spoolman setup stores the full name including vendor+material
+    sm = _sm_filament_with_vendor(30, "Hatchbox PLA Light Blue", "Hatchbox", "PLA")
+    decisions = [{"spoolman_filament_id": 30, "action": "create"}]
+    names = _run_planner_named(db, [sm], decisions)
+
+    # Must not become "Hatchbox PLA Hatchbox PLA Light Blue"
+    assert names[30] == "Hatchbox PLA Light Blue"
+
+
+def test_standalone_created_filament_includes_vendor_material(db):
+    """A standalone (no master) created filament always carries vendor + material in its name."""
+    sm = _sm_filament_with_vendor(40, "Beige", "SUNLU", "PETG")
+    decisions = [{"spoolman_filament_id": 40, "action": "create"}]
+    names = _run_planner_named(db, [sm], decisions)
+
+    # Name must include both vendor and material
+    assert "SUNLU" in names[40]
+    assert "PETG" in names[40]
+    assert "Beige" in names[40]
+
+
+def test_linked_name_not_overridden(db):
+    """A 'link' action (standardized/existing FDB filament) must not have its name changed.
+
+    The planner does not set fdb_payload for link items; name patching must be a no-op.
+    """
+    sm = _sm_filament_with_vendor(50, "Beige", "SUNLU", "PETG")
+    fdb_fil = FDBFilament.model_validate({"_id": "fdb-50", "name": "SUNLU PETG Beige"})
+    decisions_by_sm = {50: {"spoolman_filament_id": 50, "action": "link", "filamentdb_id": "fdb-50"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm],
+        sm_spools=[],
+        fdb_filaments=[fdb_fil],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+    )
+    link_item = next(i for i in plan.filament_items if i.action == "link")
+    # link items have no fdb_payload — name patching has no effect
+    assert link_item.fdb_payload is None
+
+
+def test_filament_base_name_helper_vendor_material_finish(db):
+    """_filament_base_name produces vendor + base_material + finish (capitalized), no color."""
+    # Silk finish: material "PLA Silk" → strip to "PLA", then append "Silk"
+    result = _filament_base_name("Prusament", "PLA Silk", "Silk Red", variant_keywords=["silk"])
+    assert result == "Prusament PLA Silk"
+
+    # No finish: plain PLA
+    result = _filament_base_name("Hatchbox", "PLA", "Red", variant_keywords=[])
+    assert result == "Hatchbox PLA"
+
+    # No vendor
+    result = _filament_base_name(None, "PETG", "Grey", variant_keywords=[])
+    assert result == "PETG"
+
+
+def test_patch_fdb_name_dedup_material_prefix_in_color(db):
+    """_patch_fdb_name strips a material prefix from color to avoid doubling.
+
+    e.g. sm.name="PLA Red", base="ELEGOO PLA" → "ELEGOO PLA Red" (not "ELEGOO PLA PLA Red").
+    """
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm = SpoolmanFilament(id=1, name="PLA Red", vendor=elegoo, material="PLA", weight=1000.0)
+    result = _patch_fdb_name(sm)
+    assert result == "ELEGOO PLA Red", f"Expected 'ELEGOO PLA Red', got '{result}'"
+
+
+def test_patch_fdb_name_plain_color_gets_qualified(db):
+    """_patch_fdb_name builds 'Vendor Material Color' when sm.name is just the color."""
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm = SpoolmanFilament(id=2, name="Light Blue", vendor=elegoo, material="PLA", weight=1000.0)
+    result = _patch_fdb_name(sm)
+    assert result == "ELEGOO PLA Light Blue"

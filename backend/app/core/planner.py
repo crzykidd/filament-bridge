@@ -16,7 +16,7 @@ from app.config import settings as _settings
 from app.core.color import apply_finish_tags, sm_multicolor_to_fdb
 from app.core.fields import resolve_effective_cost
 from app.core.material_tags import finish_ids_from_text, strip_finish_words
-from app.core.matcher import sm_prop_conflicts
+from app.core.matcher import extract_finish_line, sm_prop_conflicts
 from app.core.weight import DEFAULT_TARE_GRAMS, spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
@@ -25,6 +25,96 @@ from app.schemas.spoolman import SpoolmanFilament, decode_extra_value
 logger = logging.getLogger(__name__)
 
 _DEFAULT_FDB_MATERIAL = "Unknown"
+
+
+def _filament_base_name(
+    vendor: str | None,
+    raw_material: str,
+    sm_name: str,
+    variant_keywords: list[str] | None = None,
+) -> str:
+    """Build the vendor + material + finish base name for an FDB filament (no color, no marker).
+
+    This is the shared logic used by both the container naming path and the variant/standalone
+    naming path so master and variant names can never drift.
+
+    E.g. vendor="Hatchbox", raw_material="PLA", sm_name="PLA Light Blue", keywords=[] →
+    "Hatchbox PLA"
+
+    E.g. vendor="Prusament", raw_material="PLA Silk", sm_name="Silk Red", keywords=["silk"] →
+    "Prusament PLA Silk"
+    """
+    tag_map = _settings.parsed_material_tag_ids
+    finish = extract_finish_line(sm_name or "", raw_material, keywords=variant_keywords)
+    base_material = strip_finish_words(raw_material, tag_map)
+    if not base_material:
+        base_material = _DEFAULT_FDB_MATERIAL
+    parts = []
+    if vendor:
+        parts.append(vendor)
+    parts.append(base_material)
+    if finish:
+        # Capitalize for display (finish comes from normalized lower)
+        parts.append(finish.title())
+    return " ".join(parts)
+
+
+def _patch_fdb_name(
+    sm: SpoolmanFilament,
+    *,
+    base_name: str | None = None,
+    variant_keywords: list[str] | None = None,
+) -> str:
+    """Compute the proper FDB filament name: vendor + material[+finish] + color.
+
+    When *base_name* is supplied (e.g. from the master's cluster key) it is used directly;
+    otherwise it is derived from *sm*'s vendor/material/name.
+
+    Dedup guards (all case-insensitive):
+    1. color already starts with base_name → the SM name already carries vendor+material;
+       return color unchanged to avoid doubling.  e.g. "ELEGOO PLA Light Blue" + base "ELEGOO PLA".
+    2. base_name already contains or ends with color → color is a material/base substring;
+       return base_name as-is.  e.g. name="PLA", base="ELEGOO PLA" → "ELEGOO PLA".
+    3. color starts with a material prefix that already appears in base_name → strip the
+       duplicate material prefix so we get "ELEGOO PLA Red" not "ELEGOO PLA PLA Red".
+       e.g. color="PLA Red", base="ELEGOO PLA" → detect "PLA " prefix → strip → "Red"
+       → result "ELEGOO PLA Red".
+    """
+    vendor = sm.vendor.name if sm.vendor else None
+    raw_material = sm.material or _DEFAULT_FDB_MATERIAL
+    if base_name is None:
+        base_name = _filament_base_name(vendor, raw_material, sm.name, variant_keywords)
+
+    color = sm.name or ""
+    color_lo = color.lower().strip()
+    base_lo = base_name.lower().strip()
+
+    # Guard 1: SM name already carries the full qualified name (starts with vendor+material).
+    if color_lo.startswith(base_lo):
+        return color
+
+    # Guard 2: the color token is already part of the base (e.g. "PLA" inside "ELEGOO PLA").
+    # This avoids "ELEGOO PLA PLA" when the SM filament name is just the material token.
+    if color_lo and (color_lo in base_lo or base_lo.endswith(color_lo)):
+        return base_name
+
+    # Guard 3: color starts with the stripped material (or any trailing token of base_name)
+    # that is already in base_name — strip it from color to get the pure color suffix.
+    # e.g. color="PLA Red", base="ELEGOO PLA" → strip leading "pla " → color_suffix="Red".
+    # Only strip if there is a remaining suffix (don't reduce to empty string).
+    tag_map = _settings.parsed_material_tag_ids
+    base_material_lo = strip_finish_words(raw_material.lower(), tag_map) or raw_material.lower()
+    base_material_lo = base_material_lo.strip()
+    if base_material_lo and color_lo.startswith(base_material_lo):
+        suffix = color[len(base_material_lo):].strip()
+        if suffix:
+            return f"{base_name} {suffix}"
+        # color == material only → return base_name
+        return base_name
+
+    if color:
+        return f"{base_name} {color}"
+    return base_name
 
 
 def _resolve_filament_tare(
@@ -203,6 +293,7 @@ def _plan_spoolman_to_fdb(
     precision: int = 2,
     include_empty_spools: bool = True,
     existing_fdb_spool_ids: set[str] | None = None,
+    variant_keywords: list[str] | None = None,
 ) -> _SyncPlan:
     """Compute what _execute_spoolman_to_fdb would do — no writes, no upstream I/O.
 
@@ -278,6 +369,10 @@ def _plan_spoolman_to_fdb(
             plan.filament_items.append(item)
 
     # ---- Phase B: annotate variants with master SM id + property conflicts ----
+    # Also patch the FDB filament name for variant creates: use the master's base name
+    # (vendor + material + finish, no marker) + the variant's color (sm.name) so names
+    # are unique and never bare-color-only.  This eliminates FDB 409 name collisions
+    # when two different lines share a color name (e.g. "Light Blue").
     plan.master_of_sm = dict(master_of_sm)
     sm_by_id: dict[int, SpoolmanFilament] = {f.id: f for f in sm_filaments}
     for item in plan.filament_items:
@@ -287,6 +382,33 @@ def _plan_spoolman_to_fdb(
             master_sm_fil = sm_by_id.get(master_sm_id)
             if master_sm_fil is not None and not item.error:
                 item.prop_conflicts = sm_prop_conflicts(master_sm_fil, item.sm_filament)
+            # Patch the create payload name using the master's base name + variant color.
+            if item.action == "create" and item.fdb_payload is not None:
+                master_for_base = master_sm_fil if master_sm_fil is not None else item.sm_filament
+                base = _filament_base_name(
+                    master_for_base.vendor.name if master_for_base.vendor else None,
+                    master_for_base.material or _DEFAULT_FDB_MATERIAL,
+                    master_for_base.name or "",
+                    variant_keywords,
+                )
+                item.fdb_payload = dict(item.fdb_payload)
+                item.fdb_payload["name"] = _patch_fdb_name(
+                    item.sm_filament, base_name=base, variant_keywords=variant_keywords,
+                )
+
+    # ---- Phase B.5: patch standalone (non-variant) create names ----
+    # For filaments with no master, ensure the name includes vendor + material so it
+    # cannot collide with a bare-color name from a different line.  Items that were
+    # already "link" or "skip" (standardized name) are untouched.
+    for item in plan.filament_items:
+        if item.variant_master_sm_id is not None:
+            continue  # already patched above
+        if item.action != "create" or item.fdb_payload is None:
+            continue
+        item.fdb_payload = dict(item.fdb_payload)
+        item.fdb_payload["name"] = _patch_fdb_name(
+            item.sm_filament, variant_keywords=variant_keywords,
+        )
 
     # Build set of all current FDB spool ids for stale-xref validation.
     # A cross-ref only causes a skip when the referenced spool actually exists.

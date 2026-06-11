@@ -43,6 +43,7 @@ from app.core.planner import (
     _FilamentPlanItem,
     _SpoolPlanItem,
     _SyncPlan,
+    _filament_base_name,
     _plan_spoolman_to_fdb,
 )
 from app.core.weight import DEFAULT_TARE_GRAMS, fdb_to_spoolman_net, spoolman_to_fdb_gross
@@ -181,9 +182,10 @@ def _container_display_name(
     """Derive a display name for a generic container parent from its cluster members.
 
     Uses the first member (arbitrary; naming is deterministic once the cluster is
-    stable) to extract vendor + stripped-material + finish line — the same combination
-    that the cluster key groups on.  Appends the configured marker (default "(Master)")
-    so the container name never collides with its own color children.
+    stable) to extract vendor + stripped-material + finish line via the shared
+    ``_filament_base_name`` helper — the same combination that the cluster key
+    groups on.  Appends the configured marker (default "(Master)") so the container
+    name never collides with its own color children.
 
     E.g. (marker="(Master)"):
       "ELEGOO" + "PLA" + "" → "ELEGOO PLA (Master)"
@@ -198,20 +200,7 @@ def _container_display_name(
     rep = sm_members[0]
     vendor = rep.vendor.name if rep.vendor else None
     raw_material = rep.material or _DEFAULT_FDB_MATERIAL
-    finish = extract_finish_line(rep.name or "", rep.material, keywords=variant_keywords)
-    # Strip finish keywords from the material string before composing so we don't
-    # produce duplicates like "PLA Silk Silk".  strip_finish_words uses the full
-    # tag map; pass it the configured map so user overrides are honoured.
-    tag_map = _settings.parsed_material_tag_ids
-    base_material = strip_finish_words(raw_material, tag_map)
-    parts = []
-    if vendor:
-        parts.append(vendor)
-    parts.append(base_material)
-    if finish:
-        # Capitalize for display (finish comes from normalized lower)
-        parts.append(finish.title())
-    base_name = " ".join(parts)
+    base_name = _filament_base_name(vendor, raw_material, rep.name or "", variant_keywords)
     if marker:
         return f"{base_name} {marker}"
     return base_name
@@ -995,6 +984,7 @@ async def _execute_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
         decisions_by_sm, master_of_sm, tare_by_sm_spool, precision,
         include_empty_spools=include_empty_spools,
+        variant_keywords=variant_keywords,
     )
 
     fdb_field_name = _settings.filamentdb_spoolman_id_field
@@ -2049,6 +2039,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     master_of_sm = _build_master_of_sm(sm_variant_decisions)
     never_import_empties = bool(get_config_value(db, "never_import_empties", False))
     include_empty = not never_import_empties
+    preview_variant_keywords = _resolve_variant_keywords(db)
     # Phase 4: load reconcile decisions for the planned-writes summary
     reconcile_decisions_raw = get_config_value(db, "wizard_variances_reconcile", []) or []
     reconcile_by_master_preview = _build_reconcile_by_master(reconcile_decisions_raw)
@@ -2077,6 +2068,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         decisions_by_sm, master_of_sm, {},  # no tare overrides for preview
         precision=precision,
         include_empty_spools=include_empty,
+        variant_keywords=preview_variant_keywords,
     )
 
     _action_for_plan: dict[str, str] = {
@@ -2110,7 +2102,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
     _preview_container_names: dict[tuple, str] = {}
     if _preview_variant_mode == "generic_container":
         _preview_marker = _resolve_container_parent_marker(db)
-        _preview_kw = _resolve_variant_keywords(db)
+        _preview_kw = preview_variant_keywords
         for item in plan.filament_items:
             if not item.resolved:
                 continue

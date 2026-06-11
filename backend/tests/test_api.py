@@ -1681,22 +1681,27 @@ def test_preview_makes_no_writes(db):
 
 
 def test_preview_name_collision_vs_existing_and_intra_batch(db):
-    """Name collisions: vendor-aware — only same-vendor+name collides.
+    """Name collisions after vendor+material name qualification.
 
-    - ids 10 and 11 are both "Black PLA" from ELEGOO → intra_batch=True, vs_existing=True
-      (existing FDB "Black PLA" is also from ELEGOO)
-    - id 13 is "Black PLA" from a DIFFERENT vendor (Bambu) → no collision with ELEGOO entry
-    - id 12 ("White PLA" / ELEGOO) is unique → no collision entry
+    With the fix, created FDB names carry vendor+material (e.g. "ELEGOO PLA Black").
+    Two SM filaments with the identical color name under the same vendor+material still
+    produce an intra_batch collision; cross-vendor same-color names become distinct.
+
+    Setup (all filaments have material="PLA"):
+    - ids 10 and 11: "Black" from ELEGOO → both become "ELEGOO PLA Black" → intra_batch
+    - id 13: "Black" from Bambu → becomes "Bambu PLA Black" → different name, no collision
+    - id 12: "White" from ELEGOO → becomes "ELEGOO PLA White" → unique, no collision
+    - existing FDB: "ELEGOO PLA Black" from ELEGOO → triggers vs_existing for ids 10+11
     """
     sm_filaments = [
-        SpoolmanFilament(id=10, name="Black PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
-        SpoolmanFilament(id=11, name="Black PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
-        SpoolmanFilament(id=12, name="White PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
-        SpoolmanFilament(id=13, name="Black PLA", vendor=SpoolmanVendor(id=2, name="Bambu")),
+        SpoolmanFilament(id=10, name="Black", vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA"),
+        SpoolmanFilament(id=11, name="Black", vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA"),
+        SpoolmanFilament(id=12, name="White", vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA"),
+        SpoolmanFilament(id=13, name="Black", vendor=SpoolmanVendor(id=2, name="Bambu"), material="PLA"),
     ]
     fdb_filaments = [
-        # Same vendor+name as ids 10 and 11 → vs_existing should fire
-        FDBFilament.model_validate({"_id": "existing", "name": "Black PLA", "vendor": "ELEGOO"}),
+        # Same qualified name as ids 10 and 11 → vs_existing fires for them
+        FDBFilament.model_validate({"_id": "existing", "name": "ELEGOO PLA Black", "vendor": "ELEGOO"}),
     ]
     decisions = [
         {"spoolman_filament_id": 10, "action": "create"},
@@ -1709,18 +1714,18 @@ def test_preview_name_collision_vs_existing_and_intra_batch(db):
     body = client.get("/api/wizard/preview").json()
     collisions = body["name_collisions"]
 
-    # "black pla" from ELEGOO: intra_batch (ids 10+11) and vs_existing
-    black_entry = next(c for c in collisions if c["normalized_name"] == "black pla")
+    # "elegoo pla black": intra_batch (ids 10+11) AND vs_existing (same qualified name in FDB)
+    black_entry = next(c for c in collisions if c["normalized_name"] == "elegoo pla black")
     assert black_entry["vs_existing"] is True
     assert black_entry["intra_batch"] is True
     assert black_entry["existing_fdb_filament_id"] == "existing"
     assert set(black_entry["sm_filament_ids"]) == {10, 11}
 
-    # id 13 "Black PLA" from Bambu → different vendor, no collision entry for it
+    # id 13 "Black" from Bambu → becomes "Bambu PLA Black" → different name, no collision entry
     assert not any(13 in c["sm_filament_ids"] for c in collisions)
 
-    # "white pla" is unique — no collision entry
-    assert not any(c["normalized_name"] == "white pla" for c in collisions)
+    # "elegoo pla white" is unique — no collision entry
+    assert not any(c["normalized_name"] == "elegoo pla white" for c in collisions)
     assert body["flag_counts"]["name_collision"] == 1
 
 
@@ -2193,7 +2198,13 @@ def test_planner_echoes_master_of_sm_on_plan():
 
 
 def test_wizard_execute_variant_group_creates_with_parent_id(db):
-    """Greenfield group: master create + 2 variant creates; variants get parentId injected."""
+    """Greenfield group: master create + 2 variant creates; variants get parentId injected.
+
+    With vendor+material naming:
+    - master (SM id=10, name="PLA", material="PLA") → "ELEGOO PLA" (dedup guard: "pla" in "elegoo pla")
+    - variant red  (SM id=11, name="PLA Red")       → "ELEGOO PLA Red" (base + color, dedup: "pla red" not in base)
+    - variant blue (SM id=12, name="PLA Blue")       → "ELEGOO PLA Blue"
+    """
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions", [
         {"spoolman_filament_id": 10, "action": "create"},
@@ -2226,14 +2237,20 @@ def test_wizard_execute_variant_group_creates_with_parent_id(db):
     assert body["failed"] == 0
     assert body["created"] == 3  # 3 filament creates
 
-    # Master (id=10) must be created without parentId
-    master_call = next(c for c in create_calls if c.get("name") == "PLA" and "parentId" not in c)
+    # Master (id=10) must be created without parentId.
+    # With the new naming, sm.name="PLA" (same as material) → dedup guard → name="ELEGOO PLA".
+    master_call = next(c for c in create_calls if c.get("name") == "ELEGOO PLA" and "parentId" not in c)
     assert master_call is not None
 
     # Both variants must have parentId in their create payload
     variant_calls = [c for c in create_calls if "parentId" in c]
     assert len(variant_calls) == 2
     assert all(c["parentId"] is not None for c in variant_calls)
+
+    # Variants carry vendor+material prefix in their names (no bare color)
+    variant_names = {c["name"] for c in variant_calls}
+    assert "ELEGOO PLA Red" in variant_names
+    assert "ELEGOO PLA Blue" in variant_names
 
     # FilamentMapping for variants has filamentdb_parent_id set
     maps = {m.spoolman_filament_id: m for m in db.query(FilamentMapping).all()}

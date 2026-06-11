@@ -1,5 +1,31 @@
 # Decision record
 
+## 2026-06-10 — Wizard import: created FDB filament naming rule (variant + standalone)
+
+When the wizard creates a Filament DB filament from Spoolman, the FDB name must always
+include vendor + material so names are globally unique and never bare-color-only.
+
+**Naming rule:**
+- `base_name` = vendor + stripped-material + finish-line (produced by `_filament_base_name`
+  in `core/planner.py`, shared by both the planner and `_container_display_name`).
+- **Variant creates** (Phase B): `"{base_name} {sm.name}"` where `sm.name` is the color label.
+  The base_name is derived from the master SM filament, so master and variant names share the
+  same prefix and can never drift (e.g. "Hatchbox PLA Red" → "Hatchbox PLA Light Blue").
+- **Standalone creates** (Phase B.5): same formula applied to the filament itself.
+- **Dedup guards** (all case-insensitive):
+  1. sm.name already starts with base_name → return sm.name unchanged (full name stored in SM).
+  2. base_name already contains/ends with sm.name → return base_name (color = material token).
+  3. sm.name starts with the bare material prefix that is already in base_name → strip material
+     prefix and append suffix (e.g. "PLA Red" + base "ELEGOO PLA" → "ELEGOO PLA Red").
+- **Link actions** (standardized/existing): name is never changed.
+- **Master/container marker** (`(Master)`) appears only on the synthetic container parent in
+  `generic_container` mode, not on variants or standalones.
+- `_compute_name_collisions` naturally works against the new names since it reads `fdb_payload["name"]`.
+
+Motivation: raw Spoolman names are often bare colors ("Light Blue", "Beige"). Two filaments
+from different lines with the same color both produce "Light Blue" → FDB 409 → silent import
+failure. Qualifying with vendor+material makes them unique.
+
 ## 2026-06-10 — Wizard execute response: added `label` field to `WizardExecuteRecord`
 
 `WizardExecuteRecord` (in `schemas/api.py` and `api/types.ts`) gained a new optional
