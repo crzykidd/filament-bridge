@@ -42,6 +42,13 @@ _DUMP_GLOB = "startup-state-*.txt"
 _DUMP_PREFIX = "startup-state-"
 _DUMP_SUFFIX = ".txt"
 
+# Upstream-fetch retry budget.  When the whole compose stack starts together the
+# bridge usually boots before Spoolman / Filament DB accept connections
+# (depends_on orders container start, not readiness), so a one-shot fetch at
+# boot would almost always fail.  12 attempts × 10 s ≈ 2 minutes of cover.
+_FETCH_ATTEMPTS = 12
+_FETCH_RETRY_DELAY_SECONDS = 10.0
+
 
 # ---------------------------------------------------------------------------
 # Pure formatter (unit-testable, clock injected)
@@ -276,17 +283,38 @@ async def write_startup_dump(
     Designed to run as a background asyncio task.  Any exception is caught,
     logged as a warning, and swallowed — the dump must never break startup.
     Builds the complete text in memory before writing (no partial writes).
+
+    The data fetch retries (``_FETCH_ATTEMPTS`` × ``_FETCH_RETRY_DELAY_SECONDS``)
+    because at boot the upstreams are usually still starting alongside the bridge.
     """
     try:
         import asyncio
 
         from app import __version__
 
-        # Fetch everything concurrently.
-        sm_filaments, sm_spools, fdb_filaments, sm_version, fdb_version = await asyncio.gather(
-            spoolman.get_filaments(),
-            spoolman.get_spools(),
-            filamentdb.get_filaments(),
+        # Fetch the record data concurrently, retrying while the upstreams warm up.
+        for attempt in range(1, _FETCH_ATTEMPTS + 1):
+            try:
+                sm_filaments, sm_spools, fdb_filaments = await asyncio.gather(
+                    spoolman.get_filaments(),
+                    spoolman.get_spools(),
+                    filamentdb.get_filaments(),
+                )
+                break
+            except Exception as exc:
+                if attempt == _FETCH_ATTEMPTS:
+                    raise
+                logger.info(
+                    "state_dump: upstream fetch failed (attempt %d/%d): %s — retrying in %.0fs",
+                    attempt, _FETCH_ATTEMPTS, exc, _FETCH_RETRY_DELAY_SECONDS,
+                )
+                await asyncio.sleep(_FETCH_RETRY_DELAY_SECONDS)
+
+        # Versions are fetched after the data succeeds.  Force a fresh FDB version
+        # read: get_version() caches its first result for the client's lifetime, and
+        # that first read may have happened (and failed) while FDB was still booting.
+        filamentdb._version_fetched = False
+        sm_version, fdb_version = await asyncio.gather(
             _get_sm_version(spoolman),
             filamentdb.get_version(),
         )

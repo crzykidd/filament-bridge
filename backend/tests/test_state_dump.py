@@ -409,9 +409,12 @@ async def test_write_startup_dump_creates_file():
 
 
 @pytest.mark.asyncio
-async def test_write_startup_dump_client_error_no_file_no_exception():
-    """A client error must be swallowed — no file written, no exception propagated."""
+async def test_write_startup_dump_client_error_no_file_no_exception(monkeypatch):
+    """A persistent client error must be swallowed after the retry budget —
+    no file written, no exception propagated."""
     settings = _fake_settings()
+    monkeypatch.setattr("app.core.state_dump._FETCH_ATTEMPTS", 3)
+    monkeypatch.setattr("app.core.state_dump._FETCH_RETRY_DELAY_SECONDS", 0.0)
 
     sm_client = AsyncMock()
     sm_client.get_filaments = AsyncMock(side_effect=RuntimeError("Spoolman unreachable"))
@@ -428,10 +431,48 @@ async def test_write_startup_dump_client_error_no_file_no_exception():
         # Must not raise
         await write_startup_dump(sm_client, fdb_client, tmp, settings)
 
+        # All retry attempts were used before giving up.
+        assert sm_client.get_filaments.await_count == 3
+
         dump_dir = Path(tmp) / "state-dumps"
         if dump_dir.exists():
             dumps = list(dump_dir.glob("startup-state-*.txt"))
             assert len(dumps) == 0, "no dump file should be written on error"
+
+
+@pytest.mark.asyncio
+async def test_write_startup_dump_retries_until_upstreams_ready(monkeypatch):
+    """The boot race: upstreams refuse connections at first, come up later —
+    the dump must retry and succeed instead of giving up on attempt 1."""
+    settings = _fake_settings()
+    monkeypatch.setattr("app.core.state_dump._FETCH_RETRY_DELAY_SECONDS", 0.0)
+
+    # Fail the first two attempts, succeed on the third.
+    sm_client = AsyncMock()
+    sm_client.get_filaments = AsyncMock(
+        side_effect=[RuntimeError("booting"), RuntimeError("booting"), [_sm_filament()]]
+    )
+    sm_client.get_spools = AsyncMock(return_value=[_sm_spool()])
+    mock_resp = AsyncMock()
+    mock_resp.raise_for_status = lambda: None
+    mock_resp.json = lambda: {"version": "0.22.1"}
+    http_mock = AsyncMock()
+    http_mock.get = AsyncMock(return_value=mock_resp)
+    sm_client._http = http_mock
+
+    fdb_client = AsyncMock()
+    fdb_client.get_filaments = AsyncMock(return_value=[_fdb_filament()])
+    fdb_client.get_version = AsyncMock(return_value="1.37.0")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        await write_startup_dump(sm_client, fdb_client, tmp, settings)
+
+        assert sm_client.get_filaments.await_count == 3
+        dumps = list((Path(tmp) / "state-dumps").glob("startup-state-*.txt"))
+        assert len(dumps) == 1, "dump must be written once the upstreams come up"
+        content = dumps[0].read_text(encoding="utf-8")
+        assert "== SPOOLMAN FILAMENTS (1) ==" in content
+        assert "spoolman: 0.22.1" in content
 
 
 # ---------------------------------------------------------------------------
