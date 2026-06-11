@@ -1,12 +1,7 @@
 /**
- * Frontend tests for Phase B master_divergence conflict card.
- *
- * Tests:
- *   - Divergence card renders when conflict_type === "master_divergence"
- *   - "Apply to all variants" button calls resolveConflict with action=apply_all
- *   - "Make variant's own setting" button calls resolveConflict with action=variant_override
- *   - "Ignore" button calls resolveConflict with action=ignore
- *   - Other conflict types render the standard ConflictDetail card (not MasterDivergenceDetail)
+ * Frontend tests for the Conflicts page:
+ *   - Phase B master_divergence conflict card
+ *   - ?highlight=<id> deep-link: expands + marks the matching row, graceful fallback
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -23,6 +18,14 @@ vi.mock('../api/client', () => ({
   resolveConflict: vi.fn(),
   getConflicts: vi.fn(),
   bulkResolveConflicts: vi.fn(),
+}))
+
+// Mock react-router-dom: provide a controllable useSearchParams.
+const mockSetSearchParams = vi.fn()
+let mockSearchParams = new URLSearchParams()
+
+vi.mock('react-router-dom', () => ({
+  useSearchParams: () => [mockSearchParams, mockSetSearchParams],
 }))
 
 // Mock DeepLinkContext to avoid the health endpoint call it makes on mount.
@@ -156,6 +159,7 @@ function renderConflictsWithData(conflicts: ConflictResponse[]) {
 describe('Conflicts page — master_divergence card', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
     // Default: divergence context fetch succeeds.
     vi.mocked(getDivergenceContext).mockResolvedValue(mockDivergenceContext)
     // Default: resolve succeeds.
@@ -302,6 +306,7 @@ describe('Conflicts page — master_divergence card', () => {
 describe('Conflicts page — non-master_divergence conflict type', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
   })
 
   it('renders standard resolution buttons for cross_system conflict', async () => {
@@ -332,5 +337,64 @@ describe('Conflicts page — non-master_divergence conflict type', () => {
     })
 
     expect(getDivergenceContext).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Highlight deep-link (from Synced Records "See conflict" button)
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — ?highlight=<id> deep-link', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(getDivergenceContext).mockResolvedValue(mockDivergenceContext)
+    vi.mocked(resolveConflict).mockResolvedValue({
+      ...makeMasterDivergenceConflict(),
+      status: 'resolved',
+      resolution: 'spoolman',
+    })
+  })
+
+  it('expands the matching conflict row when ?highlight=<id> is set', async () => {
+    mockSearchParams = new URLSearchParams('highlight=2')
+    renderConflictsWithData([makeCrossSystemConflict({ id: 2 })])
+
+    // The row should be auto-expanded → resolution buttons visible
+    await waitFor(() => {
+      expect(screen.getByText('Use spoolman')).toBeInTheDocument()
+    })
+  })
+
+  it('applies a highlight ring to the targeted conflict card', async () => {
+    mockSearchParams = new URLSearchParams('highlight=2')
+    renderConflictsWithData([makeCrossSystemConflict({ id: 2 })])
+
+    await waitFor(() => {
+      const card = document.querySelector('[data-conflict-id="2"]')
+      expect(card).not.toBeNull()
+      // The highlighted card should have the amber ring class applied
+      expect(card?.className).toMatch(/ring-2/)
+    })
+  })
+
+  it('shows a not-found notice when target conflict is not in the open list', async () => {
+    mockSearchParams = new URLSearchParams('highlight=999')
+    renderConflictsWithData([makeCrossSystemConflict({ id: 2 })])
+
+    await waitFor(() => {
+      expect(screen.getByText(/conflict #999 was not found/i)).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT expand or highlight when no ?highlight param is set', async () => {
+    mockSearchParams = new URLSearchParams()
+    renderConflictsWithData([makeCrossSystemConflict({ id: 2 })])
+
+    // No auto-expand: resolution buttons should NOT be visible
+    expect(screen.queryByText('Use spoolman')).not.toBeInTheDocument()
+
+    const card = document.querySelector('[data-conflict-id="2"]')
+    expect(card?.className).not.toMatch(/ring-2/)
   })
 })

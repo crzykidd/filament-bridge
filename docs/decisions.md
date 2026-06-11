@@ -1,5 +1,18 @@
 # Decision record
 
+## 2026-06-11 — MappingRow carries `conflict_id`; Synced Records deep-links to Conflicts
+
+`MappingRow` (both `schemas/api.py` and `frontend/src/api/types.ts`) includes `conflict_id: int | None`
+populated by `build_mapping_rows()` from the already-computed `conflict_id_by_sm` / `conflict_id_by_fdb`
+lookup. This lets the frontend jump directly to the specific conflict from a Synced Records row.
+
+UI surface: Synced Records rows where `status === "conflict"` show a **"See conflict"** button
+(amber, icon + label, dark-mode aware) that calls `useNavigate('/conflicts?highlight=<conflict_id>')`.
+The Conflicts page reads the `highlight` query param via `useSearchParams`, auto-expands the matching
+row, applies a 2.5 s amber ring highlight, and scrolls it into view. If the target id is absent from
+the open queue (already resolved or never existed) a dismissible amber notice is shown instead.
+The `highlight` param is cleared from the URL after handling so refreshes don't re-flash.
+
 ## 2026-06-10 — Engine: stale spool mappings purge instead of queuing deletion conflicts
 
 A deletion conflict is only warranted when there is a **live, still-linked counterpart to protect**. Otherwise the connection is stale and the engine purges it from its own DB (bridge-local rows only — never upstream records).

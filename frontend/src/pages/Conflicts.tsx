@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { getConflicts, resolveConflict, bulkResolveConflicts, getDivergenceContext } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
@@ -384,6 +385,7 @@ function CollapsibleConflict({
   tab,
   selected,
   onSelect,
+  highlighted,
 }: {
   conflict: ConflictResponse
   expanded: boolean
@@ -392,12 +394,20 @@ function CollapsibleConflict({
   tab: 'open' | 'resolved'
   selected: boolean
   onSelect: () => void
+  highlighted?: boolean
 }) {
   const type = classifyConflict(conflict)
   const fieldLabel = conflict.field_name === DELETION_FIELD ? 'Record deleted' : conflict.field_name
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <div
+      data-conflict-id={conflict.id}
+      className={`bg-white dark:bg-gray-800 rounded-lg border overflow-hidden transition-all duration-700 ${
+        highlighted
+          ? 'border-amber-400 dark:border-amber-500 ring-2 ring-amber-300 dark:ring-amber-600'
+          : 'border-gray-200 dark:border-gray-700'
+      }`}
+    >
       {/* Compact summary row */}
       <div
         className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-750 select-none"
@@ -484,6 +494,7 @@ function CollapsibleConflict({
 // ---------------------------------------------------------------------------
 
 export default function Conflicts() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [tab, setTab] = useState<'open' | 'resolved'>('open')
   const { data, loading, error, reload } = useApi(() => getConflicts(tab), [tab])
 
@@ -493,8 +504,65 @@ export default function Conflicts() {
   const [typeFilter, setTypeFilter] = useState<ConflictType | 'all'>('all')
   const [sortKey, setSortKey] = useState<SortKey>('detected')
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  const [highlightId, setHighlightId] = useState<number | null>(null)
+  const highlightHandledRef = useRef(false)
+  const [notFoundId, setNotFoundId] = useState<number | null>(null)
 
   const allRows: ConflictResponse[] = data ?? []
+
+  // Handle the ?highlight=<id> deep-link from Synced Records conflict rows.
+  // Runs once per page load (after data arrives) — expand + scroll + briefly highlight.
+  const clearHighlight = useCallback(() => {
+    setHighlightId(null)
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.delete('highlight')
+      return next
+    }, { replace: true })
+  }, [setSearchParams])
+
+  useEffect(() => {
+    if (loading || highlightHandledRef.current) return
+    const raw = searchParams.get('highlight')
+    if (!raw) return
+
+    const targetId = parseInt(raw, 10)
+    if (isNaN(targetId)) {
+      highlightHandledRef.current = true
+      clearHighlight()
+      return
+    }
+
+    // Only handle once — even if data reloads after resolve
+    highlightHandledRef.current = true
+
+    const found = allRows.find(c => c.id === targetId)
+    if (!found) {
+      // Conflict not in the open list — may already be resolved or not exist
+      setNotFoundId(targetId)
+      clearHighlight()
+      return
+    }
+
+    // Expand the row, highlight it, then scroll to it
+    setExpandedIds(prev => new Set([...prev, targetId]))
+    setHighlightId(targetId)
+
+    // Scroll after a brief render tick so the expanded row is in the DOM
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-conflict-id="${targetId}"]`)
+      if (el && typeof (el as HTMLElement).scrollIntoView === 'function') {
+        ;(el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    })
+
+    // Remove the highlight ring after 2.5 s so it's a flash, not permanent
+    const timer = setTimeout(() => {
+      clearHighlight()
+    }, 2500)
+    return () => clearTimeout(timer)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, allRows.length])
 
   // Counts per type — only types present in the current tab's data
   const typeCounts: { type: ConflictType; label: string; count: number }[] = TYPE_ORDER
@@ -706,6 +774,19 @@ export default function Conflicts() {
         </p>
       )}
 
+      {/* Not-found notice when deep-link target is already resolved or missing */}
+      {notFoundId != null && (
+        <div className="flex items-center justify-between bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg px-4 py-2 text-sm text-amber-700 dark:text-amber-300">
+          <span>Conflict #{notFoundId} was not found in the open queue — it may already be resolved.</span>
+          <button
+            onClick={() => setNotFoundId(null)}
+            className="ml-4 text-amber-500 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-200 font-medium text-xs"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Conflict rows */}
       <div className="space-y-2">
         {rows.map(c => (
@@ -718,6 +799,7 @@ export default function Conflicts() {
             tab={tab}
             selected={selected.includes(c.id)}
             onSelect={() => toggleSelect(c.id)}
+            highlighted={highlightId === c.id}
           />
         ))}
       </div>

@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { getMappings } from '../api/client'
 import { useApi } from '../api/hooks'
 import { StatusBadge } from '../components/StatusBadge'
@@ -58,6 +58,7 @@ function DetailGrid({ detail }: { detail: MappingDetailField[] }) {
 
 export default function SyncedRecords() {
   const { data, loading, error } = useApi(getMappings)
+  const navigate = useNavigate()
   const [statusFilter, setStatusFilter] = useState<MappingStatus | ''>('')
   const [search, setSearch] = useState('')
   const [hideEmpty, setHideEmpty] = useState(false)
@@ -179,17 +180,21 @@ export default function SyncedRecords() {
                         <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtWeight(row.spoolman_weight, '(net)')}</td>
                         <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtWeight(row.filamentdb_weight, '(gross)')}</td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                          {row.status === 'conflict' ? (
-                            <Link
-                              to={row.conflict_id != null ? `/conflicts#conflict-${row.conflict_id}` : '/conflicts'}
-                              className="hover:opacity-75"
-                              title="View conflict"
-                            >
-                              <StatusBadge status={row.status} />
-                            </Link>
-                          ) : (
+                          <div className="flex flex-col items-start gap-1">
                             <StatusBadge status={row.status} />
-                          )}
+                            {row.status === 'conflict' && row.conflict_id != null && (
+                              <button
+                                onClick={() => navigate(`/conflicts?highlight=${row.conflict_id}`)}
+                                className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-300 transition-colors"
+                                title="Jump to this conflict in the Conflicts page"
+                              >
+                                <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                See conflict
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatLocal(row.last_synced)}</td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
