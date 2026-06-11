@@ -2880,9 +2880,9 @@ async def run_sync_cycle(
             for fdb_spool in fdb_f.spools:
                 if fdb_spool.id in mapped_fdb_spool_ids:
                     continue
-                label_val = getattr(fdb_spool, fdb_field_name, None) if fdb_field_name == "label" else None
+                label_val = getattr(fdb_spool, fdb_field_name, None)
                 if label_val:
-                    continue  # has SM ID in label — orphan without SpoolMapping, skip
+                    continue  # has SM ID in configured field — orphan without SpoolMapping, skip
                 await _handle_new_fdb_spool(
                     db, cycle_id, result, dry_run,
                     fdb_f, fdb_spool, filament_mappings_by_fdb,

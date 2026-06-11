@@ -160,6 +160,7 @@ class SpoolmanClient:
         (including a transient error on get_field_definitions) does not abort the other.
         """
         # ---- Spool fields ----
+        from app.config import settings as _settings
         try:
             existing_spool = await self.get_field_definitions("spool")
             existing_spool_keys = {f.key for f in existing_spool}
@@ -170,7 +171,28 @@ class SpoolmanClient:
             )
             existing_spool_keys = set()
 
-        for field_def in _REQUIRED_SPOOL_FIELDS:
+        # Build the runtime spool field list from the config-overridable keys so that
+        # users who override SPOOLMAN_FIELD_FILAMENTDB_ID / _PARENT_ID / _SPOOL_ID get
+        # their custom keys registered instead of the hard-coded defaults.
+        runtime_spool_fields = [
+            {
+                "key": _settings.spoolman_field_filamentdb_id,
+                "name": "Filament DB ID",
+                "field_type": "text",
+            },
+            {
+                "key": _settings.spoolman_field_filamentdb_parent_id,
+                "name": "Filament DB Parent ID",
+                "field_type": "text",
+            },
+            {
+                "key": _settings.spoolman_field_filamentdb_spool_id,
+                "name": "Filament DB Spool ID",
+                "field_type": "text",
+            },
+        ]
+
+        for field_def in runtime_spool_fields:
             key = field_def["key"]
             if key in existing_spool_keys:
                 continue
@@ -192,7 +214,6 @@ class SpoolmanClient:
                 )
 
         # ---- Filament fields ----
-        from app.config import settings as _settings
         try:
             existing_filament = await self.get_field_definitions("filament")
             existing_filament_keys = {f.key for f in existing_filament}

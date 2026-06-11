@@ -2552,3 +2552,120 @@ async def test_fr11_first_sight_stores_field_values_in_baseline(db):
     fdb_snap_data = json.loads(fdb_snap_row.data)
     assert "_field_values" in fdb_snap_data
     assert fdb_snap_data["_field_values"].get("density") == 1.24
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: ensure_extra_fields uses configured spool field names (not hard-coded)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_registers_custom_spool_keys():
+    """ensure_extra_fields must POST the configured (overridden) spool cross-ref key names,
+    not the hard-coded defaults.
+
+    If a user sets SPOOLMAN_FIELD_FILAMENTDB_ID=fdb_id etc., startup must create
+    /api/v1/field/spool/fdb_id — not /api/v1/field/spool/filamentdb_id.
+    """
+    from app.services.spoolman import SpoolmanClient
+    from app.schemas.spoolman import SpoolmanFieldDef
+    from unittest.mock import patch as _patch, AsyncMock as _AsyncMock
+
+    client = SpoolmanClient.__new__(SpoolmanClient)
+
+    # No spool fields exist yet (Spoolman is freshly installed)
+    async def fake_get_field_definitions(entity_type: str):
+        return []
+
+    posted_spool_keys: list[str] = []
+
+    async def fake_post(path: str, *, json: dict) -> MagicMock:
+        if "/field/spool/" in path:
+            key = path.split("/field/spool/")[-1]
+            posted_spool_keys.append(key)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    with _patch("app.config.settings") as settings_mock:
+        # Override all three spool cross-ref field names
+        settings_mock.spoolman_field_filamentdb_id = "fdb_id"
+        settings_mock.spoolman_field_filamentdb_parent_id = "fdb_parent_id"
+        settings_mock.spoolman_field_filamentdb_spool_id = "fdb_spool_id"
+        settings_mock.spoolman_field_filamentdb_material_tags = "filamentdb_material_tags"
+        settings_mock.spoolman_field_openprinttag_slug = "openprinttag_slug"
+        settings_mock.spoolman_field_openprinttag_uuid = "openprinttag_uuid"
+        client.get_field_definitions = _AsyncMock(side_effect=fake_get_field_definitions)
+        mock_http = MagicMock()
+        mock_http.post = _AsyncMock(side_effect=fake_post)
+        client._client = mock_http
+
+        await client.ensure_extra_fields()
+
+    assert "fdb_id" in posted_spool_keys, (
+        "ensure_extra_fields must POST /api/v1/field/spool/fdb_id (custom SPOOLMAN_FIELD_FILAMENTDB_ID)"
+    )
+    assert "fdb_parent_id" in posted_spool_keys, (
+        "ensure_extra_fields must POST /api/v1/field/spool/fdb_parent_id (custom SPOOLMAN_FIELD_FILAMENTDB_PARENT_ID)"
+    )
+    assert "fdb_spool_id" in posted_spool_keys, (
+        "ensure_extra_fields must POST /api/v1/field/spool/fdb_spool_id (custom SPOOLMAN_FIELD_FILAMENTDB_SPOOL_ID)"
+    )
+    # Must NOT have posted the old hard-coded default names
+    assert "filamentdb_id" not in posted_spool_keys, "must not POST default key when overridden"
+    assert "filamentdb_parent_id" not in posted_spool_keys, "must not POST default key when overridden"
+    assert "filamentdb_spool_id" not in posted_spool_keys, "must not POST default key when overridden"
+
+
+# ---------------------------------------------------------------------------
+# Bug fix: engine orphan guard reads any configured FDB field, not only "label"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_engine_fdb_orphan_guard_works_with_custom_id_field(db):
+    """When FILAMENTDB_SPOOLMAN_ID_FIELD is overridden to a custom value, an FDB spool
+    that carries the Spoolman ID in that custom field but has no SpoolMapping row must
+    be treated as an orphan and NOT trigger creation of a new Spoolman spool.
+
+    Regression for Bug B: the old code had `getattr(...) if fdb_field_name == "label" else None`
+    which made label_val always None for any non-default field name.
+    """
+    custom_field = "customSpoolmanId"
+
+    # FDB filament with a spool that has the Spoolman spool ID in "customSpoolmanId"
+    fdb_fil = FDBFilament.model_validate({
+        "_id": "fdb-fil-60",
+        "name": "PLA",
+        "spoolWeight": 200.0,
+        "spools": [
+            {
+                "_id": "fdb-spool-60",
+                "totalWeight": 700.0,
+                "retired": False,
+                # The spool carries the Spoolman ID in the custom field
+                custom_field: "42",
+            }
+        ],
+    })
+
+    # There is a FilamentMapping for the filament but NO SpoolMapping for fdb-spool-60
+    _add_fil_mapping(db, sm_fil_id=60, fdb_fil_id="fdb-fil-60")
+
+    # The Spoolman spool does NOT exist in the current SM list (simulates bridge-DB reset
+    # where the SpoolMapping was lost but the FDB spool still carries the SM ID)
+    spoolman = _fake_spoolman(spools=[])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.create_spool = AsyncMock(return_value={"_id": "should-not-be-created"})
+
+    with patch("app.core.engine._settings") as mock_settings:
+        mock_settings.filamentdb_spoolman_id_field = custom_field
+        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+        mock_settings.parsed_field_mappings = {}
+        mock_settings.parsed_field_mapping_excludes = set()
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # The orphan guard must kick in: no new SM spool should be created.
+    fdb_client.create_spool.assert_not_called()

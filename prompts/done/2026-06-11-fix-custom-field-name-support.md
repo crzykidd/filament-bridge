@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-fix-custom-field-name-support
-status: pending
+status: done
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Both bugs fixed. ensure_extra_fields now builds spool field list from settings at call time. Engine orphan guard no longer special-cases "label". 897 tests pass.
 ---
 
 # Task: Honor configured cross-reference field names (startup field creation + engine label guard)

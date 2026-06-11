@@ -1,5 +1,13 @@
 # Decision record
 
+## 2026-06-11 — Honor configured cross-reference field names in ensure_extra_fields + engine orphan guard
+
+Two bugs only affecting users who override the cross-ref field env vars (`SPOOLMAN_FIELD_FILAMENTDB_ID`, `SPOOLMAN_FIELD_FILAMENTDB_PARENT_ID`, `SPOOLMAN_FIELD_FILAMENTDB_SPOOL_ID`, `FILAMENTDB_SPOOLMAN_ID_FIELD`).
+
+**Bug A.** `ensure_extra_fields` had a module-level `_REQUIRED_SPOOL_FIELDS` list hard-coding the default key names. The filament section already built its field list at call time from `_settings`; the spool section did not. Fixed by replacing the static list with a `runtime_spool_fields` list built from `_settings.spoolman_field_filamentdb_{id,parent_id,spool_id}` inside the function body, matching the existing filament-section pattern.
+
+**Bug B.** The new-FDB-spool detection block in `engine.py` (`run_sync_cycle`) read `getattr(fdb_spool, fdb_field_name, None) if fdb_field_name == "label" else None`. The guard was a no-op for any non-default field name, so a spool that already carried a Spoolman ID in a custom field was treated as brand-new → duplicate spool created. Fixed by removing the `== "label"` condition; `FDBSpool` has `extra="allow"` so any configured field name is accessible via `getattr`.
+
 ## 2026-06-11 — Fix wizard Pass-2.6 finish-tag wire format (CSV not JSON array)
 
 `api/wizard.py` Pass 2.6 was calling `encode_extra_value(finish_ids)` where `finish_ids` is a Python list, producing a JSON-array wire value (`[17]`) that Spoolman 400s on. Fixed to `encode_extra_value(serialize_material_tags(finish_ids))` matching the engine path. The failure was silently swallowed as a warning, so the `filamentdb_material_tags` extra field was never stamped during wizard import.
