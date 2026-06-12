@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-settings-page-redesign
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: Redesigned Settings page into logical sections with 2-column responsive layout. Renamed "Scheduler & Logs" to "Sync"; moved weight threshold/precision next to Weight sync; added New records card with new_filament_policy + new_spool_policy dropdowns; created Import & matching section for variant/OpenTag tuning. All 69 frontend tests pass, 738 backend tests pass, tsc clean.
 ---
 
 # Task: Settings page redesign — tight, grouped, 2-column; surface the new policies

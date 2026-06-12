@@ -92,6 +92,8 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     material_properties_sync_direction: 'filamentdb_to_spoolman',
     material_properties_conflict_policy: 'manual',
     new_spool_sync_direction: 'two_way',
+    new_filament_policy: 'manual_review',
+    new_spool_policy: 'manual_review',
     sync_interval_seconds: 120,
     sync_log_retention_days: 30,
     never_import_empties: false,

@@ -3,7 +3,7 @@ import { useBlocker, Link } from 'react-router-dom'
 import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
-import type { SyncDirection2, ConflictPolicy, VariantParentMode } from '../api/types'
+import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy } from '../api/types'
 import { useTheme } from '../context/ThemeContext'
 import type { ThemeMode } from '../context/ThemeContext'
 import { HelpTip } from '../components/HelpTip'
@@ -195,6 +195,10 @@ export default function Settings() {
   const [matPolicy, setMatPolicy] = useState<MatConflictPolicy | null>(null)
   const [newSpoolDir, setNewSpoolDir] = useState<SyncDirection2 | null>(null)
 
+  // New-record handling policies
+  const [newFilamentPolicy, setNewFilamentPolicy] = useState<NewRecordPolicy | null>(null)
+  const [newSpoolPolicy, setNewSpoolPolicy] = useState<NewRecordPolicy | null>(null)
+
   const [threshold, setThreshold] = useState('')
   const [precision, setPrecision] = useState<number | null>(null)
   const [variantKeywords, setVariantKeywords] = useState<string | null>(null)
@@ -202,7 +206,7 @@ export default function Settings() {
   const [colorKeywords, setColorKeywords] = useState<string | null>(null)
   const [neverImportEmpties, setNeverImportEmpties] = useState<boolean | null>(null)
 
-  // Scheduler & Logs state
+  // Sync section state (formerly "Scheduler & Logs")
   const [syncIntervalMinutes, setSyncIntervalMinutes] = useState<number | null>(null)
   const [syncLogRetentionDays, setSyncLogRetentionDays] = useState<number | null>(null)
   const [togglingAutoSync, setTogglingAutoSync] = useState(false)
@@ -253,6 +257,8 @@ export default function Settings() {
     (matDir != null && matDir !== data.material_properties_sync_direction) ||
     (matPolicy != null && matPolicy !== data.material_properties_conflict_policy) ||
     (newSpoolDir != null && newSpoolDir !== data.new_spool_sync_direction) ||
+    (newFilamentPolicy != null && newFilamentPolicy !== data.new_filament_policy) ||
+    (newSpoolPolicy != null && newSpoolPolicy !== data.new_spool_policy) ||
     (threshold !== '' && threshold !== String(data.sync_weight_threshold_grams)) ||
     (precision != null && precision !== data.weight_precision_decimals) ||
     (variantKeywords != null && variantKeywords !== (data.variant_line_keywords ?? '')) ||
@@ -304,6 +310,8 @@ export default function Settings() {
   const mDir = matDir ?? data.material_properties_sync_direction
   const mPol = (matPolicy ?? data.material_properties_conflict_policy) as MatConflictPolicy
   const nsDir = newSpoolDir ?? data.new_spool_sync_direction
+  const nfPol = newFilamentPolicy ?? data.new_filament_policy
+  const nsPol = newSpoolPolicy ?? data.new_spool_policy
   const thresh = threshold !== '' ? threshold : String(data.sync_weight_threshold_grams)
   const prec = precision ?? data.weight_precision_decimals
   const vkw = variantKeywords ?? data.variant_line_keywords ?? ''
@@ -492,6 +500,8 @@ export default function Settings() {
         material_properties_sync_direction: mDir,
         material_properties_conflict_policy: mPol,
         new_spool_sync_direction: nsDir,
+        new_filament_policy: newFilamentPolicy ?? undefined,
+        new_spool_policy: newSpoolPolicy ?? undefined,
         sync_weight_threshold_grams: parseFloat(thresh) || undefined,
         weight_precision_decimals: prec,
         variant_line_keywords: variantKeywords ?? undefined,
@@ -560,6 +570,11 @@ export default function Settings() {
   const toggleOnCls = 'bg-indigo-600'
   const toggleOffCls = 'bg-gray-200 dark:bg-gray-600'
 
+  const newRecordPolicyOptions: { value: NewRecordPolicy; label: string }[] = [
+    { value: 'manual_review', label: 'Manual review' },
+    { value: 'auto_import', label: 'Auto-import' },
+  ]
+
   return (
     <>
     <BackupSafetyDialog
@@ -611,15 +626,17 @@ export default function Settings() {
         </div>
       </div>
     )}
-    <div className="p-8 space-y-6 max-w-2xl">
+    <div className="p-8 space-y-6 max-w-3xl">
       <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
 
       {/* Appearance */}
       <AppearanceSection />
 
-      {/* Scheduler & Logs */}
-      <div className={`${cardCls} space-y-3`}>
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Scheduler &amp; Logs</h2>
+      {/* ------------------------------------------------------------------ */}
+      {/* Sync                                                                */}
+      {/* ------------------------------------------------------------------ */}
+      <div className={`${cardCls} space-y-4`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Sync</h2>
 
         {/* Auto-sync toggle */}
         <div className="flex items-center justify-between py-2">
@@ -697,230 +714,286 @@ export default function Settings() {
           Application logs go to the container&apos;s stdout — rotation is handled by your Docker
           logging driver.
         </p>
-      </div>
 
-      {/* Weight sync */}
-      <div className={`${cardCls} space-y-1`}>
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Weight sync</h2>
-        <p className={`${subTextCls} mb-3`}>
-          Controls which direction weight changes flow and what happens when both
-          sides change between syncs.
-        </p>
-        <DirectionSelect
-          label="Direction"
-          value={wDir}
-          onChange={v => {
-            setWeightDir(v)
-            if (v !== 'two_way') setWeightPolicy('manual')
-          }}
-          tip="Which side's weight changes get copied to the other. One-way ignores changes on the locked side; two-way syncs both and can conflict."
-          tipHref="/docs/sync-model"
-        />
-        <WeightConflictSelect
-          value={wPol}
-          direction={wDir}
-          onChange={v => setWeightPolicy(v)}
-        />
-      </div>
+        {/* 2-column grid: Weight sync | Material properties sync */}
+        <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 ${dividerCls}`}>
 
-      {/* Material properties sync */}
-      <div className={`${cardCls} space-y-1`}>
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Material properties sync</h2>
-        <p className={`${subTextCls} mb-3`}>
-          Controls direction for field sync, multicolor/color, density, diameter,
-          temperatures, and cost.
-        </p>
-        <DirectionSelect
-          label="Direction"
-          value={mDir}
-          onChange={v => {
-            setMatDir(v)
-            if (v !== 'two_way') setMatPolicy('manual')
-          }}
-          tip="Covers material/type, density, diameter, temperatures, cost, color, and finish tags."
-          tipHref="/docs/sync-model"
-        />
-        <MatPropConflictSelect
-          value={mPol}
-          direction={mDir}
-          onChange={v => setMatPolicy(v)}
-        />
-      </div>
+          {/* Weight sync card */}
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-1">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Weight sync</h3>
+            <p className={`${subTextCls} mb-2`}>
+              Which direction weight changes flow and what happens when both sides change.
+            </p>
+            <DirectionSelect
+              label="Direction"
+              value={wDir}
+              onChange={v => {
+                setWeightDir(v)
+                if (v !== 'two_way') setWeightPolicy('manual')
+              }}
+              tip="Which side's weight changes get copied to the other. One-way ignores changes on the locked side; two-way syncs both and can conflict."
+              tipHref="/docs/sync-model"
+            />
+            <WeightConflictSelect
+              value={wPol}
+              direction={wDir}
+              onChange={v => setWeightPolicy(v)}
+            />
+            {/* Weight-specific numeric settings */}
+            <div className={`pt-3 mt-1 ${dividerCls} space-y-2`}>
+              <div className="flex items-center justify-between py-1">
+                <span className="flex items-center">
+                  <span className={labelCls}>Threshold (g)</span>
+                  <HelpTip text="Changes smaller than this are ignored, so net↔gross rounding doesn't cause endless tiny updates. Default 2 g." />
+                </span>
+                <input
+                  type="number"
+                  min="0.1"
+                  step="0.5"
+                  value={thresh}
+                  onChange={e => setThreshold(e.target.value)}
+                  className={`w-20 ${inputCls} text-right`}
+                />
+              </div>
+              <div className="flex items-center justify-between py-1">
+                <span className="flex items-center">
+                  <span className={labelCls}>Precision (decimals)</span>
+                  <HelpTip text="Decimal places used when comparing and writing weights." />
+                </span>
+                <select
+                  value={prec}
+                  onChange={e => setPrecision(Number(e.target.value))}
+                  className={inputCls}
+                >
+                  {[0, 1, 2, 3, 4].map(n => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
 
-      {/* New spools */}
-      <div className={`${cardCls} space-y-1`}>
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">New spools</h2>
-        <p className={`${subTextCls} mb-3`}>
-          Controls which newly-detected unmapped spools are automatically created in the
-          other system. Two-way creates in both directions (default behavior).
-        </p>
-        <DirectionSelect
-          label="Direction"
-          value={nsDir}
-          onChange={v => setNewSpoolDir(v)}
-          tip="When an unmapped spool appears in one system, the bridge creates it in the other. Direction limits which side gets auto-created."
-        />
-        <div className={`flex items-start justify-between py-3 ${dividerCls}`}>
-          <div>
-            <span className="flex items-center">
-              <span className={labelCls}>Never import empties</span>
-              <HelpTip text="Applies to wizard imports only — the ongoing engine doesn't create records for depleted spools either way." />
-            </span>
-            <p className={`${subTextCls} mt-0.5`}>
-              Empty/depleted spools are skipped on import; the filament definition is still imported.
+          {/* Material properties sync card */}
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-1">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Material properties sync</h3>
+            <p className={`${subTextCls} mb-2`}>
+              Direction for color, density, diameter, temperatures, and cost.
+            </p>
+            <DirectionSelect
+              label="Direction"
+              value={mDir}
+              onChange={v => {
+                setMatDir(v)
+                if (v !== 'two_way') setMatPolicy('manual')
+              }}
+              tip="Covers material/type, density, diameter, temperatures, cost, color, and finish tags."
+              tipHref="/docs/sync-model"
+            />
+            <MatPropConflictSelect
+              value={mPol}
+              direction={mDir}
+              onChange={v => setMatPolicy(v)}
+            />
+          </div>
+        </div>
+
+        {/* New records card — full width under the 2-column pair */}
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-2">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">New records</h3>
+          <p className={`${subTextCls} mb-2`}>
+            Controls what happens when the engine detects an unmapped record in either system.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+            {/* Direction */}
+            <div className="md:col-span-2">
+              <DirectionSelect
+                label="Direction"
+                value={nsDir}
+                onChange={v => setNewSpoolDir(v)}
+                tip="When an unmapped spool appears in one system, the bridge creates it in the other. Direction limits which side gets auto-created."
+              />
+            </div>
+
+            {/* New filament policy */}
+            <div className="flex items-center justify-between py-2">
+              <span className="flex items-center">
+                <span className={labelCls}>New filaments</span>
+                <HelpTip text="Manual review queues new filaments for you to confirm; Auto-import creates them immediately." />
+              </span>
+              <select
+                value={nfPol}
+                onChange={e => setNewFilamentPolicy(e.target.value as NewRecordPolicy)}
+                className={inputCls}
+              >
+                {newRecordPolicyOptions.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* New spool policy */}
+            <div className="flex items-center justify-between py-2">
+              <span className="flex items-center">
+                <span className={labelCls}>New spools</span>
+                <HelpTip text="Manual review queues new spools for you to confirm; Auto-import creates them immediately. Spools are always created after their filament." />
+              </span>
+              <select
+                value={nsPol}
+                onChange={e => setNewSpoolPolicy(e.target.value as NewRecordPolicy)}
+                className={inputCls}
+              >
+                {newRecordPolicyOptions.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Helper note */}
+            <p className={`md:col-span-2 ${subTextCls}`}>
+              Spools are always created after their filament — if a filament is held for manual
+              review, its spools wait too.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setNeverImportEmpties(!neverEmpties)}
-            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ml-4 mt-0.5 ${
-              neverEmpties ? toggleOnCls : toggleOffCls
-            }`}
-            aria-pressed={neverEmpties}
-          >
-            <span
-              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                neverEmpties ? 'translate-x-5' : 'translate-x-0'
+
+          {/* Never import empties toggle */}
+          <div className={`flex items-start justify-between py-3 mt-1 ${dividerCls}`}>
+            <div>
+              <span className="flex items-center">
+                <span className={labelCls}>Never import empties</span>
+                <HelpTip text="Applies to wizard imports only — the ongoing engine doesn't create records for depleted spools either way." />
+              </span>
+              <p className={`${subTextCls} mt-0.5`}>
+                Empty/depleted spools are skipped on import; the filament definition is still imported.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNeverImportEmpties(!neverEmpties)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ml-4 mt-0.5 ${
+                neverEmpties ? toggleOnCls : toggleOffCls
               }`}
-            />
-          </button>
+              aria-pressed={neverEmpties}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  neverEmpties ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Variant parent mode */}
-      <div className={`bg-white dark:bg-gray-800 rounded-lg border p-5 space-y-3 ${
-        effectiveVariantParentMode === 'unset'
-          ? 'border-amber-400 dark:border-amber-600'
-          : 'border-gray-200 dark:border-gray-700'
-      }`}>
-        <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Variant parent mode</h2>
-            <HelpTip
-              text="How the wizard builds Filament DB's parent/variant tree from flat Spoolman filaments. Choose once before the first import; existing mappings are never changed."
-              learnMoreHref="/docs/variant-parent-mode"
-            />
-          </span>
-          {effectiveVariantParentMode === 'unset' && (
-            <span className="text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded px-2 py-0.5">
-              Choose a mode before running the wizard
-            </span>
-          )}
-        </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
-          Controls how the Bulk Import Wizard builds the parent/variant structure in Filament DB
-          from flat Spoolman filaments.{' '}
-          <Link to="/docs/variant-parent-mode" className="text-indigo-600 dark:text-indigo-400 hover:underline">
-            Read the details
-          </Link>
-        </p>
-        <div className="space-y-2">
-          {(['promote_color', 'generic_container'] as const).map(mode => (
-            <label key={mode} className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="variant_parent_mode"
-                value={mode}
-                checked={effectiveVariantParentMode === mode}
-                onChange={() => setVariantParentModeState(mode)}
-                className="mt-0.5 h-4 w-4 text-indigo-600 border-gray-300 dark:border-gray-600 focus:ring-indigo-500"
-              />
-              <div>
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {mode === 'promote_color' ? 'Promote a color to parent' : 'Generic container parent'}
-                </span>
-                <p className={`${subTextCls} mt-0.5`}>
-                  {mode === 'promote_color'
-                    ? 'One color is promoted as the Filament DB parent; the others become variants. Matches the wizard\'s original behavior.'
-                    : 'A colorless container is created for every group (even single-color). All colors are variants under it. Uniform structure — every color is always a child.'}
-                </p>
-              </div>
-            </label>
-          ))}
-        </div>
-        {effectiveVariantParentMode === 'unset' && (
-          <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded p-2">
-            The Bulk Import Wizard (Spoolman &rarr; Filament DB direction) will not run until you
-            choose a mode and save.
-          </p>
-        )}
+      {/* ------------------------------------------------------------------ */}
+      {/* Import & matching                                                   */}
+      {/* ------------------------------------------------------------------ */}
+      <div className={`${cardCls} space-y-4`}>
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Import &amp; matching</h2>
 
-        {effectiveVariantParentMode === 'generic_container' && (
-          <div className={`mt-3 pt-3 ${dividerCls} space-y-2`}>
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                id="container-marker-enabled"
-                checked={effectiveMarkerEnabled}
-                onChange={e => {
-                  setContainerMarkerEnabled(e.target.checked)
-                  if (e.target.checked && effectiveMarkerText === '') {
-                    setContainerMarkerText('(Master)')
-                  }
-                }}
-                className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+        {/* Variant parent mode */}
+        <div className={`rounded-lg border p-4 space-y-3 ${
+          effectiveVariantParentMode === 'unset'
+            ? 'border-amber-400 dark:border-amber-600'
+            : 'border-gray-200 dark:border-gray-700'
+        }`}>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Variant parent mode</h3>
+              <HelpTip
+                text="How the wizard builds Filament DB's parent/variant tree from flat Spoolman filaments. Choose once before the first import; existing mappings are never changed."
+                learnMoreHref="/docs/variant-parent-mode"
               />
-              <label htmlFor="container-marker-enabled" className={`${labelCls} cursor-pointer`}>
-                Append a marker to container parent names
-              </label>
-            </div>
-            {effectiveMarkerEnabled && (
-              <div className="pl-7 space-y-1">
-                <input
-                  type="text"
-                  value={effectiveMarkerText}
-                  onChange={e => setContainerMarkerText(e.target.value)}
-                  placeholder="(Master)"
-                  className={`${inputCls} w-48`}
-                />
-                <p className={subTextCls}>
-                  Keeps container names distinct from their color variants (e.g. "ELEGOO PLA {effectiveMarkerText}").
-                  On a name collision you can rename or skip per-record at Preview.
-                </p>
-              </div>
-            )}
-            {!effectiveMarkerEnabled && (
-              <p className={`pl-7 ${subTextCls}`}>
-                Containers will have no suffix (e.g. "ELEGOO PLA"). If a collision occurs you can
-                rename or skip per-record at the Preview step.
-              </p>
+            </span>
+            {effectiveVariantParentMode === 'unset' && (
+              <span className="text-xs font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded px-2 py-0.5">
+                Choose a mode before running the wizard
+              </span>
             )}
           </div>
-        )}
-      </div>
-
-      {/* Other settings */}
-      <div className={`${cardCls} space-y-1`}>
-        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Other settings</h2>
-        <div className="flex items-center justify-between py-3">
-          <span className="flex items-center">
-            <span className={labelCls}>Weight sync threshold (g)</span>
-            <HelpTip text="Changes smaller than this are ignored, so net↔gross rounding doesn't cause endless tiny updates. Default 2 g." />
-          </span>
-          <input
-            type="number"
-            min="0.1"
-            step="0.5"
-            value={thresh}
-            onChange={e => setThreshold(e.target.value)}
-            className={`w-24 ${inputCls} text-right`}
-          />
-        </div>
-        <div className="flex items-center justify-between py-3">
-          <span className="flex items-center">
-            <span className={labelCls}>Weight precision (decimal places)</span>
-            <HelpTip text="Decimal places used when comparing and writing weights." />
-          </span>
-          <select
-            value={prec}
-            onChange={e => setPrecision(Number(e.target.value))}
-            className={inputCls}
-          >
-            {[0, 1, 2, 3, 4].map(n => (
-              <option key={n} value={n}>{n}</option>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Controls how the Bulk Import Wizard builds the parent/variant structure in Filament DB
+            from flat Spoolman filaments.{' '}
+            <Link to="/docs/variant-parent-mode" className="text-indigo-600 dark:text-indigo-400 hover:underline">
+              Read the details
+            </Link>
+          </p>
+          <div className="space-y-2">
+            {(['promote_color', 'generic_container'] as const).map(mode => (
+              <label key={mode} className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="variant_parent_mode"
+                  value={mode}
+                  checked={effectiveVariantParentMode === mode}
+                  onChange={() => setVariantParentModeState(mode)}
+                  className="mt-0.5 h-4 w-4 text-indigo-600 border-gray-300 dark:border-gray-600 focus:ring-indigo-500"
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {mode === 'promote_color' ? 'Promote a color to parent' : 'Generic container parent'}
+                  </span>
+                  <p className={`${subTextCls} mt-0.5`}>
+                    {mode === 'promote_color'
+                      ? 'One color is promoted as the Filament DB parent; the others become variants. Matches the wizard\'s original behavior.'
+                      : 'A colorless container is created for every group (even single-color). All colors are variants under it. Uniform structure — every color is always a child.'}
+                  </p>
+                </div>
+              </label>
             ))}
-          </select>
+          </div>
+          {effectiveVariantParentMode === 'unset' && (
+            <p className="text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded p-2">
+              The Bulk Import Wizard (Spoolman &rarr; Filament DB direction) will not run until you
+              choose a mode and save.
+            </p>
+          )}
+
+          {effectiveVariantParentMode === 'generic_container' && (
+            <div className={`mt-3 pt-3 ${dividerCls} space-y-2`}>
+              <div className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="container-marker-enabled"
+                  checked={effectiveMarkerEnabled}
+                  onChange={e => {
+                    setContainerMarkerEnabled(e.target.checked)
+                    if (e.target.checked && effectiveMarkerText === '') {
+                      setContainerMarkerText('(Master)')
+                    }
+                  }}
+                  className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="container-marker-enabled" className={`${labelCls} cursor-pointer`}>
+                  Append a marker to container parent names
+                </label>
+              </div>
+              {effectiveMarkerEnabled && (
+                <div className="pl-7 space-y-1">
+                  <input
+                    type="text"
+                    value={effectiveMarkerText}
+                    onChange={e => setContainerMarkerText(e.target.value)}
+                    placeholder="(Master)"
+                    className={`${inputCls} w-48`}
+                  />
+                  <p className={subTextCls}>
+                    Keeps container names distinct from their color variants (e.g. "ELEGOO PLA {effectiveMarkerText}").
+                    On a name collision you can rename or skip per-record at Preview.
+                  </p>
+                </div>
+              )}
+              {!effectiveMarkerEnabled && (
+                <p className={`pl-7 ${subTextCls}`}>
+                  Containers will have no suffix (e.g. "ELEGOO PLA"). If a collision occurs you can
+                  rename or skip per-record at the Preview step.
+                </p>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* Variant line keywords */}
         <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
           <span className="flex items-center">
             <span className={labelCls}>Variant line keywords</span>
@@ -938,6 +1011,8 @@ export default function Settings() {
             Filaments whose names contain different keywords won't be grouped together.
           </span>
         </div>
+
+        {/* Manufacturer mappings */}
         <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
           <span className="flex items-center">
             <span className={labelCls}>Manufacturer mappings (Spoolman → OpenTag)</span>
@@ -956,6 +1031,8 @@ export default function Settings() {
             name in Spoolman differs from the brand name used in OpenTag.
           </span>
         </div>
+
+        {/* Color word mappings */}
         <div className={`flex flex-col gap-1 py-3 ${dividerCls}`}>
           <span className={labelCls}>Color word mappings (OpenTag matcher)</span>
           <input
@@ -972,7 +1049,9 @@ export default function Settings() {
             to use defaults only.
           </span>
         </div>
-        <div className="pt-2 flex items-center gap-3">
+
+        {/* Save button */}
+        <div className={`pt-3 ${dividerCls} flex items-center gap-3`}>
           <button
             onClick={handleSave}
             disabled={saving}
@@ -987,6 +1066,7 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Backup */}
       <div className={`${cardCls} space-y-3`}>
         <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Backup</h2>
         <div className="flex gap-3 flex-wrap items-center">
@@ -1012,6 +1092,7 @@ export default function Settings() {
         {importMsg && <p className="text-sm text-gray-600 dark:text-gray-300">{importMsg}</p>}
       </div>
 
+      {/* Wizard status */}
       <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 p-5 text-sm text-gray-500 dark:text-gray-400 space-y-1">
         <p>Wizard completed: <strong className="text-gray-700 dark:text-gray-300">{data.wizard_completed ? 'Yes' : 'No'}</strong></p>
         {data.import_direction && (

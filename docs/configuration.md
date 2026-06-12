@@ -39,7 +39,7 @@ privileges via `gosu`. No manual `chown` is ever needed — pre-existing root-ow
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SYNC_INTERVAL_SECONDS` | No | `120` | Default seconds between auto-sync cycles. Runtime-editable in Settings → Scheduler & Logs (no restart needed; backend clamps to ≥ 30 s). Auto-sync itself is OFF by default and must be enabled explicitly after the wizard. |
+| `SYNC_INTERVAL_SECONDS` | No | `120` | Default seconds between auto-sync cycles. Runtime-editable in Settings → Sync (no restart needed; backend clamps to ≥ 30 s). Auto-sync itself is OFF by default and must be enabled explicitly after the wizard. |
 
 ### Two-axis sync model
 
@@ -129,20 +129,20 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 
 | Setting | Default | Where | Description |
 |---|---|---|---|
-| Auto-sync enabled | `false` | Scheduler & Logs | Master switch for scheduled sync. Enabling requires a completed wizard and is gated behind the backup dialog. |
-| `sync_interval_seconds` | env (`120`) | Scheduler & Logs | Auto-sync interval; rescheduled immediately on save (min 30 s). |
-| `sync_log_retention_days` | `30` | Scheduler & Logs | Sync-log rows older than this are pruned at the start of each auto-sync tick. `0` = keep forever. |
-| Weight / material-properties / new-spool direction + policy | see above | category cards | The two-axis model. |
-| `sync_weight_threshold_grams` | `2.0` | Other settings | Weight changes smaller than this are ignored (suppresses net/gross rounding churn). |
-| `weight_precision_decimals` | `2` | Other settings | Decimal places used when comparing/writing weights. |
-| `variant_line_keywords` | env seed | Other settings | See `VARIANT_LINE_KEYWORDS`. |
-| `opentag_vendor_aliases` | env / seed | Other settings | See `OPENTAG_VENDOR_ALIASES`. |
-| `opentag_color_keywords` | env / seed | Other settings | See `OPENTAG_COLOR_KEYWORDS`. |
-| `new_filament_policy` | `manual_review` | New records | What the engine does when it detects an unmapped filament: `manual_review` queues a `new_filament` conflict (actionable — the Conflicts page "Add" button imports it); `auto_import` creates the filament automatically and writes the cross-reference. Defaults to `manual_review` for both fresh and existing installs. When `variant_parent_mode` is `unset` and the filament looks like a variant-cluster member, auto-import falls back to `manual_review` regardless of this setting (can't group variants without a mode). |
-| `new_spool_policy` | `manual_review` | New records | What the engine does when an unmapped spool appears whose filament **is already mapped**: `manual_review` queues a `new_spool` conflict; `auto_import` creates the spool immediately. A spool is always held when its filament is unmapped, regardless of this setting — the filament tier must resolve first. |
-| `never_import_empties` | `false` | New spools | Controls both empty and archived spools. When `false` (default): all spools import, including depleted (`remaining ≤ 0`) and archived ones. Archived spools import as **retired** FDB spools (spool only — the filament stays live). When `true`: spools with `remaining ≤ 0` are skipped (whether active or archived); archived spools with positive remaining weight still import as retired. The filament definition always imports regardless. |
-| `variant_parent_mode` | `unset` | Variant parent mode | **Required before the wizard runs** (Spoolman→FDB direction): `promote_color` or `generic_container`. See [variant-parent-mode.md](variant-parent-mode.md). |
-| `container_parent_marker` | env (`(Master)`) | Variant parent mode | Marker on generic-container names; checkbox + text field, visible in `generic_container` mode. |
+| Auto-sync enabled | `false` | Sync | Master switch for scheduled sync. Enabling requires a completed wizard and is gated behind the backup dialog. |
+| `sync_interval_seconds` | env (`120`) | Sync | Auto-sync interval; rescheduled immediately on save (min 30 s). |
+| `sync_log_retention_days` | `30` | Sync | Sync-log rows older than this are pruned at the start of each auto-sync tick. `0` = keep forever. |
+| Weight / material-properties / new-record direction + policy | see above | Sync → category cards | The two-axis model. |
+| `sync_weight_threshold_grams` | `2.0` | Sync → Weight sync | Weight changes smaller than this are ignored (suppresses net/gross rounding churn). |
+| `weight_precision_decimals` | `2` | Sync → Weight sync | Decimal places used when comparing/writing weights. |
+| `new_filament_policy` | `manual_review` | Sync → New records | What the engine does when it detects an unmapped filament: `manual_review` queues a `new_filament` conflict (actionable — the Conflicts page "Add" button imports it); `auto_import` creates the filament automatically and writes the cross-reference. Defaults to `manual_review` for both fresh and existing installs. When `variant_parent_mode` is `unset` and the filament looks like a variant-cluster member, auto-import falls back to `manual_review` regardless of this setting (can't group variants without a mode). |
+| `new_spool_policy` | `manual_review` | Sync → New records | What the engine does when an unmapped spool appears whose filament **is already mapped**: `manual_review` queues a `new_spool` conflict; `auto_import` creates the spool immediately. A spool is always held when its filament is unmapped, regardless of this setting — the filament tier must resolve first. |
+| `never_import_empties` | `false` | Sync → New records | Controls both empty and archived spools. When `false` (default): all spools import, including depleted (`remaining ≤ 0`) and archived ones. Archived spools import as **retired** FDB spools (spool only — the filament stays live). When `true`: spools with `remaining ≤ 0` are skipped (whether active or archived); archived spools with positive remaining weight still import as retired. The filament definition always imports regardless. |
+| `variant_parent_mode` | `unset` | Import & matching | **Required before the wizard runs** (Spoolman→FDB direction): `promote_color` or `generic_container`. See [variant-parent-mode.md](variant-parent-mode.md). |
+| `container_parent_marker` | env (`(Master)`) | Import & matching | Marker on generic-container names; checkbox + text field, visible in `generic_container` mode. |
+| `variant_line_keywords` | env seed | Import & matching | See `VARIANT_LINE_KEYWORDS`. |
+| `opentag_vendor_aliases` | env / seed | Import & matching | See `OPENTAG_VENDOR_ALIASES`. |
+| `opentag_color_keywords` | env / seed | Import & matching | See `OPENTAG_COLOR_KEYWORDS`. |
 | `api_token_enabled` | `false` | Security | Allow `Authorization: Bearer` / `X-API-Key` machine auth. |
 | `api_token` | (none) | Security | The token value; generate/regenerate in Settings (displayed masked). |
 | `debug_mode` | `false` | Debug mode | Reveals the Danger Zone and enables the three `/api/debug/*` reset endpoints (403 when off). Never enable in production. |
