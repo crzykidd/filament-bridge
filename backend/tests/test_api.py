@@ -1916,8 +1916,9 @@ def test_preview_name_collision_vs_existing_and_intra_batch(db):
     assert body["flag_counts"]["name_collision"] == 1
 
 
-def test_preview_empty_active_flags_zero_weight_not_archived(db):
-    """empty_active: flags remaining_weight==0 AND not archived; ignores archived-and-empty."""
+def test_preview_empty_active_flags_empty_and_archived(db):
+    """empty_active: flags empty spools (remaining<=0) AND archived spools; archived ones
+    carry archived=True (they import as retired). A non-empty active spool is excluded."""
     sm_fil = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))
     spools = [
         SpoolmanSpool(id=1, filament=sm_fil, remaining_weight=0.0, archived=False, extra={}),
@@ -1927,10 +1928,11 @@ def test_preview_empty_active_flags_zero_weight_not_archived(db):
     client, _, _ = _setup_preview(db, sm_filaments=[sm_fil], sm_spools=spools)
 
     body = client.get("/api/wizard/preview").json()
-    empty = body["empty_active"]
-    assert len(empty) == 1
-    assert empty[0]["spoolman_spool_id"] == 1
-    assert body["flag_counts"]["empty_active"] == 1
+    by_id = {e["spoolman_spool_id"]: e for e in body["empty_active"]}
+    assert set(by_id) == {1, 2}  # active-empty + archived; the 100 g active spool is excluded
+    assert by_id[1]["archived"] is False
+    assert by_id[2]["archived"] is True
+    assert body["flag_counts"]["empty_active"] == 2
 
 
 def test_preview_default_tare_reports_200g_substitution(db):
@@ -3754,6 +3756,7 @@ async def test_new_spool_two_way_creates_in_both_directions(db):
     })
     db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
     db.merge(BridgeConfig(key="new_spool_sync_direction", value='"two_way"'))
+    db.merge(BridgeConfig(key="new_spool_policy", value='"auto_import"'))
     db.commit()
 
     spoolman = AsyncMock()
@@ -3799,6 +3802,7 @@ async def test_new_spool_spoolman_to_filamentdb_only_creates_fdb(db):
     })
     db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
     db.merge(BridgeConfig(key="new_spool_sync_direction", value='"spoolman_to_filamentdb"'))
+    db.merge(BridgeConfig(key="new_spool_policy", value='"auto_import"'))
     db.commit()
 
     spoolman = AsyncMock()
@@ -3844,6 +3848,7 @@ async def test_new_spool_filamentdb_to_spoolman_only_creates_sm(db):
     })
     db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
     db.merge(BridgeConfig(key="new_spool_sync_direction", value='"filamentdb_to_spoolman"'))
+    db.merge(BridgeConfig(key="new_spool_policy", value='"auto_import"'))
     db.commit()
 
     spoolman = AsyncMock()
