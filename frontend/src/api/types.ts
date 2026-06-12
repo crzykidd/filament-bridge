@@ -781,6 +781,10 @@ export interface OpenTagApplyResponse {
   results: OpenTagApplyFilamentResult[]
 }
 
+export interface OpenTagSearchResponse {
+  results: OpenTagCandidate[]
+}
+
 // ---------------------------------------------------------------------------
 // Debug reset tools
 // ---------------------------------------------------------------------------

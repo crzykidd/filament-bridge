@@ -38,14 +38,18 @@ Per Spoolman filament:
    coextruded/gradient only match compatible multicolor profiles.
 4. **Polymer-family gate.** A PC filament can never match ASA, etc. (PLA and PLA+ are the
    same family by design — grades live in the name, per the OpenTag spec.)
-5. **Scoring** (sums to 1.0): material match 0.20, brand 0.20, color-*name* similarity
-   0.25 (+0.05 when both names reduce to the same base color via the **Color word
-   mappings** — "Jet Black" and "Galaxy Black" both → black), color-*hex* proximity up to
-   0.15, finish-tag agreement ±0.15 (a silk vs matte mismatch is penalized).
+5. **Structured scoring** (sums to 1.0): material 0.15, brand 0.15, color-*multiset*
+   0.40 (order-independent, count-aware — a name with "Silver & Blue" scores both colors
+   separately), modifier Jaccard 0.15 (silk/matte/gradient words), finish-tag agreement
+   ±0.10, color-hex proximity 0.05, full-string tiebreaker 0–0.05.
 
 Matches below 30% land in the **unmatched** list with a reason (unknown manufacturer, no
 material for that brand, multicolor with no multicolor candidates, or simply no confident
 match). Fix unknown manufacturers by adding a mapping in Settings, then Reprocess.
+
+For a detailed breakdown of how scoring works — including the mined lexicons, n-gram
+separator rule, color multiset formula, and a worked AMOLEN example — see
+[opentag-matching.md](opentag-matching.md).
 
 ## Updates available banner
 
@@ -104,6 +108,19 @@ warns when Spoolman has multicolor data but the candidate is single-color.
 The **Manufacturer** row only appears when the Spoolman vendor and the OpenTag brand
 actually differ — accepting it re-points the filament to the right vendor (created in
 Spoolman if needed; this is the only path in the tool that can create a vendor).
+
+### Manual search
+
+Each card has a **Search OpenTag manually…** link (below the field table, always
+visible when the card is expanded and not ignored). Click it to open a per-card search
+box. Type a keyword (e.g. "Silk Gold", "Matte Dark Blue"); results are scored against
+the same brand+material context as the automatic match and rendered with confidence
+badges. Clicking a result injects it as the active candidate — the field table, slug,
+and confidence badge all update immediately. The injected candidate is de-duplicated
+against any existing candidates so re-searching does not bloat the list.
+
+This is useful for unmatched filaments (confidence &lt; 30%) or cases where the
+automatic best match is clearly wrong.
 
 ## Apply
 

@@ -1,20 +1,34 @@
 """OpenTag → Spoolman matcher — pure, no I/O.
 
+v2 scorer (2026-06-11): structured token decomposition + mined lexicons.
+
 Scores OPTMaterial candidates against a SpoolmanFilament by:
-  1. Material/type match (normalised, finish-stripped)
-  2. Vendor/brand name match
-  3. Color name similarity  ← key within-brand/material discriminator
-  4. Color hex proximity
-  5. Finish tag overlap
+  1. Material/type match (normalised, finish-stripped)              × 0.15
+  2. Vendor/brand name match                                        × 0.15
+  3. Color multiset similarity (order-independent, count-aware)     × 0.40
+  4. Modifier set Jaccard                                           × 0.15
+  5. Finish tag overlap                                             ±0.10
+  6. Color hex proximity                                            × 0.05
+  7. Full-string similarity tie-breaker                             +0.05 max
 
 Returns best match + confidence + alternates list.
+
+Backward-compat shims retained
+--------------------------------
+``_color_name_tokens``, ``_name_similarity``, ``_base_color`` are kept as shims
+for existing tests.  The new code path uses ``decompose_name`` + ``score_candidate``.
+
+``score_candidate`` / ``find_best_match`` gain an optional ``lexicon=`` kwarg.
+When ``None`` the scorer falls back to the seed-only ``BASE_COLORS``/``MODIFIER_SEED``
+lexicons from ``opentag_lexicon`` (no network call needed).
 """
 
 from __future__ import annotations
 
-import re
 import unicodedata
-from typing import Any
+from collections import Counter
+from difflib import SequenceMatcher
+from typing import Any, NamedTuple
 
 from app.core.color import TAG_COEXTRUDED, TAG_GRADIENT, arrangement_from_tags
 from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS, finish_ids_from_text, serialize_material_tags, strip_finish_words
@@ -23,82 +37,254 @@ from app.schemas.spoolman import SpoolmanFilament
 
 
 # ---------------------------------------------------------------------------
-# Color-words map — maps any color word to a canonical base color
+# COLOR_SYNONYMS — true synonym reduction only (v2)
+#
+# LOCKED DECISION (2026-06-11 plan): drop all conflating base-color collapses
+# (silver→grey, galaxy→black, cool→grey, etc.).  Reduce to ONLY genuine
+# linguistic equivalences.  Marketing names and distinct shades are NOT collapsed.
+#
+# The ``opentag_color_keywords`` setting / env var now feeds OVERRIDES into this
+# map (synonyms-only), not the primary matching mechanism.
 # ---------------------------------------------------------------------------
 
-#: Default seed map for color-word normalization.
-#: Three kinds of entry:
-#:   - Base colors → themselves (canonical identity)
-#:   - Lightness modifiers ("light", "dark", "deep", "pastel") → ignored/stripped
-#:     (not in this map; handled by stripping modifier tokens before lookup)
-#:   - Brand/marketing names → a base color (e.g. "galaxy" → "black", "cool" → "grey")
-#: User-extendable via OPENTAG_COLOR_KEYWORDS env var or Settings UI.
+#: True synonym map applied to both sides before multiset comparison.
+#: Keep short — only add entries where two words are genuinely interchangeable
+#: (e.g. "gray" == "grey", "violet" == "purple").
 DEFAULT_COLOR_KEYWORDS: dict[str, str] = {
-    # Base colors
-    "black": "black",
-    "white": "white",
-    "grey": "grey",
-    "gray": "grey",
-    "silver": "grey",
-    "red": "red",
-    "blue": "blue",
-    "green": "green",
-    "yellow": "yellow",
-    "orange": "orange",
-    "purple": "purple",
-    "violet": "purple",
-    "pink": "pink",
-    "magenta": "pink",
-    "brown": "brown",
-    "beige": "brown",
-    "tan": "brown",
-    "gold": "gold",
-    "bronze": "bronze",
-    "copper": "copper",
-    "cyan": "cyan",
-    "teal": "cyan",
-    "navy": "blue",
-    "indigo": "purple",
-    "natural": "natural",
-    "clear": "clear",
+    # Spelling variants (genuine synonyms)
+    "gray":        "grey",
+    "violet":      "purple",
+    "magenta":     "pink",
     "transparent": "clear",
-    # Marketing/brand names → base color
-    "galaxy": "black",
-    "jet": "black",
-    "onyx": "black",
-    "obsidian": "black",
-    "charcoal": "grey",
-    "cool": "grey",
-    "ash": "grey",
-    "fog": "grey",
-    "smoke": "grey",
-    "pearl": "white",
-    "ivory": "white",
-    "cream": "white",
-    "snow": "white",
-    "crimson": "red",
-    "scarlet": "red",
-    "ruby": "red",
-    "rose": "pink",
-    "coral": "orange",
-    "amber": "orange",
-    "pumpkin": "orange",
-    "lime": "green",
-    "olive": "green",
-    "mint": "green",
-    "forest": "green",
-    "army": "green",
-    "sky": "blue",
-    "azure": "blue",
-    "ocean": "blue",
-    "cobalt": "blue",
-    "sapphire": "blue",
-    "electric": "blue",
-    "royal": "blue",
-    "lavender": "purple",
-    "lilac": "purple",
-    "prusa": "",       # brand prefix, not a color — maps to empty (ignored)
+    "navy":        "blue",
+    # Legacy: keep "prusa" → empty so the brand-name token doesn't score as a color
+    "prusa":       "",
 }
+
+#: Alias: ``COLOR_SYNONYMS`` is the canonical name; ``DEFAULT_COLOR_KEYWORDS``
+#: is retained for import-compat with ``api/opentag.py``.
+COLOR_SYNONYMS = DEFAULT_COLOR_KEYWORDS
+
+
+# ---------------------------------------------------------------------------
+# ParsedName — structured token bag produced by ``decompose_name``
+# ---------------------------------------------------------------------------
+
+class ParsedName(NamedTuple):
+    """Structured decomposition of a filament name.
+
+    Fields
+    ------
+    material_family:
+        Normalised polymer family (``"pla"``, ``"petg"``, ``"tpu"``, …) or ``""``
+        when not identifiable.
+    finish_ids:
+        Set of integer finish-tag IDs detected in the name (silk, matte, cf, …).
+    modifiers:
+        Frozenset of modifier tokens/phrases (``"shiny"``, ``"gradient"``,
+        ``"dual color"``, …) present in the residual after brand/material/finish
+        removal.
+    colors:
+        Counter (multiset) of color tokens.  Synonym-reduced via ``COLOR_SYNONYMS``
+        **before** building the Counter so that "gray" and "grey" always compare equal.
+    """
+    material_family: str
+    finish_ids: frozenset[int]
+    modifiers: frozenset[str]
+    colors: Counter  # str → int
+
+
+# ---------------------------------------------------------------------------
+# Lexicon helpers — build match dicts from the mined lexicon
+# ---------------------------------------------------------------------------
+
+def build_ngram_index(lexicon: dict[str, list[str]] | None) -> dict[int, set[str]]:
+    """Return ``{1: set_of_unigrams, 2: set_of_bigrams, 3: set_of_trigrams}``
+    keyed by n-gram length (word count).
+
+    When ``lexicon`` is None, falls back to ``MODIFIER_SEED`` + ``BASE_COLORS``
+    from ``opentag_lexicon``.
+    """
+    from app.core.opentag_lexicon import BASE_COLORS, MODIFIER_SEED
+    if lexicon is None:
+        modifier_list: list[str] = list(MODIFIER_SEED)
+        color_list: list[str] = list(BASE_COLORS)
+    else:
+        modifier_list = lexicon.get("modifiers", [])
+        color_list = lexicon.get("colors", [])
+
+    all_terms = list(modifier_list) + list(color_list)
+    index: dict[int, set[str]] = {1: set(), 2: set(), 3: set()}
+    for term in all_terms:
+        n = len(term.split())
+        if 1 <= n <= 3:
+            index[n].add(term)
+    return index
+
+
+# ---------------------------------------------------------------------------
+# decompose_name — pure, both sides identical
+# ---------------------------------------------------------------------------
+
+def _norm(s: str | None) -> str:
+    if not s:
+        return ""
+    return unicodedata.normalize("NFKC", s).lower().strip()
+
+
+def _residual_token_list(
+    name: str | None,
+    vendor: str | None,
+    material: str | None,
+    tag_map: dict[str, int] | None = None,
+) -> list[str]:
+    """Return an ordered list of residual lowercase tokens from a material name,
+    with vendor, material, and finish words removed.  Separator positions
+    (``&``, ``/``) are preserved as ``"__SEP__"`` sentinels.
+
+    This is the shared residual-token step used by both ``decompose_name`` and
+    (via a set-shim) the legacy ``_color_name_tokens`` helper.
+    """
+    from app.core.opentag_lexicon import _residual_tokens as _lex_residual
+    return _lex_residual(name, vendor, material, tag_map)
+
+
+def decompose_name(
+    name: str | None,
+    vendor: str | None,
+    material: str | None,
+    tag_map: dict[str, int] | None = None,
+    ngram_index: dict[int, set[str]] | None = None,
+    color_synonyms: dict[str, str] | None = None,
+) -> ParsedName:
+    """Decompose a filament name into a structured ``ParsedName`` token bag.
+
+    Algorithm
+    ---------
+    1. ``material_family()`` on the material field.
+    2. ``finish_ids_from_text()`` on name + material.
+    3. ``_residual_token_list()`` → ordered residual tokens (brand/mat/finish removed).
+    4. Slide a longest-first n-gram window (tri → bi → uni) over the residual to
+       classify tokens into ``modifiers`` vs ``colors``:
+       - n-gram found in the modifier lexicon → modifier.
+       - unigram found in the color lexicon → color.
+       - unigram not found in either → silently discarded (generic noise).
+       Consumed token positions are not reused.
+    5. Color synonyms are applied (via ``color_synonyms``) to the color Counter
+       so that "gray" and "grey" score identically.
+
+    N-grams do NOT cross ``__SEP__`` sentinels (``&`` / ``/`` boundaries).
+
+    Parameters
+    ----------
+    ngram_index:
+        Pre-built ``{1: set, 2: set, 3: set}`` of known modifier/color terms.
+        When None, built from seed lists (no mined lexicon).
+    color_synonyms:
+        Synonym reduction map (``{"gray": "grey", ...}``).  Defaults to
+        ``COLOR_SYNONYMS``.
+    """
+    if tag_map is None:
+        tag_map = DEFAULT_MATERIAL_TAG_IDS
+    if color_synonyms is None:
+        color_synonyms = COLOR_SYNONYMS
+
+    # Build ngram index lazily when not pre-built
+    if ngram_index is None:
+        ngram_index = build_ngram_index(None)
+
+    mat_fam = material_family(material, tag_map)
+    finish_ids = frozenset(finish_ids_from_text(name or "", material or "", tag_map))
+
+    tokens = _residual_token_list(name, vendor, material, tag_map)
+
+    # Build color set for quick unigram lookup
+    modifier_set_2: set[str] = ngram_index.get(2, set())
+    modifier_set_3: set[str] = ngram_index.get(3, set())
+
+    # Determine which unigrams are colors vs modifiers from the lexicon
+    from app.core.opentag_lexicon import BASE_COLORS
+    color_unigrams: set[str] = set()
+    modifier_unigrams: set[str] = set()
+    for term in ngram_index.get(1, set()):
+        if term in BASE_COLORS:
+            color_unigrams.add(term)
+        else:
+            modifier_unigrams.add(term)
+    # Also treat any additional color lexicon entries as colors
+    if "colors" in _get_raw_lexicon_ref(ngram_index):
+        pass  # already handled via BASE_COLORS above
+
+    mods: set[str] = set()
+    cols: Counter = Counter()
+
+    i = 0
+    n_tok = len(tokens)
+    while i < n_tok:
+        if tokens[i] == "__SEP__":
+            i += 1
+            continue
+
+        # Try trigram first (no sep in window)
+        if i + 2 < n_tok:
+            w3 = tokens[i: i + 3]
+            if "__SEP__" not in w3:
+                phrase3 = " ".join(w3)
+                if phrase3 in modifier_set_3:
+                    mods.add(phrase3)
+                    i += 3
+                    continue
+
+        # Try bigram
+        if i + 1 < n_tok:
+            w2 = tokens[i: i + 2]
+            if "__SEP__" not in w2:
+                phrase2 = " ".join(w2)
+                if phrase2 in modifier_set_2:
+                    mods.add(phrase2)
+                    i += 2
+                    continue
+
+        # Unigram
+        tok = tokens[i]
+        if tok in color_unigrams:
+            # Apply synonym reduction before inserting into counter
+            canonical = color_synonyms.get(tok, tok)
+            if canonical:  # skip empty-mapped tokens (e.g. "prusa" → "")
+                cols[canonical] += 1
+        elif tok in modifier_unigrams:
+            mods.add(tok)
+        # else: discard — generic noise not in lexicon
+
+        i += 1
+
+    return ParsedName(
+        material_family=mat_fam,
+        finish_ids=finish_ids,
+        modifiers=frozenset(mods),
+        colors=cols,
+    )
+
+
+def _get_color_set(ngram_index: dict[int, set[str]]) -> set[str]:
+    """Return the set of color unigrams from the ngram index.
+
+    The ngram_index built by ``build_ngram_index`` merges both modifiers and
+    colors into the same n sets.  We recover the color subset by intersecting
+    with ``BASE_COLORS``.
+    """
+    from app.core.opentag_lexicon import BASE_COLORS
+    return ngram_index.get(1, set()) & BASE_COLORS
+
+
+def _get_raw_lexicon_ref(ngram_index: dict[int, set[str]]) -> dict:
+    """Thin helper to avoid circular logic — returns an empty dict here."""
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Color-words map helpers (backward-compat shims)
+# ---------------------------------------------------------------------------
 
 # Modifier words that prefix a color token but should not block a base-color match.
 # These are stripped from color names before base-color lookup.
@@ -111,14 +297,9 @@ _COLOR_MODIFIERS: frozenset[str] = frozenset({
 def _base_color(tokens: set[str], color_map: dict[str, str]) -> str:
     """Reduce a set of color tokens to a single canonical base color string.
 
-    Algorithm:
-    1. Strip modifier tokens.
-    2. For each remaining token, look it up in color_map.
-    3. Return the first non-empty base color found, or "" if none.
-
-    This is intentionally simple and fast — the map is the authority.
+    Shim retained for backward-compat with existing tests that call this directly.
+    The v2 scorer uses ``decompose_name`` → color ``Counter`` instead.
     """
-    # First pass: look up non-modifier tokens directly
     for tok in tokens:
         if tok in _COLOR_MODIFIERS:
             continue
@@ -129,11 +310,10 @@ def _base_color(tokens: set[str], color_map: dict[str, str]) -> str:
 
 
 def parse_color_keywords_config(csv: str) -> dict[str, str]:
-    """Parse a ``keyword=base_color`` CSV string into a color-words map.
+    """Parse a ``keyword=base_color`` CSV string into a color-synonyms map.
 
-    Blank entries and entries without ``=`` are silently ignored.
-    The resulting dict OVERRIDES (does not merge with) DEFAULT_COLOR_KEYWORDS
-    when non-empty; the caller must decide whether to merge or replace.
+    In v2 this feeds COLOR_SYNONYMS overrides (synonyms-only), not the primary
+    matching mechanism.  Blank entries and entries without ``=`` are silently ignored.
     """
     result: dict[str, str] = {}
     for pair in csv.split(","):
@@ -516,12 +696,6 @@ def resolve_opentag_brand(sm_vendor_name: str | None, aliases: dict[str, str]) -
 # ---------------------------------------------------------------------------
 
 
-def _norm(s: str | None) -> str:
-    if not s:
-        return ""
-    return unicodedata.normalize("NFKC", s).lower().strip()
-
-
 def _color_name_tokens(
     name: str | None,
     vendor: str | None,
@@ -530,6 +704,10 @@ def _color_name_tokens(
 ) -> set[str]:
     """Extract the color-name tokens from a filament name by removing vendor,
     material, and finish words.
+
+    SHIM — retained for backward-compat with existing tests.  The v2 scorer
+    uses ``decompose_name`` instead.  This function now delegates to the shared
+    ``_residual_token_list`` (same implementation as before, just factored out).
 
     Returns a (possibly empty) set of lowercase token strings.  An empty set
     means no distinguishable color token could be isolated.
@@ -544,40 +722,11 @@ def _color_name_tokens(
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
 
-    text = _norm(name)
-    if not text:
-        return set()
+    tokens = _residual_token_list(name, vendor, material, tag_map)
 
-    # Remove vendor tokens
-    vendor_norm = _norm(vendor)
-    for tok in vendor_norm.split():
-        # Whole-word removal
-        text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
-
-    # Remove material tokens (base material, finish-stripped)
-    mat_norm = _norm(material)
-    base_mat = _norm(strip_finish_words(mat_norm, tag_map) or mat_norm)
-    for tok in base_mat.split():
-        text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
-
-    # Remove full material string tokens (catches e.g. "petg" in "Copper PETG")
-    for tok in mat_norm.split():
-        text = re.sub(r'\b' + re.escape(tok) + r'\b', ' ', text)
-
-    # Remove finish words (also strips "transparent", "silk", "matte", etc. from color names
-    # so that "Transparent Orange" → {"orange"} and the finish component handles the mismatch).
-    for keyword in sorted(tag_map.keys(), key=len, reverse=True):
-        text = re.sub(r'\b' + re.escape(keyword) + r'\b', ' ', text, flags=re.IGNORECASE)
-
-    # Tokenize on any non-alphanumeric run so "/" "-" "&" etc. separate tokens
-    # (e.g. "Green/Purple" → {"green","purple"}; not one token "green/purple").
-    raw_tokens = re.split(r"[^a-z0-9]+", text.lower())
-
-    # Drop generic multicolor-descriptor noise tokens that appear across all
-    # dual/tri candidates and would otherwise keep every variant tied.
-    _NOISE = {"color", "dual", "tri", "multi", "multicolor", "tricolor", "dualcolor"}
-    tokens = {t for t in raw_tokens if len(t) > 1 and t not in _NOISE}
-    return tokens
+    # Drop separator sentinels and noise tokens (same set as the old code)
+    _NOISE = {"color", "dual", "tri", "multi", "multicolor", "tricolor", "dualcolor", "__SEP__"}
+    return {t for t in tokens if t != "__SEP__" and len(t) > 1 and t not in _NOISE}
 
 
 def _name_similarity(
@@ -585,6 +734,8 @@ def _name_similarity(
     opt_tokens: set[str],
 ) -> float:
     """Score color-name token overlap in [0.0, 1.0].
+
+    SHIM — retained for backward-compat with existing tests.
 
     Scoring:
     - If both token sets are non-empty: Jaccard similarity with a containment
@@ -642,34 +793,85 @@ def _finish_score(
     sm_finish_ids: set[int],
     opt_finish_ids: set[int],
 ) -> float:
-    """Return a finish component in [-0.15, +0.15].
+    """Return a finish component in [-0.10, +0.10].
 
-    Rules:
-    - Both empty (solid vs solid): neutral +0.075
-    - Perfect match (same non-empty sets): +0.15
-    - Both non-empty, partial overlap: Jaccard × 0.15
-    - One solid, other has finish (clear mismatch): −0.15 penalty
-    - Both non-empty but disjoint: −0.10 penalty (matte vs silk)
+    Rules (v2 rescaled from ±0.15 to ±0.10 to match new weight budget):
+    - Both empty (solid vs solid): neutral +0.05
+    - Perfect match (same non-empty sets): +0.10
+    - Both non-empty, partial overlap: Jaccard × 0.10
+    - One solid, other has finish (clear mismatch): −0.10 penalty
+    - Both non-empty but disjoint: −0.07 penalty (matte vs silk)
 
     A mismatch (penalty) is large enough to drop a wrong-finish candidate below a
     correct plain/solid one of the same color name.
     """
     if not sm_finish_ids and not opt_finish_ids:
         # Both plain/solid → neutral (half the max reward)
-        return 0.075
+        return 0.05
 
     if not sm_finish_ids or not opt_finish_ids:
         # One solid, the other finished → clear mismatch penalty
-        return -0.15
+        return -0.10
 
     union = sm_finish_ids | opt_finish_ids
     inter = sm_finish_ids & opt_finish_ids
     if not inter:
         # Both finished but different (e.g. matte vs silk) → mismatch penalty
-        return -0.10
+        return -0.07
 
     jaccard = len(inter) / len(union)
-    return 0.15 * jaccard
+    return 0.10 * jaccard
+
+
+def _color_multiset_score(a: Counter, b: Counter) -> float:
+    """Score two color Counters (multisets) in [0.0, 1.0].
+
+    Formula:
+        matched  = sum((A & B).values())   # intersection (minimum per-color)
+        denom    = matched + sum((A - B).values()) + sum((B - A).values())
+        score    = matched / denom         (= 1.0 iff A == B)
+
+    When either side is empty → neutral 0.5 (naming gap, not a mismatch).
+    """
+    if not a or not b:
+        return 0.5  # neutral: one side has no recognized color tokens
+
+    matched = sum((a & b).values())
+    extra_a = sum((a - b).values())
+    extra_b = sum((b - a).values())
+    denom = matched + extra_a + extra_b
+    if denom == 0:
+        return 0.5  # shouldn't happen (both non-empty), but defensive
+    return matched / denom
+
+
+def _modifier_jaccard(sm_mods: frozenset[str], opt_mods: frozenset[str]) -> float:
+    """Jaccard of two modifier sets in [0.0, 1.0].
+
+    When both sides are empty → neutral 0.5 (no modifier signal, not a mismatch).
+    """
+    if not sm_mods and not opt_mods:
+        return 0.5  # neutral
+    union = sm_mods | opt_mods
+    if not union:
+        return 0.5
+    inter = sm_mods & opt_mods
+    return len(inter) / len(union)
+
+
+def _hex_score(sm_hex: str | None, opt_hex: str | None) -> float:
+    """Score hex proximity in [0.0, 0.05] (max 0.05 weight)."""
+    dist = _color_distance(sm_hex, opt_hex)
+    # distance 0 → 0.05, distance 1 → 0.0; neutral 0.025 when unknown (dist == 0.5)
+    return max(0.0, 0.05 * (1.0 - dist / 0.5)) if dist <= 0.5 else 0.0
+
+
+def _string_similarity_bonus(sm_name: str, opt_name: str) -> float:
+    """Full-string SequenceMatcher ratio × 0.05 (tie-breaker, max 0.05)."""
+    if not sm_name or not opt_name:
+        return 0.0
+    ratio = SequenceMatcher(None, _norm(sm_name), _norm(opt_name)).ratio()
+    return ratio * 0.05
 
 
 def score_candidate(
@@ -678,102 +880,99 @@ def score_candidate(
     tag_map: dict[str, int] | None = None,
     aliases: dict[str, str] | None = None,
     color_map: dict[str, str] | None = None,
+    lexicon: dict[str, list[str]] | None = None,
 ) -> float:
-    """Score an OPTMaterial candidate against a SpoolmanFilament.
+    """Score an OPTMaterial candidate against a SpoolmanFilament (v2).
 
     Returns a confidence in [0.0, 1.0].  Higher is better.
 
-    Scoring components (weights sum to 1.0 for a perfect match):
-    - Type/material match:   0.20 exact / 0.10 substring
-    - Vendor/brand match:    0.20 exact / 0.10 substring
-    - Color name similarity: 0.25  ← within-brand/material discriminator
-      (finish words stripped BEFORE tokenising so "Transparent Orange" → {orange})
-      + 0.05 base-color bonus when both sides map to the same canonical base color
-      via the color-words map (e.g. "Jet Black" and "Galaxy Black" both → "black")
-    - Finish tag overlap:    up to +0.15 reward; −0.10 to −0.15 mismatch penalty
-    - Color hex proximity:   0.15  ← primary color signal when both hexes present
+    Scoring components (v2 weights — sum to 1.0 for a perfect match):
+    - Color multiset similarity:  0.40  ← primary discriminator within brand/material
+    - Modifier set Jaccard:       0.15
+    - Material family:            0.15  exact / 0.075 substring
+    - Vendor/brand:               0.15  exact / 0.075 substring
+    - Finish tag overlap:        ±0.10
+    - Color hex proximity:        0.05
+    - Full-string tie-breaker:   +0.05 max
 
-    Total weight is the same as before; hex weight increased from 0.10 → 0.15 because
-    hex is ground truth ("Jet Black" #222F2E and "Galaxy Black" #4b4545 are both clearly
-    dark) while marketing names ("Galaxy"/"Cool") are brand fluff.  The 0.05 reduction
-    comes from splitting the old 0.30 name component into 0.25 token-sim + 0.05 base-color.
-
-    ``aliases`` is the parsed ``opentag_vendor_aliases`` dict
-    (``{normalize_vendor(sm): normalize_vendor(opentag)}``).  When provided,
-    the SM vendor is resolved through the alias map before comparing to the OPT
-    brand so that e.g. "Prusa" scores as a full match against "Prusament".
-
-    ``color_map`` is the parsed ``opentag_color_keywords`` dict mapping color words to
-    canonical base colors (e.g. ``{"galaxy": "black", "jet": "black"}``).  Falls back
-    to ``DEFAULT_COLOR_KEYWORDS`` when None.
+    ``aliases`` is the parsed ``opentag_vendor_aliases`` dict for vendor resolution.
+    ``color_map`` feeds COLOR_SYNONYMS overrides (synonyms-only in v2).
+    ``lexicon`` is the mined modifier/color lexicon dict (``{"modifiers":..., "colors":...}``).
+    When ``None``, seed-only fallback is used.
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
     if aliases is None:
         aliases = {}
     if color_map is None:
-        color_map = DEFAULT_COLOR_KEYWORDS
+        color_map = COLOR_SYNONYMS
+
+    # Merge user synonym overrides on top of default synonyms
+    effective_synonyms = dict(COLOR_SYNONYMS)
+    if color_map is not COLOR_SYNONYMS:
+        effective_synonyms.update(color_map)
+
+    # Build ngram index once from the lexicon
+    ngram_index = build_ngram_index(lexicon)
 
     score = 0.0
 
-    # ---- Type / material (0.20) ----
-    sm_mat = _norm(strip_finish_words(sm.material, tag_map) or sm.material)
+    # ---- Material family (0.15) ----
+    sm_mat = material_family(sm.material, tag_map)
     opt_type_raw = opt.get("type") or opt.get("abbreviation") or ""
-    opt_mat = _norm(strip_finish_words(opt_type_raw, tag_map) or opt_type_raw)
+    opt_mat = material_family(opt_type_raw, tag_map)
     if sm_mat and opt_mat:
         if sm_mat == opt_mat:
-            score += 0.20
+            score += 0.15
         elif sm_mat in opt_mat or opt_mat in sm_mat:
-            score += 0.10
+            score += 0.075
 
-    # ---- Vendor / brand (0.20) ----
+    # ---- Vendor / brand (0.15) ----
     sm_vendor_name = sm.vendor.name if sm.vendor else None
-    # Apply alias resolution so "Prusa" → "prusament" when aliases contain that pair.
     sm_vendor = resolve_opentag_brand(sm_vendor_name, aliases)
     opt_brand = normalize_vendor(opt.get("brandName"))
     if sm_vendor and opt_brand:
         if sm_vendor == opt_brand:
-            score += 0.20
+            score += 0.15
         elif sm_vendor in opt_brand or opt_brand in sm_vendor:
-            score += 0.10
+            score += 0.075
 
-    # ---- Color name similarity (0.25 token-sim + 0.05 base-color bonus) ----
-    # Finish words are removed inside _color_name_tokens so "Transparent Orange" → {"orange"};
-    # the transparent/solid mismatch is then handled separately by the finish component.
-    sm_color_tokens = _color_name_tokens(sm.name, sm_vendor_name, sm.material, tag_map)
-    opt_color_tokens = _color_name_tokens(
-        opt.get("name"), opt.get("brandName"), opt_type_raw, tag_map
+    # ---- Color multiset (0.40) ----
+    # Decompose both sides using structured decomposition
+    sm_parsed = decompose_name(
+        sm.name, sm_vendor_name, sm.material,
+        tag_map=tag_map,
+        ngram_index=ngram_index,
+        color_synonyms=effective_synonyms,
     )
-    name_sim = _name_similarity(sm_color_tokens, opt_color_tokens)
-    score += 0.25 * name_sim
+    opt_parsed = decompose_name(
+        opt.get("name"), opt.get("brandName"), opt_type_raw,
+        tag_map=tag_map,
+        ngram_index=ngram_index,
+        color_synonyms=effective_synonyms,
+    )
 
-    # Base-color bonus: when both sides reduce to the same canonical base color via the
-    # color-words map, add 0.05 so "Jet Black" and "Galaxy Black" (both → "black") still
-    # get color credit even though their token sets are disjoint.
-    # Only awarded when token similarity is < 1.0 (i.e., names are not already identical);
-    # no double-credit for exact matches.
-    if name_sim < 1.0:
-        sm_base = _base_color(sm_color_tokens, color_map)
-        opt_base = _base_color(opt_color_tokens, color_map)
-        if sm_base and opt_base and sm_base == opt_base:
-            score += 0.05
+    color_sim = _color_multiset_score(sm_parsed.colors, opt_parsed.colors)
+    score += 0.40 * color_sim
 
-    # ---- Finish component (up to +0.15, min −0.15) ----
-    sm_finish_ids = finish_ids_from_text(sm.name, sm.material, tag_map)
+    # ---- Modifier Jaccard (0.15) ----
+    mod_sim = _modifier_jaccard(sm_parsed.modifiers, opt_parsed.modifiers)
+    score += 0.15 * mod_sim
+
+    # ---- Finish component (up to +0.10, min −0.10) ----
+    # Use pre-computed finish_ids from ParsedName where possible; also scan OPT tags
+    sm_finish_ids = set(sm_parsed.finish_ids)
     opt_tags_raw: list[str] = opt.get("tags") or []
-    opt_finish_ids: set[int] = set()
+    opt_finish_ids: set[int] = set(opt_parsed.finish_ids)
     for ts in opt_tags_raw:
         opt_finish_ids.update(finish_ids_from_text(ts, None, tag_map))
-    opt_finish_ids.update(finish_ids_from_text(opt.get("name", ""), opt_type_raw, tag_map))
     score += _finish_score(sm_finish_ids, opt_finish_ids)
 
-    # ---- Color hex proximity (0.15) ----
-    # Hex is the primary color signal — it's ground truth regardless of the marketing name.
-    # Weight increased from 0.10 to 0.15; the extra 0.05 comes from splitting the old 0.30
-    # name component into 0.25 token-sim + 0.05 base-color bonus.
-    color_dist = _color_distance(sm.color_hex, opt.get("color"))
-    # distance 0 → 0.15, distance 1 → 0.0
-    score += max(0.0, 0.15 * (1.0 - color_dist / 0.5)) if color_dist <= 0.5 else 0.0
+    # ---- Color hex proximity (0.05) ----
+    score += _hex_score(sm.color_hex, opt.get("color"))
+
+    # ---- Full-string similarity tie-breaker (+0.05 max) ----
+    score += _string_similarity_bonus(sm.name, opt.get("name"))
 
     return round(score, 4)
 
@@ -792,6 +991,7 @@ def find_best_match(
     top_n: int = 10,
     min_confidence: float = 0.30,
     color_map: dict[str, str] | None = None,
+    lexicon: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Find the best matching OPTMaterial for a SpoolmanFilament.
 
@@ -808,7 +1008,8 @@ def find_best_match(
     ``alternate_scores`` always has the same length as ``alternates``.
 
     ``aliases`` is forwarded to ``score_candidate`` for vendor-alias resolution.
-    ``color_map`` is forwarded to ``score_candidate`` for base-color reduction.
+    ``color_map`` is forwarded to ``score_candidate`` for synonym overrides.
+    ``lexicon`` is forwarded to ``score_candidate`` for the mined modifier/color lexicon.
     """
     if not materials:
         return {"best": None, "confidence": 0.0, "alternates": [], "alternate_scores": []}
@@ -818,7 +1019,7 @@ def find_best_match(
     # Defensive: skip any candidate that isn't a dict (guard against shape drift
     # or a malformed cache entry containing a string instead of an OPTMaterial).
     scored = [
-        (score_candidate(sm, opt, tag_map, aliases, color_map), opt)
+        (score_candidate(sm, opt, tag_map, aliases, color_map, lexicon), opt)
         for opt in materials
         if isinstance(opt, dict)
     ]

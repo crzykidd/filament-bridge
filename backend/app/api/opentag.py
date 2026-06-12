@@ -24,7 +24,7 @@ from app.api.errors import api_error
 from app.config import settings as _settings
 from app.core.change_log import record_change as _record_change
 from app.core.matcher import normalize_vendor
-from app.core.opentag_cache import get_cache_metadata, load_opentag_dataset
+from app.core.opentag_cache import _load_cache, get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import (
     find_best_match,
     material_family,
@@ -32,8 +32,10 @@ from app.core.opentag_match import (
     opt_to_spoolman_fields,
     profiles_compatible,
     resolve_opentag_brand,
+    score_candidate,
     sm_color_profile,
 )
+from app.schemas.spoolman import SpoolmanFilament as _SpoolmanFilament, SpoolmanVendor as _SpoolmanVendor
 from app.db import SessionLocal
 from app.schemas.spoolman import decode_extra_value, encode_extra_value
 
@@ -168,6 +170,11 @@ class OpenTagApplyResponse(BaseModel):
 class OpenTagIgnoreResponse(BaseModel):
     spoolman_filament_id: int
     ignored_updates: bool
+
+
+class OpenTagSearchResponse(BaseModel):
+    """Response from the manual search endpoint."""
+    results: list[OpenTagCandidate]
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +502,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             "check that the bridge container has outbound HTTPS access.",
         ) from exc
     materials: list[dict[str, Any]] = dataset["materials"]
+    dataset_lexicon: dict[str, list[str]] | None = dataset.get("lexicon")
     _record_last_count(dataset["count"])
     tag_map = _settings.parsed_material_tag_ids
     # Load vendor alias map and color-keywords map once — BridgeConfig value overrides
@@ -607,7 +615,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 ) in ("", sm_fam)
             ]
 
-        match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases, color_map=color_map)
+        match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases, color_map=color_map, lexicon=dataset_lexicon)
         best = match_result["best"]
         confidence = match_result["confidence"]
         alternates = match_result["alternates"]
@@ -921,3 +929,113 @@ async def opentag_set_ignore(
         ) from exc
 
     return OpenTagIgnoreResponse(spoolman_filament_id=filament_id, ignored_updates=ignored)
+
+
+@router.get("/openprinttag/search", response_model=OpenTagSearchResponse)
+async def opentag_search(
+    brand: str = "",
+    material: str = "",
+    q: str = "",
+    limit: int = 20,
+) -> OpenTagSearchResponse:
+    """Manual free-text search within the cached OpenTag dataset.
+
+    Scores a synthetic SpoolmanFilament (built from ``brand``, ``material``, ``q``)
+    through the same ``score_candidate`` as the automatic matcher — no duplicate scorer.
+
+    Query params:
+    - ``brand``:    Optional brand name to pre-filter (same logic as automatic brand pre-filter).
+    - ``material``: Optional material type (polymer) to pre-filter.
+    - ``q``:        Free-text query (usually the color/modifier part of a filament name).
+    - ``limit``:    Max results (default 20, max 50).
+
+    Returns the top ``limit`` scored candidates sorted by score descending.
+    """
+    # Load cached dataset (no network fetch — must already be cached)
+    cache = _load_cache(_settings.data_dir)
+    if cache is None or not cache.get("materials"):
+        return OpenTagSearchResponse(results=[])
+
+    materials: list[dict[str, Any]] = [m for m in cache.get("materials", []) if isinstance(m, dict)]
+    dataset_lexicon: dict[str, list[str]] | None = cache.get("lexicon")
+    tag_map = _settings.parsed_material_tag_ids
+
+    # Load vendor aliases and color synonyms
+    from app.api.config import get_config_value
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS, parse_color_keywords_config
+    try:
+        with SessionLocal() as _db:
+            aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
+            color_kw_raw: str = get_config_value(_db, "opentag_color_keywords", _settings.opentag_color_keywords) or ""
+    except Exception:
+        aliases_raw = _settings.opentag_vendor_aliases
+        color_kw_raw = _settings.opentag_color_keywords
+    vendor_aliases = _parse_vendor_aliases(aliases_raw)
+    color_map = dict(DEFAULT_COLOR_KEYWORDS)
+    if color_kw_raw.strip():
+        color_map.update(parse_color_keywords_config(color_kw_raw))
+
+    limit = min(limit, 50)
+
+    # Brand pre-filter (same logic as automatic matcher)
+    if brand:
+        resolved_brand = resolve_opentag_brand(brand, vendor_aliases)
+        materials_by_brand: dict[str, list[dict[str, Any]]] = {}
+        for m in materials:
+            bk = normalize_vendor(m.get("brandName"))
+            materials_by_brand.setdefault(bk, []).append(m)
+        materials = materials_by_brand.get(resolved_brand, [])
+
+    # Material (polymer family) pre-filter
+    if material:
+        sm_fam = material_family(material, tag_map)
+        if sm_fam:
+            materials = [
+                c for c in materials
+                if material_family(c.get("type") or c.get("abbreviation") or "", tag_map) in ("", sm_fam)
+            ]
+
+    if not materials:
+        return OpenTagSearchResponse(results=[])
+
+    # Build a synthetic SM filament from the query params so we can reuse score_candidate
+    # unchanged (no duplicate scorer — as per plan).
+    synthetic_sm = _SpoolmanFilament(
+        id=0,
+        name=q or "",
+        vendor=_SpoolmanVendor(id=0, name=brand) if brand else None,
+        material=material or None,
+        color_hex=None,
+        extra={},
+    )
+
+    scored = [
+        (score_candidate(synthetic_sm, opt, tag_map, vendor_aliases, color_map, dataset_lexicon), opt)
+        for opt in materials
+    ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    results: list[OpenTagCandidate] = []
+    for conf, mat in scored[:limit]:
+        opt_fields = opt_to_spoolman_fields(mat, tag_map)
+        sm_for_fields = _SpoolmanFilament(
+            id=0,
+            name=q or "",
+            vendor=_SpoolmanVendor(id=0, name=brand) if brand else None,
+            material=material or None,
+            color_hex=None,
+            extra={},
+        )
+        field_rows = _build_field_rows(sm_for_fields, opt_fields)
+        results.append(OpenTagCandidate(
+            opt_uuid=mat.get("uuid"),
+            opt_slug=mat.get("slug"),
+            opt_brand=mat.get("brandName"),
+            opt_name=mat.get("name"),
+            opt_color_hex=mat.get("color"),
+            confidence=conf,
+            multicolor_mismatch=False,
+            fields=field_rows,
+        ))
+
+    return OpenTagSearchResponse(results=results)

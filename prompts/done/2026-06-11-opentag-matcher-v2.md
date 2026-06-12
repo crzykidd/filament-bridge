@@ -1,10 +1,10 @@
 ---
 name: 2026-06-11-opentag-matcher-v2
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-06-11
-model: opus              # algorithm redesign — PLAN first, then implement
-completed:
-result:
+completed: 2026-06-11
+model: sonnet
+result: shipped — v2 scorer, mined lexicons (LEXICON_VERSION=2), cache persistence, search endpoint + UI, 37 new tests (17 golden + 20 lexicon), docs
 ---
 
 # Task: OpenTag matcher v2 — structured token scoring + mined modifier/color lexicons

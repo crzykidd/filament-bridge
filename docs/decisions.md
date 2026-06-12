@@ -1,5 +1,47 @@
 # Decision record
 
+## 2026-06-11 — OpenTag matcher v2: structured token decomposition + mined lexicons
+
+**Why.** The v1 scorer collapsed color names to a single base color via
+`DEFAULT_COLOR_KEYWORDS` (`"silver" → "grey"`, `"galaxy" → "black"`, etc.) and scored
+them with string similarity. Two failure modes:
+
+1. **Multicolor order collapse.** "Silk Shiny Gradient Silver & Blue" and "Dual Color
+   Blue & Fuchsia" both reduced to `{grey, blue}` after the silver→grey collapse — the
+   correct target was indistinguishable from the wrong one.
+2. **Color-word pollution.** Genuine color names like turquoise, fuchsia, emerald appeared
+   in too few brands to reach the mining threshold and leaked into the modifier vocabulary.
+
+**v2 design (locked 2026-06-11).**
+
+- **`decompose_name`** decomposes filament names into `ParsedName(material_family,
+  finish_ids, modifiers, colors: Counter)`. Both the Spoolman and OpenTag names are
+  decomposed identically before comparison — no side-specific heuristics.
+- **Color multiset score (weight 0.40).** Order-independent, count-aware:
+  `matched / (matched + extra_a + extra_b)`. Neutral 0.5 when either side has no color
+  tokens. This correctly handles "Silver & Blue" (two distinct colors) without collapsing.
+- **Modifier Jaccard (weight 0.15).** Captures silk/matte/gradient/dual agreement without
+  requiring exact name matches.
+- **Material / vendor / finish / hex weights** updated to 0.15 / 0.15 / ±0.10 / 0.05;
+  full-string tiebreaker adds 0–0.05.
+- **`COLOR_SYNONYMS` = synonyms only.** `DEFAULT_COLOR_KEYWORDS` is now an alias for a
+  short map of genuine equivalences (`gray→grey`, `violet→purple`, `magenta→pink`,
+  `transparent→clear`, `navy→blue`). All marketing collapses dropped.
+  The `opentag_color_keywords` env/setting feeds additional synonyms, not primary colors.
+- **`BASE_COLORS` seed** prevents color-word leak into the modifier vocabulary for words
+  that appear in too few brands to reach the mining threshold.
+- **Stop-list** excludes material codes (`gfN`, `rfid`, `esd`, `htpla`, `rpla`, `rpetg`)
+  from modifier mining.
+- **`LEXICON_VERSION = 2`**: cache self-healing on version bump (re-mine from cached
+  materials without network fetch).
+- **Manual search endpoint** (`GET /api/openprinttag/search`) runs the same scorer with a
+  synthetic filament built from `brand + material + q`. No duplicate scoring path.
+- **UI search box** per FilamentCard; injected result is prepended to
+  `candidates[]` (deduplicated by slug/uuid) and becomes active immediately.
+
+**AMOLEN regression preserved.** "Silk Shiny Gradient Silver & Shiny Blue" ranks #1
+over "Dual Color Blue & Fuchsia" with ≥ 0.10 gap in `test_opentag_golden.py`.
+
 ## 2026-06-11 — New-record handling: two-tier policy model (new_filament_policy / new_spool_policy)
 
 **Why.** The ongoing engine had no policy for new filaments: it never created filaments

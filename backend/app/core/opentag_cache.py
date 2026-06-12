@@ -328,18 +328,68 @@ def _load_cache(data_dir: str) -> dict[str, Any] | None:
         return None
 
 
-def _save_cache(data_dir: str, materials: list[dict], fetched_at: str) -> None:
+def _save_cache(
+    data_dir: str,
+    materials: list[dict],
+    fetched_at: str,
+    lexicon: dict | None = None,
+    lexicon_version: int = 0,
+) -> None:
+    from app.core.opentag_lexicon import LEXICON_VERSION as _CURRENT_LEXICON_VERSION
     path = Path(data_dir) / _CACHE_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"fetched_at": fetched_at, "count": len(materials), "materials": materials}
+    data: dict = {
+        "fetched_at": fetched_at,
+        "count": len(materials),
+        "materials": materials,
+        "lexicon_version": lexicon_version or _CURRENT_LEXICON_VERSION,
+    }
+    if lexicon is not None:
+        data["lexicon"] = lexicon
     with path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
-    logger.info("opentag_cache: saved %d materials to %s", len(materials), path)
+    logger.info("opentag_cache: saved %d materials to %s (lexicon_version=%d)",
+                len(materials), path, data["lexicon_version"])
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _mine_and_attach_lexicon(
+    cache: dict[str, Any],
+    data_dir: str,
+    save: bool = True,
+) -> dict[str, Any]:
+    """Mine the lexicon from ``cache["materials"]`` and persist it in-place.
+
+    This is called:
+    1. After a fresh network fetch (always).
+    2. As a self-heal when the cached ``lexicon_version`` doesn't match the current
+       ``LEXICON_VERSION`` constant — recomputes WITHOUT a network re-fetch.
+
+    Returns the updated ``cache`` dict (with ``"lexicon"`` and ``"lexicon_version"``
+    keys populated).  Writes the updated cache to disk when ``save=True``.
+    """
+    from app.core.opentag_lexicon import LEXICON_VERSION, mine_lexicons
+    materials = cache.get("materials", [])
+    logger.info(
+        "opentag_cache: mining lexicon from %d materials (target version %d)",
+        len(materials), LEXICON_VERSION,
+    )
+    lexicon = mine_lexicons(materials)
+    cache["lexicon"] = lexicon
+    cache["lexicon_version"] = LEXICON_VERSION
+    if save and data_dir:
+        _save_cache(
+            data_dir,
+            materials,
+            cache.get("fetched_at", ""),
+            lexicon=lexicon,
+            lexicon_version=LEXICON_VERSION,
+        )
+    return cache
 
 
 async def load_opentag_dataset(
@@ -359,8 +409,14 @@ async def load_opentag_dataset(
             "fetched_at": "<iso>",
             "count": N,
             "stale": False,
-            "materials": [...OPTMaterial dicts...]
+            "materials": [...OPTMaterial dicts...],
+            "lexicon": {"modifiers": [...], "colors": [...]},
         }
+
+    The ``lexicon`` key contains the mined modifier/color lexicon, persisted
+    alongside the materials in the cache file.  When the cached ``lexicon_version``
+    doesn't match ``LEXICON_VERSION`` the lexicon is re-mined in-place WITHOUT a
+    network re-fetch (version-bump self-heal).
 
     ``http`` is an optional ``httpx.AsyncClient`` for the tarball download (useful
     in tests to inject a fake client).  When ``None``, a fresh client is created.
@@ -369,6 +425,8 @@ async def load_opentag_dataset(
     Raises ``httpx.HTTPStatusError`` for non-2xx from GitHub.
     Raises ``httpx.RequestError`` for connectivity failures.
     """
+    from app.core.opentag_lexicon import LEXICON_VERSION
+
     cache = _load_cache(data_dir)
 
     # Self-heal: treat a cached materials list that isn't a non-empty list of
@@ -395,14 +453,31 @@ async def load_opentag_dataset(
         )
         materials = await _fetch_from_tarball(http)
         fetched_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        _save_cache(data_dir, materials, fetched_at)
-        cache = {"fetched_at": fetched_at, "count": len(materials), "materials": materials}
+        # Mine lexicon from freshly-fetched data then save everything together
+        cache = {
+            "fetched_at": fetched_at,
+            "count": len(materials),
+            "materials": materials,
+        }
+        _mine_and_attach_lexicon(cache, data_dir, save=True)
+    else:
+        # Check whether the cached lexicon needs to be re-mined (version bump / missing)
+        cached_version = (cache or {}).get("lexicon_version", 0)
+        cached_lexicon = (cache or {}).get("lexicon")
+        if cached_version != LEXICON_VERSION or not cached_lexicon:
+            logger.info(
+                "opentag_cache: lexicon version mismatch (cached=%d, want=%d) — "
+                "re-mining in-place without network fetch",
+                cached_version, LEXICON_VERSION,
+            )
+            _mine_and_attach_lexicon(cache, data_dir, save=True)
 
     return {
         "fetched_at": cache["fetched_at"],
         "count": cache.get("count", len(cache.get("materials", []))),
         "stale": _is_stale(cache.get("fetched_at"), max_age_hours),
         "materials": cache.get("materials", []),
+        "lexicon": cache.get("lexicon"),
     }
 
 

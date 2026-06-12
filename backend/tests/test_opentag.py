@@ -4525,15 +4525,16 @@ def test_score_candidate_prusa_with_alias_scores_vendor_match():
     score_with = score_candidate(sm_prusa, _OPT_PRUSAMENT_PLA, aliases=aliases)
     score_without = score_candidate(sm_prusa, _OPT_PRUSAMENT_PLA, aliases={})
 
-    # With alias: vendor component should be 0.20 (exact match prusa→prusament == opt brand)
-    # Without alias: "prusa" != "prusament" so vendor component is 0 or partial
+    # With alias: vendor component is 0.15 (exact match prusa→prusament == opt brand, v2 weight)
+    # Without alias: "prusa" in "prusament" → partial 0.075 (substring match)
+    # Gap = 0.15 - 0.075 = 0.075
     assert score_with > score_without, (
         f"Expected alias score ({score_with:.4f}) > no-alias score ({score_without:.4f})"
     )
-    # The gap should be at least 0.10 (the minimum vendor score contribution difference)
-    # Use round() to avoid floating-point precision issues (e.g. 0.1000 vs 0.1).
-    assert round(score_with - score_without, 6) >= 0.10, (
-        f"Expected vendor component difference >= 0.10 but got {score_with - score_without:.4f}"
+    # The gap should be at least 0.07 (v2: exact=0.15 vs partial=0.075 → gap 0.075)
+    # Use round() to avoid floating-point precision issues.
+    assert round(score_with - score_without, 6) >= 0.07, (
+        f"Expected vendor component difference >= 0.07 but got {score_with - score_without:.4f}"
     )
 
 
@@ -5452,32 +5453,46 @@ def test_jet_black_find_best_match_surfaces_galaxy_black():
 
 
 def test_base_color_bonus_light_grey_vs_grey():
-    """'Light Grey' and 'Grey' share the same base color ('grey') and should get the bonus.
+    """_base_color shim: 'gray' maps to 'grey' via COLOR_SYNONYMS (v2 synonyms-only map).
 
-    The modifier 'light' must not block the base-color match.
+    v2: DEFAULT_COLOR_KEYWORDS is a SYNONYMS-only map (gray→grey, violet→purple, etc.).
+    Base color names like 'grey' are NOT in the map — the v2 scorer uses the color
+    multiset (via decompose_name) rather than a single-base-color collapse.
     """
     from app.core.opentag_match import _base_color, DEFAULT_COLOR_KEYWORDS, _color_name_tokens
     from app.core.material_tags import DEFAULT_MATERIAL_TAG_IDS
 
-    # 'light grey' tokens = {'light', 'grey'} → after modifier strip → 'grey' base
-    toks_lg = _color_name_tokens("Light Grey", None, "PLA", DEFAULT_MATERIAL_TAG_IDS)
-    # 'grey' tokens = {'grey'}
+    # v2: 'grey' is not in DEFAULT_COLOR_KEYWORDS (synonyms-only), so _base_color returns ""
+    # (the _base_color shim is retained for back-compat but is no longer used by score_candidate)
     toks_g = _color_name_tokens("Grey", None, "PLA", DEFAULT_MATERIAL_TAG_IDS)
+    toks_gray = _color_name_tokens("Gray", None, "PLA", DEFAULT_MATERIAL_TAG_IDS)
 
-    base_lg = _base_color(toks_lg, DEFAULT_COLOR_KEYWORDS)
+    # "gray" → "grey" via synonyms map
+    base_gray = _base_color(toks_gray, DEFAULT_COLOR_KEYWORDS)
+    assert base_gray == "grey", f"Expected 'grey' for 'Gray' tokens {toks_gray!r}, got {base_gray!r}"
+
+    # "grey" is a canonical color — NOT collapsed further by the synonyms map
+    # The v2 scorer uses decompose_name colors Counter for this, not _base_color
     base_g = _base_color(toks_g, DEFAULT_COLOR_KEYWORDS)
-
-    assert base_lg == "grey", f"Expected 'grey' for 'Light Grey' tokens {toks_lg!r}, got {base_lg!r}"
-    assert base_g == "grey", f"Expected 'grey' for 'Grey' tokens {toks_g!r}, got {base_g!r}"
-    assert base_lg == base_g, "Light Grey and Grey should share the same base color"
+    # Either "" (not in map) or "grey" (if synonym-mapped) is acceptable
+    assert base_g in ("grey", ""), f"Unexpected base_g={base_g!r} for 'Grey'"
 
 
 def test_base_color_bonus_marketing_name_galaxy_cool():
-    """'Galaxy' → 'black', 'Cool' → 'grey' via DEFAULT_COLOR_KEYWORDS marketing entries."""
+    """v2: DEFAULT_COLOR_KEYWORDS is synonyms-only — galaxy/cool/jet are NOT in the map.
+
+    In v1, marketing names mapped to base colors (galaxy→black, cool→grey).
+    In v2 the map is reduced to TRUE synonyms only (gray→grey, violet→purple, etc.).
+    Marketing names are discriminating modifiers/colors in the new multiset scorer, not collapses.
+    """
     from app.core.opentag_match import _base_color, DEFAULT_COLOR_KEYWORDS
-    assert _base_color({"galaxy"}, DEFAULT_COLOR_KEYWORDS) == "black"
-    assert _base_color({"cool"}, DEFAULT_COLOR_KEYWORDS) == "grey"
-    assert _base_color({"jet"}, DEFAULT_COLOR_KEYWORDS) == "black"
+    # v2: marketing names are NOT in DEFAULT_COLOR_KEYWORDS — they score via the modifier/color lexicon
+    assert _base_color({"gray"}, DEFAULT_COLOR_KEYWORDS) == "grey"    # true synonym
+    assert _base_color({"violet"}, DEFAULT_COLOR_KEYWORDS) == "purple"  # true synonym
+    # galaxy/cool/jet are not in the synonyms map — returns ""
+    assert _base_color({"galaxy"}, DEFAULT_COLOR_KEYWORDS) == ""
+    assert _base_color({"cool"}, DEFAULT_COLOR_KEYWORDS) == ""
+    assert _base_color({"jet"}, DEFAULT_COLOR_KEYWORDS) == ""
 
 
 def test_parse_color_keywords_config_basic():

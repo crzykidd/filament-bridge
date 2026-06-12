@@ -6,9 +6,10 @@
  * Flow: Dataset status → Fetch matches → Review per filament → Confirm → Apply
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getOpenTagMatches,
+  getOpenTagSearch,
   getOpenTagStatus,
   postOpenTagApply,
   postOpenTagIgnore,
@@ -240,6 +241,7 @@ interface FilamentCardProps {
   ignored: boolean
   selectedCandidateIdx: number
   onCandidateChange: (idx: number) => void
+  onSearchSelect: (candidate: OpenTagCandidate) => void
 }
 
 function FilamentCard({
@@ -250,8 +252,42 @@ function FilamentCard({
   ignored,
   selectedCandidateIdx,
   onCandidateChange,
+  onSearchSelect,
 }: FilamentCardProps) {
   const [expanded, setExpanded] = useState(true)
+
+  // Manual search state — lets the user find a better OpenTag match by keyword
+  const [showSearch, setShowSearch] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<OpenTagCandidate[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const runSearch = useCallback(async (q: string) => {
+    if (!q.trim()) { setSearchResults([]); return }
+    setIsSearching(true)
+    setSearchError(null)
+    try {
+      const res = await getOpenTagSearch(
+        match.spoolman_vendor ?? '',
+        match.spoolman_material ?? '',
+        q,
+        12,
+      )
+      setSearchResults(res.results)
+    } catch (e: unknown) {
+      setSearchError(e instanceof Error ? e.message : 'Search failed')
+    } finally {
+      setIsSearching(false)
+    }
+  }, [match.spoolman_vendor, match.spoolman_material])
+
+  const handleSearchInput = useCallback((value: string) => {
+    setSearchQuery(value)
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = setTimeout(() => { void runSearch(value) }, 350)
+  }, [runSearch])
 
   // Active candidate: use structured candidates[selectedCandidateIdx] when available,
   // otherwise fall back to the top-level match fields (backward-compat / no-match rows).
@@ -399,6 +435,79 @@ function FilamentCard({
             ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
             : 'No field differences detected.'}
         </p>
+      )}
+
+      {/* Manual search — available whenever the card is expanded and not ignored */}
+      {expanded && !ignored && (
+        <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-700">
+          {!showSearch ? (
+            <button
+              type="button"
+              className="text-xs text-indigo-500 dark:text-indigo-400 hover:underline"
+              onClick={() => setShowSearch(true)}
+            >
+              Search OpenTag manually…
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Search OpenTag</span>
+                <button
+                  type="button"
+                  className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                  onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchResults([]) }}
+                >
+                  ✕ close
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="search"
+                  className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 text-xs w-56 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  placeholder="e.g. Silk Gold, Matte Blue…"
+                  value={searchQuery}
+                  onChange={e => handleSearchInput(e.target.value)}
+                  autoFocus
+                />
+                {isSearching && (
+                  <svg className="animate-spin h-3 w-3 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                  </svg>
+                )}
+              </div>
+              {searchError && (
+                <p className="text-xs text-red-600 dark:text-red-400">{searchError}</p>
+              )}
+              {searchResults.length > 0 && (
+                <ul className="divide-y divide-gray-100 dark:divide-gray-700 border border-gray-200 dark:border-gray-600 rounded bg-white dark:bg-gray-800 max-h-48 overflow-y-auto text-xs">
+                  {searchResults.map((c, i) => (
+                    <li key={c.opt_uuid ?? c.opt_slug ?? i}>
+                      <button
+                        type="button"
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors"
+                        onClick={() => {
+                          onSearchSelect(c)
+                          setShowSearch(false)
+                          setSearchQuery('')
+                          setSearchResults([])
+                        }}
+                      >
+                        {c.opt_color_hex && <ColorSwatch hex={c.opt_color_hex} />}
+                        <span className="font-medium text-gray-800 dark:text-gray-100">{c.opt_brand}</span>
+                        <span className="text-gray-600 dark:text-gray-300 flex-1 truncate">· {c.opt_name}</span>
+                        <span className="shrink-0">{confidenceBadge(c.confidence)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!isSearching && searchQuery.trim() && searchResults.length === 0 && (
+                <p className="text-xs text-gray-500 dark:text-gray-400 italic">No results found.</p>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
@@ -592,6 +701,7 @@ interface GroupSectionProps {
   onFieldChange: (smId: number, field: string, updated: OpenTagFieldDecision) => void
   onIgnore: (smId: number, ignored: boolean) => void
   onCandidateChange: (smId: number, idx: number, match: OpenTagFilamentMatch) => void
+  onSearchSelect: (smId: number, candidate: OpenTagCandidate) => void
   showHeader: boolean
   collapsed: boolean
   onToggleCollapse: () => void
@@ -617,6 +727,7 @@ function GroupSection({
   onFieldChange,
   onIgnore,
   onCandidateChange,
+  onSearchSelect,
   showHeader,
   collapsed,
   onToggleCollapse,
@@ -672,6 +783,7 @@ function GroupSection({
           ignored={ignoredIds.has(m.spoolman_filament_id)}
           selectedCandidateIdx={selectedCandidates[m.spoolman_filament_id] ?? 0}
           onCandidateChange={(idx) => onCandidateChange(m.spoolman_filament_id, idx, m)}
+          onSearchSelect={(candidate) => onSearchSelect(m.spoolman_filament_id, candidate)}
         />
       ))}
     </div>
@@ -1267,6 +1379,37 @@ export default function OpenTagCleanup() {
     [],
   )
 
+  // When a user picks a search result, inject it as candidates[0] for that filament
+  // (prepend so it becomes the active selection) and reset field decisions to its OPT values.
+  const handleSearchSelect = useCallback(
+    (smId: number, candidate: OpenTagCandidate) => {
+      setResponse(prev => {
+        if (!prev) return prev
+        const matches = prev.matches.map(m => {
+          if (m.spoolman_filament_id !== smId) return m
+          // Prepend the search result; deduplicate by slug/uuid so repeated picks don't bloat the list
+          const existing = m.candidates ?? []
+          const filtered = existing.filter(
+            c => c.opt_slug !== candidate.opt_slug || c.opt_uuid !== candidate.opt_uuid,
+          )
+          return { ...m, candidates: [candidate, ...filtered], confidence: candidate.confidence }
+        })
+        return { ...prev, matches }
+      })
+      // Reset field decisions to the injected candidate's OPT values
+      setFieldDecisions(prev => {
+        const newDecisions: Record<string, OpenTagFieldDecision> = {}
+        for (const row of candidate.fields) {
+          newDecisions[row.field] = { field: row.field, value: row.opentag_value, keep_mine: false }
+        }
+        return { ...prev, [smId]: newDecisions }
+      })
+      // Select index 0 (the just-injected candidate)
+      setSelectedCandidates(prev => ({ ...prev, [smId]: 0 }))
+    },
+    [],
+  )
+
   const handleToggleCollapse = useCallback((groupKey: string) => {
     setCollapsedGroups(prev => ({ ...prev, [groupKey]: !(prev[groupKey] ?? true) }))
   }, [])
@@ -1638,6 +1781,7 @@ export default function OpenTagCleanup() {
               onFieldChange={handleFieldChange}
               onIgnore={handleIgnore}
               onCandidateChange={handleCandidateChange}
+              onSearchSelect={handleSearchSelect}
               showHeader={groupBy !== 'none'}
               collapsed={groupBy === 'none' ? false : (collapsedGroups[group.key] ?? true)}
               onToggleCollapse={() => handleToggleCollapse(group.key)}

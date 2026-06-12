@@ -27,6 +27,7 @@ import type {
   OpenTagDatasetMeta,
   OpenTagIgnoreResponse,
   OpenTagMatchesResponse,
+  OpenTagSearchResponse,
   ResetStateResponse,
   SMVariancesDecisionsRequest,
   SyncLogDeleteResponse,
@@ -248,6 +249,19 @@ export const postOpenTagIgnore = (filamentId: number, ignored: boolean) =>
     `/openprinttag/ignore/${filamentId}?ignored=${ignored}`,
     { method: 'POST' },
   )
+export const getOpenTagSearch = (
+  brand: string,
+  material: string,
+  q: string,
+  limit = 20,
+) => {
+  const params = new URLSearchParams()
+  if (brand) params.set('brand', brand)
+  if (material) params.set('material', material)
+  if (q) params.set('q', q)
+  params.set('limit', String(limit))
+  return request<OpenTagSearchResponse>(`/openprinttag/search?${params.toString()}`)
+}
 
 // ---------------------------------------------------------------------------
 // Debug reset tools (only available when debug_mode=true)

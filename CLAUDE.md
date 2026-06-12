@@ -169,8 +169,9 @@ filament-bridge/
 │   │   │   ├── dates.py                    — Spoolman timestamps → FDB purchase/opened dates
 │   │   │   ├── version.py                  — semver helpers + MIN_FDB/MIN_SPOOLMAN gates
 │   │   │   ├── compat.py                   — shared upstream-version compatibility check
-│   │   │   ├── opentag_match.py            — OPTMaterial → Spoolman field mapper + scorer
-│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated)
+│   │   │   ├── opentag_match.py            — OPTMaterial → Spoolman field mapper + v2 scorer (structured token decomposition + mined lexicons)
+│   │   │   ├── opentag_lexicon.py          — n-gram lexicon miner (modifiers + colors from dataset); LEXICON_VERSION bump triggers cache self-heal
+│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated); stores mined lexicons
 │   │   │   └── opentag_secondary.py        — secondary-color recovery from the raw OPT tarball
 │   │   ├── schemas/                        — Pydantic models (bridge API, Filament DB, Spoolman shapes)
 │   │   ├── models/
@@ -244,7 +245,7 @@ filament-bridge/
 | `SPOOLMAN_FIELD_FILAMENTDB_MATERIAL_TAGS` | No | `filamentdb_material_tags` | Spoolman filament-level extra field storing finish-tag IDs (CSV string of ints, e.g. `16,17`) |
 | `MATERIAL_TAG_IDS` | No | (seed list) | CSV of `keyword=id` pairs overriding the default keyword→OpenPrintTag-ID map for finish detection. Empty = use seed defaults from `core/material_tags.py`. |
 | `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenTag brand pre-filter (e.g. `prusa=prusament`). Normalised on both sides; blank = no aliases. Overridable at runtime via Settings. |
-| `OPENTAG_COLOR_KEYWORDS` | No | — | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher (e.g. `galaxy=black,cool=grey,jet=black`). Merged on top of seed defaults from `core/opentag_match.py:DEFAULT_COLOR_KEYWORDS`; blank = seed defaults only. Overridable at runtime via Settings. |
+| `OPENTAG_COLOR_KEYWORDS` | No | — | CSV of `keyword=synonym` pairs added to the v2 COLOR_SYNONYMS map (true linguistic equivalences only — e.g. `gray=grey`). The v1 marketing collapses (`galaxy=black`, `cool=grey`, etc.) are no longer valid; they degraded multicolor matching. Merged on top of `DEFAULT_COLOR_KEYWORDS`; blank = seed defaults only. Overridable at runtime via Settings. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag material slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_IGNORE` | No | `openprinttag_ignore` | Spoolman filament extra field storing the "ignore future updates" flag (`"1"` = ignored, `""` = not ignored). Written by the Updates Review UI. |
@@ -276,7 +277,7 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `api_token_enabled` | `false` | When `true`, requests may authenticate via `Authorization: Bearer <token>` or `X-API-Key`. Toggle in Settings → Security. |
 | `api_token` | (none) | The API token value — stored in BridgeConfig so Settings can display it. Regenerate via Settings → Security → Regenerate token. |
 | `opentag_vendor_aliases` | env fallback (`""`) | CSV of `sm=opentag` vendor alias pairs for the OpenTag matcher brand pre-filter. |
-| `opentag_color_keywords` | env fallback (`""`) | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher. Merged on top of `DEFAULT_COLOR_KEYWORDS` seed. |
+| `opentag_color_keywords` | env fallback (`""`) | CSV of `keyword=synonym` pairs added to the v2 COLOR_SYNONYMS map (synonyms-only; marketing collapses like `galaxy=black` are no longer valid and degrade multicolor matching). Merged on top of the `DEFAULT_COLOR_KEYWORDS` seed. |
 | `container_parent_marker` | env fallback (`"(Master)"`) | String appended to generic-container parent names (e.g. "ELEGOO PLA (Master)"). Empty = no suffix. Shown in Settings when `generic_container` mode is active. |
 
 ## Important technical details
