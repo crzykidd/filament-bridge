@@ -103,7 +103,16 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
     filament_mappings = {m.id: m for m in db.query(FilamentMapping).all()}
 
     # Open conflicts indexed by the spool ids they reference.
-    open_conflicts = db.query(Conflict).filter(Conflict.resolved_at.is_(None)).all()
+    # IMPORTANT: only SPOOL-level conflicts may key into these spool rows. Spoolman
+    # filament-ids and spool-ids are separate id-spaces, and a `new_filament` conflict
+    # (entity_type="filament") stores a *filament* id in `spoolman_id` — which numerically
+    # collides with unrelated spool ids. Including them here made synced spool rows show a
+    # false "conflict" status and "Resolve" jump to an unrelated filament conflict.
+    open_conflicts = (
+        db.query(Conflict)
+        .filter(Conflict.resolved_at.is_(None), Conflict.entity_type == "spool")
+        .all()
+    )
     conflict_sm_ids = {c.spoolman_id for c in open_conflicts if c.spoolman_id is not None}
     conflict_fdb_spool_ids = {
         c.filamentdb_spool_id for c in open_conflicts if c.filamentdb_spool_id is not None
