@@ -82,8 +82,12 @@ uses (the two cannot drift):
   with each other. Container-name collisions get an inline **rename** box and a
   **skip cluster** action; other collisions link back to Variances to fix grouping.
   Anything left colliding fails per-record at execute (the batch continues).
-- **Empty active spools** — depleted-but-unarchived Spoolman spools; imported or skipped
-  according to the *Never import empties* setting.
+- **Empty/archived spools** — depleted (`remaining ≤ 0`) or archived Spoolman spools.
+  The *Never import empties* setting governs both: when off (default), all spools import
+  including empty/archived ones; when on, spools with `remaining ≤ 0` are skipped.
+  **Archived spools always import as retired FDB spools** (only the spool is retired; the
+  filament is always a normal, non-retired filament). Each archived entry shows an
+  "archived → imports as retired" tag in the Preview panel.
 - **Default tare** — spools whose gross weight will be computed with the 200 g fallback.
 - **Variant groups** — the parent/variant tree about to be created.
 - **Planned writes** — a field-level list of every write, filterable by target system.

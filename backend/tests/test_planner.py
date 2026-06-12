@@ -4,6 +4,7 @@ Covers:
 - netFilamentWeight field on FDB create payloads (Spoolman → FDB wizard import).
 - Bug A: stale filamentdb_spool_id cross-ref → spool is planned as create, not skip.
 - Bug B: resolved tare is written to spoolWeight, not raw sm.spool_weight.
+- Archived spool fix: archived spools route through the empty gate and import as retired.
 """
 
 import json
@@ -998,3 +999,347 @@ def test_stale_spool_mapping_execute_replaces_mapping(db):
     assert fresh.spoolman_spool_id == 601, (
         f"Fresh spool mapping should be for SM spool 601, got {fresh.spoolman_spool_id}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Archived-spool fix — SM filament 63 / spool 65 scenario (never_import_empties)
+# ---------------------------------------------------------------------------
+# SM spool #65: archived=True, used_weight=1047.98, initial_weight=1000.0 →
+# remaining_weight = 1000 - 1047.98 = -47.98 (negative; used more than initial).
+# This mirrors the real-world "Light Purple PLA" case.
+
+
+def _sm_spool_archived(
+    sid: int,
+    filament: SpoolmanFilament,
+    remaining: float = -47.98,
+    archived: bool = True,
+) -> SpoolmanSpool:
+    """Build a SpoolmanSpool fixture mirroring the SM #65 (archived, negative remaining)."""
+    return SpoolmanSpool(
+        id=sid,
+        filament=filament,
+        initial_weight=1000.0,
+        remaining_weight=remaining,
+        archived=archived,
+        extra={},
+    )
+
+
+# ---- test 1: planner includes archived empty spool → plan item create, retired=True ----
+
+
+def test_planner_archived_empty_spool_creates_retired_plan_item(db):
+    """Archived spool with negative remaining is planned as create (retired=True)
+    when include_empty_spools=True (never_import_empties=False, the default)."""
+    sm_fil = _sm_filament(fid=63, name="Light Purple PLA", weight=1000.0)
+    sm_sp = _sm_spool_archived(65, sm_fil, remaining=-47.98, archived=True)
+
+    decisions_by_sm = {63: {"spoolman_filament_id": 63, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+        include_empty_spools=True,  # never_import_empties=False → include empties
+    )
+
+    assert len(plan.spool_items) == 1, (
+        f"Expected 1 spool item for archived spool, got {len(plan.spool_items)}"
+    )
+    si = plan.spool_items[0]
+    assert si.action == "create", (
+        f"Archived spool with include_empty=True must be planned as 'create', got '{si.action}'"
+    )
+    assert si.retired is True, (
+        "Archived SM spool must set retired=True on the plan item"
+    )
+
+
+# ---- test 2: never_import_empties=True skips archived empty spool ----
+
+
+def test_planner_archived_empty_spool_skipped_when_never_import_empties(db):
+    """Archived spool with negative remaining is skipped when include_empty_spools=False."""
+    sm_fil = _sm_filament(fid=63, name="Light Purple PLA", weight=1000.0)
+    sm_sp_archived = _sm_spool_archived(65, sm_fil, remaining=-47.98, archived=True)
+    # Also add an active empty spool to confirm it is also skipped
+    sm_sp_active_empty = _sm_spool(66, sm_fil, remaining=0.0)
+
+    decisions_by_sm = {63: {"spoolman_filament_id": 63, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp_archived, sm_sp_active_empty],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+        include_empty_spools=False,  # never_import_empties=True → skip empties
+    )
+
+    # Both spools have remaining <= 0 → both skipped
+    assert len(plan.spool_items) == 0, (
+        f"Expected 0 spool items when never_import_empties=True, got {len(plan.spool_items)}"
+    )
+
+
+# ---- test 3: active empty spool → retired=False when imported ----
+
+
+def test_planner_active_empty_spool_not_retired(db):
+    """An active (non-archived) spool with zero remaining imports with retired=False."""
+    sm_fil = _sm_filament(fid=70, name="PLA Active Empty", weight=1000.0)
+    sm_sp = _sm_spool(70, sm_fil, remaining=0.0)  # active, archived=False
+
+    decisions_by_sm = {70: {"spoolman_filament_id": 70, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+        include_empty_spools=True,
+    )
+
+    assert len(plan.spool_items) == 1
+    si = plan.spool_items[0]
+    assert si.action == "create"
+    assert si.retired is False, (
+        "Active (non-archived) spool must set retired=False"
+    )
+
+
+# ---- test 4: archived non-empty spool → creates as retired ----
+
+
+def test_planner_archived_nonempty_spool_creates_as_retired(db):
+    """An archived spool with positive remaining weight still imports as retired (O1)."""
+    sm_fil = _sm_filament(fid=80, name="PLA Archived NonEmpty", weight=1000.0)
+    # archived but still has 200g remaining
+    sm_sp = _sm_spool_archived(80, sm_fil, remaining=200.0, archived=True)
+
+    decisions_by_sm = {80: {"spoolman_filament_id": 80, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[sm_sp],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+        include_empty_spools=False,  # never_import_empties=True — but 200g > 0, so not skipped
+    )
+
+    # remaining > 0 → not skipped by the empty gate, even when never_import_empties=True
+    assert len(plan.spool_items) == 1
+    si = plan.spool_items[0]
+    assert si.action == "create"
+    assert si.retired is True, (
+        "Archived spool (even non-empty) must import as retired (O1)"
+    )
+
+
+# ---- test 5: execute creates FDB spool with retired=True + SpoolMapping exists ----
+
+
+def test_execute_archived_spool_imports_as_retired_with_mapping(db):
+    """Execute: archived SM spool creates FDB spool with retired=True and a SpoolMapping.
+
+    End-to-end: after execute, SpoolMapping exists → filament appears in Synced Records.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 63, "action": "create"}])
+    db.commit()
+
+    sm_fil = SpoolmanFilament(
+        id=63, name="Light Purple PLA",
+        vendor=SpoolmanVendor(id=1, name="ACME"), material="PLA", weight=1000.0,
+    )
+    # Mirror SM spool #65: archived, negative remaining (used > initial)
+    sm_sp = SpoolmanSpool(
+        id=65, filament=sm_fil, initial_weight=1000.0,
+        remaining_weight=-47.98, archived=True, extra={},
+    )
+
+    spoolman_client = AsyncMock()
+    spoolman_client.get_filaments = AsyncMock(return_value=[sm_fil])
+    spoolman_client.get_spools = AsyncMock(return_value=[sm_sp])
+    spoolman_client.update_spool = AsyncMock(return_value=None)
+    spoolman_client.get_field_definitions = AsyncMock(return_value=[])
+
+    created_fdb_fil = MagicMock()
+    created_fdb_fil.id = "fdb-fil-63"
+
+    filamentdb_client = AsyncMock()
+    filamentdb_client.get_filaments = AsyncMock(return_value=[])
+    filamentdb_client.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb_client.create_filament = AsyncMock(return_value=created_fdb_fil)
+    # create_spool returns the raw FDB response dict; retired flag must be in the call
+    filamentdb_client.create_spool = AsyncMock(return_value={"_id": "fdb-spool-65"})
+    filamentdb_client.get_locations = AsyncMock(return_value=[])
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api import wizard
+    from app.db import get_db
+
+    app = FastAPI()
+    app.include_router(wizard.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = spoolman_client
+    app.state.filamentdb = filamentdb_client
+    client = TestClient(app)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["failed"] == 0, f"Expected 0 failures, got {body['failed']}: {body['records']}"
+
+    # SpoolMapping must exist (this is what makes the filament appear in Synced Records)
+    all_spool_maps = db.query(SpoolMapping).all()
+    assert len(all_spool_maps) == 1, (
+        f"Expected exactly 1 SpoolMapping after importing archived spool, got {len(all_spool_maps)}"
+    )
+    sm_map = all_spool_maps[0]
+    assert sm_map.spoolman_spool_id == 65
+    assert sm_map.filamentdb_spool_id == "fdb-spool-65"
+
+    # FDB create_spool must have been called with retired=True
+    call_args = filamentdb_client.create_spool.call_args
+    assert call_args is not None, "create_spool was never called"
+    spool_payload = call_args[0][1]  # positional: (fdb_id, spool_payload)
+    assert spool_payload.get("retired") is True, (
+        f"FDB spool payload must have retired=True for archived SM spool; got: {spool_payload}"
+    )
+
+    # The execute record detail must mention "retired"
+    spool_records = [r for r in body["records"] if r["entity_type"] == "spool" and r["action"] == "created"]
+    assert len(spool_records) >= 1
+    assert spool_records[0]["detail"] is not None
+    assert "retired" in spool_records[0]["detail"], (
+        f"Execute record detail must mention 'retired'; got: {spool_records[0]['detail']}"
+    )
+
+
+# ---- test 6: never_import_empties=True → no create_spool / SpoolMapping for #65 ----
+
+
+def test_execute_never_import_empties_skips_archived_empty(db):
+    """Execute with never_import_empties=True: archived empty spool is not created in FDB."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "never_import_empties", True)
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 63, "action": "create"}])
+    db.commit()
+
+    sm_fil = SpoolmanFilament(
+        id=63, name="Light Purple PLA",
+        vendor=SpoolmanVendor(id=1, name="ACME"), material="PLA", weight=1000.0,
+    )
+    sm_sp = SpoolmanSpool(
+        id=65, filament=sm_fil, initial_weight=1000.0,
+        remaining_weight=-47.98, archived=True, extra={},
+    )
+
+    spoolman_client = AsyncMock()
+    spoolman_client.get_filaments = AsyncMock(return_value=[sm_fil])
+    spoolman_client.get_spools = AsyncMock(return_value=[sm_sp])
+    spoolman_client.update_spool = AsyncMock(return_value=None)
+    spoolman_client.get_field_definitions = AsyncMock(return_value=[])
+
+    created_fdb_fil = MagicMock()
+    created_fdb_fil.id = "fdb-fil-63"
+
+    filamentdb_client = AsyncMock()
+    filamentdb_client.get_filaments = AsyncMock(return_value=[])
+    filamentdb_client.get_version = AsyncMock(return_value="1.33.0")
+    filamentdb_client.create_filament = AsyncMock(return_value=created_fdb_fil)
+    filamentdb_client.create_spool = AsyncMock(return_value={"_id": "fdb-spool-65"})
+    filamentdb_client.get_locations = AsyncMock(return_value=[])
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api import wizard
+    from app.db import get_db
+
+    app = FastAPI()
+    app.include_router(wizard.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = spoolman_client
+    app.state.filamentdb = filamentdb_client
+    client = TestClient(app)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 200, resp.text
+
+    # No spool created in FDB
+    filamentdb_client.create_spool.assert_not_called()
+    # No SpoolMapping
+    all_spool_maps = db.query(SpoolMapping).all()
+    assert len(all_spool_maps) == 0, (
+        f"Expected 0 SpoolMappings when never_import_empties=True, got {len(all_spool_maps)}"
+    )
+
+
+# ---- test 7: _compute_empty_active includes archived entry with archived=True ----
+
+
+def test_compute_empty_active_includes_archived():
+    """_compute_empty_active emits entries for empty active spools AND archived spools.
+
+    Archived spools must have archived=True; active-empty have archived=False.
+    """
+    from app.api.wizard import _compute_empty_active
+
+    sm_fil = MagicMock()
+    sm_fil.id = 1
+    sm_fil.name = "PLA"
+
+    # Active, fully depleted
+    active_empty = MagicMock()
+    active_empty.id = 10
+    active_empty.filament = sm_fil
+    active_empty.remaining_weight = 0.0
+    active_empty.archived = False
+
+    # Archived, also depleted (negative remaining)
+    archived_empty = MagicMock()
+    archived_empty.id = 65
+    archived_empty.filament = sm_fil
+    archived_empty.remaining_weight = -47.98
+    archived_empty.archived = True
+
+    # Archived, non-empty (still archived → must appear)
+    archived_nonempty = MagicMock()
+    archived_nonempty.id = 66
+    archived_nonempty.filament = sm_fil
+    archived_nonempty.remaining_weight = 200.0
+    archived_nonempty.archived = True
+
+    # Active, non-empty → must NOT appear
+    active_nonempty = MagicMock()
+    active_nonempty.id = 99
+    active_nonempty.filament = sm_fil
+    active_nonempty.remaining_weight = 500.0
+    active_nonempty.archived = False
+
+    result = _compute_empty_active([active_empty, archived_empty, archived_nonempty, active_nonempty])
+
+    ids = {e.spoolman_spool_id for e in result}
+    assert 10 in ids, "active-empty spool must appear"
+    assert 65 in ids, "archived-empty spool must appear"
+    assert 66 in ids, "archived-nonempty spool must appear"
+    assert 99 not in ids, "active-nonempty spool must NOT appear"
+
+    # archived flag must be set correctly
+    archived_entries = {e.spoolman_spool_id: e.archived for e in result}
+    assert archived_entries[10] is False, "active-empty must have archived=False"
+    assert archived_entries[65] is True, "archived-empty must have archived=True"
+    assert archived_entries[66] is True, "archived-nonempty must have archived=True"

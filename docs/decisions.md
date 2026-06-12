@@ -1,5 +1,47 @@
 # Decision record
 
+## 2026-06-11 — Archived Spoolman spools import as retired FDB spools (not silently dropped)
+
+**Root cause.** The wizard's `sm_spools_by_filament` builder (planner.py:316) filtered
+out archived Spoolman spools *before* the `never_import_empties` gate. A user with SM
+filament 63 ("Light Purple PLA") and only one spool (#65, archived, `used_weight 1047.98 >
+initial_weight 1000.0` → remaining = −47.98) saw the filament created in FDB but zero
+spool mappings — so it never appeared in Synced Records.
+
+**Decision O1 (locked): archived ⇒ retired.** Archived SM spools are no longer
+categorically excluded from import. They flow through the same `never_import_empties` gate
+as active spools:
+- `never_import_empties = false` (default): import all spools, including empty/archived ones.
+  Archived spools become **retired** FDB spools (`retired: true` on the spool payload and
+  the seed snapshot). **Only the spool is retired — the filament is always a normal,
+  non-retired filament** (in Spoolman the archived flag is spool-level; the filament
+  remains live).
+- `never_import_empties = true`: skip spools whose `remaining_weight ≤ 0.0`, whether active
+  or archived. An archived spool with positive remaining weight still imports as retired.
+
+**Decision O2 (accepted): no un-archive flip-back.** The ongoing engine does NOT flip a
+retired FDB spool back to active when the SM spool is un-archived later. `archived`/`retired`
+is set once at import; subsequent state changes are not a synced field. (Engine guardrails:
+the mapped-pair archived branch at engine.py:2380 skips retired/archived pairs; new-spool
+detection uses active-only lists; differ has no `retired` field.)
+
+**Decision O3 (empty gate): `remaining_weight ≤ 0.0`.** The empty gate now uses `<= 0.0`
+everywhere (was `== 0.0` in some sites). The proven real-world case has
+`remaining_weight = -47.98` (used 1047.98 g from a 1000 g spool), which `== 0.0` would
+miss. Changed at: planner.py:461, wizard.py:613 (`spool_ids_per_filament`), and the
+`_compute_empty_active` bucket.
+
+**Transparency.** The wizard Preview step's "Empty/archived spools" bucket now includes all
+spools with `remaining ≤ 0` or `archived = True`. Each archived entry displays an
+"archived → imports as retired" badge. The execute sync-log record for a retired spool
+create carries `detail = "imported as retired (archived in Spoolman, spool #N)"`.
+
+**Sites changed** (from the plan's table): A (planner.py:316 — the bug), B (planner.py:461
+empty gate + retired flag), D (wizard.py:613 spool_ids_per_filament), F (wizard.py:291 xref
+map), G (wizard.py:397 wizard_weights), H (wizard.py:1129 generic_container parent scan),
+I (wizard.py:1880 _compute_empty_active). Sites C/E/J/K/L kept active-only (heuristics and
+engine guardrails — no change per plan).
+
 ## 2026-06-11 — Startup state dump retries the upstream fetch (~2 min) instead of one-shot
 
 `write_startup_dump` initially fetched once, ~2 s after boot — which always lost the race

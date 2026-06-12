@@ -1,10 +1,17 @@
 ---
 name: 2026-06-11-import-archived-empty-spools
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-06-11
 model: opus              # PLAN first (engine ripple), then implement via sonnet
-completed:
-result:
+completed: 2026-06-11
+result: >
+  Implemented per agreed plan. Archived SM spools now route through the empty gate and
+  import as retired FDB spools (retired=True on the spool, filament stays live). All 7
+  backend code sites changed per the plan table; 4 sites kept active-only (heuristics +
+  engine guardrails). Empty gate uses <= 0.0 everywhere (O3). Preview shows
+  "archived → imports as retired" badge. Execute sync-log detail mentions "retired".
+  Snapshot seeds use correct retired flag. 7 new backend tests + 4 frontend tests added.
+  709 backend tests pass, 44 frontend tests pass, ruff clean, tsc clean.
 ---
 
 # Task: Stop hard-excluding archived spools — gate empty/archived import on `never_import_empties`

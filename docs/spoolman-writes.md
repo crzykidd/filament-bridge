@@ -78,6 +78,11 @@ New-spool creation during a cycle (gated by `new_spool_sync_direction`):
 | Filament | update | `extra.filamentdb_material_tags` | Pass 2.6 — writes parsed finish-tag IDs (from SM name/material text) back so SM's extra field matches FDB's `optTags` |
 | Filament | update | `material`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `spool_weight` | Variances **reconcile write-back** — only fields the user corrected, and only where the value differs from current Spoolman |
 
+For FDB spool creates: when the source SM spool is **archived**, the bridge sets `retired: true`
+on the FDB spool payload so the archived state is preserved at import. Only the spool is
+marked retired — the filament record is always created as a normal, non-retired filament.
+`archived`/`retired` is set once at import and is NOT a synced field in ongoing auto-sync.
+
 ## Conflict-resolution writes (on-demand, human-approved)
 
 Resolving a **master_divergence** conflict (`POST /api/conflicts/{id}/resolve` with an

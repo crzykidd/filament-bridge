@@ -288,8 +288,8 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
     sm_spools = await request.app.state.spoolman.get_spools()
     fdb_id_field = _settings.spoolman_field_filamentdb_id
     for spool in sm_spools:
-        if spool.archived:
-            continue
+        # Include archived spools in xref recognition — an archived spool with a live
+        # cross-ref still links its filament to FDB (so it shows as "already linked").
         if spool.filament is None:
             continue
         raw = (spool.extra or {}).get(fdb_id_field)
@@ -394,8 +394,7 @@ async def wizard_weights(request: Request, db: Session = Depends(get_db)) -> Wiz
         included = _included_sm_ids(db)
         spools = await request.app.state.spoolman.get_spools()
         for s in spools:
-            if s.archived:
-                continue
+            # Include archived spools — they import as retired FDB spools.
             if s.filament and s.filament.id not in included:
                 continue
             tare = s.spool_weight if s.spool_weight is not None else (
@@ -606,11 +605,12 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
             fdb_fil = fdb_by_id.get(fdb_id)
             sm_to_fdb_type[sm_id] = fdb_fil.type if fdb_fil else None
 
-    # Spool ids per filament (active only; D4 — skip zero-weight spools when toggle is off)
+    # Spool ids per filament (active + archived; D4 — skip depleted spools when toggle is off)
     spool_ids_per_filament: dict[int, list[int]] = {}
     for s in sm_spools:
-        if not s.archived and s.filament:
-            if not include_empty and (s.remaining_weight or 0.0) == 0.0:
+        if s.filament:
+            # O3: use <= 0.0 (negative remaining is possible when used > initial)
+            if not include_empty and (s.remaining_weight or 0.0) <= 0.0:
                 continue
             spool_ids_per_filament.setdefault(s.filament.id, []).append(s.id)
 
@@ -1124,10 +1124,10 @@ async def _execute_spoolman_to_fdb(
             existing_fdb_parent_id: str | None = None
 
             # 1. Check extra-field references on SM spools for any member
+            # Include archived spools — a previously-imported archived spool may carry
+            # the filamentdb_parent_id xref that identifies the existing container.
             all_sm_ids_for_cluster = {m.id for m in members}
             for sm_spool in sm_spools:
-                if getattr(sm_spool, 'archived', False):
-                    continue
                 if sm_spool.filament is None:
                     continue
                 if sm_spool.filament.id not in all_sm_ids_for_cluster:
@@ -1613,6 +1613,10 @@ async def _execute_spoolman_to_fdb(
                     spool_payload["locationId"] = _fdb_loc_cache[sm_location]
                 # Preserve the spool's age (purchase/opened dates) from Spoolman.
                 spool_payload.update(spool_provenance_dates(spool_item.sm_spool))
+                # Archived SM spools import as retired FDB spools (O1: archived ⇒ retired).
+                # The FILAMENT is always a normal, non-retired filament — only the spool is retired.
+                if spool_item.retired:
+                    spool_payload["retired"] = True
                 # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
                 raw = await filamentdb.create_spool(fdb_id, spool_payload)
                 new_fdb_spool_id = extract_created_spool_id(
@@ -1635,11 +1639,18 @@ async def _execute_spoolman_to_fdb(
                 ))
                 spool_item.sm_spool.extra.update(
                     _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_fdb_id))
+                # Seed snapshot with the correct retired flag so the engine sees this
+                # pair as in-sync on the first cycle (no spurious update/conflict).
                 _seed_snapshots(db, spool_item.sm_spool, FDBSpool.model_validate({
                     "_id": new_fdb_spool_id, "label": str(spool_item.sm_spool.id),
-                    "totalWeight": spool_item.planned_gross, "retired": False,
+                    "totalWeight": spool_item.planned_gross, "retired": spool_item.retired,
                 }))
+                _create_detail = (
+                    f"imported as retired (archived in Spoolman, spool #{spool_item.sm_spool.id})"
+                    if spool_item.retired else None
+                )
                 res.add(db, "spool", "created", label=_spool_label,
+                        detail=_create_detail,
                         sm_spool_id=spool_item.sm_spool.id,
                         fdb_filament_id=fdb_id, fdb_spool_id=new_fdb_spool_id)
             except Exception as exc:
@@ -1875,13 +1886,25 @@ def _compute_name_collisions(
 
 
 def _compute_empty_active(sm_spools: list) -> list[EmptyActiveEntry]:
+    """Return entries for spools that are empty (remaining ≤ 0) or archived.
+
+    Active-empty and archived spools both appear here so the Preview step can show
+    the user what will happen:
+    - active-empty: imported at near-zero weight (or skipped when never_import_empties=true).
+    - archived (archived=True): imported as a RETIRED FDB spool (or skipped when never_import_empties=true
+      and remaining ≤ 0).
+    """
     result: list[EmptyActiveEntry] = []
     for s in sm_spools:
-        if not getattr(s, "archived", False) and (s.remaining_weight or 0.0) == 0.0:
+        is_archived = bool(getattr(s, "archived", False))
+        # O3: use <= 0.0 (negative remaining is possible when used > initial)
+        is_empty = (s.remaining_weight or 0.0) <= 0.0
+        if is_empty or is_archived:
             result.append(EmptyActiveEntry(
                 spoolman_spool_id=s.id,
                 spoolman_filament_id=s.filament.id if s.filament else None,
                 name=s.filament.name if s.filament else None,
+                archived=is_archived,
             ))
     return result
 
@@ -2156,6 +2179,11 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
             error=item.error,
         ))
     for si in plan.spool_items:
+        _preview_spool_detail = si.detail
+        if si.action == "create" and si.retired:
+            _preview_spool_detail = (
+                f"imports as retired (archived in Spoolman, spool #{si.sm_spool.id})"
+            )
         plan_rows.append(WizardExecuteRecord(
             entity_type="spool",
             action="created" if si.action == "create" else "skipped",
@@ -2163,7 +2191,7 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
             spoolman_filament_id=si.sm_spool.filament.id if si.sm_spool.filament else None,
             filamentdb_filament_id=si.fdb_filament_id,
             filamentdb_spool_id=si.skip_fdb_spool_id,
-            detail=si.detail,
+            detail=_preview_spool_detail,
         ))
 
     # Compute container display names for the generic_container mode collision check.

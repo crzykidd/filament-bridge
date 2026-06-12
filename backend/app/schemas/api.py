@@ -584,11 +584,17 @@ class NameCollisionEntry(BaseModel):
 
 
 class EmptyActiveEntry(BaseModel):
-    """A Spoolman spool that is active (not archived) but fully consumed."""
+    """A Spoolman spool that is empty (remaining ≤ 0) or archived.
+
+    ``archived=True`` means the spool is archived in Spoolman — when imported, it will
+    become a *retired* spool in Filament DB (``retired: true``). When ``never_import_empties``
+    is off (the default), both empty-active and archived/empty spools are imported.
+    """
 
     spoolman_spool_id: int
     spoolman_filament_id: int | None = None
     name: str | None = None
+    archived: bool = False  # True when the spool is archived in Spoolman (imports as retired)
 
 
 class DefaultTareEntry(BaseModel):

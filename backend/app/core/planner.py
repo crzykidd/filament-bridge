@@ -179,6 +179,7 @@ class _SpoolPlanItem:
     tare_source: str = "default"  # "spoolman" | "default"
     used_tare: float = 0.0
     detail: str | None = None
+    retired: bool = False  # True when the SM spool is archived → import as FDB retired spool
     # When a SpoolMapping exists but its FDB spool target is gone, it is recorded here
     # so wizard_execute can delete it before writing the fresh mapping.
     stale_spool_mapping: object = None  # SpoolMapping | None
@@ -313,8 +314,9 @@ def _plan_spoolman_to_fdb(
 
     sm_spools_by_filament: dict[int, list] = {}
     for s in sm_spools:
-        if not getattr(s, "archived", False):
-            sm_spools_by_filament.setdefault(s.filament.id, []).append(s)
+        # Include ALL spools (active + archived); archived ones import as retired FDB spools.
+        # The empty gate below decides whether to skip truly empty spools.
+        sm_spools_by_filament.setdefault(s.filament.id, []).append(s)
 
     fil_map_by_sm: dict[int, FilamentMapping] = {
         m.spoolman_filament_id: m for m in db.query(FilamentMapping).all()
@@ -455,8 +457,10 @@ def _plan_spoolman_to_fdb(
         if not item.resolved:
             continue
         for sm_spool in sm_spools_by_filament.get(item.sm_filament.id, []):
-            if not include_empty_spools and (sm_spool.remaining_weight or 0.0) == 0.0:
-                continue  # D4: skip empty spool records when toggle is off
+            # O3: use <= 0.0 because negative remaining_weight is possible (used > initial).
+            if not include_empty_spools and (sm_spool.remaining_weight or 0.0) <= 0.0:
+                continue  # D4: skip empty/depleted spools (active or archived) when toggle is off
+            _spool_retired = bool(getattr(sm_spool, "archived", False))
             xref = decode_extra_value(
                 sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
             )
@@ -509,6 +513,7 @@ def _plan_spoolman_to_fdb(
                 planned_gross=gross_res.total_weight,
                 tare_source="default" if gross_res.used_default_tare else "spoolman",
                 used_tare=gross_res.total_weight - (sm_spool.remaining_weight or 0.0),
+                retired=_spool_retired,
                 stale_spool_mapping=_stale_spool_mapping,
             ))
 

@@ -18,8 +18,8 @@ const FLAG_LABELS: Record<FlagKey, string> = {
 
 function emptyActiveLabel(neverImportEmpties: boolean): string {
   return neverImportEmpties
-    ? "Empty/depleted spools (skipped — 'Never import empties' is on)"
-    : 'Empty/depleted spools (will be imported)'
+    ? "Empty/archived spools (skipped — 'Never import empties' is on)"
+    : 'Empty/archived spools (will be imported; archived → retired)'
 }
 
 export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
@@ -174,7 +174,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         open={open.has('empty_active')}
         onToggle={() => toggle('empty_active')}
         infoOnly={config?.never_import_empties ?? false}
-        tip="Depleted but unarchived Spoolman spools. If 'Never import empties' is on, they're skipped; otherwise they'll be imported."
+        tip="Depleted or archived Spoolman spools. Archived spools import as retired Filament DB spools. If 'Never import empties' is on, depleted spools are skipped; archived non-empty spools still import as retired."
       >
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {(config?.never_import_empties ?? false) && (
@@ -184,12 +184,20 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
           )}
           {!(config?.never_import_empties ?? false) && (
             <p className="px-4 py-2 text-xs text-blue-600">
-              These spools will be imported. Turn on "Never import empties" in Settings to skip them.
+              These spools will be imported. Archived spools import as <strong>retired</strong> Filament DB spools.
+              Turn on "Never import empties" in Settings to skip depleted ones.
             </p>
           )}
           {data.empty_active.map((e, i) => (
             <div key={i} className="px-4 py-2 text-sm flex items-center justify-between gap-3">
-              <span className="text-gray-700 dark:text-gray-200">{e.name ?? `Spool #${e.spoolman_spool_id}`}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-gray-700 dark:text-gray-200">{e.name ?? `Spool #${e.spoolman_spool_id}`}</span>
+                {e.archived && (
+                  <span className="inline-flex px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 shrink-0">
+                    archived → imports as retired
+                  </span>
+                )}
+              </div>
               <DeepLinks
                 spoolmanSpoolId={e.spoolman_spool_id}
                 spoolmanFilamentId={e.spoolman_filament_id}

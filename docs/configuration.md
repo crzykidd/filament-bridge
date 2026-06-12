@@ -138,7 +138,7 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | `variant_line_keywords` | env seed | Other settings | See `VARIANT_LINE_KEYWORDS`. |
 | `opentag_vendor_aliases` | env / seed | Other settings | See `OPENTAG_VENDOR_ALIASES`. |
 | `opentag_color_keywords` | env / seed | Other settings | See `OPENTAG_COLOR_KEYWORDS`. |
-| `never_import_empties` | `false` | New spools | Wizard skips creating FDB spool records for depleted spools (net weight 0); the filament definition still imports. |
+| `never_import_empties` | `false` | New spools | Controls both empty and archived spools. When `false` (default): all spools import, including depleted (`remaining ≤ 0`) and archived ones. Archived spools import as **retired** FDB spools (spool only — the filament stays live). When `true`: spools with `remaining ≤ 0` are skipped (whether active or archived); archived spools with positive remaining weight still import as retired. The filament definition always imports regardless. |
 | `variant_parent_mode` | `unset` | Variant parent mode | **Required before the wizard runs** (Spoolman→FDB direction): `promote_color` or `generic_container`. See [variant-parent-mode.md](variant-parent-mode.md). |
 | `container_parent_marker` | env (`(Master)`) | Variant parent mode | Marker on generic-container names; checkbox + text field, visible in `generic_container` mode. |
 | `api_token_enabled` | `false` | Security | Allow `Authorization: Bearer` / `X-API-Key` machine auth. |

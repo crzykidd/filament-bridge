@@ -533,6 +533,8 @@ export interface EmptyActiveEntry {
   spoolman_spool_id: number
   spoolman_filament_id: number | null
   name: string | null
+  /** True when the spool is archived in Spoolman; imports as a retired FDB spool. */
+  archived: boolean
 }
 
 export interface DefaultTareEntry {

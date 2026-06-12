@@ -234,6 +234,57 @@ async def test_weight_two_way_print_converges_no_loop(db):
 
 
 @pytest.mark.asyncio
+async def test_archived_imported_spool_no_pingpong(db):
+    """An imported archived→retired spool must not be re-animated or bounced.
+
+    Mirrors the wizard importing SM spool #65 (archived, used up) as a RETIRED FDB
+    spool with a SpoolMapping. The mapped-pair loop must hit the archived-skip branch
+    (engine.py ~2380) every cycle: no weight diff, no usage log, no FDB→SM decrement,
+    no conflict, no duplicate-spool creation on either side — across multiple cycles.
+    """
+    sm_spool = SpoolmanSpool(
+        id=65,
+        filament=SpoolmanFilament(id=63, name="Light Purple PLA",
+                                  vendor=SpoolmanVendor(id=1, name="Hatchbox")),
+        remaining_weight=-47.98,   # used 1047 > initial 1000 → negative remaining
+        archived=True,
+        extra={"filamentdb_id": "fil-63", "filamentdb_spool_id": "spool-65"},
+    )
+    fdb_fil = FDBFilament.model_validate({
+        "_id": "fil-63",
+        "name": "Hatchbox PLA Light Purple PLA",
+        "vendor": "hatchbox",
+        "spoolWeight": 200.0,
+        "spools": [{"_id": "spool-65", "totalWeight": 200.0, "retired": True}],
+    })
+    _add_spool_mapping(db, 65, "fil-63", "spool-65")
+    _store_snapshot(db, "spoolman", "spool", "65", {"remaining_weight": -47.98})
+    _store_snapshot(db, "filamentdb", "spool", "spool-65", {"totalWeight": 200.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="arch-c1")
+        r2 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="arch-c2")
+
+    # No spurious work on either cycle — the archived pair is skipped, not synced.
+    for r in (r1, r2):
+        assert r.updated == 0, f"archived pair must not update; got {r.updated}"
+        assert r.conflicts == 0, f"archived pair must not conflict; got {r.conflicts}"
+        assert r.errors == 0
+        assert r.skipped >= 1, "archived pair must hit the skip branch"
+    # No writes to either system for the archived/retired spool.
+    fdb_client.log_usage.assert_not_called()
+    fdb_client.update_spool.assert_not_called()
+    fdb_client.create_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    spoolman.create_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_weight_two_way_fdb_change_converges_no_loop(db):
     """A lone FDB-side weight change under two_way propagates to SM once
     (net = totalWeight - tare, NO usage subtraction) and then converges."""
