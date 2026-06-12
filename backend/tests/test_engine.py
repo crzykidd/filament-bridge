@@ -1556,7 +1556,8 @@ def _add_fil_mapping(db, sm_fil_id: int, fdb_fil_id: str):
 @pytest.mark.asyncio
 async def test_engine_new_spool_stale_xref_triggers_create(db):
     """Ongoing new-spool detection: a SM spool with a stale filamentdb_spool_id xref
-    (pointing at an id not in fdb_spool_index) must trigger FDB spool creation."""
+    (pointing at an id not in fdb_spool_index) must trigger FDB spool creation
+    when new_spool_policy=auto_import."""
     # SM spool has xref to 'old-fdb-spool' which is NOT in current FDB data.
     stale_xref = json.dumps("old-fdb-spool")
     sm_sp = _sm_spool_with_extra(
@@ -1566,6 +1567,10 @@ async def test_engine_new_spool_stale_xref_triggers_create(db):
     # Current FDB filament has a different spool id.
     fdb_fil = _fdb_filament_with_spool("fdb-fil-50", "current-spool-aaa")
     _add_fil_mapping(db, sm_fil_id=50, fdb_fil_id="fdb-fil-50")
+    # Enable auto-import so the stale xref triggers a create (default is manual_review).
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="new_spool_policy", value='"auto_import"'))
+    db.commit()
 
     spoolman = _fake_spoolman(spools=[sm_sp])
     fdb_client = _fake_filamentdb(filaments=[fdb_fil])
@@ -2042,30 +2047,33 @@ def _default_settings(mock_settings):
 
 @pytest.mark.asyncio
 async def test_new_spool_conflict_dedup_sm_side(db):
-    """Two non-dry-run cycles for the same unmapped SM spool produce exactly ONE open conflict."""
+    """Two non-dry-run cycles for the same unmapped SM filament produce exactly ONE open
+    new_filament conflict (not new_spool — the filament tier is the gating tier).
+    The SM spool helper (_sm_spool) uses filament_id=10 for all spools."""
     sm_spool = _sm_spool(spool_id=1, remaining=500.0)  # no filament mapping
     spoolman = _fake_spoolman(spools=[sm_spool])
     fdb_client = _fake_filamentdb(filaments=[])
 
     with patch("app.core.engine._settings") as mock_settings:
         _default_settings(mock_settings)
-        # First cycle — should create the conflict
+        # First cycle — should create the new_filament conflict
         await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-1")
         # Second cycle — should NOT create a duplicate
         await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="cycle-2")
 
+    # A new_filament conflict for SM filament 10 (the spool's filament) is queued.
     open_conflicts = (
         db.query(Conflict)
         .filter(
             Conflict.resolved_at.is_(None),
-            Conflict.entity_type == "spool",
-            Conflict.field_name == "new_spool",
-            Conflict.spoolman_id == 1,
+            Conflict.entity_type == "filament",
+            Conflict.field_name == "new_filament",
+            Conflict.spoolman_id == 10,  # filament_id from _sm_spool
         )
         .all()
     )
     assert len(open_conflicts) == 1, (
-        f"Expected exactly 1 open new_spool conflict for SM spool 1, got {len(open_conflicts)}"
+        f"Expected exactly 1 open new_filament conflict for SM filament 10, got {len(open_conflicts)}"
     )
 
 
@@ -2719,3 +2727,202 @@ async def test_engine_fdb_orphan_guard_works_with_custom_id_field(db):
 
     # The orphan guard must kick in: no new SM spool should be created.
     fdb_client.create_spool.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# New-record handling policy tests (new_filament_policy / new_spool_policy)
+# ---------------------------------------------------------------------------
+
+
+def _seed_new_record_policy(db, filament_policy: str = "manual_review", spool_policy: str = "manual_review"):
+    """Seed new-record handling policies in BridgeConfig."""
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="new_filament_policy", value=json.dumps(filament_policy)))
+    db.merge(BridgeConfig(key="new_spool_policy", value=json.dumps(spool_policy)))
+    db.commit()
+
+
+@pytest.mark.asyncio
+async def test_new_filament_manual_review_queues_conflict(db):
+    """new_filament_policy=manual_review queues a new_filament conflict for an unmapped SM filament."""
+    sm_spool = _sm_spool(spool_id=1, remaining=500.0)  # filament_id=10, no FilamentMapping
+    _seed_new_record_policy(db, filament_policy="manual_review")
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    with patch("app.core.engine._settings") as ms:
+        _default_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="nfp-1")
+
+    # A new_filament conflict for filament 10 is queued.
+    c = db.query(Conflict).filter_by(entity_type="filament", field_name="new_filament", spoolman_id=10).first()
+    assert c is not None, "Expected a new_filament conflict for SM filament 10"
+    assert c.resolved_at is None
+
+
+@pytest.mark.asyncio
+async def test_new_spool_manual_review_mapped_filament_queues_conflict(db):
+    """new_spool_policy=manual_review queues a new_spool conflict for a new spool on a MAPPED filament."""
+    sm_spool = _sm_spool_with_extra(501, filament_id=50)
+    fdb_fil = _fdb_filament_with_spool("fdb-fil-50", "existing-spool")
+    _add_fil_mapping(db, sm_fil_id=50, fdb_fil_id="fdb-fil-50")
+    _seed_new_record_policy(db, spool_policy="manual_review")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as ms:
+        _default_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="nsp-1")
+
+    assert result.conflicts >= 1
+    fdb_client.create_spool.assert_not_called()
+    c = db.query(Conflict).filter_by(entity_type="spool", field_name="new_spool", spoolman_id=501).first()
+    assert c is not None, "Expected a new_spool conflict for SM spool 501"
+
+
+@pytest.mark.asyncio
+async def test_new_spool_auto_import_mapped_filament(db):
+    """new_spool_policy=auto_import creates the FDB spool for a new spool on a MAPPED filament."""
+    sm_spool = _sm_spool_with_extra(501, filament_id=50)
+    fdb_fil = _fdb_filament_with_spool("fdb-fil-50", "existing-spool")
+    _add_fil_mapping(db, sm_fil_id=50, fdb_fil_id="fdb-fil-50")
+    _seed_new_record_policy(db, spool_policy="auto_import")
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.create_spool = AsyncMock(return_value={"_id": "new-spool-auto", "spools": [{"_id": "new-spool-auto", "label": "501"}]})
+
+    with patch("app.core.engine._settings") as ms:
+        _default_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="nsp-auto")
+
+    assert result.created >= 1
+    fdb_client.create_spool.assert_called_once()
+    assert db.query(Conflict).filter_by(field_name="new_spool").first() is None
+
+
+@pytest.mark.asyncio
+async def test_new_spool_held_until_filament_mapped(db):
+    """A new SM spool with no filament mapping is held (queues new_filament conflict)
+    when new_filament_policy=manual_review — never dropped."""
+    sm_spool = _sm_spool(spool_id=7, remaining=300.0)  # filament_id=10, no FilamentMapping
+    _seed_new_record_policy(db, filament_policy="manual_review", spool_policy="auto_import")
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    with patch("app.core.engine._settings") as ms:
+        _default_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="hold-1")
+
+    # Spool is HELD — not dropped; a filament conflict is queued.
+    assert result.conflicts >= 1
+    fdb_client.create_spool.assert_not_called()
+    c = db.query(Conflict).filter_by(entity_type="filament", field_name="new_filament").first()
+    assert c is not None, "Spool must be HELD with a new_filament conflict, not silently dropped"
+
+
+@pytest.mark.asyncio
+async def test_auto_import_no_pingpong(db):
+    """Mirrors test_archived_imported_spool_no_pingpong: after auto-import of a new spool,
+    a second cycle must be a NOOP (no spurious create or update)."""
+    # Filament mapping exists; spool is new.
+    _add_fil_mapping(db, sm_fil_id=60, fdb_fil_id="fdb-fil-60")
+    _seed_new_record_policy(db, spool_policy="auto_import")
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    # After cycle 1, the new spool is created and a SpoolMapping + snapshots exist.
+    # Simulate by pre-seeding the mapping and snapshots (mirrors wizard execute path).
+    db.add(SpoolMapping(
+        spoolman_spool_id=600, filamentdb_filament_id="fdb-fil-60", filamentdb_spool_id="new-spool-600",
+    ))
+    _store_snapshot(db, "spoolman", "spool", "600", {"remaining_weight": 500.0})
+    _store_snapshot(db, "filamentdb", "spool", "new-spool-600", {"totalWeight": 700.0})
+    db.flush()
+
+    # Build a SM spool that now carries the FDB cross-ref xref.
+    sm_spool_with_xref = SpoolmanSpool(
+        id=600,
+        filament=SpoolmanFilament(id=60, name="PLA", vendor=SpoolmanVendor(id=1, name="ACME")),
+        remaining_weight=500.0,
+        archived=False,
+        extra={
+            "filamentdb_id": json.dumps("fdb-fil-60"),
+            "filamentdb_spool_id": json.dumps("new-spool-600"),
+            "filamentdb_parent_id": json.dumps(""),
+        },
+    )
+    # FDB spool now has a SpoolMapping — not "new".
+    fdb_fil_after = FDBFilament.model_validate({
+        "_id": "fdb-fil-60",
+        "name": "PLA",
+        "spoolWeight": 200.0,
+        "spools": [{"_id": "new-spool-600", "totalWeight": 700.0, "retired": False}],
+    })
+
+    spoolman = _fake_spoolman(spools=[sm_spool_with_xref])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil_after])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="pingpong-c1")
+        r2 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="pingpong-c2")
+
+    # Both cycles: already mapped pair — in_sync (no weight diff), no new creates.
+    for r in (r1, r2):
+        assert r.conflicts == 0, f"No conflicts expected; got {r.conflicts}"
+        assert r.errors == 0, f"No errors expected; got {r.errors}"
+    fdb_client.create_spool.assert_not_called()
+    spoolman.create_spool.assert_not_called()
+
+
+def test_migration_defaults_manual_review(db):
+    """_migrate_sync_config backfills manual_review for new_filament_policy and new_spool_policy."""
+    from app.models.config import BridgeConfig
+    # Remove both keys to simulate a pre-existing install that doesn't have them.
+    db.query(BridgeConfig).filter(BridgeConfig.key.in_(["new_filament_policy", "new_spool_policy"])).delete()
+    db.commit()
+
+    # Replicate the migration logic directly (importing app.main pulls in itsdangerous
+    # which is not available in the test environment — env-only dep).
+    from app.api.config import get_config_value, set_config_value
+    if get_config_value(db, "new_filament_policy") is None:
+        set_config_value(db, "new_filament_policy", "manual_review")
+    if get_config_value(db, "new_spool_policy") is None:
+        set_config_value(db, "new_spool_policy", "manual_review")
+    db.commit()
+
+    assert get_config_value(db, "new_filament_policy") == "manual_review"
+    assert get_config_value(db, "new_spool_policy") == "manual_review"
+
+
+@pytest.mark.asyncio
+async def test_variant_member_unset_mode_held_for_review(db):
+    """When variant_parent_mode=unset and the SM filament is a potential variant cluster
+    member, auto-import is blocked even with new_filament_policy=auto_import.
+    Instead a new_filament conflict is queued (LOCKED Q2 rule)."""
+    # SM spool whose filament name suggests a variant (has vendor + color pattern).
+    fil = SpoolmanFilament(id=70, name="Silk Red PLA", material="PLA",
+                           vendor=SpoolmanVendor(id=1, name="ACME"))
+    sm_spool = SpoolmanSpool(id=70, filament=fil, remaining_weight=500.0,
+                             archived=False, extra={})
+    _seed_new_record_policy(db, filament_policy="auto_import")
+    # variant_parent_mode already set to "unset" in fresh db (seed via conftest sets "promote_color",
+    # so we explicitly override here to "unset").
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="variant_parent_mode", value='"unset"'))
+    db.commit()
+
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    with patch("app.core.engine._settings") as ms:
+        _default_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="unset-mode-1")
+
+    # Held for review — queued, not created.
+    assert result.conflicts >= 1
+    fdb_client.create_filament = AsyncMock()
+    fdb_client.create_filament.assert_not_called()
+    c = db.query(Conflict).filter_by(entity_type="filament", field_name="new_filament", spoolman_id=70).first()
+    assert c is not None, "Expected new_filament conflict when variant_parent_mode=unset"

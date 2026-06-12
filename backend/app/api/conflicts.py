@@ -8,17 +8,24 @@ For `master_divergence` conflicts the endpoint additionally writes upstream
 when the human chooses an action (apply_all / variant_override / ignore) — this
 is human-approved resolution, not silent auto-apply.  All other conflict types
 remain record-only (no upstream writes).
+
+POST /api/conflicts/{conflict_id}/import is the scoped single-record import
+endpoint for new_filament and new_spool conflicts — it powers the "Add" button
+in the Conflicts UI (prompt #2).  It uses the shared single-record import helper
+in app/core/single_record_import.py so the import logic is not duplicated.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.api.config import get_config_value
 from app.api.errors import api_error
 from app.db import get_db
 from app.models.conflict import DELETION_FIELD, Conflict
@@ -27,10 +34,12 @@ from app.models.snapshot import Snapshot
 from app.schemas.api import (
     BulkResolveRequest,
     BulkResolveResponse,
+    ConflictImportRequest,
     ConflictResolveRequest,
     ConflictResponse,
     DivergenceContextResponse,
     DivergenceVariantEntry,
+    WizardExecuteResponse,
 )
 
 router = APIRouter()
@@ -240,6 +249,238 @@ async def resolve_conflict(
     db.commit()
     db.refresh(c)
     return _to_response(c, db)
+
+
+@router.post("/conflicts/{conflict_id}/import", response_model=WizardExecuteResponse)
+async def import_conflict_record(
+    conflict_id: int,
+    payload: ConflictImportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> WizardExecuteResponse:
+    """Scoped single-record import for new_filament / new_spool conflicts.
+
+    Powers the "Add" button in the Conflicts UI (prompt #2).  Uses the same
+    wizard/planner execute path as the Bulk Import Wizard — no create logic is
+    duplicated.
+
+    - dry_run=True returns a preview without writing anything.
+    - On zero-failure execute: marks the conflict resolved (resolution="imported")
+      and resolves any paired new_filament conflict.
+    - On upstream failure: returns 502 and leaves the conflict open.
+
+    Accepted for conflict types: new_filament, new_spool.
+    """
+    from app.core.compat import sync_compatibility_errors
+    from app.core.single_record_import import (
+        import_single_fdb_filament,
+        import_single_sm_filament,
+    )
+    from app.api.wizard import (
+        _resolve_container_parent_marker,
+        _resolve_variant_keywords,
+        _resolve_variant_parent_mode,
+    )
+
+    c = db.query(Conflict).filter_by(id=conflict_id).first()
+    if c is None:
+        raise api_error(404, "conflict_not_found", f"No conflict with id {conflict_id}")
+    if c.resolved_at is not None:
+        raise api_error(409, "already_resolved", f"Conflict {conflict_id} is already resolved")
+
+    allowed_types = ("new_filament", "new_spool")
+    if c.field_name not in allowed_types:
+        raise api_error(
+            400, "import_not_supported",
+            f"Conflict {conflict_id} has field_name '{c.field_name}'; "
+            f"import is only supported for: {', '.join(allowed_types)}",
+        )
+
+    spoolman = request.app.state.spoolman
+    filamentdb = request.app.state.filamentdb
+
+    # Version gate.
+    blocked = await sync_compatibility_errors(spoolman, filamentdb)
+    if blocked:
+        raise api_error(
+            409, "upstream_version_unsupported",
+            "Sync disabled — " + "; ".join(blocked) + ".",
+        )
+
+    cycle_id = str(uuid.uuid4())
+    precision = int(get_config_value(db, "weight_precision_decimals", 2))
+
+    # Determine direction from the conflict ids.
+    is_sm_to_fdb = c.spoolman_id is not None  # spoolman_id set → SM→FDB
+    is_fdb_to_sm = not is_sm_to_fdb and c.filamentdb_filament_id is not None
+
+    if not is_sm_to_fdb and not is_fdb_to_sm:
+        raise api_error(400, "ambiguous_direction",
+                        "Cannot determine import direction from conflict ids")
+
+    sm_filament_id: int | None = None  # set in SM→FDB branch; used for paired-conflict cleanup
+
+    try:
+        if is_sm_to_fdb:
+            # For new_spool conflicts the spoolman_id is the SPOOL id; we need
+            # the FILAMENT id from the spool's filament attribute.
+            sm_id = c.spoolman_id
+            # Resolve to filament id: for new_filament conflicts spoolman_id IS
+            # the filament id; for new_spool we must look it up from Spoolman.
+            if c.field_name == "new_filament":
+                sm_filament_id = sm_id
+            else:
+                # new_spool: resolve filament id from the live spool.
+                try:
+                    sm_spools_live = await spoolman.get_spools()
+                    sm_spool_live = next((s for s in sm_spools_live if s.id == sm_id), None)
+                    if sm_spool_live is None or sm_spool_live.filament is None:
+                        raise api_error(
+                            404, "spool_not_found",
+                            f"Spoolman spool {sm_id} not found or has no filament",
+                        )
+                    sm_filament_id = sm_spool_live.filament.id
+                except HTTPException:
+                    raise
+                except Exception as exc:
+                    raise api_error(502, "upstream_fetch_failed",
+                                    f"Could not resolve Spoolman spool to filament: {exc}")
+
+            variant_parent_mode = _resolve_variant_parent_mode(db)
+            variant_keywords = _resolve_variant_keywords(db)
+            container_marker = _resolve_container_parent_marker(db)
+
+            import_res = await import_single_sm_filament(
+                db, cycle_id, spoolman, filamentdb,
+                sm_filament_id,
+                filament_action=payload.filament_action,
+                filamentdb_id=payload.filamentdb_id,
+                tare_override=payload.tare_override,
+                master_filamentdb_id=payload.master_filamentdb_id,
+                variant_parent_mode=variant_parent_mode if variant_parent_mode != "unset" else "promote_color",
+                variant_keywords=variant_keywords,
+                container_parent_marker=container_marker,
+                precision=precision,
+            )
+            direction = "spoolman_to_filamentdb"
+        else:
+            fdb_fil_id = c.filamentdb_filament_id
+            import_res = await import_single_fdb_filament(
+                db, cycle_id, spoolman, filamentdb,
+                fdb_fil_id,
+                precision=precision,
+            )
+            direction = "filamentdb_to_spoolman"
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "import_conflict_record %d: upstream error: %s", conflict_id, exc
+        )
+        raise api_error(
+            502, "upstream_write_failed",
+            f"Import failed; conflict left open. Detail: {exc}",
+        )
+
+    if payload.dry_run:
+        # Dry run: don't commit or resolve — just return the preview counts.
+        db.rollback()
+        _type_action_counts: dict[tuple[str, str], int] = {}
+        for _r in import_res.records:
+            _key = (_r.entity_type, _r.action)
+            _type_action_counts[_key] = _type_action_counts.get(_key, 0) + 1
+        return WizardExecuteResponse(
+            cycle_id=cycle_id,
+            direction=direction,
+            created=import_res.created,
+            updated=import_res.updated,
+            skipped=import_res.skipped,
+            failed=import_res.failed,
+            wizard_completed=False,
+            records=import_res.records,
+            created_filaments=_type_action_counts.get(("filament", "created"), 0),
+            created_spools=_type_action_counts.get(("spool", "created"), 0),
+            updated_filaments=_type_action_counts.get(("filament", "updated"), 0),
+            updated_spools=_type_action_counts.get(("spool", "updated"), 0),
+            skipped_filaments=_type_action_counts.get(("filament", "skipped"), 0),
+            skipped_spools=_type_action_counts.get(("spool", "skipped"), 0),
+            failed_filaments=_type_action_counts.get(("filament", "failed"), 0),
+            failed_spools=_type_action_counts.get(("spool", "failed"), 0),
+        )
+
+    if import_res.failed > 0:
+        # Partial failure — commit what succeeded but leave conflict open.
+        db.commit()
+        raise api_error(
+            502, "partial_import_failure",
+            f"Import had {import_res.failed} failure(s); conflict left open. "
+            "Check the records field for details.",
+        )
+
+    # Success: resolve this conflict and any paired new_filament conflict.
+    _now = datetime.datetime.now(datetime.timezone.utc)
+    c.resolution = "imported"
+    c.resolved_value = json.dumps({"cycle_id": cycle_id})
+    c.resolved_at = _now
+
+    # Resolve paired new_filament conflict if this is a new_spool import.
+    if c.field_name == "new_spool" and is_sm_to_fdb:
+        paired = (
+            db.query(Conflict)
+            .filter(
+                Conflict.resolved_at.is_(None),
+                Conflict.entity_type == "filament",
+                Conflict.field_name == "new_filament",
+                Conflict.spoolman_id == sm_filament_id,  # type: ignore[possibly-undefined]
+            )
+            .first()
+        )
+        if paired is not None:
+            paired.resolution = "imported"
+            paired.resolved_value = json.dumps({"cycle_id": cycle_id})
+            paired.resolved_at = _now
+    elif c.field_name == "new_spool" and is_fdb_to_sm:
+        paired_fdb = (
+            db.query(Conflict)
+            .filter(
+                Conflict.resolved_at.is_(None),
+                Conflict.entity_type == "filament",
+                Conflict.field_name == "new_filament",
+                Conflict.filamentdb_filament_id == c.filamentdb_filament_id,
+            )
+            .first()
+        )
+        if paired_fdb is not None:
+            paired_fdb.resolution = "imported"
+            paired_fdb.resolved_value = json.dumps({"cycle_id": cycle_id})
+            paired_fdb.resolved_at = _now
+
+    db.commit()
+
+    _type_action_counts2: dict[tuple[str, str], int] = {}
+    for _r in import_res.records:
+        _key = (_r.entity_type, _r.action)
+        _type_action_counts2[_key] = _type_action_counts2.get(_key, 0) + 1
+
+    return WizardExecuteResponse(
+        cycle_id=cycle_id,
+        direction=direction,
+        created=import_res.created,
+        updated=import_res.updated,
+        skipped=import_res.skipped,
+        failed=import_res.failed,
+        wizard_completed=False,
+        records=import_res.records,
+        created_filaments=_type_action_counts2.get(("filament", "created"), 0),
+        created_spools=_type_action_counts2.get(("spool", "created"), 0),
+        updated_filaments=_type_action_counts2.get(("filament", "updated"), 0),
+        updated_spools=_type_action_counts2.get(("spool", "updated"), 0),
+        skipped_filaments=_type_action_counts2.get(("filament", "skipped"), 0),
+        skipped_spools=_type_action_counts2.get(("spool", "skipped"), 0),
+        failed_filaments=_type_action_counts2.get(("filament", "failed"), 0),
+        failed_spools=_type_action_counts2.get(("spool", "failed"), 0),
+    )
 
 
 @router.get("/conflicts/{conflict_id}/divergence-context", response_model=DivergenceContextResponse)

@@ -20,6 +20,12 @@ _DEFAULTS = {
     "material_properties_conflict_policy": '"manual"',
     # New spool creation direction: two_way = bidirectional (= today's behavior).
     "new_spool_sync_direction": '"two_way"',
+    # New-record handling policies (ongoing sync, not wizard).
+    # manual_review (default) → queue an actionable conflict so the user decides.
+    # auto_import → create the record automatically in the target system.
+    # Default manual_review for both fresh AND existing installs (migration backfills).
+    "new_filament_policy": '"manual_review"',
+    "new_spool_policy": '"manual_review"',
     # Spoolman vendor → OpenTag brand aliases for the OpenTag cleanup matcher.
     # Seeded with common defaults for NEW installs only (on_conflict_do_nothing
     # never overwrites an existing install's value — empty or customised).

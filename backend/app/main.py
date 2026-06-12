@@ -122,6 +122,14 @@ def _migrate_sync_config(db) -> None:
     if get_config_value(db, "new_spool_sync_direction") is None:
         set_config_value(db, "new_spool_sync_direction", "two_way")
 
+    # New-record handling policies — backfill manual_review for existing installs.
+    # manual_review is the safe default: no behavior change for users who upgrade
+    # (new spools on mapped filaments now queue instead of auto-creating — intended).
+    if get_config_value(db, "new_filament_policy") is None:
+        set_config_value(db, "new_filament_policy", "manual_review")
+    if get_config_value(db, "new_spool_policy") is None:
+        set_config_value(db, "new_spool_policy", "manual_review")
+
     db.commit()
 
 

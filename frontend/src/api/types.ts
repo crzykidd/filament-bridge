@@ -21,6 +21,7 @@ export type SyncDirection2 = 'two_way' | 'spoolman_to_filamentdb' | 'filamentdb_
 export type ConflictPolicy = 'manual' | 'spoolman_wins' | 'filamentdb_wins' | 'newest_wins'
 export type MappingStatus = 'in_sync' | 'pending' | 'conflict' | 'unlinked'
 export type VariantParentMode = 'unset' | 'promote_color' | 'generic_container'
+export type NewRecordPolicy = 'manual_review' | 'auto_import'
 
 // ---------------------------------------------------------------------------
 // Health
@@ -232,6 +233,9 @@ export interface ConfigResponse {
   material_properties_sync_direction: SyncDirection2
   material_properties_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
   new_spool_sync_direction: SyncDirection2
+  // New-record handling policies
+  new_filament_policy: NewRecordPolicy
+  new_spool_policy: NewRecordPolicy
   // Scheduler settings
   sync_interval_seconds: number
   sync_log_retention_days: number
@@ -261,6 +265,9 @@ export interface ConfigUpdateRequest {
   material_properties_sync_direction?: SyncDirection2 | null
   material_properties_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
   new_spool_sync_direction?: SyncDirection2 | null
+  // New-record handling policies
+  new_filament_policy?: NewRecordPolicy | null
+  new_spool_policy?: NewRecordPolicy | null
   // Scheduler settings
   sync_interval_seconds?: number | null
   sync_log_retention_days?: number | null

@@ -22,9 +22,8 @@ Every cycle (scheduled, or via **Sync now**):
    (nothing left to protect). See [conflicts.md](conflicts.md).
 5. **Filament-level passes.** Multicolor, cost, temperatures, native scalars, and finish
    tags run over filament mappings.
-6. **New-spool detection.** Unmapped spools on either side are created on the other (or
-   queued as a `new_spool` notice when no filament mapping exists), gated by the
-   new-spool direction.
+6. **New-record detection.** The engine detects unmapped filaments and spools on both sides
+   and handles them according to the two-tier new-record policy (see below).
 7. **OpenTag identity push.** `openprinttag_slug`/`uuid` from Spoolman extras are merged
    into the linked FDB filament's `settings{}` bag (the one approved exception to the
    "never touch settings" rule).
@@ -91,6 +90,48 @@ Two invariants prevent feedback loops:
 Filament-level passes share one snapshot row per filament per side; each pass keeps its own
 keys (`_mc_sig`, `_cost`, `_mp_<field>`, `_finish_sig`) via a merge-write so they never
 clobber each other.
+
+## New-record hierarchy (filament → spool)
+
+A **filament is a container**. Sync flows top-down: a spool can only be created in the
+target system once its filament exists and is mapped. This gives two independent policy
+tiers:
+
+### Filament tier (`new_filament_policy`)
+
+When the engine detects an unmapped filament (Spoolman or Filament DB side):
+
+- **`manual_review`** (default): queues a `new_filament` conflict. Actionable — the
+  Conflicts page "Add" button calls `POST /api/conflicts/{id}/import` to create the
+  filament and write the mapping without leaving the page.
+- **`auto_import`**: immediately creates the filament on the other side using the same
+  code path as the Bulk Import Wizard (`app/core/single_record_import.py`), writes the
+  `FilamentMapping` and cross-reference IDs, then snapshots both sides to prevent ping-pong
+  (see anti-ping-pong below). **Exception:** if `variant_parent_mode` is `unset` and the
+  filament appears to belong to a variant cluster, the engine falls back to `manual_review`
+  — auto-grouping without a chosen parent mode would produce an uncorrectable hierarchy.
+
+### Spool tier (`new_spool_policy`)
+
+After the filament is mapped, the engine handles each new spool:
+
+- **`manual_review`** (default): queues a `new_spool` conflict.
+- **`auto_import`**: creates the spool immediately on the other side.
+
+A spool whose filament is **not yet mapped** is always held regardless of `new_spool_policy`
+— the filament must be resolved first. The engine queues a `new_filament` conflict for the
+filament and does not touch the spool until the filament is mapped.
+
+Both policies default to `manual_review` — new records never appear silently without a
+conflict entry in the queue.
+
+### Anti-ping-pong after auto-create
+
+After any auto-create, the engine refreshes **both** sides' snapshots to the agreed
+post-create state. Without this, the newly created record would look like a fresh change
+on the destination side next cycle and be re-queued. This is the same FR-11 post-write
+refresh invariant that applies to all other write passes. Covered by
+`test_auto_import_no_pingpong`.
 
 ## Version gating
 

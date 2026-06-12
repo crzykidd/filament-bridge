@@ -308,6 +308,10 @@ async def test_engine_new_sm_spool_mapping_uses_spool_id_not_filament_id(db):
     fdb_fil = _fdb_filament_no_spools("FDB-FIL-ID-xyz")
     db.add(FilamentMapping(spoolman_filament_id=20, filamentdb_id="FDB-FIL-ID-xyz"))
     db.flush()
+    # Enable auto-import so new spools on mapped filaments create rather than queue.
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="new_spool_policy", value='"auto_import"'))
+    db.commit()
 
     spoolman = _fake_spoolman_engine(spools=[sm_sp])
     fdb_client = _fake_filamentdb_engine(filaments=[fdb_fil])

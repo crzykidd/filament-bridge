@@ -30,6 +30,9 @@ ConflictPolicy = Literal["manual", "spoolman_wins", "filamentdb_wins", "newest_w
 # Variant parent mode for the Bulk Import Wizard (Spoolman → FDB direction).
 VariantParentMode = Literal["unset", "promote_color", "generic_container"]
 
+# New-record handling policy for ongoing sync (not the wizard).
+NewRecordPolicy = Literal["manual_review", "auto_import"]
+
 # Backup envelope schema version — bump when the export shape changes.
 BACKUP_SCHEMA_VERSION = 1
 
@@ -166,6 +169,27 @@ class DivergenceContextResponse(BaseModel):
     variants: list[DivergenceVariantEntry] = Field(default_factory=list)
 
 
+class ConflictImportRequest(BaseModel):
+    """Request body for POST /api/conflicts/{conflict_id}/import.
+
+    Scoped single-record import: imports the filament (and optionally its spool)
+    referenced by a new_filament or new_spool conflict, using the existing
+    wizard/planner logic.  Dry-run returns a preview without writing.
+    """
+    dry_run: bool = False
+    # "create" → create a new filament in the target system.
+    # "link"   → link to an existing filament (filamentdb_id required for SM→FDB conflicts;
+    #             spoolman_filament_id not yet supported for FDB→SM conflicts — use create).
+    filament_action: Literal["create", "link"] = "create"
+    # For filament_action=="link" (SM→FDB): the existing FDB filament id to link to.
+    filamentdb_id: str | None = None
+    # Optional tare override in grams (overrides the filament's spool_weight / spoolWeight).
+    tare_override: float | None = None
+    # For variant grouping: if the SM filament should become a child of an existing
+    # FDB filament, supply that id here (only used when filament_action=="create").
+    master_filamentdb_id: str | None = None
+
+
 class BulkResolveRequest(BaseModel):
     ids: list[int]
     resolution: Literal["spoolman", "filamentdb", "manual"]
@@ -239,6 +263,10 @@ class ConfigResponse(BaseModel):
     material_properties_sync_direction: SyncDirection2 = "filamentdb_to_spoolman"
     material_properties_conflict_policy: ConflictPolicy = "manual"
     new_spool_sync_direction: SyncDirection2 = "two_way"
+    # New-record handling policies
+    # manual_review (default) → queue an actionable conflict; auto_import → create immediately.
+    new_filament_policy: NewRecordPolicy = "manual_review"
+    new_spool_policy: NewRecordPolicy = "manual_review"
     # Scheduler settings
     sync_interval_seconds: int = 120
     sync_log_retention_days: int = 30
@@ -273,6 +301,9 @@ class ConfigUpdateRequest(BaseModel):
     material_properties_sync_direction: SyncDirection2 | None = None
     material_properties_conflict_policy: ConflictPolicy | None = None
     new_spool_sync_direction: SyncDirection2 | None = None
+    # New-record handling policies
+    new_filament_policy: NewRecordPolicy | None = None
+    new_spool_policy: NewRecordPolicy | None = None
     # Scheduler settings
     sync_interval_seconds: int | None = Field(default=None, ge=30)
     sync_log_retention_days: int | None = Field(default=None, ge=0)

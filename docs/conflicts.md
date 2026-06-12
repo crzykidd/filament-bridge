@@ -11,7 +11,8 @@ answer differs by type.
 | **Weight / Property / Multicolor** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). |
 | **Master divergence** | A Spoolman value would override a Filament DB variant's *inherited* setting (the variant currently gets the value from its parent). Writing it silently would detach the field from the parent, so the bridge asks first. |
 | **Deleted record** | A previously-synced spool was deleted on one side, and the surviving side is still linked to it. The bridge protects the survivor and asks what you want. |
-| **New spool** | An unmapped spool appeared and the bridge couldn't auto-match its filament. Informational — creation happens via the Bulk Import Wizard. |
+| **New filament** | An unmapped filament appeared on one side and `new_filament_policy` is `manual_review`. Actionable — use the import endpoint or the Conflicts page "Add" button to create it on the other side and map it. Once a filament is mapped, any held spools belonging to it are released for normal new-spool handling. |
+| **New spool** | An unmapped spool appeared whose filament is already mapped, and `new_spool_policy` is `manual_review`. Also appears when the filament is unmapped (the spool is held until the filament is imported). Actionable — use the import endpoint to create the spool once its filament is resolved. |
 
 Open conflicts are deduplicated (the same field + records is queued once, not every cycle)
 and survive restarts. Synced Records rows in conflict show a **See conflict** button that
@@ -54,11 +55,27 @@ to protect. If both sides are gone, or the survivor's cross-reference was alread
 the stale link is purged automatically (logged in the Sync Log as `auto_stale_purge`) —
 no conflict appears.
 
-### New spool — dismiss
+### New filament — import or dismiss
 
-**Dismiss** clears the notice. To actually create the record, run the Bulk Import Wizard,
-which handles filament matching and creation properly. Once a spool gets mapped (by the
-wizard or the engine), any stale new-spool notices for it auto-resolve.
+The **Import** button (or `POST /api/conflicts/{id}/import`) creates the filament in the
+target system using the same code path as the Bulk Import Wizard, writes the
+`FilamentMapping` and cross-reference IDs, and marks the conflict resolved. Optional
+inputs: link to an existing filament instead of creating, override tare, or attach to a
+variant parent. `dry_run=true` returns a preview without writing anything.
+
+On a successful import any open `new_spool` conflicts that were held pending this filament
+are not auto-resolved — they advance to normal new-spool handling on the next cycle.
+**Dismiss** clears the notice without creating anything.
+
+### New spool — import or dismiss
+
+**Import** (`POST /api/conflicts/{id}/import`) creates the spool on the target side (the
+filament must already be mapped — if it isn't, resolve its `new_filament` conflict first).
+On success the conflict is resolved and a paired `new_filament` conflict for the same
+filament (if any) is also auto-resolved.
+
+**Dismiss** clears the notice. Once a spool gets mapped (by the wizard, the engine, or the
+import endpoint), any stale new-spool conflicts for it auto-resolve on the next cycle.
 
 ## Avoiding conflicts in the first place
 

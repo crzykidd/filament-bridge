@@ -213,6 +213,53 @@ All conflicts are queued — never silently resolved — and shown on the Confli
 
 ---
 
+## Concepts
+
+### The filament → spool hierarchy
+
+A **filament is a container**. In Filament DB, the hierarchy is:
+
+```
+Parent filament (shared properties: material, diameter, density, temps)
+  └── Variant filament (inherits parent; overrides: color, name suffix)
+        └── Spool (weight, location, purchase date)
+```
+
+Spoolman is flat: every color is its own filament. The bridge builds the Filament DB
+hierarchy from Spoolman's flat list at import time (Bulk Import Wizard) and maintains it
+with cross-reference IDs (`filamentdb_id`, `filamentdb_parent_id`) stored in Spoolman
+extra fields.
+
+### Hold-until-filament rule
+
+Sync flows **top-down**. A spool can only be created in the target system once its filament
+exists and is mapped there. If the filament isn't mapped yet:
+
+- Under `manual_review` (the default): a `new_filament` conflict is queued. The Conflicts
+  page surfaces an **Import** button that creates the filament on the other side (powered by
+  `POST /api/conflicts/{id}/import`) without leaving the page. Any spools belonging to that
+  filament are held until you act.
+- Under `auto_import`: the engine creates the filament automatically (same code path as the
+  wizard), writes the mapping and cross-reference IDs, and releases held spools to normal
+  new-spool handling.
+
+Spools are **never silently dropped** — they wait in the conflict queue until their filament
+is resolved.
+
+### New-record policy axes
+
+Two independent settings (Settings → New records) control this behavior:
+
+| Setting | Values | Effect |
+|---|---|---|
+| `new_filament_policy` | `manual_review` (default) / `auto_import` | Queue a conflict vs auto-create for unmapped filaments |
+| `new_spool_policy` | `manual_review` (default) / `auto_import` | Queue a conflict vs auto-create for unmapped spools on already-mapped filaments |
+
+Both default to `manual_review` — no records appear in either system without a human
+decision or an explicit enable.
+
+---
+
 ## OpenTag cleanup tool
 
 The OpenTag tool matches your Spoolman filaments against the [OpenPrintTag](https://openprinttag.org) database, which provides standardized filament identification (slugs, UUIDs, finish tags).

@@ -266,6 +266,8 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | Setting | Default | Description |
 |---|---|---|
 | `sync_interval_seconds` | env fallback (`120`) | Auto-sync interval; applied immediately on save |
+| `new_filament_policy` | `manual_review` | What the engine does when it detects an unmapped filament: `manual_review` queues an actionable `new_filament` conflict; `auto_import` creates it immediately using the wizard code path. Falls back to `manual_review` if `variant_parent_mode` is `unset` and the filament looks like a variant-cluster member. |
+| `new_spool_policy` | `manual_review` | What the engine does when an unmapped spool appears on an already-mapped filament: `manual_review` queues a `new_spool` conflict; `auto_import` creates it immediately. A spool is always held when its filament is unmapped, regardless of this setting. |
 | `debug_mode` | `false` | Enables `POST /api/debug/clear-spoolman-fdb-refs`, `POST /api/debug/reset-bridge-state`, and `POST /api/debug/full-reset` (403 when off) |
 | `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |

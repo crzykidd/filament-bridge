@@ -1,5 +1,77 @@
 # Decision record
 
+## 2026-06-11 — New-record handling: two-tier policy model (new_filament_policy / new_spool_policy)
+
+**Why.** The ongoing engine had no policy for new filaments: it never created filaments
+(only the wizard did), so a brand-new Spoolman filament sat unmapped forever and every
+spool under it flooded the conflict queue with a dismissible `new_spool` notice — no
+action was possible beyond "dismiss". The half-built state meant auto-import was missing
+entirely and the conflict queue had no actionable "Add" path for new records.
+
+**Two-tier design.** A filament is a container; sync flows top-down (parent → filament →
+spool). A spool can only be created once its filament is mapped. Two independent policy
+keys control each tier:
+
+- `new_filament_policy`: `manual_review` (default) | `auto_import` — governs whether a
+  detected unmapped filament is queued for review or created automatically.
+- `new_spool_policy`: `manual_review` (default) | `auto_import` — governs whether a
+  detected unmapped spool on an already-mapped filament is queued or created automatically.
+
+Both default to `manual_review` for fresh installs (via `seed_defaults`) and for existing
+installs (via `_migrate_sync_config` in `main.py`). The `manual_review` default means the
+live behavior is unchanged for existing users: new records surface in the conflict queue
+for human review instead of being silently auto-created.
+
+**Variant/unset interaction (LOCKED Q2).** When `variant_parent_mode == "unset"` (the
+must-choose sentinel) and the filament looks like it belongs to a variant cluster
+(`sm_variant_cluster_key` returns a key), the engine HOLDS the filament for manual review
+even if `new_filament_policy == "auto_import"`. Auto-grouping a variant filament without a
+chosen parent mode would produce an incorrect hierarchy that's hard to undo. The choice:
+fall back to `manual_review` for that filament, queue a `new_filament` conflict, and wait
+for the user to configure variant_parent_mode first.
+
+**`new_filament` conflict type.** A new conflict type (`entity_type="filament"`,
+`field_name="new_filament"`) is queued when an unmapped filament is held for review. It
+carries `spoolman_id` (the SM filament id) or `fdb_filament_id` in `spoolman_value` (JSON).
+These are actionable — the `POST /api/conflicts/{id}/import` endpoint processes them.
+
+**Scoped single-record import endpoint.** `POST /api/conflicts/{id}/import` accepts a
+`ConflictImportRequest` (`dry_run`, `filament_action`, `filamentdb_id`, `tare_override`,
+`master_filamentdb_id`). It validates the conflict is open and of type `new_filament` or
+`new_spool`, resolves the SM filament id, calls `import_single_sm_filament()` (the shared
+helper), and on success marks the conflict resolved with `resolution="imported"`, also
+auto-resolving any paired `new_filament` conflict for the same SM filament.
+
+**Shared single-record import helper.** `app/core/single_record_import.py` wraps
+`_execute_spoolman_to_fdb` / `_execute_fdb_to_spoolman` scoped to a single-element
+filament list. Called by both the engine auto-import paths and the endpoint. This ensures
+one create-path that can never drift apart. The helper defers its wizard imports to the
+function body to avoid the engine→wizard→engine circular import chain.
+
+**Anti-ping-pong invariant.** After any auto-create in the engine, both sides' snapshots
+are refreshed to the agreed post-create state. This is the FR-11 invariant — without it,
+the newly created record looks like a fresh change next cycle and is re-queued. Proven by
+`test_auto_import_no_pingpong` in `tests/test_engine.py`.
+
+## 2026-06-11 — OpenTag "ignore future updates" flag stored as Spoolman extra field
+
+**Why.** The "updates available" banner needs per-filament suppression that persists across
+bridge restarts and survives cache-file deletion. Two options considered:
+
+1. **Spoolman extra field** (`openprinttag_ignore`): the flag travels with the record, is
+   visible in Spoolman's own UI, and is checkable on every `GET /api/openprinttag/matches`
+   run without any bridge-DB JOIN. Downside: requires registering one more extra field.
+2. **Bridge-local SQLite table**: no external dependency, but the flag is detached from the
+   filament record and lost on a bridge DB reset.
+
+**Decision: Spoolman extra field.** The flag is stored as `openprinttag_ignore` (text,
+`"1"` = ignored, `""` = not ignored) on the Spoolman filament entity. It is registered in
+`ensure_extra_fields()` alongside the existing OpenTag fields and keyed by the env var
+`SPOOLMAN_FIELD_OPENPRINTTAG_IGNORE` (default `openprinttag_ignore`). The matches endpoint
+reads it per-filament, sets `ignored_updates: true` on the match row, clears `has_update`,
+and excludes the filament from `updates_count`. Un-ignoring is a single PATCH to Spoolman
+via `POST /api/openprinttag/ignore/{id}?ignored=false`.
+
 ## 2026-06-11 — Filament-level dashboard counts + wizard execute per-type breakdown
 
 **Why.** The bridge was entirely spool-centric: the dashboard counts reflected

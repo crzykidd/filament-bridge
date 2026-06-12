@@ -134,6 +134,8 @@ def _config_response(db: Session) -> ConfigResponse:
         material_properties_sync_direction=cfg.get("material_properties_sync_direction", "filamentdb_to_spoolman"),
         material_properties_conflict_policy=cfg.get("material_properties_conflict_policy", "manual"),
         new_spool_sync_direction=cfg.get("new_spool_sync_direction", "two_way"),
+        new_filament_policy=cfg.get("new_filament_policy", "manual_review") or "manual_review",
+        new_spool_policy=cfg.get("new_spool_policy", "manual_review") or "manual_review",
         sync_interval_seconds=effective_interval,
         sync_log_retention_days=int(cfg.get("sync_log_retention_days", 30)),
         never_import_empties=bool(cfg.get("never_import_empties", False)),

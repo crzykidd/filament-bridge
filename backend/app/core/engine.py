@@ -1950,8 +1950,31 @@ async def _sync_finish_tags(
 
 
 # ---------------------------------------------------------------------------
-# New-spool detection (FR-12)
+# New-spool detection (FR-12) + new-record policies
 # ---------------------------------------------------------------------------
+
+
+def _queue_if_new_filament(db: Session, cycle_id: str, sm_spool: SpoolmanSpool) -> None:
+    """Queue a new_filament conflict for the SM filament that owns sm_spool.
+
+    Used when new_filament_policy == manual_review: the user must choose to link
+    or create a FDB filament before the spool can be synced.  Dedup guard prevents
+    re-queuing the same pair each cycle.
+    """
+    sm_fil_id = sm_spool.filament.id if sm_spool.filament else None
+    if sm_fil_id is None:
+        return
+    if not _has_open_conflict(
+        db, "filament", "new_filament", spoolman_id=sm_fil_id,
+    ):
+        _queue_conflict(
+            db, cycle_id, "filament", "new_filament",
+            spoolman_id=sm_fil_id,
+            spoolman_value=(
+                f"Spoolman filament {sm_fil_id} has no FDB match; "
+                f"spool {sm_spool.id} is held until the filament is imported"
+            ),
+        )
 
 
 async def _handle_new_sm_spool(
@@ -1966,20 +1989,27 @@ async def _handle_new_sm_spool(
     spoolman: SpoolmanClient,
     fdb_field_name: str,
     precision: int = 2,
+    *,
+    new_filament_policy: str = "manual_review",
+    new_spool_policy: str = "manual_review",
+    variant_parent_mode: str = "unset",
+    variant_keywords: list[str] | None = None,
+    container_parent_marker: str = "(Master)",
 ) -> None:
-    """Handle a Spoolman spool that has no filamentdb_spool_id extra field yet."""
+    """Handle a Spoolman spool that has no filamentdb_spool_id extra field yet.
+
+    Two-tier policy:
+    - Filament tier (no FilamentMapping): if new_filament_policy == auto_import, call
+      the single-record import helper (creates the filament + mapping + spools); else
+      queue a new_filament conflict + a new_spool conflict (held pending filament).
+    - Spool tier (FilamentMapping exists): if new_spool_policy == auto_import, create
+      the FDB spool; else queue an actionable new_spool conflict.
+    """
     filament_mapping = filament_mappings_by_sm_filament.get(sm_spool.filament.id)
 
     if filament_mapping is None:
-        # No filament mapping — queue as conflict for user resolution
-        if not dry_run:
-            if not _has_open_conflict(db, "spool", "new_spool", spoolman_id=sm_spool.id):
-                _queue_conflict(
-                    db, cycle_id, "spool", "new_spool",
-                    spoolman_id=sm_spool.id,
-                    spoolman_value=f"Spoolman spool {sm_spool.id} has no FDB filament match",
-                )
-        else:
+        # No filament mapping — either auto-import the filament or queue for review.
+        if dry_run:
             result.preview.append({
                 "action": "conflict",
                 "entity_type": "spool",
@@ -1992,7 +2022,67 @@ async def _handle_new_sm_spool(
                 "fdb_filament_id": None,
                 "fdb_spool_id": None,
             })
-        result.conflicts += 1
+            result.conflicts += 1
+            return
+
+        if new_filament_policy == "auto_import":
+            # Detect if this SM filament is a potential variant (non-standalone).
+            from app.core.matcher import sm_variant_cluster_key
+            from app.core.single_record_import import import_single_sm_filament
+            sm_fil = sm_spool.filament
+            cluster_key = sm_variant_cluster_key(sm_fil, keywords=variant_keywords)
+            is_potential_variant = bool(cluster_key[0] or cluster_key[2])  # vendor or finish token
+
+            # Per LOCKED Q2: if unset and this is a variant candidate, HOLD for review.
+            if variant_parent_mode == "unset" and is_potential_variant:
+                logger.info(
+                    "Cycle %s: SM filament %s may be a variant cluster member; "
+                    "variant_parent_mode=unset → holding for review (new_filament conflict)",
+                    cycle_id, sm_fil.id,
+                )
+                _queue_if_new_filament(db, cycle_id, sm_spool)
+                result.conflicts += 1
+                return
+
+            # Auto-import: create the filament + mapping + spools via the shared helper.
+            logger.info(
+                "Cycle %s: new_filament_policy=auto_import — importing SM filament %s into FDB",
+                cycle_id, sm_fil.id,
+            )
+            try:
+                import_res = await import_single_sm_filament(
+                    db, cycle_id, spoolman, filamentdb,
+                    sm_fil.id,
+                    filament_action="create",
+                    precision=precision,
+                    include_empty_spools=True,
+                    variant_parent_mode=variant_parent_mode if variant_parent_mode != "unset" else "promote_color",
+                    variant_keywords=variant_keywords,
+                    container_parent_marker=container_parent_marker,
+                )
+                result.created += import_res.created
+                result.updated += import_res.updated
+                result.errors += import_res.failed
+                if import_res.failed > 0:
+                    logger.warning(
+                        "Cycle %s: auto-import of SM filament %s had %d failure(s)",
+                        cycle_id, sm_fil.id, import_res.failed,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "Cycle %s: auto-import of SM filament %s failed: %s",
+                    cycle_id, sm_fil.id, exc,
+                )
+                _log(
+                    db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                    spoolman_id=sm_spool.id,
+                    error_message=f"auto-import failed: {exc}",
+                )
+                result.errors += 1
+        else:
+            # manual_review: queue new_filament + new_spool conflicts (actionable by user).
+            _queue_if_new_filament(db, cycle_id, sm_spool)
+            result.conflicts += 1
         return
 
     fdb_filament = fdb_filaments.get(filament_mapping.filamentdb_id)
@@ -2022,6 +2112,20 @@ async def _handle_new_sm_spool(
         result.created += 1
         return
 
+    # Filament is mapped — apply new_spool_policy.
+    if new_spool_policy != "auto_import":
+        # manual_review: queue an actionable new_spool conflict.
+        if not _has_open_conflict(db, "spool", "new_spool", spoolman_id=sm_spool.id):
+            _queue_conflict(
+                db, cycle_id, "spool", "new_spool",
+                spoolman_id=sm_spool.id,
+                fdb_filament_id=fdb_filament.id,
+                spoolman_value=f"Spoolman spool {sm_spool.id} has no FDB spool",
+            )
+        result.conflicts += 1
+        return
+
+    # auto_import: create the spool now.
     tare = fdb_filament.spoolWeight
     gross, used_default = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0, tare, precision=precision)
     if used_default:
@@ -2086,20 +2190,22 @@ async def _handle_new_fdb_spool(
     filamentdb: FilamentDBClient,
     fdb_field_name: str,
     precision: int = 2,
+    *,
+    new_filament_policy: str = "manual_review",
+    new_spool_policy: str = "manual_review",
 ) -> None:
-    """Handle a Filament DB spool that has no Spoolman ID in its label yet."""
+    """Handle a Filament DB spool that has no Spoolman ID in its label yet.
+
+    Two-tier policy (FDB→SM direction):
+    - Filament tier (no FilamentMapping): if new_filament_policy == auto_import, call the
+      single-record import helper; else queue a new_filament conflict + new_spool conflict.
+    - Spool tier (FilamentMapping exists): if new_spool_policy == auto_import, create the
+      SM spool; else queue an actionable new_spool conflict.
+    """
     filament_mapping = filament_mappings_by_fdb.get(fdb_filament.id)
 
     if filament_mapping is None:
-        if not dry_run:
-            if not _has_open_conflict(db, "spool", "new_spool", fdb_spool_id=fdb_spool.id):
-                _queue_conflict(
-                    db, cycle_id, "spool", "new_spool",
-                    fdb_filament_id=fdb_filament.id,
-                    fdb_spool_id=fdb_spool.id,
-                    filamentdb_value=f"FDB spool {fdb_spool.id} has no Spoolman filament match",
-                )
-        else:
+        if dry_run:
             result.preview.append({
                 "action": "conflict",
                 "entity_type": "spool",
@@ -2112,7 +2218,52 @@ async def _handle_new_fdb_spool(
                 "fdb_filament_id": fdb_filament.id,
                 "fdb_spool_id": fdb_spool.id,
             })
-        result.conflicts += 1
+            result.conflicts += 1
+            return
+
+        if new_filament_policy == "auto_import":
+            from app.core.single_record_import import import_single_fdb_filament
+            logger.info(
+                "Cycle %s: new_filament_policy=auto_import — importing FDB filament %s into Spoolman",
+                cycle_id, fdb_filament.id,
+            )
+            try:
+                import_res = await import_single_fdb_filament(
+                    db, cycle_id, spoolman, filamentdb,
+                    fdb_filament.id,
+                    precision=precision,
+                )
+                result.created += import_res.created
+                result.updated += import_res.updated
+                result.errors += import_res.failed
+                if import_res.failed > 0:
+                    logger.warning(
+                        "Cycle %s: auto-import of FDB filament %s had %d failure(s)",
+                        cycle_id, fdb_filament.id, import_res.failed,
+                    )
+            except Exception as exc:
+                logger.error(
+                    "Cycle %s: auto-import of FDB filament %s failed: %s",
+                    cycle_id, fdb_filament.id, exc,
+                )
+                _log(
+                    db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                    fdb_filament_id=fdb_filament.id,
+                    error_message=f"auto-import failed: {exc}",
+                )
+                result.errors += 1
+        else:
+            # manual_review: queue new_filament conflict (spool held until filament is imported).
+            if not _has_open_conflict(db, "filament", "new_filament", fdb_filament_id=fdb_filament.id):
+                _queue_conflict(
+                    db, cycle_id, "filament", "new_filament",
+                    fdb_filament_id=fdb_filament.id,
+                    filamentdb_value=(
+                        f"FDB filament {fdb_filament.id} has no Spoolman match; "
+                        f"spool {fdb_spool.id} is held until the filament is imported"
+                    ),
+                )
+            result.conflicts += 1
         return
 
     if dry_run:
@@ -2131,6 +2282,19 @@ async def _handle_new_fdb_spool(
         result.created += 1
         return
 
+    # Filament is mapped — apply new_spool_policy.
+    if new_spool_policy != "auto_import":
+        if not _has_open_conflict(db, "spool", "new_spool", fdb_spool_id=fdb_spool.id):
+            _queue_conflict(
+                db, cycle_id, "spool", "new_spool",
+                fdb_filament_id=fdb_filament.id,
+                fdb_spool_id=fdb_spool.id,
+                filamentdb_value=f"FDB spool {fdb_spool.id} has no Spoolman spool",
+            )
+        result.conflicts += 1
+        return
+
+    # auto_import: create the spool now.
     tare = fdb_filament.spoolWeight
     net, used_default = fdb_to_spoolman_net(fdb_spool.totalWeight or 0, tare, precision=precision)
     if used_default:
@@ -2206,6 +2370,16 @@ async def run_sync_cycle(
     matprop_direction: str = config.get("material_properties_sync_direction", "filamentdb_to_spoolman")
     matprop_policy: str = config.get("material_properties_conflict_policy", "manual")
     new_spool_direction: str = config.get("new_spool_sync_direction", "two_way")
+    # New-record handling policies.
+    new_filament_policy: str = config.get("new_filament_policy", "manual_review") or "manual_review"
+    new_spool_policy: str = config.get("new_spool_policy", "manual_review") or "manual_review"
+    # Variant grouping config (needed by new-filament auto-import path).
+    _engine_variant_parent_mode: str = config.get("variant_parent_mode", "unset") or "unset"
+    _engine_variant_keywords_raw: str = config.get("variant_line_keywords", "") or ""
+    _engine_variant_keywords: list[str] = [
+        k.strip() for k in _engine_variant_keywords_raw.split(",") if k.strip()
+    ] if _engine_variant_keywords_raw else None  # type: ignore[assignment]
+    _engine_container_marker: str = config.get("container_parent_marker", "(Master)") or "(Master)"
 
     threshold: float = float(config.get("sync_weight_threshold_grams", 2.0))
     precision: int = int(config.get("weight_precision_decimals", 2))
@@ -2864,6 +3038,11 @@ async def run_sync_cycle(
                 sm_spool, filament_mappings_by_sm, fdb_filaments,
                 filamentdb, spoolman, fdb_field_name,
                 precision=precision,
+                new_filament_policy=new_filament_policy,
+                new_spool_policy=new_spool_policy,
+                variant_parent_mode=_engine_variant_parent_mode,
+                variant_keywords=_engine_variant_keywords,
+                container_parent_marker=_engine_container_marker,
             )
 
     if new_spool_direction in ("two_way", "filamentdb_to_spoolman"):
@@ -2903,6 +3082,8 @@ async def run_sync_cycle(
                     fdb_f, fdb_spool, filament_mappings_by_fdb,
                     spoolman, filamentdb, fdb_field_name,
                     precision=precision,
+                    new_filament_policy=new_filament_policy,
+                    new_spool_policy=new_spool_policy,
                 )
 
     # ---- OpenTag identity push (scoped exception: merge slug/uuid into FDB settings bag) ----
