@@ -741,3 +741,70 @@ describe('Conflicts page — ?highlight=<id> deep-link', () => {
     expect(card?.className).not.toMatch(/ring-2/)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Tests — identity on new_filament / new_spool cards (Bug 2)
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — identity on new_filament / new_spool cards', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(importConflictRecord).mockResolvedValue(mockImportResponse)
+    vi.mocked(resolveConflict).mockResolvedValue({
+      ...makeNewFilamentConflict(),
+      status: 'resolved',
+      resolution: 'spoolman',
+    })
+  })
+
+  it('shows vendor · name (id) identity line in the detail panel for a new_filament conflict', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      // The newRecordIdentityLine renders "Bambu · PLA Basic Blue (SM #77)" with the · separator
+      expect(screen.getByText('Bambu · PLA Basic Blue (SM #77)')).toBeInTheDocument()
+    })
+  })
+
+  it('shows vendor · name (id) identity line in the detail panel for a new_spool conflict', async () => {
+    vi.mocked(resolveConflict).mockResolvedValue({
+      ...makeNewSpoolConflict(),
+      status: 'resolved',
+      resolution: 'spoolman',
+    })
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      // "ELEGOO · PLA Red (SM #55)" — dot-separated identity line in the detail panel
+      expect(screen.getByText('ELEGOO · PLA Red (SM #55)')).toBeInTheDocument()
+    })
+  })
+
+  it('degrades gracefully for a legacy new_filament conflict with no vendor/name', async () => {
+    const legacy = makeNewFilamentConflict({
+      vendor: null,
+      name: null,
+      color_hex: null,
+      label: 'SM #77',
+    })
+    renderConflictsWithData([legacy])
+
+    const row = screen.getByText('SM #77').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    // Should show the standard description without crashing.
+    await waitFor(() => {
+      expect(screen.getByText('Add')).toBeInTheDocument()
+      expect(screen.getByText('Dismiss')).toBeInTheDocument()
+    })
+    // No identity line when vendor/name are null (graceful fallback)
+    expect(screen.queryByText(/·/)).not.toBeInTheDocument()
+  })
+})

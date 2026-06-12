@@ -77,15 +77,35 @@ def _decode(raw: str | None):
         return raw
 
 
+def _identity_from_blob(blob_raw: str | None) -> dict | None:
+    """Parse a JSON identity blob stored in spoolman_value / filamentdb_value.
+
+    Returns a dict with vendor/name/color_hex/material keys if the blob is a
+    valid JSON object (new-format rows written by the upsert helper).  Returns
+    None for plain-string legacy values so callers can fall back gracefully.
+    """
+    if blob_raw is None:
+        return None
+    try:
+        parsed = json.loads(blob_raw)
+        if isinstance(parsed, dict) and "name" in parsed:
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
+
+
 def _conflict_identity(db: Session, c: Conflict) -> dict:
-    """Load identifying fields from the Spoolman snapshot for a conflict.
+    """Load identifying fields for a conflict row.
 
-    For spool conflicts: reads the spool snapshot whose nested filament carries
-    name/vendor/color_hex/material.
-    For filament conflicts: reads the filament snapshot directly.
+    Priority order:
+    1. Spoolman snapshot (most authoritative — has full nested filament data).
+    2. JSON identity blob stored in spoolman_value / filamentdb_value at queue time
+       (present for new_filament / new_spool conflicts where no snapshot exists yet).
+    3. Id-based label fallback.
 
-    Returns a dict with label/vendor/name/color_hex/material.
-    Tolerates a missing snapshot: returns an id-based label with null fields.
+    Returns a dict with label/vendor/name/color_hex/multi_color_hexes/
+    multi_color_direction/material.
     """
     _empty = {
         "label": None,
@@ -97,55 +117,96 @@ def _conflict_identity(db: Session, c: Conflict) -> dict:
         "material": None,
     }
 
-    if c.spoolman_id is None:
-        return _empty
+    # --- Attempt 1: Spoolman snapshot (only when spoolman_id is set) ---
+    if c.spoolman_id is not None:
+        if c.entity_type == "spool":
+            snap_row = (
+                db.query(Snapshot)
+                .filter_by(source="spoolman", entity_type="spool", entity_id=str(c.spoolman_id))
+                .first()
+            )
+            if snap_row is not None:
+                snap = json.loads(snap_row.data)
+                filament = snap.get("filament") or {}
+                vendor_obj = filament.get("vendor") if isinstance(filament.get("vendor"), dict) else {}
+                vendor_name = (vendor_obj or {}).get("name")
+                name = filament.get("name")
+                color_hex = filament.get("color_hex")
+                multi_color_hexes = filament.get("multi_color_hexes")
+                multi_color_direction = filament.get("multi_color_direction")
+                material = filament.get("material")
+                parts = [p for p in (vendor_name, name) if p]
+                label = " ".join(parts).strip() or f"SM #{c.spoolman_id}"
+                return {
+                    "label": label,
+                    "vendor": vendor_name,
+                    "name": name,
+                    "color_hex": color_hex,
+                    "multi_color_hexes": multi_color_hexes,
+                    "multi_color_direction": multi_color_direction,
+                    "material": material,
+                }
+        else:
+            # entity_type == "filament"
+            snap_row = (
+                db.query(Snapshot)
+                .filter_by(source="spoolman", entity_type="filament", entity_id=str(c.spoolman_id))
+                .first()
+            )
+            if snap_row is not None:
+                snap = json.loads(snap_row.data)
+                vendor_obj = snap.get("vendor") if isinstance(snap.get("vendor"), dict) else {}
+                vendor_name = (vendor_obj or {}).get("name")
+                name = snap.get("name")
+                color_hex = snap.get("color_hex")
+                multi_color_hexes = snap.get("multi_color_hexes")
+                multi_color_direction = snap.get("multi_color_direction")
+                material = snap.get("material")
+                parts = [p for p in (vendor_name, name) if p]
+                label = " ".join(parts).strip() or f"SM #{c.spoolman_id}"
+                return {
+                    "label": label,
+                    "vendor": vendor_name,
+                    "name": name,
+                    "color_hex": color_hex,
+                    "multi_color_hexes": multi_color_hexes,
+                    "multi_color_direction": multi_color_direction,
+                    "material": material,
+                }
 
-    if c.entity_type == "spool":
-        snap_row = (
-            db.query(Snapshot)
-            .filter_by(source="spoolman", entity_type="spool", entity_id=str(c.spoolman_id))
-            .first()
-        )
-        if snap_row is None:
-            return {**_empty, "label": f"SM #{c.spoolman_id}"}
-        snap = json.loads(snap_row.data)
-        filament = snap.get("filament") or {}
-        vendor_obj = filament.get("vendor") if isinstance(filament.get("vendor"), dict) else {}
-        vendor_name = (vendor_obj or {}).get("name")
-        name = filament.get("name")
-        color_hex = filament.get("color_hex")
-        multi_color_hexes = filament.get("multi_color_hexes")
-        multi_color_direction = filament.get("multi_color_direction")
-        material = filament.get("material")
-    else:
-        # entity_type == "filament"
-        snap_row = (
-            db.query(Snapshot)
-            .filter_by(source="spoolman", entity_type="filament", entity_id=str(c.spoolman_id))
-            .first()
-        )
-        if snap_row is None:
-            return {**_empty, "label": f"SM #{c.spoolman_id}"}
-        snap = json.loads(snap_row.data)
-        vendor_obj = snap.get("vendor") if isinstance(snap.get("vendor"), dict) else {}
-        vendor_name = (vendor_obj or {}).get("name")
-        name = snap.get("name")
-        color_hex = snap.get("color_hex")
-        multi_color_hexes = snap.get("multi_color_hexes")
-        multi_color_direction = snap.get("multi_color_direction")
-        material = snap.get("material")
+    # --- Attempt 2: JSON identity blob (new_filament / new_spool rows) ---
+    blob = _identity_from_blob(c.spoolman_value) or _identity_from_blob(c.filamentdb_value)
+    if blob is not None:
+        vendor_name = blob.get("vendor")
+        name = blob.get("name")
+        color_hex = blob.get("color_hex")
+        material = blob.get("material")
+        parts = [p for p in (vendor_name, name) if p]
+        # Build id suffix for the label
+        if c.spoolman_id is not None:
+            id_suffix = f"(SM #{c.spoolman_id})"
+        elif c.filamentdb_filament_id is not None:
+            id_suffix = f"(FDB {c.filamentdb_filament_id[:8]}…)"
+        else:
+            id_suffix = ""
+        label_parts = [p for p in (" ".join(parts).strip(), id_suffix) if p]
+        label = " ".join(label_parts) or id_suffix or "Unknown"
+        return {
+            "label": label,
+            "vendor": vendor_name,
+            "name": name,
+            "color_hex": color_hex,
+            "multi_color_hexes": None,
+            "multi_color_direction": None,
+            "material": material,
+        }
 
-    parts = [p for p in (vendor_name, name) if p]
-    label = " ".join(parts).strip() or f"SM #{c.spoolman_id}"
-    return {
-        "label": label,
-        "vendor": vendor_name,
-        "name": name,
-        "color_hex": color_hex,
-        "multi_color_hexes": multi_color_hexes,
-        "multi_color_direction": multi_color_direction,
-        "material": material,
-    }
+    # --- Attempt 3: Id-based fallback ---
+    if c.spoolman_id is not None:
+        return {**_empty, "label": f"SM #{c.spoolman_id}"}
+    if c.filamentdb_filament_id is not None:
+        return {**_empty, "label": f"FDB {c.filamentdb_filament_id[:8]}…"}
+    return _empty
 
 
 def _to_response(c: Conflict, db: Session | None = None) -> ConflictResponse:

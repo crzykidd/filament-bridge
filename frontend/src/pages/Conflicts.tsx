@@ -101,6 +101,25 @@ function entityLabel(conflict: ConflictResponse): string {
   return conflict.entity_type === 'spool' ? 'SPOOL' : 'FILAMENT'
 }
 
+/**
+ * Build a human-readable identity line for new_filament / new_spool cards.
+ * Shows "Vendor · Name (SM #id)" or "Vendor · Name (FDB id…)" as available.
+ * Falls back gracefully for legacy rows that have no enriched identity.
+ */
+function newRecordIdentityLine(conflict: ConflictResponse): string | null {
+  const { vendor, name, spoolman_id, filamentdb_filament_id } = conflict
+  const parts: string[] = []
+  if (vendor) parts.push(vendor)
+  if (name) parts.push(name)
+  if (parts.length === 0) return null
+  const idPart = spoolman_id != null
+    ? `(SM #${spoolman_id})`
+    : filamentdb_filament_id != null
+      ? `(FDB ${filamentdb_filament_id.slice(0, 8)}…)`
+      : ''
+  return [parts.join(' · '), idPart].filter(Boolean).join(' ')
+}
+
 // ---------------------------------------------------------------------------
 // Shared sub-components
 // ---------------------------------------------------------------------------
@@ -622,6 +641,23 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
       {/* New record: Add flow or framing */}
       {importable && !showAddFlow && (
         <div className="space-y-2">
+          {/* Identity row: color swatch + vendor · name (id) */}
+          {(() => {
+            const identLine = newRecordIdentityLine(conflict)
+            return identLine != null ? (
+              <div className="flex items-center gap-2">
+                <ColorDisplay
+                  colorHex={conflict.color_hex}
+                  multiColorHexes={conflict.multi_color_hexes}
+                  multiColorDirection={conflict.multi_color_direction}
+                  showLabel={false}
+                />
+                <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                  {identLine}
+                </span>
+              </div>
+            ) : null
+          })()}
           <p className="text-sm text-gray-600 dark:text-gray-300">
             {conflict.field_name === 'new_filament'
               ? 'This filament has no counterpart in the other system. Use "Add" to import it, or "Dismiss" to clear the notice.'

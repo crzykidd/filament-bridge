@@ -14,9 +14,15 @@ answer differs by type.
 | **New filament** | An unmapped filament appeared on one side and `new_filament_policy` is `manual_review`. Actionable — use the "Add" button to create it on the other side and map it. Once a filament is mapped, any held spools belonging to it are released for normal new-spool handling. |
 | **New spool** | An unmapped spool appeared whose filament is already mapped, and `new_spool_policy` is `manual_review`. Also appears when the filament is unmapped (the spool is held until the filament is imported). Actionable — use the "Add" button to create the spool once its filament is resolved. |
 
-Open conflicts are deduplicated (the same field + records is queued once, not every cycle)
-and survive restarts. Synced Records rows in conflict show a **See conflict** button that
-deep-links to the exact row here.
+Open conflicts are deduplicated and survive restarts. Synced Records rows in conflict show
+a **See conflict** button that deep-links to the exact row here.
+
+For `new_filament` and `new_spool` conflicts the bridge uses an **upsert** strategy: each
+sync cycle, the previous open conflict for that item is replaced with a fresh row. This
+keeps exactly one open conflict per unmapped item at all times and ensures the stored
+reason is always current. An unrelated conflict on a different field of the same item is
+never affected. Existing duplicate rows from previous versions collapse to one on the next
+sync cycle automatically.
 
 ## Conflict detail panels
 
@@ -68,7 +74,11 @@ no conflict appears.
 
 ### New filament — "Add" or Dismiss
 
-The expanded card explains which side the filament is on and that it has no counterpart.
+The expanded card shows the filament's **vendor · name** and a color swatch so you can
+identify it without opening Spoolman or Filament DB. The id appears in parentheses
+(e.g. *ELEGOO · PLA Wood filled (SM #136)*). Legacy rows without stored identity show
+only the bare id — identity is stored from the cycle that queued the conflict, so rows
+created before this feature shipped may lack it.
 
 **Add** opens an inline import flow:
 1. **Choose filament action** — "Create new filament" (default) or "Link to existing" (enter the FDB filament ID for link).
@@ -83,8 +93,8 @@ are not auto-resolved — they advance to normal new-spool handling on the next 
 
 ### New spool — "Add" or Dismiss
 
-The expanded card reads like "New spool — exists in Spoolman, not yet in Filament DB"
-(or vice versa).
+The expanded card shows the spool's filament **vendor · name** and a color swatch,
+same as new filament cards.
 
 **Add** opens the same import flow (filament must already be mapped — if it isn't,
 resolve its `new_filament` conflict first). On success the conflict is resolved and a

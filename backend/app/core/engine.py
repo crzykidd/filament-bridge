@@ -1954,27 +1954,110 @@ async def _sync_finish_tags(
 # ---------------------------------------------------------------------------
 
 
+def _sm_filament_identity(sm_fil: Any) -> dict:
+    """Extract vendor/name/color_hex/material from a SpoolmanFilament for storage."""
+    vendor_obj = getattr(sm_fil, "vendor", None)
+    vendor_name = vendor_obj.name if (vendor_obj and hasattr(vendor_obj, "name")) else None
+    return {
+        "vendor": vendor_name,
+        "name": getattr(sm_fil, "name", None),
+        "color_hex": getattr(sm_fil, "color_hex", None),
+        "material": getattr(sm_fil, "material", None),
+    }
+
+
+def _fdb_filament_identity(fdb_fil: Any) -> dict:
+    """Extract vendor/name/color_hex/material from an FDBFilament for storage."""
+    return {
+        "vendor": getattr(fdb_fil, "vendor", None),
+        "name": getattr(fdb_fil, "name", None),
+        "color_hex": getattr(fdb_fil, "color", None),
+        "material": getattr(fdb_fil, "type", None),
+    }
+
+
+def _upsert_new_record_conflict(
+    db: Session,
+    cycle_id: str,
+    entity_type: str,
+    field_name: str,  # "new_filament" | "new_spool"
+    *,
+    spoolman_id: int | None = None,
+    fdb_filament_id: str | None = None,
+    fdb_spool_id: str | None = None,
+    spoolman_value: Any = None,
+    filamentdb_value: Any = None,
+) -> None:
+    """Upsert a new_filament or new_spool conflict (unconditional replace-on-resync).
+
+    Before inserting, deletes any existing OPEN conflict for the same item+kind so
+    there is at most one open conflict per (item, conflict_type) at all times.  This
+    prevents the duplicate-accumulation bug where the same unmapped record re-queues
+    every cycle.
+
+    The match key is (entity_type, field_name, spoolman_id OR fdb_filament_id OR
+    fdb_spool_id) — never item alone, so an unrelated cross_system conflict on the
+    same item is never wiped.
+    """
+    # Delete any existing OPEN conflict for this same item + kind.
+    q = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.entity_type == entity_type,
+            Conflict.field_name == field_name,
+        )
+    )
+    if spoolman_id is not None:
+        q = q.filter(Conflict.spoolman_id == spoolman_id)
+    if fdb_filament_id is not None:
+        q = q.filter(Conflict.filamentdb_filament_id == fdb_filament_id)
+    if fdb_spool_id is not None:
+        q = q.filter(Conflict.filamentdb_spool_id == fdb_spool_id)
+    for old in q.all():
+        db.delete(old)
+
+    # Insert the fresh conflict row with a distinct conflict_type for clarity.
+    db.add(
+        Conflict(
+            entity_type=entity_type,
+            spoolman_id=spoolman_id,
+            filamentdb_filament_id=fdb_filament_id,
+            filamentdb_spool_id=fdb_spool_id,
+            field_name=field_name,
+            spoolman_value=json.dumps(spoolman_value) if spoolman_value is not None else None,
+            filamentdb_value=json.dumps(filamentdb_value) if filamentdb_value is not None else None,
+            conflict_type=field_name,  # "new_filament" | "new_spool"
+        )
+    )
+    _log(
+        db, cycle_id, "conflict", "conflict", entity_type,
+        spoolman_id=spoolman_id,
+        fdb_filament_id=fdb_filament_id,
+        fdb_spool_id=fdb_spool_id,
+        field_name=field_name,
+        old_value=spoolman_value,
+        new_value=filamentdb_value,
+    )
+
+
 def _queue_if_new_filament(db: Session, cycle_id: str, sm_spool: SpoolmanSpool) -> None:
-    """Queue a new_filament conflict for the SM filament that owns sm_spool.
+    """Upsert a new_filament conflict for the SM filament that owns sm_spool.
 
     Used when new_filament_policy == manual_review: the user must choose to link
-    or create a FDB filament before the spool can be synced.  Dedup guard prevents
-    re-queuing the same pair each cycle.
+    or create a FDB filament before the spool can be synced.  Unconditional
+    replace-on-resync keeps at most one open conflict per (filament, new_filament).
     """
-    sm_fil_id = sm_spool.filament.id if sm_spool.filament else None
+    sm_fil = sm_spool.filament
+    sm_fil_id = sm_fil.id if sm_fil else None
     if sm_fil_id is None:
         return
-    if not _has_open_conflict(
-        db, "filament", "new_filament", spoolman_id=sm_fil_id,
-    ):
-        _queue_conflict(
-            db, cycle_id, "filament", "new_filament",
-            spoolman_id=sm_fil_id,
-            spoolman_value=(
-                f"Spoolman filament {sm_fil_id} has no FDB match; "
-                f"spool {sm_spool.id} is held until the filament is imported"
-            ),
-        )
+    identity = _sm_filament_identity(sm_fil) if sm_fil else {}
+    _upsert_new_record_conflict(
+        db, cycle_id, "filament", "new_filament",
+        spoolman_id=sm_fil_id,
+        spoolman_value=identity,
+    )
 
 
 async def _handle_new_sm_spool(
@@ -2114,14 +2197,15 @@ async def _handle_new_sm_spool(
 
     # Filament is mapped — apply new_spool_policy.
     if new_spool_policy != "auto_import":
-        # manual_review: queue an actionable new_spool conflict.
-        if not _has_open_conflict(db, "spool", "new_spool", spoolman_id=sm_spool.id):
-            _queue_conflict(
-                db, cycle_id, "spool", "new_spool",
-                spoolman_id=sm_spool.id,
-                fdb_filament_id=fdb_filament.id,
-                spoolman_value=f"Spoolman spool {sm_spool.id} has no FDB spool",
-            )
+        # manual_review: upsert an actionable new_spool conflict (replaces stale row).
+        sm_fil = sm_spool.filament
+        identity = _sm_filament_identity(sm_fil) if sm_fil else {}
+        _upsert_new_record_conflict(
+            db, cycle_id, "spool", "new_spool",
+            spoolman_id=sm_spool.id,
+            fdb_filament_id=fdb_filament.id,
+            spoolman_value=identity,
+        )
         result.conflicts += 1
         return
 
@@ -2253,16 +2337,13 @@ async def _handle_new_fdb_spool(
                 )
                 result.errors += 1
         else:
-            # manual_review: queue new_filament conflict (spool held until filament is imported).
-            if not _has_open_conflict(db, "filament", "new_filament", fdb_filament_id=fdb_filament.id):
-                _queue_conflict(
-                    db, cycle_id, "filament", "new_filament",
-                    fdb_filament_id=fdb_filament.id,
-                    filamentdb_value=(
-                        f"FDB filament {fdb_filament.id} has no Spoolman match; "
-                        f"spool {fdb_spool.id} is held until the filament is imported"
-                    ),
-                )
+            # manual_review: upsert new_filament conflict (replaces stale row each cycle).
+            identity = _fdb_filament_identity(fdb_filament)
+            _upsert_new_record_conflict(
+                db, cycle_id, "filament", "new_filament",
+                fdb_filament_id=fdb_filament.id,
+                filamentdb_value=identity,
+            )
             result.conflicts += 1
         return
 
@@ -2284,13 +2365,14 @@ async def _handle_new_fdb_spool(
 
     # Filament is mapped — apply new_spool_policy.
     if new_spool_policy != "auto_import":
-        if not _has_open_conflict(db, "spool", "new_spool", fdb_spool_id=fdb_spool.id):
-            _queue_conflict(
-                db, cycle_id, "spool", "new_spool",
-                fdb_filament_id=fdb_filament.id,
-                fdb_spool_id=fdb_spool.id,
-                filamentdb_value=f"FDB spool {fdb_spool.id} has no Spoolman spool",
-            )
+        # manual_review: upsert an actionable new_spool conflict (replaces stale row).
+        identity = _fdb_filament_identity(fdb_filament)
+        _upsert_new_record_conflict(
+            db, cycle_id, "spool", "new_spool",
+            fdb_filament_id=fdb_filament.id,
+            fdb_spool_id=fdb_spool.id,
+            filamentdb_value=identity,
+        )
         result.conflicts += 1
         return
 
