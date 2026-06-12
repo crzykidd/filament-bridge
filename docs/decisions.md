@@ -1,5 +1,38 @@
 # Decision record
 
+## 2026-06-11 — Filament-level dashboard counts + wizard execute per-type breakdown
+
+**Why.** The bridge was entirely spool-centric: the dashboard counts reflected
+SpoolMapping state only. A filament with no active spools (or a variant/container
+filament) could be created and linked but appear as "0" everywhere in the counts,
+giving users no signal about the filament-pair sync state.
+
+**Dashboard: `filament_counts`.** `GET /api/sync/status` now returns a separate
+`filament_counts: {in_sync, pending, conflict, total}` map alongside the existing
+spool `counts`. Computation (in `api/sync.py`):
+
+- Iterates all `FilamentMapping` rows where `spoolman_filament_id IS NOT NULL`
+  (real cross-system pairs). Synthetic NULL-`spoolman_filament_id` container
+  parents (generic_container mode) are excluded — they have no Spoolman counterpart.
+- **conflict** — an open `Conflict` row references the `filamentdb_id`.
+- **in_sync** — both SM and FDB filament `Snapshot` rows exist (mapping has been
+  baselined).
+- **pending** — one or both snapshots are missing.
+
+The existing spool `counts` dict shape is unchanged — frontend code and tests that
+read `counts` are unaffected.
+
+**Execute: per-type breakdown.** `WizardExecuteResponse` gained eight new fields
+(`created_filaments`, `created_spools`, etc.) computed from `res.records` by type
++ action at the end of `wizard_execute`. The flat `created`/`updated`/`skipped`/`failed`
+totals are kept unchanged — only additive fields added.
+
+**UI.** `Dashboard.tsx` renders a "Spools" section (existing four-card grid, now
+labelled) followed by a "Filaments" section (in_sync / pending / conflict / total).
+`Step6Execute.tsx` shows a "Nf / Ns" breakdown line under each non-zero counter card.
+
+**No decision is controversial here** — this is purely additive visibility.
+
 ## 2026-06-11 — Archived Spoolman spools import as retired FDB spools (not silently dropped)
 
 **Root cause.** The wizard's `sm_spools_by_filament` builder (planner.py:316) filtered

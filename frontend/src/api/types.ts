@@ -99,6 +99,9 @@ export interface SyncStatusResponse {
   wizard_completed: boolean
   pending_conflicts: number
   counts: Record<string, number>
+  /** Filament-level counts (excludes synthetic NULL-spoolman_filament_id masters).
+   *  Keys: in_sync / pending / conflict / total */
+  filament_counts: Record<string, number>
   systems: Record<string, SystemStatus>
   sync_blocked: boolean
   sync_blocked_reasons: string[]
@@ -493,12 +496,22 @@ export interface WizardExecuteRecord {
 export interface WizardExecuteResponse {
   cycle_id: string
   direction: SyncDirection
+  /** Flat totals — kept for backwards compatibility */
   created: number
   updated: number
   skipped: number
   failed: number
   wizard_completed: boolean
   records: WizardExecuteRecord[]
+  /** Per-type breakdown (filaments vs spools) */
+  created_filaments: number
+  created_spools: number
+  updated_filaments: number
+  updated_spools: number
+  skipped_filaments: number
+  skipped_spools: number
+  failed_filaments: number
+  failed_spools: number
 }
 
 // ---------------------------------------------------------------------------

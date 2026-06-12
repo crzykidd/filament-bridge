@@ -136,6 +136,7 @@ export default function Dashboard() {
   }
 
   const counts = data?.counts ?? {}
+  const filamentCounts = data?.filament_counts ?? {}
 
   return (
     <>
@@ -169,22 +170,49 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Sync state */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        {[
-          { label: 'In Sync', value: counts['in_sync'] ?? 0, color: 'text-green-600 dark:text-green-400', tip: 'Both sides match the last-synced state.' },
-          { label: 'Pending', value: counts['pending'] ?? 0, color: 'text-yellow-600 dark:text-yellow-400', tip: 'Linked but not yet baselined by a sync cycle.' },
-          { label: 'Conflicts', value: counts['conflict'] ?? 0, color: 'text-red-600 dark:text-red-400', tip: 'Has an open conflict — see the Conflicts page.' },
-          { label: 'Unlinked', value: counts['unlinked'] ?? 0, color: 'text-gray-500 dark:text-gray-400', tip: 'Spool mapping lost its filament mapping; relink or unlink in Synced Records.' },
-        ].map(c => (
-          <div key={c.label} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-            <p className="flex items-center text-sm text-gray-500 dark:text-gray-400">
-              {c.label}
-              <HelpTip text={c.tip} />
-            </p>
-            <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
-          </div>
-        ))}
+      {/* Spools sync state */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2">Spools</h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {[
+            { label: 'In Sync', value: counts['in_sync'] ?? 0, color: 'text-green-600 dark:text-green-400', tip: 'Both sides match the last-synced state.' },
+            { label: 'Pending', value: counts['pending'] ?? 0, color: 'text-yellow-600 dark:text-yellow-400', tip: 'Linked but not yet baselined by a sync cycle.' },
+            { label: 'Conflicts', value: counts['conflict'] ?? 0, color: 'text-red-600 dark:text-red-400', tip: 'Has an open conflict — see the Conflicts page.' },
+            { label: 'Unlinked', value: counts['unlinked'] ?? 0, color: 'text-gray-500 dark:text-gray-400', tip: 'Spool mapping lost its filament mapping; relink or unlink in Synced Records.' },
+          ].map(c => (
+            <div key={c.label} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+              <p className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                {c.label}
+                <HelpTip text={c.tip} />
+              </p>
+              <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Filaments sync state */}
+      <div>
+        <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2">
+          Filaments
+          <HelpTip text="Filament-pair sync state. Excludes synthetic container parents (bridge-only, no Spoolman counterpart)." />
+        </h2>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {[
+            { label: 'In Sync', value: filamentCounts['in_sync'] ?? 0, color: 'text-green-600 dark:text-green-400', tip: 'Both filament snapshots are present and the mapping is linked.' },
+            { label: 'Pending', value: filamentCounts['pending'] ?? 0, color: 'text-yellow-600 dark:text-yellow-400', tip: 'Filament mapping exists but has not been baselined by a sync cycle yet.' },
+            { label: 'Conflicts', value: filamentCounts['conflict'] ?? 0, color: 'text-red-600 dark:text-red-400', tip: 'An open conflict references this filament — see the Conflicts page.' },
+            { label: 'Total', value: filamentCounts['total'] ?? 0, color: 'text-gray-700 dark:text-gray-300', tip: 'Total real filament pairs tracked by the bridge.' },
+          ].map(c => (
+            <div key={`fil-${c.label}`} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+              <p className="flex items-center text-sm text-gray-500 dark:text-gray-400">
+                {c.label}
+                <HelpTip text={c.tip} />
+              </p>
+              <p className={`text-3xl font-bold mt-1 ${c.color}`}>{c.value}</p>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Sync timing + controls */}

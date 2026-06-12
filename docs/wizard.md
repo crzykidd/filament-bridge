@@ -105,8 +105,10 @@ dates carried over) and writes the cross-reference IDs on both sides.
 Failures are **per-record**: a name collision or API error records a failed row and the
 run continues. The result view puts failures front and center with the record name and the
 exact error, plus a full per-record table of everything created, updated, and skipped.
-`wizard_completed` only flips on a zero-failure run — fix the failures and re-run; nothing
-already imported is duplicated.
+Each summary counter (Created / Updated / Skipped / Failed) also shows a filament/spool
+split (e.g. "2f / 5s") so it's clear how many filament pairs versus individual spools
+were affected. `wizard_completed` only flips on a zero-failure run — fix the failures and
+re-run; nothing already imported is duplicated.
 
 Created Filament DB names always include vendor + material (+ finish) + color — e.g.
 "Hatchbox PLA Light Blue" — so bare Spoolman color names ("Light Blue", "Beige") can't

@@ -56,14 +56,43 @@ function ExecuteResultView({ result }: { result: WizardExecuteResponse }) {
       {/* Summary counters */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: 'Created', value: result.created, color: 'text-green-600 dark:text-green-400' },
-          { label: 'Updated', value: result.updated, color: 'text-blue-600 dark:text-blue-400' },
-          { label: 'Skipped', value: result.skipped, color: 'text-gray-500 dark:text-gray-400' },
-          { label: 'Failed',  value: result.failed,  color: 'text-red-600 dark:text-red-400' },
+          {
+            label: 'Created',
+            value: result.created,
+            color: 'text-green-600 dark:text-green-400',
+            filaments: result.created_filaments,
+            spools: result.created_spools,
+          },
+          {
+            label: 'Updated',
+            value: result.updated,
+            color: 'text-blue-600 dark:text-blue-400',
+            filaments: result.updated_filaments,
+            spools: result.updated_spools,
+          },
+          {
+            label: 'Skipped',
+            value: result.skipped,
+            color: 'text-gray-500 dark:text-gray-400',
+            filaments: result.skipped_filaments,
+            spools: result.skipped_spools,
+          },
+          {
+            label: 'Failed',
+            value: result.failed,
+            color: 'text-red-600 dark:text-red-400',
+            filaments: result.failed_filaments,
+            spools: result.failed_spools,
+          },
         ].map(c => (
           <div key={c.label} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-3 text-center">
             <p className="text-xs text-gray-500 dark:text-gray-400">{c.label}</p>
             <p className={`text-2xl font-bold ${c.color}`}>{c.value}</p>
+            {c.value > 0 && (
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                {c.filaments}f / {c.spools}s
+              </p>
+            )}
           </div>
         ))}
       </div>

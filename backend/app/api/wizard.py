@@ -2365,6 +2365,12 @@ async def wizard_execute(
         "wizard execute %s (%s) — created=%d updated=%d skipped=%d failed=%d wizard_completed=%s",
         cycle_id, sync_direction, res.created, res.updated, res.skipped, res.failed, wizard_done,
     )
+    # Compute per-type breakdown from the record list.
+    _type_action_counts: dict[tuple[str, str], int] = {}
+    for _r in res.records:
+        _key = (_r.entity_type, _r.action)
+        _type_action_counts[_key] = _type_action_counts.get(_key, 0) + 1
+
     return WizardExecuteResponse(
         cycle_id=cycle_id,
         direction=sync_direction,
@@ -2374,4 +2380,12 @@ async def wizard_execute(
         failed=res.failed,
         wizard_completed=wizard_done,
         records=res.records,
+        created_filaments=_type_action_counts.get(("filament", "created"), 0),
+        created_spools=_type_action_counts.get(("spool", "created"), 0),
+        updated_filaments=_type_action_counts.get(("filament", "updated"), 0),
+        updated_spools=_type_action_counts.get(("spool", "updated"), 0),
+        skipped_filaments=_type_action_counts.get(("filament", "skipped"), 0),
+        skipped_spools=_type_action_counts.get(("spool", "skipped"), 0),
+        failed_filaments=_type_action_counts.get(("filament", "failed"), 0),
+        failed_spools=_type_action_counts.get(("spool", "failed"), 0),
     )

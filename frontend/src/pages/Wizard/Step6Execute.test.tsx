@@ -67,6 +67,14 @@ function makeResult(overrides?: Partial<WizardExecuteResponse>): WizardExecuteRe
     failed: 0,
     wizard_completed: false,
     records: [],
+    created_filaments: 0,
+    created_spools: 0,
+    updated_filaments: 0,
+    updated_spools: 0,
+    skipped_filaments: 0,
+    skipped_spools: 0,
+    failed_filaments: 0,
+    failed_spools: 0,
     ...overrides,
   }
 }
@@ -222,5 +230,93 @@ describe('Step6Execute — result view', () => {
       expect(screen.getByText('2')).toBeInTheDocument() // skipped
       expect(screen.getByText('4')).toBeInTheDocument() // failed
     })
+  })
+
+  it('shows filament/spool breakdown under each non-zero counter', async () => {
+    const result = makeResult({
+      created: 3,
+      created_filaments: 1,
+      created_spools: 2,
+      updated: 0,
+      updated_filaments: 0,
+      updated_spools: 0,
+      skipped: 1,
+      skipped_filaments: 0,
+      skipped_spools: 1,
+      failed: 2,
+      failed_filaments: 1,
+      failed_spools: 1,
+      records: [
+        {
+          entity_type: 'filament',
+          action: 'failed',
+          spoolman_filament_id: 5,
+          spoolman_spool_id: null,
+          filamentdb_filament_id: null,
+          filamentdb_spool_id: null,
+          label: 'ELEGOO PLA',
+          detail: null,
+          error: 'write failed',
+        },
+      ],
+    })
+
+    await renderAndExecute(result)
+
+    await waitFor(() => {
+      // The "1f / 2s" breakdown should appear under the Created counter.
+      expect(screen.getByText('1f / 2s')).toBeInTheDocument()
+      // Skipped breakdown: "0f / 1s"
+      expect(screen.getByText('0f / 1s')).toBeInTheDocument()
+      // Failed breakdown: "1f / 1s"
+      expect(screen.getByText('1f / 1s')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT show breakdown line when counter is zero', async () => {
+    const result = makeResult({
+      created: 0,
+      created_filaments: 0,
+      created_spools: 0,
+      updated: 2,
+      updated_filaments: 1,
+      updated_spools: 1,
+      records: [
+        {
+          entity_type: 'filament',
+          action: 'updated',
+          spoolman_filament_id: 10,
+          spoolman_spool_id: null,
+          filamentdb_filament_id: 'fil-1',
+          filamentdb_spool_id: null,
+          label: 'My PLA',
+          detail: null,
+          error: null,
+        },
+        {
+          entity_type: 'spool',
+          action: 'updated',
+          spoolman_filament_id: 10,
+          spoolman_spool_id: 5,
+          filamentdb_filament_id: 'fil-1',
+          filamentdb_spool_id: 'sp-1',
+          label: 'My PLA spool',
+          detail: null,
+          error: null,
+        },
+      ],
+    })
+
+    await renderAndExecute(result)
+
+    await waitFor(() => {
+      // Updated counter value should appear.
+      expect(screen.getByText('2')).toBeInTheDocument()
+      // "1f / 1s" breakdown should appear under Updated.
+      expect(screen.getByText('1f / 1s')).toBeInTheDocument()
+    })
+
+    // Created is zero — no breakdown line for it.
+    expect(screen.queryByText('0f / 0s')).not.toBeInTheDocument()
   })
 })

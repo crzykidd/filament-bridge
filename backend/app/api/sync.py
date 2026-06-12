@@ -22,6 +22,8 @@ from app.core.engine import run_sync_cycle
 from app.core.version import incompatibilities
 from app.db import get_db
 from app.models.conflict import Conflict
+from app.models.mapping import FilamentMapping
+from app.models.snapshot import Snapshot
 from app.models.sync_log import SyncLog
 from app.schemas.api import (
     AutoSyncRequest,
@@ -126,6 +128,45 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
     for r in rows:
         counts[r.status] += 1
 
+    # Filament-level counts: iterate real (non-synthetic) FilamentMappings.
+    # Exclude rows where spoolman_filament_id IS NULL (synthetic container parents
+    # created in generic_container mode — they have no real cross-system counterpart).
+    filament_counts: dict[str, int] = {"in_sync": 0, "pending": 0, "conflict": 0, "total": 0}
+    open_conflict_fdb_ids: set[str] = {
+        c.filamentdb_filament_id
+        for c in db.query(Conflict).filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.filamentdb_filament_id.is_not(None),
+        ).all()
+        if c.filamentdb_filament_id
+    }
+    real_filament_mappings = (
+        db.query(FilamentMapping)
+        .filter(FilamentMapping.spoolman_filament_id.is_not(None))
+        .all()
+    )
+    for fm in real_filament_mappings:
+        filament_counts["total"] += 1
+        fdb_id = fm.filamentdb_id
+        if fdb_id in open_conflict_fdb_ids:
+            filament_counts["conflict"] += 1
+            continue
+        # Check whether both filament snapshots exist (baselined).
+        sm_snap = db.query(Snapshot).filter(
+            Snapshot.source == "spoolman",
+            Snapshot.entity_type == "filament",
+            Snapshot.entity_id == str(fm.spoolman_filament_id),
+        ).first()
+        fdb_snap = db.query(Snapshot).filter(
+            Snapshot.source == "filamentdb",
+            Snapshot.entity_type == "filament",
+            Snapshot.entity_id == fdb_id,
+        ).first()
+        if sm_snap and fdb_snap:
+            filament_counts["in_sync"] += 1
+        else:
+            filament_counts["pending"] += 1
+
     pending_conflicts = db.query(Conflict).filter(Conflict.resolved_at.is_(None)).count()
     last_sync_at = db.query(func.max(SyncLog.timestamp)).scalar()
 
@@ -145,6 +186,7 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
         wizard_completed=bool(get_config_value(db, "wizard_completed", False)),
         pending_conflicts=pending_conflicts,
         counts=counts,
+        filament_counts=filament_counts,
         systems=systems,
         sync_blocked=bool(blocked_reasons),
         sync_blocked_reasons=blocked_reasons,

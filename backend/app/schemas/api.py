@@ -95,7 +95,10 @@ class SyncStatusResponse(BaseModel):
     auto_sync_enabled: bool
     wizard_completed: bool
     pending_conflicts: int
-    counts: dict[str, int]  # in_sync / pending / conflict / unlinked / total
+    counts: dict[str, int]  # in_sync / pending / conflict / unlinked / total (spool counts)
+    # Filament-level counts (excludes synthetic NULL-spoolman_filament_id masters).
+    # Keys: in_sync / pending / conflict / total
+    filament_counts: dict[str, int] = Field(default_factory=dict)
     systems: dict[str, SystemStatus]
     # True when an upstream version is below the minimum supported → sync is
     # refused. blocked_reasons holds the per-system upgrade messages.
@@ -553,12 +556,22 @@ class WizardExecuteRecord(BaseModel):
 class WizardExecuteResponse(BaseModel):
     cycle_id: str
     direction: SyncDirection
+    # Flat totals (existing — do not remove; frontend + tests depend on these)
     created: int
     updated: int
     skipped: int
     failed: int
     wizard_completed: bool
     records: list[WizardExecuteRecord] = Field(default_factory=list)
+    # Per-type breakdown (filaments vs spools)
+    created_filaments: int = 0
+    created_spools: int = 0
+    updated_filaments: int = 0
+    updated_spools: int = 0
+    skipped_filaments: int = 0
+    skipped_spools: int = 0
+    failed_filaments: int = 0
+    failed_spools: int = 0
 
 
 # ---------------------------------------------------------------------------
