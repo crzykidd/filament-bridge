@@ -12,6 +12,7 @@ import type {
   ClearRefsResponse,
   ConfigResponse,
   ConfigUpdateRequest,
+  ConflictImportRequest,
   ConflictResolveRequest,
   ConflictResponse,
   CycleResultResponse,
@@ -137,6 +138,9 @@ export const bulkResolveConflicts = (body: BulkResolveRequest) =>
 
 export const getDivergenceContext = (conflictId: number) =>
   request<DivergenceContextResponse>(`/conflicts/${conflictId}/divergence-context`)
+
+export const importConflictRecord = (conflictId: number, body: ConflictImportRequest) =>
+  json<WizardExecuteResponse>(`/conflicts/${conflictId}/import`, 'POST', body)
 
 // ---------------------------------------------------------------------------
 // Mappings

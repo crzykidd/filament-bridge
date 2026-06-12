@@ -2,6 +2,9 @@
  * Frontend tests for the Conflicts page:
  *   - Phase B master_divergence conflict card
  *   - ?highlight=<id> deep-link: expands + marks the matching row, graceful fallback
+ *   - Per-type detail panel (entity label, side-by-side values)
+ *   - new_spool / new_filament Add flow (wired to importConflictRecord)
+ *   - Bulk Add button appears for importable selections
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -18,6 +21,7 @@ vi.mock('../api/client', () => ({
   resolveConflict: vi.fn(),
   getConflicts: vi.fn(),
   bulkResolveConflicts: vi.fn(),
+  importConflictRecord: vi.fn(),
 }))
 
 // Mock react-router-dom: provide a controllable useSearchParams.
@@ -44,9 +48,9 @@ vi.mock('../api/hooks', () => ({
   useApi: vi.fn(),
 }))
 
-import { getDivergenceContext, resolveConflict } from '../api/client'
+import { getDivergenceContext, resolveConflict, importConflictRecord } from '../api/client'
 import { useApi } from '../api/hooks'
-import type { ConflictResponse, DivergenceContextResponse } from '../api/types'
+import type { ConflictResponse, DivergenceContextResponse, WizardExecuteResponse } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -106,6 +110,60 @@ function makeCrossSystemConflict(overrides?: Partial<ConflictResponse>): Conflic
   }
 }
 
+function makeNewSpoolConflict(overrides?: Partial<ConflictResponse>): ConflictResponse {
+  return {
+    id: 3,
+    status: 'open',
+    entity_type: 'spool',
+    field_name: 'new_spool',
+    conflict_type: 'cross_system',
+    spoolman_id: 55,
+    filamentdb_filament_id: null,
+    filamentdb_spool_id: null,
+    spoolman_value: null,
+    filamentdb_value: null,
+    detected_at: '2026-06-10T13:00:00Z',
+    resolved_at: null,
+    resolution: null,
+    resolved_value: null,
+    label: 'ELEGOO PLA Red Spool',
+    vendor: 'ELEGOO',
+    name: 'PLA Red',
+    color_hex: 'ff0000',
+    multi_color_hexes: null,
+    multi_color_direction: null,
+    material: 'PLA',
+    ...overrides,
+  }
+}
+
+function makeNewFilamentConflict(overrides?: Partial<ConflictResponse>): ConflictResponse {
+  return {
+    id: 4,
+    status: 'open',
+    entity_type: 'filament',
+    field_name: 'new_filament',
+    conflict_type: 'cross_system',
+    spoolman_id: 77,
+    filamentdb_filament_id: null,
+    filamentdb_spool_id: null,
+    spoolman_value: null,
+    filamentdb_value: null,
+    detected_at: '2026-06-10T14:00:00Z',
+    resolved_at: null,
+    resolution: null,
+    resolved_value: null,
+    label: 'Bambu PLA Basic Blue',
+    vendor: 'Bambu',
+    name: 'PLA Basic Blue',
+    color_hex: '0000ff',
+    multi_color_hexes: null,
+    multi_color_direction: null,
+    material: 'PLA',
+    ...overrides,
+  }
+}
+
 const mockDivergenceContext: DivergenceContextResponse = {
   master_fdb_id: 'master-001',
   master_name: 'ELEGOO PLA',
@@ -122,6 +180,37 @@ const mockDivergenceContext: DivergenceContextResponse = {
       inherited: true,
     },
   ],
+}
+
+const mockImportResponse: WizardExecuteResponse = {
+  cycle_id: 'test-cycle-1',
+  direction: 'spoolman_to_filamentdb',
+  created: 1,
+  updated: 0,
+  skipped: 0,
+  failed: 0,
+  wizard_completed: false,
+  records: [
+    {
+      entity_type: 'filament',
+      action: 'created',
+      spoolman_filament_id: 77,
+      spoolman_spool_id: null,
+      filamentdb_filament_id: 'new-fdb-id',
+      filamentdb_spool_id: null,
+      label: 'Bambu PLA Basic Blue',
+      detail: null,
+      error: null,
+    },
+  ],
+  created_filaments: 1,
+  created_spools: 0,
+  updated_filaments: 0,
+  updated_spools: 0,
+  skipped_filaments: 0,
+  skipped_spools: 0,
+  failed_filaments: 0,
+  failed_spools: 0,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +242,7 @@ function renderConflictsWithData(conflicts: ConflictResponse[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — master_divergence
 // ---------------------------------------------------------------------------
 
 describe('Conflicts page — master_divergence card', () => {
@@ -301,7 +390,22 @@ describe('Conflicts page — master_divergence card', () => {
       })
     })
   })
+
+  it('shows FILAMENT entity label in master_divergence expanded panel', async () => {
+    renderConflictsWithData([makeMasterDivergenceConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Black').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText('FILAMENT')).toBeInTheDocument()
+    })
+  })
 })
+
+// ---------------------------------------------------------------------------
+// Tests — non-master_divergence conflict types
+// ---------------------------------------------------------------------------
 
 describe('Conflicts page — non-master_divergence conflict type', () => {
   beforeEach(() => {
@@ -317,8 +421,8 @@ describe('Conflicts page — non-master_divergence conflict type', () => {
     if (row) fireEvent.click(row)
 
     await waitFor(() => {
-      expect(screen.getByText('Use spoolman')).toBeInTheDocument()
-      expect(screen.getByText('Use filamentdb')).toBeInTheDocument()
+      expect(screen.getByText('Use Spoolman')).toBeInTheDocument()
+      expect(screen.getByText('Use Filament DB')).toBeInTheDocument()
     })
 
     // Master divergence-specific buttons should NOT appear
@@ -333,10 +437,249 @@ describe('Conflicts page — non-master_divergence conflict type', () => {
     if (row) fireEvent.click(row)
 
     await waitFor(() => {
-      expect(screen.getByText('Use spoolman')).toBeInTheDocument()
+      expect(screen.getByText('Use Spoolman')).toBeInTheDocument()
     })
 
     expect(getDivergenceContext).not.toHaveBeenCalled()
+  })
+
+  it('shows side-by-side field values for cross_system conflict', async () => {
+    renderConflictsWithData([makeCrossSystemConflict()])
+
+    const row = screen.getByText('ELEGOO PLA White').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      // The side-by-side grid shows "Spoolman" and "Filament DB" column headers
+      expect(screen.getByText('Spoolman')).toBeInTheDocument()
+      expect(screen.getByText('Filament DB')).toBeInTheDocument()
+    })
+  })
+
+  it('shows FILAMENT entity label for a filament conflict', async () => {
+    renderConflictsWithData([makeCrossSystemConflict()])
+
+    const row = screen.getByText('ELEGOO PLA White').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText('FILAMENT')).toBeInTheDocument()
+    })
+  })
+
+  it('shows SPOOL entity label for a spool conflict', async () => {
+    // cross_system conflict on a spool (not new_spool)
+    renderConflictsWithData([makeCrossSystemConflict({ id: 5, entity_type: 'spool', label: 'SM Spool Weight' })])
+
+    const row = screen.getByText('SM Spool Weight').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText('SPOOL')).toBeInTheDocument()
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests — new_spool "Add" flow
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — new_spool Add flow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(importConflictRecord).mockResolvedValue(mockImportResponse)
+    vi.mocked(resolveConflict).mockResolvedValue({
+      ...makeNewSpoolConflict(),
+      status: 'resolved',
+      resolution: 'spoolman',
+    })
+  })
+
+  it('renders "New spool (Spoolman)" badge for new_spool conflict with spoolman_id set', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    await waitFor(() => {
+      const elements = screen.getAllByText('New spool (Spoolman)')
+      const badge = elements.find(el => el.tagName === 'SPAN')
+      expect(badge).toBeInTheDocument()
+    })
+  })
+
+  it('shows Add and Dismiss buttons when new_spool card is expanded', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText('Add')).toBeInTheDocument()
+      expect(screen.getByText('Dismiss')).toBeInTheDocument()
+    })
+  })
+
+  it('clicking Add opens the import form with Preview import button', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Preview import')).toBeInTheDocument()
+    })
+  })
+
+  it('preview calls importConflictRecord with dry_run=true', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+    await waitFor(() => expect(screen.getByText('Preview import')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('Preview import'))
+
+    await waitFor(() => {
+      expect(importConflictRecord).toHaveBeenCalledWith(3, expect.objectContaining({ dry_run: true }))
+    })
+  })
+
+  it('shows preview results after dry run succeeds', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+    await waitFor(() => expect(screen.getByText('Preview import')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Preview import'))
+
+    await waitFor(() => {
+      expect(screen.getByText('Preview')).toBeInTheDocument()
+      expect(screen.getByText('Confirm import')).toBeInTheDocument()
+    })
+  })
+
+  it('confirm import calls importConflictRecord with dry_run=false', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+    await waitFor(() => expect(screen.getByText('Preview import')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Preview import'))
+    await waitFor(() => expect(screen.getByText('Confirm import')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Confirm import'))
+
+    await waitFor(() => {
+      expect(importConflictRecord).toHaveBeenCalledWith(3, expect.objectContaining({ dry_run: false }))
+    })
+  })
+
+  it('Dismiss calls resolveConflict with resolution=spoolman (not the import endpoint)', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    const row = screen.getByText('ELEGOO PLA Red Spool').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Dismiss')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Dismiss'))
+
+    await waitFor(() => {
+      expect(resolveConflict).toHaveBeenCalledWith(3, expect.objectContaining({ resolution: 'spoolman' }))
+    })
+    expect(importConflictRecord).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests — new_filament conflict
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — new_filament conflict', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(importConflictRecord).mockResolvedValue(mockImportResponse)
+  })
+
+  it('renders "New filament (Spoolman)" badge for new_filament with spoolman_id set', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    await waitFor(() => {
+      const elements = screen.getAllByText('New filament (Spoolman)')
+      const badge = elements.find(el => el.tagName === 'SPAN')
+      expect(badge).toBeInTheDocument()
+    })
+  })
+
+  it('shows Add and Dismiss buttons for new_filament conflict', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => {
+      expect(screen.getByText('Add')).toBeInTheDocument()
+      expect(screen.getByText('Dismiss')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT call importConflictRecord before user clicks Preview import', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+
+    expect(importConflictRecord).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests — bulk Add
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — bulk Add', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(importConflictRecord).mockResolvedValue(mockImportResponse)
+  })
+
+  it('shows "Add selected" button when importable conflicts are checked', async () => {
+    renderConflictsWithData([makeNewSpoolConflict()])
+
+    // Check the checkbox
+    const checkbox = screen.getByRole('checkbox')
+    fireEvent.click(checkbox)
+
+    await waitFor(() => {
+      expect(screen.getByText('Add selected')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT show "Add selected" button when only non-importable conflicts are checked', async () => {
+    renderConflictsWithData([makeCrossSystemConflict()])
+
+    const checkbox = screen.getByRole('checkbox')
+    fireEvent.click(checkbox)
+
+    await waitFor(() => {
+      // Bulk resolve bar appears but not Add selected
+      expect(screen.getByText('Bulk resolve')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Add selected')).not.toBeInTheDocument()
   })
 })
 
@@ -362,7 +705,7 @@ describe('Conflicts page — ?highlight=<id> deep-link', () => {
 
     // The row should be auto-expanded → resolution buttons visible
     await waitFor(() => {
-      expect(screen.getByText('Use spoolman')).toBeInTheDocument()
+      expect(screen.getByText('Use Spoolman')).toBeInTheDocument()
     })
   })
 
@@ -392,7 +735,7 @@ describe('Conflicts page — ?highlight=<id> deep-link', () => {
     renderConflictsWithData([makeCrossSystemConflict({ id: 2 })])
 
     // No auto-expand: resolution buttons should NOT be visible
-    expect(screen.queryByText('Use spoolman')).not.toBeInTheDocument()
+    expect(screen.queryByText('Use Spoolman')).not.toBeInTheDocument()
 
     const card = document.querySelector('[data-conflict-id="2"]')
     expect(card?.className).not.toMatch(/ring-2/)

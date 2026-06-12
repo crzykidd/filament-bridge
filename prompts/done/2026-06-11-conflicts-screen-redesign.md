@@ -1,10 +1,18 @@
 ---
 name: 2026-06-11-conflicts-screen-redesign
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-06-11
 model: sonnet
-completed:
-result:
+completed: 2026-06-11
+result: >
+  Implemented per-conflict detail panels with SPOOL/FILAMENT entity labels and
+  side-by-side Spoolman|FDB value grids. Added new_filament conflict type
+  (new_filament_sm / new_filament_fdb badges). Per-type action buttons with
+  recommended defaults for all conflict types. new_spool and new_filament Add
+  flow wired to POST /api/conflicts/{id}/import with dry_run preview + confirm
+  + execute. Bulk Add modal for multi-selected importable conflicts. Existing
+  Open/Resolved tabs, sort, expand/collapse, bulk-select preserved.
+  All tests pass: 738 pytest, ruff clean, tsc clean, 69 frontend tests (16 new).
 ---
 
 # Task: Conflicts screen redesign — detail panels, per-type actions, and the "Add" flow

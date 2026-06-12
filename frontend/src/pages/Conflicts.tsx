@@ -1,11 +1,23 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { getConflicts, resolveConflict, bulkResolveConflicts, getDivergenceContext } from '../api/client'
+import {
+  getConflicts,
+  resolveConflict,
+  bulkResolveConflicts,
+  getDivergenceContext,
+  importConflictRecord,
+} from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
 import { ColorDisplay } from '../components/ColorDisplay'
 import { HelpTip } from '../components/HelpTip'
-import type { ConflictResponse, DivergenceContextResponse, DivergenceVariantEntry } from '../api/types'
+import type {
+  ConflictResponse,
+  DivergenceContextResponse,
+  DivergenceVariantEntry,
+  WizardExecuteRecord,
+  WizardExecuteResponse,
+} from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
 type Resolution = 'spoolman' | 'filamentdb' | 'manual'
@@ -15,12 +27,23 @@ type SortKey = 'detected' | 'type' | 'label'
 // Conflict type classification
 // ---------------------------------------------------------------------------
 
-type ConflictType = 'deleted' | 'new_spool_sm' | 'new_spool_fdb' | 'weight' | 'multicolor' | 'property' | 'master_divergence'
+type ConflictType =
+  | 'deleted'
+  | 'new_spool_sm'
+  | 'new_spool_fdb'
+  | 'new_filament_sm'
+  | 'new_filament_fdb'
+  | 'weight'
+  | 'multicolor'
+  | 'property'
+  | 'master_divergence'
 
 const TYPE_LABELS: Record<ConflictType, string> = {
   deleted: 'Deleted record',
   new_spool_sm: 'New spool (Spoolman)',
   new_spool_fdb: 'New spool (Filament DB)',
+  new_filament_sm: 'New filament (Spoolman)',
+  new_filament_fdb: 'New filament (Filament DB)',
   weight: 'Weight',
   multicolor: 'Multicolor',
   property: 'Property',
@@ -31,13 +54,25 @@ const TYPE_BADGE_COLORS: Record<ConflictType, string> = {
   deleted: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400',
   new_spool_sm: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400',
   new_spool_fdb: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400',
+  new_filament_sm: 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-400',
+  new_filament_fdb: 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-400',
   weight: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
   multicolor: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400',
   property: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
   master_divergence: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400',
 }
 
-const TYPE_ORDER: ConflictType[] = ['deleted', 'new_spool_sm', 'new_spool_fdb', 'weight', 'multicolor', 'property', 'master_divergence']
+const TYPE_ORDER: ConflictType[] = [
+  'deleted',
+  'new_spool_sm',
+  'new_spool_fdb',
+  'new_filament_sm',
+  'new_filament_fdb',
+  'weight',
+  'multicolor',
+  'property',
+  'master_divergence',
+]
 
 const DELETION_FIELD = '__record_deleted__'
 
@@ -45,13 +80,14 @@ function classifyConflict(c: ConflictResponse): ConflictType {
   if (c.conflict_type === 'master_divergence') return 'master_divergence'
   if (c.field_name === DELETION_FIELD) return 'deleted'
   if (c.field_name === 'new_spool') return c.spoolman_id != null ? 'new_spool_sm' : 'new_spool_fdb'
+  if (c.field_name === 'new_filament') return c.spoolman_id != null ? 'new_filament_sm' : 'new_filament_fdb'
   if (c.field_name === 'weight' || c.field_name === 'remaining_weight') return 'weight'
   if (c.field_name === 'multicolor') return 'multicolor'
   return 'property'
 }
 
-function isNewSpool(c: ConflictResponse): boolean {
-  return c.field_name === 'new_spool'
+function isImportable(c: ConflictResponse): boolean {
+  return c.field_name === 'new_spool' || c.field_name === 'new_filament'
 }
 
 function deletedSideLabel(conflict: ConflictResponse): string {
@@ -61,9 +97,250 @@ function deletedSideLabel(conflict: ConflictResponse): string {
   return 'one side'
 }
 
+function entityLabel(conflict: ConflictResponse): string {
+  return conflict.entity_type === 'spool' ? 'SPOOL' : 'FILAMENT'
+}
+
 // ---------------------------------------------------------------------------
-// Sub-components
+// Shared sub-components
 // ---------------------------------------------------------------------------
+
+function ValueDisplay({ value }: { value: unknown }) {
+  if (value == null) return <span className="text-gray-400 dark:text-gray-500">—</span>
+  const s = typeof value === 'object' ? JSON.stringify(value) : String(value)
+  return <span className="font-mono text-xs text-gray-900 dark:text-gray-100">{s}</span>
+}
+
+/** Two-column Spoolman | FDB grid, reusing the SyncedRecords DetailGrid styling. */
+function SideBySideGrid({ rows }: { rows: { field: string; label: string; sm: unknown; fdb: unknown }[] }) {
+  if (rows.length === 0) return null
+  return (
+    <div className="grid grid-cols-[10rem_1fr_1fr] gap-x-4 gap-y-1 text-xs max-w-2xl">
+      <div className="font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">Field</div>
+      <div className="font-medium text-emerald-700 dark:text-emerald-400">Spoolman</div>
+      <div className="font-medium text-blue-700 dark:text-blue-400">Filament DB</div>
+      {rows.map(r => (
+        <Fragment key={r.field}>
+          <div className="text-gray-600 dark:text-gray-300">{r.label}</div>
+          <div className="font-mono text-gray-800 dark:text-gray-200">
+            <ValueDisplay value={r.sm} />
+          </div>
+          <div className="font-mono text-gray-800 dark:text-gray-200">
+            <ValueDisplay value={r.fdb} />
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  )
+}
+
+/** Compact import preview table (WizardExecuteRecord list). */
+function ImportPreview({ records }: { records: WizardExecuteRecord[] }) {
+  if (records.length === 0) return <p className="text-xs text-gray-400 dark:text-gray-500 italic">Nothing to import.</p>
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-gray-400 dark:text-gray-500 uppercase tracking-wide border-b border-gray-100 dark:border-gray-700">
+            <th className="pb-1 pr-3">Type</th>
+            <th className="pb-1 pr-3">Action</th>
+            <th className="pb-1">Label</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((r, i) => (
+            <tr key={i} className="border-b border-gray-50 dark:border-gray-800 last:border-0">
+              <td className="py-0.5 pr-3 text-gray-500 dark:text-gray-400">{r.entity_type}</td>
+              <td className="py-0.5 pr-3">
+                <span className={`font-medium ${
+                  r.action === 'created' ? 'text-emerald-600 dark:text-emerald-400'
+                    : r.action === 'updated' ? 'text-blue-600 dark:text-blue-400'
+                    : r.action === 'failed' ? 'text-red-600 dark:text-red-400'
+                    : 'text-gray-500 dark:text-gray-400'
+                }`}>{r.action}</span>
+              </td>
+              <td className="py-0.5 text-gray-700 dark:text-gray-300">{r.label ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Import flow for new_spool / new_filament conflicts
+// ---------------------------------------------------------------------------
+
+type ImportStep = 'form' | 'preview' | 'done'
+
+function NewRecordAddFlow({
+  conflict,
+  onResolved,
+  onCancel,
+}: {
+  conflict: ConflictResponse
+  onResolved: () => void
+  onCancel: () => void
+}) {
+  const isSmToFdb = conflict.spoolman_id != null
+  const [filamentAction, setFilamentAction] = useState<'create' | 'link'>('create')
+  const [filamentdbId, setFilamentdbId] = useState('')
+  const [tare, setTare] = useState('')
+  const [step, setStep] = useState<ImportStep>('form')
+  const [preview, setPreview] = useState<WizardExecuteResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function runPreview() {
+    setLoading(true)
+    setErr(null)
+    try {
+      const res = await importConflictRecord(conflict.id, {
+        dry_run: true,
+        filament_action: filamentAction,
+        filamentdb_id: filamentAction === 'link' ? (filamentdbId.trim() || null) : null,
+        tare_override: tare.trim() ? parseFloat(tare) : null,
+      })
+      setPreview(res)
+      setStep('preview')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function runExecute() {
+    setLoading(true)
+    setErr(null)
+    try {
+      await importConflictRecord(conflict.id, {
+        dry_run: false,
+        filament_action: filamentAction,
+        filamentdb_id: filamentAction === 'link' ? (filamentdbId.trim() || null) : null,
+        tare_override: tare.trim() ? parseFloat(tare) : null,
+      })
+      setStep('done')
+      onResolved()
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (step === 'done') {
+    return (
+      <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded p-3 text-sm text-emerald-800 dark:text-emerald-300">
+        Imported successfully — conflict resolved.
+      </div>
+    )
+  }
+
+  if (step === 'preview' && preview != null) {
+    return (
+      <div className="space-y-3">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded p-3 text-sm text-blue-800 dark:text-blue-300">
+          <strong>Preview</strong> — no changes written yet. Review below, then confirm.
+        </div>
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          Creates: {preview.created_filaments} filament(s), {preview.created_spools} spool(s) ·
+          Updates: {preview.updated_filaments + preview.updated_spools} ·
+          Skips: {preview.skipped_filaments + preview.skipped_spools}
+        </div>
+        <ImportPreview records={preview.records} />
+        {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+        <div className="flex gap-2">
+          <button
+            onClick={runExecute}
+            disabled={loading}
+            className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {loading ? 'Importing…' : 'Confirm import'}
+          </button>
+          <button
+            onClick={() => { setStep('form'); setErr(null) }}
+            className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600"
+          >
+            Back
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // step === 'form'
+  return (
+    <div className="space-y-3">
+      {/* Only show filament action picker for SM→FDB (FDB→SM always creates) */}
+      {isSmToFdb && (
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Filament action</p>
+          <div className="flex gap-2">
+            {(['create', 'link'] as const).map(opt => (
+              <button
+                key={opt}
+                onClick={() => setFilamentAction(opt)}
+                className={`px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
+                  filamentAction === opt
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600'
+                }`}
+              >
+                {opt === 'create' ? 'Create new filament' : 'Link to existing filament'}
+              </button>
+            ))}
+          </div>
+
+          {filamentAction === 'link' && (
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">FDB filament ID</label>
+              <input
+                type="text"
+                placeholder="24-char hex id…"
+                value={filamentdbId}
+                onChange={e => setFilamentdbId(e.target.value)}
+                className="flex-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">Tare override (g)</label>
+        <input
+          type="number"
+          placeholder="Optional, e.g. 200"
+          value={tare}
+          onChange={e => setTare(e.target.value)}
+          min={0}
+          className="w-40 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        />
+        <HelpTip text="Overrides the filament's spool_weight for the weight conversion. Leave blank to use the default from Spoolman." />
+      </div>
+
+      {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+
+      <div className="flex gap-2">
+        <button
+          onClick={runPreview}
+          disabled={loading || (filamentAction === 'link' && !filamentdbId.trim())}
+          className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+        >
+          {loading ? 'Loading…' : 'Preview import'}
+        </button>
+        <button
+          onClick={onCancel}
+          className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Master-divergence specialized card
@@ -153,6 +430,14 @@ function MasterDivergenceDetail({
 
   return (
     <div className="border-t border-gray-100 dark:border-gray-700 mt-0 px-4 pb-4 pt-3 space-y-3">
+      {/* Entity type label */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-orange-600 dark:text-orange-400">
+          {entityLabel(conflict)}
+        </span>
+        <span className="text-xs text-gray-400 dark:text-gray-500">master_divergence on field: {fieldLabel}</span>
+      </div>
+
       {/* Header: field + incoming vs master values */}
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded p-3">
@@ -217,31 +502,40 @@ function MasterDivergenceDetail({
       )}
 
       {confirmAction !== 'apply_all' && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setConfirmAction('apply_all')}
-            disabled={submitting}
-            className="px-4 py-1.5 bg-orange-600 text-white rounded text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
-            title={`Write ${incomingValue} to master and all variants in FDB and Spoolman`}
-          >
-            Apply to all variants
-          </button>
-          <button
-            onClick={() => submit('variant_override')}
-            disabled={submitting}
-            className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-            title="Write this value to this variant only; master and siblings unchanged"
-          >
-            {submitting ? 'Saving…' : 'Make variant\'s own setting'}
-          </button>
-          <button
-            onClick={() => submit('ignore')}
-            disabled={submitting}
-            className="px-4 py-1.5 bg-gray-500 text-white rounded text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
-            title="No write; store baselines so this won't re-queue next cycle"
-          >
-            {submitting ? 'Saving…' : 'Ignore'}
-          </button>
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="flex flex-col items-start gap-1">
+            <button
+              onClick={() => setConfirmAction('apply_all')}
+              disabled={submitting}
+              className="px-4 py-1.5 bg-orange-600 text-white rounded text-sm font-medium hover:bg-orange-700 disabled:opacity-50"
+              title={`Write ${incomingValue} to master and all variants in FDB and Spoolman`}
+            >
+              Apply to all variants
+            </button>
+            <span className="text-xs text-gray-400 dark:text-gray-500 pl-1">Writes value to master + every variant</span>
+          </div>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              onClick={() => submit('variant_override')}
+              disabled={submitting}
+              className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              title="Write this value to this variant only; master and siblings unchanged"
+            >
+              {submitting ? 'Saving…' : "Make variant's own setting"}
+            </button>
+            <span className="text-xs text-gray-400 dark:text-gray-500 pl-1">Overrides this variant only, master unchanged</span>
+          </div>
+          <div className="flex flex-col items-start gap-1">
+            <button
+              onClick={() => submit('ignore')}
+              disabled={submitting}
+              className="px-4 py-1.5 bg-gray-500 text-white rounded text-sm font-medium hover:bg-gray-600 disabled:opacity-50"
+              title="No write; store baselines so this won't re-queue next cycle"
+            >
+              {submitting ? 'Saving…' : 'Ignore'}
+            </button>
+            <span className="text-xs text-gray-400 dark:text-gray-500 pl-1">No write; stores baselines to prevent re-queue</span>
+          </div>
         </div>
       )}
 
@@ -250,24 +544,20 @@ function MasterDivergenceDetail({
   )
 }
 
-function ValueDisplay({ value }: { value: unknown }) {
-  if (value == null) return <span className="text-gray-400 dark:text-gray-500">—</span>
-  const s = typeof value === 'object' ? JSON.stringify(value) : String(value)
-  return <span className="font-mono text-xs text-gray-900 dark:text-gray-100">{s}</span>
-}
-
 /**
  * The expanded resolve / detail body — rendered inside a CollapsibleConflict
- * when expanded.
+ * when expanded (non-master_divergence types).
  */
 function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; onResolved: () => void }) {
   const [resolution, setResolution] = useState<Resolution>('spoolman')
   const [manualValue, setManualValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [showAddFlow, setShowAddFlow] = useState(false)
 
   const isDeletion = conflict.field_name === DELETION_FIELD
-  const newSpool = isNewSpool(conflict)
+  const importable = isImportable(conflict)
+  const isSmToFdb = conflict.spoolman_id != null
 
   async function submit(overrideResolution?: Resolution) {
     const res = overrideResolution ?? resolution
@@ -288,20 +578,40 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
 
   return (
     <div className="border-t border-gray-100 dark:border-gray-700 mt-0 px-4 pb-4 pt-3 space-y-3">
-      {/* Values grid (not shown for deletion or new_spool) */}
-      {!isDeletion && !newSpool && (
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded p-3">
-            <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 mb-1">Spoolman value</p>
-            <ValueDisplay value={conflict.spoolman_value} />
-          </div>
-          <div className="bg-blue-50 dark:bg-blue-900/20 rounded p-3">
-            <p className="text-xs font-medium text-blue-700 dark:text-blue-400 mb-1">Filament DB value</p>
-            <ValueDisplay value={conflict.filamentdb_value} />
-          </div>
-        </div>
+      {/* Entity type label */}
+      <div className="flex items-center gap-2">
+        <span className={`text-xs font-semibold uppercase tracking-wide ${
+          isDeletion ? 'text-red-600 dark:text-red-400'
+          : importable ? 'text-emerald-600 dark:text-emerald-400'
+          : 'text-indigo-600 dark:text-indigo-400'
+        }`}>
+          {entityLabel(conflict)}
+        </span>
+        {!isDeletion && !importable && (
+          <span className="text-xs text-gray-400 dark:text-gray-500">field: {conflict.field_name}</span>
+        )}
+        {importable && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            {conflict.field_name === 'new_filament' ? 'Unmapped filament' : 'Unmapped spool'}
+            {' — '}
+            {isSmToFdb ? 'exists in Spoolman, not yet in Filament DB' : 'exists in Filament DB, not yet in Spoolman'}
+          </span>
+        )}
+      </div>
+
+      {/* Values grid (cross_system / weight / property / multicolor) */}
+      {!isDeletion && !importable && (
+        <SideBySideGrid rows={[
+          {
+            field: conflict.field_name,
+            label: conflict.field_name,
+            sm: conflict.spoolman_value,
+            fdb: conflict.filamentdb_value,
+          },
+        ]} />
       )}
 
+      {/* Deletion explanation */}
       {isDeletion && (
         <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-3 text-sm text-amber-800 dark:text-amber-300">
           This record was deleted in <strong>{deletedSideLabel(conflict)}</strong>. Removing the
@@ -309,15 +619,42 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
         </div>
       )}
 
-      {newSpool && (
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Dismisses this notice — create the record via the{' '}
-          <span className="font-medium text-gray-700 dark:text-gray-300">Bulk Import Wizard</span>.
-        </p>
+      {/* New record: Add flow or framing */}
+      {importable && !showAddFlow && (
+        <div className="space-y-2">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            {conflict.field_name === 'new_filament'
+              ? 'This filament has no counterpart in the other system. Use "Add" to import it, or "Dismiss" to clear the notice.'
+              : 'This spool has no counterpart in the other system. Use "Add" to import it, or "Dismiss" to clear the notice.'}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAddFlow(true)}
+              className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700"
+            >
+              Add
+            </button>
+            <button
+              onClick={() => submit('spoolman')}
+              disabled={submitting}
+              className="px-4 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50"
+            >
+              {submitting ? 'Dismissing…' : 'Dismiss'}
+            </button>
+          </div>
+        </div>
       )}
 
-      {/* Action row */}
-      {isDeletion ? (
+      {importable && showAddFlow && (
+        <NewRecordAddFlow
+          conflict={conflict}
+          onResolved={onResolved}
+          onCancel={() => setShowAddFlow(false)}
+        />
+      )}
+
+      {/* Action row — deletion */}
+      {isDeletion && (
         <div className="flex items-center gap-2">
           <button
             onClick={() => submit('spoolman')}
@@ -327,49 +664,65 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
             {submitting ? 'Removing…' : 'Remove mapping'}
           </button>
         </div>
-      ) : newSpool ? (
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => submit('spoolman')}
-            disabled={submitting}
-            className="px-4 py-1.5 bg-gray-600 text-white rounded text-sm font-medium hover:bg-gray-700 disabled:opacity-50"
-          >
-            {submitting ? 'Dismissing…' : 'Dismiss'}
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 flex-wrap">
-          {(['spoolman', 'filamentdb', 'manual'] as const).map(r => (
+      )}
+
+      {/* Action row — cross_system / weight / property / multicolor */}
+      {!isDeletion && !importable && (
+        <div className="space-y-2">
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            Pick a side — this records your choice only. Make the actual edit in that system; sync propagates it next cycle.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
             <button
-              key={r}
-              onClick={() => setResolution(r)}
+              onClick={() => setResolution('spoolman')}
               className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                resolution === r
+                resolution === 'spoolman'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+              }`}
+            >
+              Use Spoolman
+            </button>
+            <button
+              onClick={() => setResolution('filamentdb')}
+              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                resolution === 'filamentdb'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+              }`}
+            >
+              Use Filament DB
+            </button>
+            <button
+              onClick={() => setResolution('manual')}
+              className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                resolution === 'manual'
                   ? 'bg-indigo-600 text-white'
                   : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
               }`}
             >
-              Use {r === 'manual' ? 'manual value' : r}
+              Manual value
             </button>
-          ))}
-          {resolution === 'manual' && (
-            <input
-              type="text"
-              placeholder="Enter value…"
-              value={manualValue}
-              onChange={e => setManualValue(e.target.value)}
-              className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            />
-          )}
-          <button
-            onClick={() => submit()}
-            disabled={submitting || (resolution === 'manual' && !manualValue.trim())}
-            className="ml-auto px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {submitting ? 'Saving…' : 'Resolve'}
-          </button>
+            {resolution === 'manual' && (
+              <input
+                type="text"
+                placeholder="Enter value…"
+                value={manualValue}
+                onChange={e => setManualValue(e.target.value)}
+                className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+            )}
+            <button
+              onClick={() => submit()}
+              disabled={submitting || (resolution === 'manual' && !manualValue.trim())}
+              className="ml-auto px-4 py-1.5 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {submitting ? 'Saving…' : 'Resolve'}
+            </button>
+          </div>
         </div>
       )}
+
       {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
     </div>
   )
@@ -491,6 +844,102 @@ function CollapsibleConflict({
 }
 
 // ---------------------------------------------------------------------------
+// Bulk Add modal for new_spool / new_filament conflicts
+// ---------------------------------------------------------------------------
+
+function BulkAddModal({
+  conflicts,
+  onDone,
+  onCancel,
+}: {
+  conflicts: ConflictResponse[]
+  onDone: () => void
+  onCancel: () => void
+}) {
+  const [results, setResults] = useState<{ id: number; label: string | null; status: 'pending' | 'ok' | 'error'; msg?: string }[]>(
+    conflicts.map(c => ({ id: c.id, label: c.label, status: 'pending' }))
+  )
+  const [running, setRunning] = useState(false)
+  const [done, setDone] = useState(false)
+
+  async function runAll() {
+    setRunning(true)
+    const next = [...results]
+    for (let i = 0; i < conflicts.length; i++) {
+      try {
+        await importConflictRecord(conflicts[i].id, { dry_run: false, filament_action: 'create' })
+        next[i] = { ...next[i], status: 'ok' }
+      } catch (e) {
+        next[i] = { ...next[i], status: 'error', msg: e instanceof Error ? e.message : String(e) }
+      }
+      setResults([...next])
+    }
+    setRunning(false)
+    setDone(true)
+  }
+
+  const okCount = results.filter(r => r.status === 'ok').length
+  const errCount = results.filter(r => r.status === 'error').length
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-lg w-full mx-4 p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          Bulk Add — {conflicts.length} record(s)
+        </h2>
+
+        {!done && !running && (
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            Each selected record will be imported using "create new filament" as the default.
+            Records that need a specific link or tare override should be handled individually.
+          </p>
+        )}
+
+        <div className="space-y-1 max-h-64 overflow-y-auto">
+          {results.map(r => (
+            <div key={r.id} className="flex items-center gap-2 text-sm py-0.5">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${
+                r.status === 'ok' ? 'bg-emerald-500'
+                : r.status === 'error' ? 'bg-red-500'
+                : 'bg-gray-300 dark:bg-gray-600'
+              }`} />
+              <span className="flex-1 text-gray-700 dark:text-gray-300 truncate">{r.label ?? `#${r.id}`}</span>
+              {r.status === 'ok' && <span className="text-xs text-emerald-600 dark:text-emerald-400">imported</span>}
+              {r.status === 'error' && <span className="text-xs text-red-600 dark:text-red-400 truncate max-w-[12rem]">{r.msg}</span>}
+            </div>
+          ))}
+        </div>
+
+        {done && (
+          <p className="text-sm font-medium">
+            Done: <span className="text-emerald-600 dark:text-emerald-400">{okCount} imported</span>
+            {errCount > 0 && <>, <span className="text-red-600 dark:text-red-400">{errCount} failed</span></>}
+          </p>
+        )}
+
+        <div className="flex gap-2 justify-end">
+          {!done && (
+            <button
+              onClick={runAll}
+              disabled={running}
+              className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+            >
+              {running ? 'Importing…' : 'Import all'}
+            </button>
+          )}
+          <button
+            onClick={() => { onDone() }}
+            className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600"
+          >
+            {done ? 'Close' : 'Cancel'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -508,6 +957,7 @@ export default function Conflicts() {
   const [highlightId, setHighlightId] = useState<number | null>(null)
   const highlightHandledRef = useRef(false)
   const [notFoundId, setNotFoundId] = useState<number | null>(null)
+  const [showBulkAdd, setShowBulkAdd] = useState(false)
 
   const allRows: ConflictResponse[] = data ?? []
 
@@ -630,6 +1080,11 @@ export default function Conflicts() {
     setSelected(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id])
   }
 
+  // Selected importable conflicts for bulk-add
+  const selectedImportable = selected
+    .map(id => allRows.find(c => c.id === id))
+    .filter((c): c is ConflictResponse => c != null && isImportable(c))
+
   return (
     <div className="p-8 space-y-5">
       {/* Header */}
@@ -656,9 +1111,10 @@ export default function Conflicts() {
       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 text-sm text-blue-800 dark:text-blue-300 space-y-1">
         <p>
           <strong>Resolving a conflict records your choice and removes it from the queue.</strong> For
-          standard conflicts this is record-only (no upstream writes). Deletion conflicts remove the
-          bridge mapping only. <strong>Master divergence</strong> conflicts apply changes upstream when
-          you choose an action.
+          cross-system conflicts this is record-only (no upstream writes) — make the actual edit in the
+          chosen system; sync propagates it. <strong>Deletion</strong> conflicts remove the bridge mapping.{' '}
+          <strong>Master divergence</strong> conflicts apply changes upstream when you choose an action.{' '}
+          <strong>New spool / filament</strong> conflicts can be imported directly via the "Add" button.
         </p>
       </div>
 
@@ -746,31 +1202,50 @@ export default function Conflicts() {
         </div>
       )}
 
-      {/* Bulk resolve bar */}
+      {/* Bulk action bar */}
       {tab === 'open' && selected.length > 0 && (
-        <div className="flex items-center gap-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded p-3">
-          <span className="text-sm text-indigo-700 dark:text-indigo-300">{selected.length} selected</span>
-          {(['spoolman', 'filamentdb'] as const).map(r => (
+        <div className="space-y-2">
+          {/* Bulk Add — shown when at least one selected is importable */}
+          {selectedImportable.length > 0 && (
+            <div className="flex items-center gap-3 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded p-3">
+              <span className="text-sm text-emerald-700 dark:text-emerald-300">
+                {selectedImportable.length} importable selected
+              </span>
+              <button
+                onClick={() => setShowBulkAdd(true)}
+                className="px-4 py-1 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700"
+              >
+                Add selected
+              </button>
+              <HelpTip text="Bulk-imports each selected new-spool or new-filament conflict using 'create' as the filament action. For link-to-existing or custom tare, use the individual Add flow instead." />
+            </div>
+          )}
+
+          {/* Bulk resolve (dismiss) */}
+          <div className="flex items-center gap-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded p-3">
+            <span className="text-sm text-indigo-700 dark:text-indigo-300">{selected.length} selected</span>
+            {(['spoolman', 'filamentdb'] as const).map(r => (
+              <button
+                key={r}
+                onClick={() => setBulkRes(r)}
+                className={`px-3 py-1 rounded text-sm font-medium ${
+                  bulkRes === r
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200'
+                }`}
+              >
+                Use {r}
+              </button>
+            ))}
+            <HelpTip text="Records the choice only — no values are written upstream. Make the actual edit in the system you chose, and sync propagates it." />
             <button
-              key={r}
-              onClick={() => setBulkRes(r)}
-              className={`px-3 py-1 rounded text-sm font-medium ${
-                bulkRes === r
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200'
-              }`}
+              onClick={handleBulk}
+              disabled={bulking}
+              className="px-4 py-1 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
             >
-              Use {r}
+              {bulking ? 'Resolving…' : 'Bulk resolve'}
             </button>
-          ))}
-          <HelpTip text="Records the choice only — no values are written upstream. Make the actual edit in the system you chose, and sync propagates it." />
-          <button
-            onClick={handleBulk}
-            disabled={bulking}
-            className="px-4 py-1 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {bulking ? 'Resolving…' : 'Bulk resolve'}
-          </button>
+          </div>
         </div>
       )}
 
@@ -812,6 +1287,15 @@ export default function Conflicts() {
           />
         ))}
       </div>
+
+      {/* Bulk Add modal */}
+      {showBulkAdd && (
+        <BulkAddModal
+          conflicts={selectedImportable}
+          onDone={() => { setShowBulkAdd(false); setSelected([]); void reload() }}
+          onCancel={() => setShowBulkAdd(false)}
+        />
+      )}
     </div>
   )
 }

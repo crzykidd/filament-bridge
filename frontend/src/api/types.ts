@@ -164,6 +164,19 @@ export interface DivergenceContextResponse {
   variants: DivergenceVariantEntry[]
 }
 
+export interface ConflictImportRequest {
+  dry_run?: boolean
+  /** "create" → create a new filament in the target system.
+   *  "link"   → link to an existing filament (filamentdb_id required). */
+  filament_action?: 'create' | 'link'
+  /** For filament_action=="link" (SM→FDB): the existing FDB filament id to link to. */
+  filamentdb_id?: string | null
+  /** Optional tare override in grams. */
+  tare_override?: number | null
+  /** For variant grouping: existing FDB parent id (only when filament_action=="create"). */
+  master_filamentdb_id?: string | null
+}
+
 export interface BulkResolveRequest {
   ids: number[]
   resolution: 'spoolman' | 'filamentdb' | 'manual'
