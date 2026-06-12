@@ -24,6 +24,7 @@ import type {
   OpenTagApplyResponse,
   OpenTagCacheStatus,
   OpenTagDatasetMeta,
+  OpenTagIgnoreResponse,
   OpenTagMatchesResponse,
   ResetStateResponse,
   SMVariancesDecisionsRequest,
@@ -238,6 +239,11 @@ export const postOpenTagRefresh = () =>
   request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>
   json<OpenTagApplyResponse>('/openprinttag/apply', 'POST', body)
+export const postOpenTagIgnore = (filamentId: number, ignored: boolean) =>
+  request<OpenTagIgnoreResponse>(
+    `/openprinttag/ignore/${filamentId}?ignored=${ignored}`,
+    { method: 'POST' },
+  )
 
 // ---------------------------------------------------------------------------
 // Debug reset tools (only available when debug_mode=true)

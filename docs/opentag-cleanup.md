@@ -47,7 +47,49 @@ Matches below 30% land in the **unmatched** list with a reason (unknown manufact
 material for that brand, multicolor with no multicolor candidates, or simply no confident
 match). Fix unknown manufacturers by adding a mapping in Settings, then Reprocess.
 
-## Review
+## Updates available banner
+
+When the matches are loaded, a banner appears at the top if any already-tagged filaments
+(those carrying an `openprinttag_uuid` extra) have values that differ from the latest
+OpenTag dataset. The count excludes filaments the user has suppressed via **Ignore future
+updates** (see below).
+
+Click **Review updates** to switch to the focused updates view.
+
+## Updates review view
+
+The **Review updates** view shows only the filaments with drifted data. For each:
+
+- A collapsible **field table** showing current Spoolman value → updated OpenTag value per
+  changed field (identity fields slug/uuid are not shown here — they never trigger the banner).
+- A **per-row checkbox** and a **Select all / Deselect all** toolbar button.
+- **Search** by name or vendor, **group by** brand/material, and **sort** by brand or name.
+- **Apply selected** → calls the existing `POST /api/openprinttag/apply` endpoint with only
+  the selected filaments. On success those filaments drop out of the "updates available" set.
+- **Ignore future updates** per filament — persists a Spoolman extra field
+  (`openprinttag_ignore = "1"`) so the filament is excluded from the updates count until
+  un-ignored. See below.
+- **Ignored filaments** section (collapsible) at the bottom of the view, with an
+  **Un-ignore** button for each.
+
+## Ignore future updates
+
+Each filament in the Updates Review view has an **Ignore future updates** button. Clicking
+it writes `openprinttag_ignore = "1"` to the Spoolman filament's extra fields via
+`POST /api/openprinttag/ignore/{id}?ignored=true`. Clicking **Un-ignore** clears the flag
+(`ignored=false`). The field is registered at startup alongside the other OpenTag extra
+fields; it must exist before any write can succeed.
+
+Because the flag is stored on the Spoolman filament record, it:
+- Survives bridge restarts and cache clears.
+- Travels with the record if the filament is re-imported.
+- Is checkable on every `GET /api/openprinttag/matches` run (the backend reads it and sets
+  `ignored_updates: true` / `has_update: false` on that match row, and excludes it from
+  `updates_count`).
+
+The flag is visible in Spoolman's extra-field UI as "OpenPrintTag Ignore Updates".
+
+## Review (full review view)
 
 Each filament card shows the best candidate (★) and up to five alternates in a dropdown,
 with a field-by-field table: current Spoolman value vs the OpenTag value. Per field you can

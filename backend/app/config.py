@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # OpenTag extra fields on Spoolman filament entity
     spoolman_field_openprinttag_slug: str = "openprinttag_slug"
     spoolman_field_openprinttag_uuid: str = "openprinttag_uuid"
+    # When set to "1", suppresses this filament from the "updates available" banner.
+    # Stored on the Spoolman filament so it travels with the record.
+    spoolman_field_openprinttag_ignore: str = "openprinttag_ignore"
 
     # Local OpenTag cache staleness threshold (hours)
     opentag_cache_max_age_hours: int = 24

@@ -3253,13 +3253,14 @@ async def test_ensure_extra_fields_skips_already_existing_filament_fields():
                 {"key": "filamentdb_spool_id", "name": "x", "field_type": "text", "entity_type": "spool"},
             ])
         else:
-            # All filament fields already exist
+            # All filament fields already exist (including the new ignore field)
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
             resp.json = MagicMock(return_value=[
                 {"key": _s.spoolman_field_filamentdb_material_tags, "name": "x", "field_type": "text", "entity_type": "filament"},
                 {"key": _s.spoolman_field_openprinttag_slug, "name": "x", "field_type": "text", "entity_type": "filament"},
                 {"key": _s.spoolman_field_openprinttag_uuid, "name": "x", "field_type": "text", "entity_type": "filament"},
+                {"key": _s.spoolman_field_openprinttag_ignore, "name": "x", "field_type": "text", "entity_type": "filament"},
             ])
         return resp
 
@@ -5493,3 +5494,236 @@ def test_parse_color_keywords_config_ignores_blanks():
     assert "galaxy" in result
     assert "" not in result
     assert "foo" not in result
+
+
+# ---------------------------------------------------------------------------
+# Updates-available: has_update, ignored_updates, updates_count
+# ---------------------------------------------------------------------------
+
+
+def test_data_differs_detects_changed_non_identity_field():
+    """_data_differs returns True when a non-identity field has a different
+    normalized value between Spoolman and OpenTag."""
+    from app.api.opentag import _data_differs, OpenTagCandidate, OpenTagFieldRow
+
+    candidate = OpenTagCandidate(
+        opt_uuid="uuid-1",
+        opt_slug="slug-1",
+        opt_brand="TestBrand",
+        opt_name="Test PLA",
+        opt_color_hex=None,
+        confidence=0.9,
+        fields=[
+            OpenTagFieldRow(field="material", spoolman_value="PETG", opentag_value="PLA",
+                            suggested_value="PLA"),
+            OpenTagFieldRow(field="extra.openprinttag_uuid", spoolman_value="uuid-1",
+                            opentag_value="uuid-1", suggested_value="uuid-1"),
+        ],
+    )
+    assert _data_differs(candidate) is True
+
+
+def test_data_differs_false_when_only_identity_differs():
+    """_data_differs returns False when only identity fields (slug/uuid) differ."""
+    from app.api.opentag import _data_differs, OpenTagCandidate, OpenTagFieldRow
+
+    candidate = OpenTagCandidate(
+        opt_uuid="new-uuid",
+        opt_slug="new-slug",
+        opt_brand="TestBrand",
+        opt_name="Test PLA",
+        opt_color_hex=None,
+        confidence=1.0,
+        fields=[
+            OpenTagFieldRow(field="material", spoolman_value="PLA", opentag_value="PLA",
+                            suggested_value="PLA"),
+            OpenTagFieldRow(field="extra.openprinttag_uuid", spoolman_value="old-uuid",
+                            opentag_value="new-uuid", suggested_value="new-uuid"),
+        ],
+    )
+    assert _data_differs(candidate) is False
+
+
+def test_data_differs_false_when_no_fields():
+    """_data_differs returns False when the candidate has no fields (no-match row)."""
+    from app.api.opentag import _data_differs, OpenTagCandidate
+
+    candidate = OpenTagCandidate(
+        opt_uuid=None, opt_slug=None, opt_brand=None, opt_name=None,
+        opt_color_hex=None, confidence=0.0, fields=[],
+    )
+    assert _data_differs(candidate) is False
+
+
+@pytest.mark.asyncio
+async def test_matches_sets_has_update_for_drifted_tagged_filament(tmp_path):
+    """A filament already carrying openprinttag_uuid whose OPT data has drifted
+    should come back with has_update=True and be counted in updates_count."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import encode_extra_value
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+
+    # Build a SM filament that already has the UUID but with a different material
+    uuid_key = _ot_mod._settings.spoolman_field_openprinttag_uuid
+
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[
+        SpoolmanFilament(
+            id=1,
+            name="PLA Silk Bronze",
+            vendor=SpoolmanVendor(id=10, name="Buddy3D"),
+            material="PETG",  # DIFFERS from OPT's PLA
+            color_hex="B87333",
+            extra={uuid_key: encode_extra_value(_OPT_PLA_SILK["uuid"])},
+        )
+    ])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = AsyncMock()
+
+    try:
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+            client = TestClient(test_app)
+            resp = client.get("/api/openprinttag/matches")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["updates_count"] == 1
+            match = data["matches"][0]
+            assert match["has_update"] is True
+            assert match["ignored_updates"] is False
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_excludes_ignored_filament_from_updates_count(tmp_path):
+    """A filament with openprinttag_ignore='1' should have has_update=False and
+    should NOT be counted in updates_count."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import encode_extra_value
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+
+    uuid_key = _ot_mod._settings.spoolman_field_openprinttag_uuid
+    ignore_key = _ot_mod._settings.spoolman_field_openprinttag_ignore
+
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[
+        SpoolmanFilament(
+            id=1,
+            name="PLA Silk Bronze",
+            vendor=SpoolmanVendor(id=10, name="Buddy3D"),
+            material="PETG",  # differs from OPT — but this filament is ignored
+            color_hex="B87333",
+            extra={
+                uuid_key: encode_extra_value(_OPT_PLA_SILK["uuid"]),
+                ignore_key: encode_extra_value("1"),  # user has suppressed updates
+            },
+        )
+    ])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = AsyncMock()
+
+    try:
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+            client = TestClient(test_app)
+            resp = client.get("/api/openprinttag/matches")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["updates_count"] == 0, "Ignored filament must not be counted"
+            match = data["matches"][0]
+            assert match["has_update"] is False
+            assert match["ignored_updates"] is True
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_ignore_endpoint_sets_flag():
+    """POST /api/openprinttag/ignore/{id}?ignored=true writes openprinttag_ignore='1'
+    to the Spoolman filament."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import decode_extra_value
+
+    import app.api.opentag as _ot_mod
+
+    patched: list[tuple] = []
+
+    async def _capture_patch(fil_id, payload):
+        patched.append((fil_id, payload))
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_capture_patch)
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = AsyncMock()
+
+    client = TestClient(test_app)
+    resp = client.post("/api/openprinttag/ignore/42?ignored=true")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["spoolman_filament_id"] == 42
+    assert data["ignored_updates"] is True
+
+    # The PATCH should have set openprinttag_ignore to "1"
+    assert len(patched) == 1
+    _, payload = patched[0]
+    ignore_key = _ot_mod._settings.spoolman_field_openprinttag_ignore
+    assert "extra" in payload
+    assert ignore_key in payload["extra"]
+    assert decode_extra_value(payload["extra"][ignore_key]) == "1"
+
+
+@pytest.mark.asyncio
+async def test_ignore_endpoint_clears_flag():
+    """POST /api/openprinttag/ignore/{id}?ignored=false writes openprinttag_ignore=''
+    to the Spoolman filament."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import decode_extra_value
+
+    import app.api.opentag as _ot_mod
+
+    patched: list[tuple] = []
+
+    async def _capture_patch(fil_id, payload):
+        patched.append((fil_id, payload))
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_capture_patch)
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = AsyncMock()
+
+    client = TestClient(test_app)
+    resp = client.post("/api/openprinttag/ignore/7?ignored=false")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["ignored_updates"] is False
+
+    _, payload = patched[0]
+    ignore_key = _ot_mod._settings.spoolman_field_openprinttag_ignore
+    assert decode_extra_value(payload["extra"][ignore_key]) == ""

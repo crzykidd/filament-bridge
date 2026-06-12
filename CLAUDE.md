@@ -247,6 +247,7 @@ filament-bridge/
 | `OPENTAG_COLOR_KEYWORDS` | No | — | CSV of `keyword=base_color` pairs for color-name normalization in the OpenTag matcher (e.g. `galaxy=black,cool=grey,jet=black`). Merged on top of seed defaults from `core/opentag_match.py:DEFAULT_COLOR_KEYWORDS`; blank = seed defaults only. Overridable at runtime via Settings. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag material slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_IGNORE` | No | `openprinttag_ignore` | Spoolman filament extra field storing the "ignore future updates" flag (`"1"` = ignored, `""` = not ignored). Written by the Updates Review UI. |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | String appended (after a space) to generic-container parent names in the wizard. Empty string = no suffix. Overridable at runtime via Settings. |
 | `BRIDGE_CHANNEL` | No | `release` | Build channel baked in at image build time (Docker build arg `BUILD_CHANNEL`). When `dev`, the displayed version gets a `-dev` suffix (+ short commit). |

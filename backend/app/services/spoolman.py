@@ -260,6 +260,11 @@ class SpoolmanClient:
                 "name": "OpenPrintTag UUID",
                 "field_type": "text",
             },
+            {
+                "key": _settings.spoolman_field_openprinttag_ignore,
+                "name": "OpenPrintTag Ignore Updates",
+                "field_type": "text",
+            },
         ]
 
         for field_def in runtime_filament_fields:

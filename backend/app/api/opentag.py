@@ -109,11 +109,20 @@ class OpenTagFilamentMatch(BaseModel):
     multicolor_mismatch: bool = False
     # Human-readable reason why a no-match row has no match.  None on matched rows.
     no_match_reason: str | None = None
+    # True when the filament already has an openprinttag_uuid and at least one
+    # non-identity field differs (data drift).  Excludes filaments that the user
+    # has suppressed via the openprinttag_ignore extra field.
+    has_update: bool = False
+    # True when the user has set openprinttag_ignore="1" to suppress future update
+    # flagging for this filament.
+    ignored_updates: bool = False
 
 
 class OpenTagMatchesResponse(BaseModel):
     dataset: OpenTagDatasetMeta
     matches: list[OpenTagFilamentMatch]
+    # Count of already-tagged filaments with data drift (excluding ignored ones)
+    updates_count: int = 0
 
 
 # Apply request ---------------------------------------------------------------
@@ -154,6 +163,11 @@ class OpenTagApplyResponse(BaseModel):
     ignored: int
     errors: int
     results: list[OpenTagApplyFilamentResult]
+
+
+class OpenTagIgnoreResponse(BaseModel):
+    spoolman_filament_id: int
+    ignored_updates: bool
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +245,29 @@ def _build_field_rows(
             suggested_value=opt_value,
         ))
     return rows
+
+
+_IDENTITY_FIELDS = frozenset(["extra.openprinttag_slug", "extra.openprinttag_uuid"])
+
+
+def _normalize_field_value(v: Any) -> str:
+    """Normalize a field value for comparison (mirrors frontend normalizeFieldValue)."""
+    if v is None:
+        return ""
+    s = str(v).strip().lower()
+    if s in ("", "—"):
+        return ""
+    return s
+
+
+def _data_differs(candidate: OpenTagCandidate) -> bool:
+    """Return True when any non-identity field in this candidate has a different
+    normalized value between Spoolman and OpenTag."""
+    return any(
+        _normalize_field_value(row.spoolman_value) != _normalize_field_value(row.opentag_value)
+        for row in candidate.fields
+        if row.field not in _IDENTITY_FIELDS
+    )
 
 
 def _build_candidate(
@@ -504,19 +541,25 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     )
 
     uuid_field = _settings.spoolman_field_openprinttag_uuid
+    ignore_field = _settings.spoolman_field_openprinttag_ignore
 
     matched = 0
     no_match = 0
     matches: list[OpenTagFilamentMatch] = []
     for sm_fil in sm_filaments:
+        # Read per-filament flags from Spoolman extra fields.
+        existing_uuid = decode_extra_value(sm_fil.extra.get(uuid_field))
+        ignored_updates = bool(decode_extra_value(sm_fil.extra.get(ignore_field)))
+
         # Exact-UUID match: if the SM filament already carries an openprinttag_uuid that
         # maps to a known material, return that material at confidence 1.0 — skip fuzzy.
-        existing_uuid = decode_extra_value(sm_fil.extra.get(uuid_field))
         if existing_uuid and existing_uuid in by_uuid:
             best = by_uuid[existing_uuid]
             confidence = 1.0
             matched += 1
             best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+            differs = _data_differs(best_candidate)
+            has_update = differs and not ignored_updates
             matches.append(OpenTagFilamentMatch(
                 spoolman_filament_id=sm_fil.id,
                 spoolman_name=sm_fil.name,
@@ -532,6 +575,8 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 alternates=[],
                 candidates=[best_candidate],
                 multicolor_mismatch=best_candidate.multicolor_mismatch,
+                has_update=has_update,
+                ignored_updates=ignored_updates,
             ))
             continue
 
@@ -610,6 +655,7 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 candidates=[],
                 multicolor_mismatch=mismatch,
                 no_match_reason=no_match_reason,
+                ignored_updates=ignored_updates,
             ))
             continue
 
@@ -623,6 +669,11 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         structured_candidates: list[OpenTagCandidate] = [best_candidate]
         for alt_mat, alt_score in zip(alternates, alternate_scores):
             structured_candidates.append(_build_candidate(sm_fil, alt_mat, alt_score, tag_map))
+
+        # has_update: already tagged (has existing_uuid) and data has drifted,
+        # but the user has not suppressed this filament via openprinttag_ignore.
+        differs = _data_differs(best_candidate)
+        has_update = bool(existing_uuid) and differs and not ignored_updates
 
         matches.append(OpenTagFilamentMatch(
             spoolman_filament_id=sm_fil.id,
@@ -639,16 +690,19 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
             alternates=alternates,
             candidates=structured_candidates,
             multicolor_mismatch=best_candidate.multicolor_mismatch,
+            has_update=has_update,
+            ignored_updates=ignored_updates,
         ))
 
     logger.info("opentag matches: %d matched, %d no-match", matched, no_match)
 
+    updates_count = sum(1 for m in matches if m.has_update)
     dataset_meta = OpenTagDatasetMeta(
         fetched_at=dataset["fetched_at"],
         count=dataset["count"],
         stale=dataset["stale"],
     )
-    return OpenTagMatchesResponse(dataset=dataset_meta, matches=matches)
+    return OpenTagMatchesResponse(dataset=dataset_meta, matches=matches, updates_count=updates_count)
 
 
 @router.post("/openprinttag/apply", response_model=OpenTagApplyResponse)
@@ -816,3 +870,54 @@ async def opentag_apply(
         errors=errors,
         results=results,
     )
+
+
+@router.post("/openprinttag/ignore/{filament_id}", response_model=OpenTagIgnoreResponse)
+async def opentag_set_ignore(
+    filament_id: int,
+    request: Request,
+    ignored: bool = True,
+) -> OpenTagIgnoreResponse:
+    """Set or clear the openprinttag_ignore flag on a Spoolman filament.
+
+    When ignored=true (default), the filament is excluded from the "updates available"
+    count and banner.  Call with ignored=false to un-ignore.
+
+    The flag is stored as a Spoolman extra field (``openprinttag_ignore``) on the filament,
+    so it travels with the record and persists across bridge restarts and cache clears.
+    """
+    sm: Any = request.app.state.spoolman
+
+    # Ensure the extra field exists before writing.
+    try:
+        await sm.ensure_extra_fields()
+    except Exception as exc:
+        logger.warning("opentag ignore: ensure_extra_fields failed: %s", exc)
+
+    ignore_field = _settings.spoolman_field_openprinttag_ignore
+    # Spoolman text extras are JSON-quoted; "1" = ignored, "" = not ignored.
+    value = encode_extra_value("1") if ignored else encode_extra_value("")
+    try:
+        await sm.update_filament(filament_id, {"extra": {ignore_field: value}})
+        logger.info(
+            "opentag ignore: set %s=%r on SM filament %d",
+            ignore_field, ignored, filament_id,
+        )
+    except Exception as exc:
+        resp_body = ""
+        if hasattr(exc, "response") and exc.response is not None:
+            try:
+                resp_body = f" — response: {exc.response.text}"
+            except Exception:
+                pass
+        logger.error(
+            "opentag ignore: could not update SM filament %d: %s%s",
+            filament_id, exc, resp_body,
+        )
+        raise api_error(
+            502,
+            "opentag_ignore_failed",
+            f"Could not update Spoolman filament {filament_id}: {exc}",
+        ) from exc
+
+    return OpenTagIgnoreResponse(spoolman_filament_id=filament_id, ignored_updates=ignored)

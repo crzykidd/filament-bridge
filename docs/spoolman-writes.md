@@ -27,6 +27,7 @@ Created once at startup (`ensure_extra_fields()`). Key names are overridable via
 | `filamentdb_material_tags` | text | OpenPrintTag finish IDs as a CSV string (e.g. `17` for silk, `16,17`), JSON-quoted on the wire like all text extras |
 | `openprinttag_slug` | text | OpenPrintTag material slug (e.g. `buddy3d-pla-silk-bronze`) — written by the OpenTag cleanup tool Apply action |
 | `openprinttag_uuid` | text | OpenPrintTag material UUID — written by the OpenTag cleanup tool Apply action |
+| `openprinttag_ignore` | text | `"1"` when the user has suppressed future update alerts for this filament via the Updates Review view; empty string = not ignored |
 
 All extras are stored JSON-encoded (`encode_extra_value`). Everything below writes native
 Spoolman fields or these extras.

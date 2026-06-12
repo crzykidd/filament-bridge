@@ -11,6 +11,7 @@ import {
   getOpenTagMatches,
   getOpenTagStatus,
   postOpenTagApply,
+  postOpenTagIgnore,
   postOpenTagRefresh,
 } from '../api/client'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
@@ -678,6 +679,442 @@ function GroupSection({
 }
 
 // ---------------------------------------------------------------------------
+// Updates Review — focused view of already-tagged filaments with drifted data
+// ---------------------------------------------------------------------------
+
+interface UpdatesReviewProps {
+  matches: OpenTagFilamentMatch[]
+  onBack: () => void
+  onApplied: () => void
+}
+
+/** One row in the updates review table — shows changed fields for a filament. */
+function UpdatesReviewRow({
+  match,
+  checked,
+  onCheck,
+  onIgnore,
+  ignoringId,
+}: {
+  match: OpenTagFilamentMatch
+  checked: boolean
+  onCheck: (checked: boolean) => void
+  onIgnore: (ignored: boolean) => void
+  ignoringId: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const activeCandidate = match.candidates?.[0] ?? null
+  const displayFields = activeCandidate ? activeCandidate.fields : match.fields
+  // Only show fields that actually differ (non-identity)
+  const changedFields = displayFields.filter(
+    r => !IDENTITY_FIELDS.has(r.field) &&
+      normalizeFieldValue(r.spoolman_value) !== normalizeFieldValue(r.opentag_value),
+  )
+
+  return (
+    <div className={`border border-gray-200 dark:border-gray-700 rounded-lg mb-2 overflow-hidden ${match.ignored_updates ? 'opacity-50' : ''}`}>
+      <div className="flex items-center gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-900/40">
+        <input
+          type="checkbox"
+          className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-400"
+          checked={checked && !match.ignored_updates}
+          disabled={match.ignored_updates}
+          onChange={e => onCheck(e.target.checked)}
+        />
+        <ColorSwatch hex={match.spoolman_color_hex} />
+        <span className="font-medium text-sm text-gray-900 dark:text-gray-100 flex-1 min-w-0 truncate">
+          {match.spoolman_name}
+        </span>
+        {match.spoolman_vendor && (
+          <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">{match.spoolman_vendor}</span>
+        )}
+        {match.spoolman_material && (
+          <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs shrink-0">
+            {match.spoolman_material}
+          </span>
+        )}
+        <DeepLinks spoolmanFilamentId={match.spoolman_filament_id} />
+        <span className="text-xs text-amber-700 dark:text-amber-400 shrink-0 font-medium">
+          {changedFields.length} field{changedFields.length !== 1 ? 's' : ''} changed
+        </span>
+        <button
+          type="button"
+          className={`text-xs px-2 py-0.5 rounded border shrink-0 ${
+            match.ignored_updates
+              ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-200'
+              : 'bg-white dark:bg-gray-800 border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
+          } disabled:opacity-50 disabled:cursor-not-allowed`}
+          onClick={() => onIgnore(!match.ignored_updates)}
+          disabled={ignoringId}
+          title={match.ignored_updates ? 'Un-ignore future updates for this filament' : 'Ignore future updates for this filament'}
+        >
+          {ignoringId ? '…' : match.ignored_updates ? 'Un-ignore' : 'Ignore future updates'}
+        </button>
+        <button
+          type="button"
+          className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline shrink-0"
+          onClick={() => setExpanded(e => !e)}
+        >
+          {expanded ? 'Hide' : 'Show'} details
+        </button>
+      </div>
+      {expanded && changedFields.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs divide-y divide-gray-100 dark:divide-gray-700">
+            <thead>
+              <tr className="bg-gray-50 dark:bg-gray-900/40 text-gray-500 dark:text-gray-400 uppercase">
+                <th className="px-3 py-1 text-left">Field</th>
+                <th className="px-3 py-1 text-left">Current (Spoolman)</th>
+                <th className="px-3 py-1 text-left">Updated (OpenTag)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {changedFields.map(row => {
+                const isColor = row.field === 'color_hex' || row.field === 'multi_color_hexes'
+                return (
+                  <tr key={row.field} className="hover:bg-gray-50 dark:hover:bg-gray-700/40">
+                    <td className="px-3 py-1.5 font-mono text-gray-500 dark:text-gray-400">{row.field}</td>
+                    <td className="px-3 py-1.5 text-gray-600 dark:text-gray-300">
+                      {isColor && <ColorSwatch hex={renderValue(row.spoolman_value)} />}
+                      {renderValue(row.spoolman_value)}
+                    </td>
+                    <td className="px-3 py-1.5 text-indigo-700 dark:text-indigo-400 font-medium">
+                      {isColor && <ColorSwatch hex={renderValue(row.opentag_value)} />}
+                      {renderValue(row.opentag_value)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps) {
+  // The matches prop is already filtered to has_update===true (or ignored_updates===true shown separately)
+  // We show non-ignored ones by default; ignored ones appear in a collapsible section.
+  const activeMatches = matches.filter(m => !m.ignored_updates)
+  const ignoredMatches = matches.filter(m => m.ignored_updates)
+
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(
+    () => new Set(activeMatches.map(m => m.spoolman_filament_id)),
+  )
+  const [applying, setApplying] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const [applyResult, setApplyResult] = useState<{ applied: number; errors: number } | null>(null)
+  // Track which filament IDs are currently being ignored (pending API call)
+  const [ignoringIds, setIgnoringIds] = useState<Set<number>>(new Set())
+  // Track local ignore state so UI updates immediately without re-fetching
+  const [localIgnoredIds, setLocalIgnoredIds] = useState<Set<number>>(
+    () => new Set(ignoredMatches.map(m => m.spoolman_filament_id)),
+  )
+  const [showIgnored, setShowIgnored] = useState(false)
+
+  // Search + sort
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState<SortBy>('brand')
+  const [groupBy, setGroupBy] = useState<GroupBy>('brand')
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
+
+  // Effective list: merge localIgnoredIds with the match data
+  const effectiveMatches = useMemo(
+    () => matches.map(m => ({
+      ...m,
+      ignored_updates: localIgnoredIds.has(m.spoolman_filament_id),
+    })),
+    [matches, localIgnoredIds],
+  )
+  const displayMatches = useMemo(() => {
+    let list = effectiveMatches.filter(m => !m.ignored_updates)
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      list = list.filter(m =>
+        (m.spoolman_name ?? '').toLowerCase().includes(q) ||
+        (m.spoolman_vendor ?? '').toLowerCase().includes(q),
+      )
+    }
+    return sortMatches(list, sortBy)
+  }, [effectiveMatches, search, sortBy])
+
+  const displayIgnored = useMemo(
+    () => effectiveMatches.filter(m => m.ignored_updates),
+    [effectiveMatches],
+  )
+
+  // Groups
+  const displayGroups = useMemo<MatchGroup[]>(() => {
+    if (groupBy === 'none') return [{ key: '', matches: displayMatches }]
+    const order: string[] = []
+    const map = new Map<string, OpenTagFilamentMatch[]>()
+    for (const m of displayMatches) {
+      const k = groupKey(m, groupBy)
+      if (!map.has(k)) { order.push(k); map.set(k, []) }
+      map.get(k)!.push(m)
+    }
+    order.sort((a, b) => {
+      const aU = a.startsWith('Unknown'); const bU = b.startsWith('Unknown')
+      if (aU && !bU) return 1; if (!aU && bU) return -1
+      return a.toLowerCase() < b.toLowerCase() ? -1 : 1
+    })
+    return order.map(k => ({ key: k, matches: map.get(k)! }))
+  }, [displayMatches, groupBy])
+
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups(prev => ({ ...prev, [key]: !(prev[key] ?? false) }))
+
+  const allSelectedInView = displayMatches.length > 0 &&
+    displayMatches.every(m => selectedIds.has(m.spoolman_filament_id))
+
+  const toggleSelectAll = () => {
+    if (allSelectedInView) {
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        for (const m of displayMatches) next.delete(m.spoolman_filament_id)
+        return next
+      })
+    } else {
+      setSelectedIds(prev => {
+        const next = new Set(prev)
+        for (const m of displayMatches) next.add(m.spoolman_filament_id)
+        return next
+      })
+    }
+  }
+
+  const handleIgnore = async (smId: number, ignore: boolean) => {
+    setIgnoringIds(prev => new Set(prev).add(smId))
+    try {
+      await postOpenTagIgnore(smId, ignore)
+      setLocalIgnoredIds(prev => {
+        const next = new Set(prev)
+        if (ignore) { next.add(smId); setSelectedIds(s => { const ns = new Set(s); ns.delete(smId); return ns }) }
+        else next.delete(smId)
+        return next
+      })
+    } catch {
+      // Silently fail — user sees no change (the flag didn't stick)
+    } finally {
+      setIgnoringIds(prev => { const next = new Set(prev); next.delete(smId); return next })
+    }
+  }
+
+  const handleApply = async () => {
+    setApplying(true)
+    setApplyError(null)
+    try {
+      const selectedMatches = displayMatches.filter(m => selectedIds.has(m.spoolman_filament_id))
+      const decisions = selectedMatches.map(m => {
+        const candidateIdx = 0 // always use best candidate in updates review
+        const activeCandidate = m.candidates?.[candidateIdx] ?? null
+        const activeFields = activeCandidate ? activeCandidate.fields : m.fields
+        const fields = activeFields.map(row => ({
+          field: row.field,
+          value: row.opentag_value,
+          keep_mine: false,
+        }))
+        const slug = activeCandidate?.opt_slug ?? m.opt_slug ?? undefined
+        const uuid = activeCandidate?.opt_uuid ?? m.opt_uuid ?? undefined
+        return {
+          spoolman_filament_id: m.spoolman_filament_id,
+          ignored: false,
+          fields,
+          openprinttag_slug: slug ?? null,
+          openprinttag_uuid: uuid ?? null,
+        }
+      })
+      const req: OpenTagApplyRequest = { decisions }
+      const result = await postOpenTagApply(req)
+      setApplyResult({ applied: result.applied, errors: result.errors })
+      onApplied()
+    } catch (e: unknown) {
+      setApplyError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  if (applyResult) {
+    return (
+      <div className="px-6 py-8 text-center">
+        <div className="text-4xl mb-4">{applyResult.errors === 0 ? '✓' : '⚠'}</div>
+        <h2 className="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">
+          {applyResult.errors === 0 ? 'Updates applied!' : 'Completed with errors'}
+        </h2>
+        <p className="text-gray-600 dark:text-gray-400 mb-6">
+          Applied {applyResult.applied} filament updates.
+          {applyResult.errors > 0 && ` ${applyResult.errors} errors — check the sync log.`}
+        </p>
+        <button
+          type="button"
+          className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
+          onClick={onBack}
+        >
+          Back to main view
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-4">
+        <button
+          type="button"
+          className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+          onClick={onBack}
+        >
+          ← Back
+        </button>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          Review OpenTag updates
+        </h2>
+        <span className="text-sm text-gray-500 dark:text-gray-400">
+          {displayMatches.length} filament{displayMatches.length !== 1 ? 's' : ''} with updated values
+        </span>
+      </div>
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        These filaments are already tagged with an OpenPrintTag UUID but their Spoolman
+        data differs from the latest OpenTag dataset. Select the ones you want to update
+        and click <strong>Apply selected</strong>.
+      </p>
+
+      {applyError && (
+        <div className="mb-4 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-400">
+          <strong>Error:</strong> {applyError}
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-3 mb-3 px-3 py-2 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+        <input
+          type="search"
+          className="text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 w-48 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          placeholder="Search filaments…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Group:</span>
+          {(['none', 'brand', 'material'] as GroupBy[]).map(g => (
+            <button key={g} type="button"
+              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                groupBy === g
+                  ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+                  : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
+              }`}
+              onClick={() => setGroupBy(g)}
+            >
+              {g === 'none' ? 'None' : groupLabel(g)}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Sort:</span>
+          {(['brand', 'name'] as SortBy[]).map(s => (
+            <button key={s} type="button"
+              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                sortBy === s
+                  ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+                  : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600'
+              }`}
+              onClick={() => setSortBy(s)}
+            >
+              {s === 'brand' ? 'Brand' : 'Name'}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex items-center gap-3">
+          <button type="button"
+            className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600 disabled:opacity-40"
+            onClick={toggleSelectAll}
+            disabled={displayMatches.length === 0}
+          >
+            {allSelectedInView ? 'Deselect all' : 'Select all'}
+          </button>
+          <span className="text-sm text-gray-600 dark:text-gray-300">
+            {selectedIds.size} of {displayMatches.length} selected
+          </span>
+          <button
+            type="button"
+            className="px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={handleApply}
+            disabled={applying || selectedIds.size === 0}
+          >
+            {applying ? 'Applying…' : `Apply ${selectedIds.size} selected`}
+          </button>
+        </div>
+      </div>
+
+      {displayMatches.length === 0 && displayIgnored.length === 0 && (
+        <p className="text-gray-500 dark:text-gray-400 italic text-sm py-4">
+          No filaments with pending updates.
+          {search && ' Try clearing the search filter.'}
+        </p>
+      )}
+
+      {/* Groups */}
+      {displayGroups.map(group => (
+        <div key={group.key || '__flat__'} className="mb-4">
+          {groupBy !== 'none' && (
+            <div
+              className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-md mb-2 select-none cursor-pointer"
+              onClick={() => toggleGroup(group.key)}
+            >
+              <span className="text-gray-400 dark:text-gray-500 text-xs w-3">
+                {collapsedGroups[group.key] ? '▸' : '▾'}
+              </span>
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">{group.key || 'Unknown'}</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">({group.matches.length})</span>
+            </div>
+          )}
+          {!collapsedGroups[group.key] && group.matches.map(m => (
+            <UpdatesReviewRow
+              key={m.spoolman_filament_id}
+              match={m}
+              checked={selectedIds.has(m.spoolman_filament_id)}
+              onCheck={checked => setSelectedIds(prev => {
+                const next = new Set(prev)
+                if (checked) next.add(m.spoolman_filament_id)
+                else next.delete(m.spoolman_filament_id)
+                return next
+              })}
+              onIgnore={ignore => void handleIgnore(m.spoolman_filament_id, ignore)}
+              ignoringId={ignoringIds.has(m.spoolman_filament_id)}
+            />
+          ))}
+        </div>
+      ))}
+
+      {/* Ignored filaments section */}
+      {displayIgnored.length > 0 && (
+        <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+          <button
+            type="button"
+            className="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 mb-2"
+            onClick={() => setShowIgnored(v => !v)}
+          >
+            {showIgnored ? '▾' : '▸'} {displayIgnored.length} filament{displayIgnored.length !== 1 ? 's' : ''} with ignored updates
+          </button>
+          {showIgnored && displayIgnored.map(m => (
+            <UpdatesReviewRow
+              key={m.spoolman_filament_id}
+              match={m}
+              checked={false}
+              onCheck={() => {}}
+              onIgnore={ignore => void handleIgnore(m.spoolman_filament_id, ignore)}
+              ignoringId={ignoringIds.has(m.spoolman_filament_id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -686,6 +1123,9 @@ type Step = 'review' | 'confirm' | 'done'
 export default function OpenTagCleanup() {
   // Cache status — loaded instantly on mount, no fetch
   const [cacheStatus, setCacheStatus] = useState<OpenTagCacheStatus | null>(null)
+
+  // View mode: 'all' = main review flow, 'updates-review' = focused updates view
+  const [viewMode, setViewMode] = useState<'all' | 'updates-review'>('all')
 
   // Group / sort state
   const [groupBy, setGroupBy] = useState<GroupBy>('brand')
@@ -887,6 +1327,16 @@ export default function OpenTagCleanup() {
 
   const matches = response?.matches ?? []
 
+  // Count of already-tagged filaments with drifted data (from backend, or computed locally)
+  const updatesCount = response?.updates_count ?? matches.filter(m => m.has_update).length
+
+  // Matches that should appear in the Updates Review view (has_update OR ignored_updates,
+  // so the user can see/manage their ignores from that view too)
+  const updateMatches = useMemo(
+    () => matches.filter(m => m.has_update || m.ignored_updates),
+    [matches],
+  )
+
   // Apply filter toggles before the withMatch/noMatch split so groups, no-match
   // details, and count summaries all reflect the active filters.
   const filteredMatches = useMemo(() => {
@@ -994,6 +1444,28 @@ export default function OpenTagCleanup() {
         </div>
       </div>
 
+      {/* Updates available banner — shown once matches are loaded */}
+      {!working && response && updatesCount > 0 && step === 'review' && viewMode === 'all' && (
+        <div className="mb-4 flex items-center gap-4 px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0">
+            <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
+          </svg>
+          <span className="text-sm text-amber-800 dark:text-amber-300 font-medium">
+            {updatesCount} filament{updatesCount !== 1 ? 's have' : ' has'} updated OpenPrintTag values
+          </span>
+          <span className="text-xs text-amber-700 dark:text-amber-400">
+            Already-tagged filaments with data drift in the latest dataset.
+          </span>
+          <button
+            type="button"
+            className="ml-auto px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700 font-medium"
+            onClick={() => setViewMode('updates-review')}
+          >
+            Review updates
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="mb-4 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-400">
           <strong>Error:</strong> {error}
@@ -1010,7 +1482,16 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {!working && step === 'review' && response && (
+      {/* Updates Review focused view */}
+      {!working && viewMode === 'updates-review' && response && (
+        <UpdatesReviewSection
+          matches={updateMatches}
+          onBack={() => setViewMode('all')}
+          onApplied={() => { setViewMode('all'); void runLoad(true) }}
+        />
+      )}
+
+      {!working && viewMode === 'all' && step === 'review' && response && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-600 dark:text-gray-300">
@@ -1199,7 +1680,7 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {!working && step === 'confirm' && response && (
+      {!working && viewMode === 'all' && step === 'confirm' && response && (
         <ConfirmStep
           matches={matches}
           fieldDecisions={fieldDecisions}
@@ -1211,7 +1692,7 @@ export default function OpenTagCleanup() {
         />
       )}
 
-      {step === 'done' && applyResult && (
+      {viewMode === 'all' && step === 'done' && applyResult && (
         <div className="px-6 py-8 text-center">
           <div className="text-4xl mb-4">{applyResult.errors === 0 ? '✓' : '⚠'}</div>
           <h2 className="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">

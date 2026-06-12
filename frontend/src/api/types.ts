@@ -715,11 +715,23 @@ export interface OpenTagFilamentMatch {
   ignored?: boolean
   multicolor_mismatch?: boolean
   no_match_reason?: string | null
+  /** True when the filament is already tagged (has openprinttag_uuid) and the
+   *  dataset values differ — and the user has not suppressed this via ignore. */
+  has_update?: boolean
+  /** True when the user has suppressed future update alerts for this filament. */
+  ignored_updates?: boolean
 }
 
 export interface OpenTagMatchesResponse {
   dataset: OpenTagDatasetMeta
   matches: OpenTagFilamentMatch[]
+  /** Count of already-tagged filaments with data drift (excluding ignored ones). */
+  updates_count: number
+}
+
+export interface OpenTagIgnoreResponse {
+  spoolman_filament_id: number
+  ignored_updates: boolean
 }
 
 export interface OpenTagFieldDecision {
