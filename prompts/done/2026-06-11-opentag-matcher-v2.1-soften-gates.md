@@ -1,10 +1,16 @@
 ---
 name: 2026-06-11-opentag-matcher-v2.1-soften-gates
-status: pending          # pending | completed | failed
+status: completed
 created: 2026-06-11
-model: opus              # matcher scoring/gate logic — PLAN first, then implement
-completed:
-result:
+model: sonnet
+completed: 2026-06-11
+result: >
+  Implemented. PLA_BIOPOLYMER_BUCKET + families_gate_compatible (family gate), 
+  color_profile_compatible_soft + opt_color_arity (color-profile gate), 
+  COMPOSITE_DESCRIPTOR_SEED + *fill fallback (descriptor capture). LEXICON_VERSION 
+  bumped to 3. All 25 golden tests pass (incl. purple-to-red #1, woodfill #1, 
+  ASA-vs-PETG regression, full truth table). 794 backend tests pass; 72 frontend 
+  tests pass; ruff clean.
 ---
 
 # Task: OpenTag matcher v2.1 — soften hard metadata gates + capture distinctive descriptors

@@ -105,9 +105,9 @@ def build_ngram_index(lexicon: dict[str, list[str]] | None) -> dict[int, set[str
     When ``lexicon`` is None, falls back to ``MODIFIER_SEED`` + ``BASE_COLORS``
     from ``opentag_lexicon``.
     """
-    from app.core.opentag_lexicon import BASE_COLORS, MODIFIER_SEED
+    from app.core.opentag_lexicon import BASE_COLORS, COMPOSITE_DESCRIPTOR_SEED, MODIFIER_SEED
     if lexicon is None:
-        modifier_list: list[str] = list(MODIFIER_SEED)
+        modifier_list: list[str] = list(MODIFIER_SEED | COMPOSITE_DESCRIPTOR_SEED)
         color_list: list[str] = list(BASE_COLORS)
     else:
         modifier_list = lexicon.get("modifiers", [])
@@ -253,6 +253,11 @@ def decompose_name(
             if canonical:  # skip empty-mapped tokens (e.g. "prusa" → "")
                 cols[canonical] += 1
         elif tok in modifier_unigrams:
+            mods.add(tok)
+        elif len(tok) >= 6 and tok.endswith("fill"):
+            # Catch novel *fill composite-descriptor tokens not yet in the lexicon
+            # (e.g. "rockfill", "glassfill") — treat as a modifier so they score
+            # against OPT entries that carry the same token.
             mods.add(tok)
         # else: discard — generic noise not in lexicon
 
@@ -665,6 +670,150 @@ def material_family(material: str | None, tag_map: dict[str, int] | None = None)
 
     # Unknown material → return as-is (normalised), so the gate is a no-op.
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# Polymer-family gate helpers (v2.1)
+# ---------------------------------------------------------------------------
+
+#: PLA-biopolymer compatibility bucket (user-confirmed 2026-06-11).
+#:
+#: These polymer families are gate-compatible with each other because:
+#: - PHA is a biopolymer that is often blended with PLA (e.g. ColorFabb composites
+#:   labelled "PHA" or "PLA/PHA" by the brand are physically the same family).
+#: - LW-PLA, HTPLA, rPLA are all PLA variants/grades.
+#: - The OpenPrintTag dataset inconsistently types some PLA composites as PHA.
+#:
+#: Everything else (ABS, ASA, PETG, PC, PA/nylon, TPU, etc.) stays strictly
+#: separate — the bucket only relaxes within the PLA biopolymer family.
+#:
+#: Bucket strings are exactly what ``material_family()`` emits for these inputs:
+#:   "PHA"     → "pha"     (unknown → stripped, returned as-is)
+#:   "LW-PLA"  → "lw-pla" (unknown → stripped, returned as-is)
+#:   "HTPLA"   → "htpla"  (unknown → stripped, returned as-is; also in STOP_WORDS
+#:               for the lexicon, but that does NOT affect material_family)
+#:   "rPLA"    → "rpla"   (unknown → stripped, returned as-is)
+#:   "PLA/PHA" → "pla"    (prefix "pla" matches before separator "/" is checked)
+#:   "PLA"     → "pla"
+PLA_BIOPOLYMER_BUCKET: frozenset[str] = frozenset({"pla", "pha", "pla/pha", "lw-pla", "htpla", "rpla"})
+
+
+def families_gate_compatible(sm_fam: str, opt_fam: str) -> bool:
+    """Return True when the SM and OPT polymer families are gate-compatible.
+
+    Rules (v2.1):
+    - If ``opt_fam`` is empty/unknown → always compatible (don't gate on missing data).
+    - If they are equal → compatible.
+    - If both are in ``PLA_BIOPOLYMER_BUCKET`` → compatible (PLA/PHA/LW-PLA/HTPLA/rPLA
+      are mutually compatible due to dataset inconsistency + actual material overlap).
+    - Otherwise → NOT compatible (ASA≠PETG, PC≠PETG, ASA≠ABS, etc.).
+
+    Parameters
+    ----------
+    sm_fam:
+        Polymer family of the Spoolman filament (from ``material_family()``).
+    opt_fam:
+        Polymer family of the OPT candidate (from ``material_family()``).
+    """
+    if not opt_fam or opt_fam == sm_fam:
+        return True
+    return sm_fam in PLA_BIOPOLYMER_BUCKET and opt_fam in PLA_BIOPOLYMER_BUCKET
+
+
+# ---------------------------------------------------------------------------
+# Color-profile gate helpers (v2.1)
+# ---------------------------------------------------------------------------
+
+
+def opt_color_arity(
+    opt: dict[str, Any],
+    tag_map: dict[str, int] | None = None,
+    ngram_index: dict[int, set[str]] | None = None,
+    color_synonyms: dict[str, str] | None = None,
+) -> int:
+    """Return the effective color count for an OPT material.
+
+    Takes the maximum of:
+    - Hex color count: ``(1 if color else 0) + len(non-empty secondaryColors)``
+    - Name-decomposed color count: sum of the colors Counter from ``decompose_name``
+
+    Using the max means an entry with incomplete hex data but a descriptive multi-color
+    name (e.g. "Temperature Color Change Purple to Red") still registers as multicolor.
+    """
+    hex_count = (1 if opt.get("color") else 0) + sum(
+        1 for s in (opt.get("secondaryColors") or []) if s
+    )
+    opt_type_raw = opt.get("type") or opt.get("abbreviation") or ""
+    opt_parsed = decompose_name(
+        opt.get("name"), opt.get("brandName"), opt_type_raw,
+        tag_map=tag_map,
+        ngram_index=ngram_index,
+        color_synonyms=color_synonyms,
+    )
+    name_color_count = sum(opt_parsed.colors.values())
+    return max(hex_count, name_color_count)
+
+
+def color_profile_compatible_soft(
+    sm_profile: str,
+    sm_arity: int,
+    opt: dict[str, Any],
+    tag_map: dict[str, int] | None = None,
+    ngram_index: dict[int, set[str]] | None = None,
+    color_synonyms: dict[str, str] | None = None,
+) -> bool:
+    """Return True when the SM color profile is compatible with an OPT candidate.
+
+    v2.1 name-aware + soft variant of the v2 ``profiles_compatible`` gate:
+
+    - When BOTH sides have a real arrangement tag (coextruded / gradient) AND the OPT
+      entry has complete hex data (hex_count >= 2) → use the strict ``profiles_compatible``
+      check.  Don't relax legit single-vs-multi where data is complete.
+
+    - Otherwise (incomplete/absent arrangement or hex data) → keep the candidate when:
+        - SM is single-color (sm_arity <= 1): keep OPT entries that are also single
+          (opt_arity <= 1).
+        - SM is multicolor (sm_arity >= 2): keep OPT entries that are also multicolor
+          (opt_arity >= 2).
+
+    This ensures "Temperature Color Change Purple to Red" (OPT: color=None,
+    secondaryColors=[], but name has 2 color tokens) reaches scoring for a multicolor
+    SM filament instead of being gate-dropped as "single".
+
+    Parameters
+    ----------
+    sm_profile:
+        ``sm_color_profile(sm_fil)`` — ``"single"``, ``"coextruded"``,
+        ``"gradient"``, or ``"multi_unknown"``.
+    sm_arity:
+        Effective color count for the SM side:
+        ``max(name_color_count, 1 + len(multi_color_hexes.split(","))`` if present, else 0).
+    opt:
+        OPT candidate dict.
+    tag_map, ngram_index, color_synonyms:
+        Forwarded to ``opt_color_arity`` / ``decompose_name``.
+    """
+    opt_profile = opt_color_profile(opt, tag_map)
+
+    # Determine whether the OPT entry has complete arrangement + hex data.
+    hex_count = (1 if opt.get("color") else 0) + sum(
+        1 for s in (opt.get("secondaryColors") or []) if s
+    )
+    opt_has_arrangement = opt_profile in (_PROFILE_COEXTRUDED, _PROFILE_GRADIENT)
+    sm_has_arrangement = sm_profile in (_PROFILE_COEXTRUDED, _PROFILE_GRADIENT)
+
+    # Strict path: both sides have explicit arrangement tags AND OPT hex data is complete.
+    if sm_has_arrangement and opt_has_arrangement and hex_count >= 2:
+        return profiles_compatible(sm_profile, opt_profile)
+
+    # Soft path: use effective arity (hex + name) for compatibility.
+    arity = opt_color_arity(opt, tag_map, ngram_index, color_synonyms)
+    if sm_arity >= 2:
+        # SM is multicolor → keep OPT candidates that are also multicolor (arity >= 2).
+        return arity >= 2
+    else:
+        # SM is single-color → keep OPT candidates that are single-color (arity <= 1).
+        return arity <= 1
 
 
 # ---------------------------------------------------------------------------

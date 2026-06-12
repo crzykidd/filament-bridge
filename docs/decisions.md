@@ -1,5 +1,70 @@
 # Decision record
 
+## 2026-06-11 — OpenTag matcher v2.1: soften hard gates + capture fill-composite descriptors
+
+**Why.** v2's name-driven scoring was correct, but two pre-v2 hard gates still ran
+*before* scoring and discarded name-perfect matches:
+
+1. **Color-profile gate** (`profiles_compatible`) classified "Temperature Color Change
+   Purple to Red" as `single` because `secondaryColors` had only one entry and no
+   arrangement tag. The SM filament was multicolor, so `profiles_compatible("multi_unknown",
+   "single")` returned `False` and the entry was dropped before scoring. The gate trusted
+   incomplete OPT hex data over the name.
+
+2. **Polymer-family gate** excluded PHA-typed OPT entries for PLA SM filaments. ColorFabb
+   composites (woodfill, copperfill, bronzefill, …) are inconsistently typed as `PHA` in
+   OpenPrintTag even though the physical product is a PLA/PHA blend. The gate was correct
+   in principle but the dataset was inconsistent.
+
+3. **No descriptor for *fill composites.** `decompose_name("PLA Woodfill")` produced no
+   modifiers — "woodfill" was residual noise. Woodfill and steelfill were indistinguishable
+   by the scorer; steelfill (PLA-typed) won on family gate alone.
+
+**Decisions (locked 2026-06-11 — confirmed in plan before implementation).**
+
+- **PLA-biopolymer bucket (user-confirmed):**
+  `PLA_BIOPOLYMER_BUCKET = {"pla","pha","pla/pha","lw-pla","htpla","rpla"}`.
+  All pairs inside the bucket are gate-compatible via `families_gate_compatible()`.
+  All other families remain strictly separate (ABS, ASA, PETG, PC, PA/nylon, TPU, etc.).
+  Do NOT collapse LW-PLA/HTPLA/rPLA inside `material_family` — equivalence lives only in
+  the gate, so the 0.15 material score still rewards exact-family matches.
+
+- **Gates stay GATES (not penalties).** Widening the family gate by the bucket and making
+  the color-profile gate name-aware keeps the candidate-set bounding and the
+  `multicolor_mismatch` UX without requiring score re-weighting.
+
+- **Color-profile gate → `color_profile_compatible_soft`** (v2.1):
+  - Strict path when BOTH sides have explicit arrangement tags AND OPT hex data is complete
+    (`hex_count >= 2`): keep `profiles_compatible` semantics.
+  - Soft path otherwise: use `opt_color_arity = max(hex_count, name_color_count)` to
+    determine OPT arity. For a multicolor SM side (arity >= 2), keep OPT candidates whose
+    arity is also >= 2. "Purple to Red" (name → 2 colors → arity 2) now reaches scoring.
+
+- **`ngram_index` / `effective_synonyms` built once** in `opentag_matches` and passed to
+  both the gate (`color_profile_compatible_soft`) and `find_best_match`. Avoids O(candidates)
+  redundant rebuilds.
+
+- **`COMPOSITE_DESCRIPTOR_SEED` unioned unconditionally into the modifier lexicon:**
+  woodfill, steelfill, stonefill, copperfill, bronzefill, corkfill, glowfill, metalfill,
+  marblefill, brassfill, bamboofill, granitfill. Plus a `len>=6 and endswith("fill")`
+  fallback in `decompose_name`'s unigram branch for novel tokens not in the seed.
+  Rides the existing modifier Jaccard component (weight 0.15) — no score re-weight.
+  Effect: "PLA Woodfill" → modifier `{"woodfill"}`; woodfill OPT → `{"woodfill"}` →
+  Jaccard 1.0 vs steelfill → Jaccard 0.0.
+
+- **No score re-weight.** Weight vector unchanged:
+  `material×0.15 + brand×0.15 + color-multiset×0.40 + modifier-jaccard×0.15 + finish±0.10
+  + hex×0.05 + string≤0.05`.
+  AMOLEN "Silk Shiny Gradient Silver & Shiny Blue" #1 confirmed (regression preserved).
+
+- **`LEXICON_VERSION` bumped 2 → 3** (COMPOSITE_DESCRIPTOR_SEED changes mined output →
+  warm caches self-heal by re-mining from cached materials without network fetch).
+
+**Proof.** Golden test `test_cc3d_temp_change_purple_red_ranks_first`: purple-to-red #1,
+green-to-yellow strictly below. `test_colorfabb_woodfill_ranks_first`: woodfill #1 over
+steelfill and copperfill. `test_petg_candidate_gate_dropped_for_asa_filament`: ASA vs PETG
+separation preserved. Full truth table in `test_families_gate_compatible_truth_table`.
+
 ## 2026-06-11 — OpenTag matcher v2: structured token decomposition + mined lexicons
 
 **Why.** The v1 scorer collapsed color names to a single base color via

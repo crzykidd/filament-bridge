@@ -1,4 +1,4 @@
-# OpenTag matcher internals (v2)
+# OpenTag matcher internals (v2.1)
 
 This document describes the scoring algorithm used by the OpenTag Cleanup tool to
 match Spoolman filaments against the OpenPrintTag dataset. It is intended for users
@@ -27,6 +27,7 @@ At dataset load time the bridge mines the full OpenPrintTag dataset
 - **Modifiers** — product-line and texture words found across many brands:
   `silk`, `matte`, `glossy`, `gradient`, `dual`, `shiny`, `rapid`, `twin`,
   `marble`, `wood`, …
+  Also includes `COMPOSITE_DESCRIPTOR_SEED` tokens unconditionally (see below).
 - **Colors** — color name tokens found across many materials plus an
   explicit seed (`BASE_COLORS`): `red`, `blue`, `green`, `silver`, `gold`,
   `turquoise`, `fuchsia`, `emerald`, `graphite`, `rosa`, `midnight`, …
@@ -56,6 +57,24 @@ Some real color names appear in too few brands to reach the color mining thresho
 seed and are **always** classified as colors — never as modifiers. The seed is
 subtracted from the mined modifier set on every rebuild.
 
+### Fill-composite descriptors (v2.1)
+
+OpenPrintTag has many "fill" composite materials (woodfill, steelfill, copperfill,
+bronzefill, …) that are distinctive product-line identifiers but do not appear in
+enough brands to be promoted by the frequency-based miner alone. A hand-curated
+`COMPOSITE_DESCRIPTOR_SEED` is **unconditionally** unioned into the modifier lexicon
+so these tokens always score correctly:
+
+> `woodfill`, `steelfill`, `stonefill`, `copperfill`, `bronzefill`, `corkfill`,
+> `glowfill`, `metalfill`, `marblefill`, `brassfill`, `bamboofill`, `granitfill`
+
+Additionally, `decompose_name` has a `len >= 6 and endswith("fill")` fallback that
+captures novel tokens not yet in the seed (e.g. "rockfill", "glassfill").
+
+**Effect.** "PLA Woodfill" decomposes to `modifiers={"woodfill"}`. The `colorfabb-woodfill`
+OPT entry also decomposes to `modifiers={"woodfill"}` → modifier Jaccard = 1.0 (+0.15).
+`colorfabb-steelfill` → `modifiers={"steelfill"}` → Jaccard = 0.0. Woodfill ranks #1.
+
 ### Cache persistence
 
 The mined lexicons are saved alongside the materials in `DATA_DIR/opentag_cache.json`
@@ -64,6 +83,8 @@ reads from the cache file without any network call. If `lexicon_version` in the 
 does not match the current `LEXICON_VERSION` constant in `opentag_lexicon.py` (e.g.
 after a bridge upgrade with a scoring change), the lexicons are re-mined in-process
 from the cached materials — again without any network call — and the file is updated.
+
+The current version is **`LEXICON_VERSION = 3`** (v2.1: COMPOSITE_DESCRIPTOR_SEED added).
 
 ## Decomposition (`decompose_name`)
 
@@ -187,6 +208,46 @@ Marketing names (`galaxy`, `cool`, `jet`, `ocean`, …) return `""` (unmapped) a
 are therefore excluded from the color bag. The `opentag_color_keywords` env var /
 runtime setting feeds **additional synonyms** into this map — it no longer serves
 as a primary color-recognition mechanism.
+
+## Pre-filter gates (v2.1)
+
+Before scoring, two gates narrow the candidate list to compatible entries. Both gates
+run after the brand pre-filter (which already bounds candidates to one brand's materials).
+
+### Polymer-family gate (`families_gate_compatible`)
+
+Keeps candidates whose polymer family is gate-compatible with the SM filament's family.
+An empty/unknown OPT family always passes (don't gate on missing data).
+
+**PLA-biopolymer bucket** — the following families are mutually compatible:
+
+> `pla`, `pha`, `pla/pha`, `lw-pla`, `htpla`, `rpla`
+
+This bucket exists because ColorFabb and similar brands sell PLA/PHA blends but
+OpenPrintTag inconsistently types them as `PHA`. Without the bucket, `colorfabb-woodfill`
+(type=PHA) would be gate-dropped for a Spoolman "PLA Woodfill" filament.
+
+All other families stay strictly separate: ASA ≠ PETG, PC ≠ PETG, ABS ≠ ASA, etc.
+
+### Color-profile gate (`color_profile_compatible_soft`)
+
+Keeps candidates whose color arrangement is compatible with the SM filament's profile.
+
+**Strict path** — when BOTH sides carry explicit arrangement tags (coextruded/gradient)
+AND the OPT entry has complete hex data (`hex_count >= 2`): applies `profiles_compatible`
+logic unchanged (don't relax where data is complete).
+
+**Soft path** — otherwise, uses **effective color arity** = `max(hex_count, name_color_count)`.
+`name_color_count` is the sum of the color Counter from `decompose_name`. For a multicolor
+SM side (arity ≥ 2), keeps OPT entries whose arity is also ≥ 2.
+
+This fixes "Temperature Color Change Purple to Red" (OPT: `color=None`,
+`secondaryColors=["#963877"]` → `hex_count=1`, but name → colors=`{purple:1, red:1}` →
+`name_color_count=2` → arity=2 → passes). Previously the entry was dropped as "single"
+and the identical name-match was never scored.
+
+**`ngram_index` and `effective_synonyms` are built once** before the filament loop and
+passed to both gates and `find_best_match` for consistency.
 
 ## Manual search
 

@@ -74,7 +74,8 @@ COLOR_MIN_BRANDS: int = 3
 #: Version tag for the lexicon stored in the cache.  Increment whenever the
 #: mining algorithm changes in a way that would produce a different lexicon.
 #: v2: extended BASE_COLORS seed (color-leak fix + gfN/rfid/htpla/rpla/rpetg/esd stop-list)
-LEXICON_VERSION: int = 2
+#: v3: COMPOSITE_DESCRIPTOR_SEED added (*fill composites folded into modifier lexicon)
+LEXICON_VERSION: int = 3
 
 # ---------------------------------------------------------------------------
 # Seed lists — always included regardless of frequency
@@ -215,6 +216,26 @@ MODIFIER_SEED: frozenset[str] = frozenset({
     "satin",
     "pastel",
     "silk",
+})
+
+#: Composite-material descriptor seeds — unconditionally unioned into the modifier
+#: lexicon so that distinctive fill-composite tokens always match their own kind.
+#: These are single-token descriptors used as product-line identifiers by ColorFabb
+#: and similar brands.  The ``*fill`` endswith fallback in ``decompose_name`` catches
+#: additional novel tokens not in this explicit seed.
+COMPOSITE_DESCRIPTOR_SEED: frozenset[str] = frozenset({
+    "woodfill",
+    "steelfill",
+    "stonefill",
+    "copperfill",
+    "bronzefill",
+    "corkfill",
+    "glowfill",
+    "metalfill",
+    "marblefill",
+    "brassfill",
+    "bamboofill",
+    "granitfill",
 })
 
 #: Base color seed — canonical color names that seed the COLOR lexicon.
@@ -609,7 +630,7 @@ def mine_lexicons(
     #       they only ended up in MODIFIER_SEED by mistake or because they appeared
     #       in fewer brands than COLOR_MIN_BRANDS before the extended color seed was added).
     # ------------------------------------------------------------------
-    all_modifiers = (mined_modifiers | MODIFIER_SEED) - STOP_WORDS - BASE_COLORS
+    all_modifiers = (mined_modifiers | MODIFIER_SEED | COMPOSITE_DESCRIPTOR_SEED) - STOP_WORDS - BASE_COLORS
 
     # Add BASE_COLORS to the color lexicon (they are always valid)
     all_colors = mined_colors | BASE_COLORS
@@ -769,7 +790,7 @@ def mine_lexicons_with_counts(
         if cnt >= COLOR_MIN_COUNT and len(unigram_brands.get(tok, set())) >= COLOR_MIN_BRANDS:
             mined_colors.add(tok)
 
-    all_modifiers = (mined_modifiers | MODIFIER_SEED) - STOP_WORDS - BASE_COLORS
+    all_modifiers = (mined_modifiers | MODIFIER_SEED | COMPOSITE_DESCRIPTOR_SEED) - STOP_WORDS - BASE_COLORS
     all_colors = mined_colors | BASE_COLORS
 
     def _sort_key(s: str) -> tuple[int, str]:

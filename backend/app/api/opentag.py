@@ -26,11 +26,14 @@ from app.core.change_log import record_change as _record_change
 from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import _load_cache, get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import (
+    build_ngram_index,
+    color_profile_compatible_soft,
+    decompose_name,
+    families_gate_compatible,
     find_best_match,
     material_family,
     opt_color_profile,
     opt_to_spoolman_fields,
-    profiles_compatible,
     resolve_opentag_brand,
     score_candidate,
     sm_color_profile,
@@ -525,6 +528,13 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
 
     sm_filaments = await sm.get_filaments()
 
+    # Build ngram_index and effective_synonyms ONCE — used by both the color-profile
+    # gate (color_profile_compatible_soft → opt_color_arity → decompose_name) and
+    # find_best_match → score_candidate → decompose_name.  Building them once ensures
+    # consistency and avoids O(candidates) rebuilds inside the gate.
+    ngram_index = build_ngram_index(dataset_lexicon)
+    effective_synonyms: dict[str, str] = dict(color_map)
+
     # Build a brand index once — keyed by normalize_vendor(brandName) — so each SM
     # filament only scores its own brand's candidates instead of all ~11k materials.
     # normalize_vendor now treats hyphens as spaces, so "VOXEL-pla" and "Voxel PLA"
@@ -595,24 +605,43 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         )
         filtered_candidates = materials_by_brand.get(sm_brand_key, [])
 
-        # Color-profile pre-filter: only score candidates whose arrangement is
-        # compatible with the SM filament's arrangement (single/coextruded/gradient).
+        # Color-profile gate (v2.1 — name-aware + soft):
+        # When the OPT entry has complete arrangement + hex data, apply the strict
+        # profiles_compatible check.  When data is incomplete/absent, use effective
+        # color arity (max of hex count and name-decomposed color count) so that OPT
+        # entries with descriptive multi-color names but missing hex data (e.g.
+        # "Temperature Color Change Purple to Red") are not incorrectly dropped.
         sm_profile = sm_color_profile(sm_fil)
+        # Compute SM arity: max of name-decomposed color count and hex field count.
+        sm_parsed_gate = decompose_name(
+            sm_fil.name, sm_fil.vendor.name if sm_fil.vendor else None, sm_fil.material,
+            tag_map=tag_map, ngram_index=ngram_index, color_synonyms=effective_synonyms,
+        )
+        sm_arity_gate = sum(sm_parsed_gate.colors.values())
+        if sm_fil.multi_color_hexes:
+            hex_arity = 1 + len([h for h in sm_fil.multi_color_hexes.split(",") if h.strip()])
+            sm_arity_gate = max(sm_arity_gate, hex_arity)
         filtered_candidates = [
             c for c in filtered_candidates
-            if isinstance(c, dict) and profiles_compatible(sm_profile, opt_color_profile(c, tag_map))
+            if isinstance(c, dict) and color_profile_compatible_soft(
+                sm_profile, sm_arity_gate, c, tag_map, ngram_index, effective_synonyms
+            )
         ]
 
-        # Polymer-family hard gate: a PC filament must never match ASA; ASA must never
-        # match PETG, etc.  Only gate when the SM filament has a non-empty / known
-        # material (unknown SM material → don't gate, score all candidates).
+        # Polymer-family gate (v2.1 — widened by PLA-biopolymer bucket):
+        # PLA/PHA/LW-PLA/HTPLA/rPLA are mutually gate-compatible (ColorFabb composites
+        # are inconsistently typed in OPT as PHA even when sold as "PLA" blends).
+        # All other cross-family pairs (ASA≠PETG, PC≠PETG, etc.) remain strictly gated.
+        # Only gate when the SM filament has a non-empty / known material
+        # (unknown SM material → don't gate, score all candidates).
         sm_fam = material_family(sm_fil.material, tag_map)
         if sm_fam:
             filtered_candidates = [
                 c for c in filtered_candidates
-                if material_family(
-                    c.get("type") or c.get("abbreviation") or "", tag_map
-                ) in ("", sm_fam)
+                if families_gate_compatible(
+                    sm_fam,
+                    material_family(c.get("type") or c.get("abbreviation") or "", tag_map),
+                )
             ]
 
         match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases, color_map=color_map, lexicon=dataset_lexicon)
