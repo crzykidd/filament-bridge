@@ -106,11 +106,19 @@ class SpoolmanClient:
     async def get_spools(self) -> list[SpoolmanSpool]:
         """Fetch all spools (active + archived), handling pagination transparently.
 
-        Caller is responsible for filtering archived spools:
+        Spoolman's default ``/api/v1/spool`` returns ONLY active spools, and
+        ``?archived=true`` returns ONLY archived ones (not "include archived"), so BOTH
+        must be fetched and merged — otherwise archived spools are invisible to the bridge
+        (an archived mapped spool would look deleted, and archived-spool import never fires).
+        Callers that want active-only still filter:
             active = [s for s in spools if not s.archived]
         """
-        rows = await self._paginate("/api/v1/spool")
-        return [SpoolmanSpool.model_validate(s) for s in rows]
+        active = await self._paginate("/api/v1/spool")
+        archived = await self._paginate("/api/v1/spool", extra_params={"archived": "true"})
+        by_id: dict[int, dict] = {s["id"]: s for s in active}
+        for s in archived:  # merge; default-fetch wins on the off chance of overlap
+            by_id.setdefault(s["id"], s)
+        return [SpoolmanSpool.model_validate(s) for s in by_id.values()]
 
     async def get_spool(self, spool_id: int) -> SpoolmanSpool:
         resp = await self._http.get(f"/api/v1/spool/{spool_id}")
