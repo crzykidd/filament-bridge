@@ -22,6 +22,7 @@ vi.mock('../api/client', () => ({
   getConflicts: vi.fn(),
   bulkResolveConflicts: vi.fn(),
   importConflictRecord: vi.fn(),
+  getFilamentSuggestions: vi.fn(),
 }))
 
 // Mock react-router-dom: provide a controllable useSearchParams.
@@ -48,9 +49,9 @@ vi.mock('../api/hooks', () => ({
   useApi: vi.fn(),
 }))
 
-import { getDivergenceContext, resolveConflict, importConflictRecord } from '../api/client'
+import { getDivergenceContext, resolveConflict, importConflictRecord, getFilamentSuggestions } from '../api/client'
 import { useApi } from '../api/hooks'
-import type { ConflictResponse, DivergenceContextResponse, WizardExecuteResponse } from '../api/types'
+import type { ConflictResponse, DivergenceContextResponse, FilamentSuggestionsResponse, WizardExecuteResponse } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -680,6 +681,203 @@ describe('Conflicts page — bulk Add', () => {
       expect(screen.getByText('Bulk resolve')).toBeInTheDocument()
     })
     expect(screen.queryByText('Add selected')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Tests — Add "link" suggestions dropdown (P2)
+// ---------------------------------------------------------------------------
+
+const mockSuggestionsResponse: FilamentSuggestionsResponse = {
+  suggestions: [
+    {
+      filamentdb_id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
+      name: 'PLA Red',
+      vendor: 'ELEGOO',
+      color: 'ff0000',
+      material: 'PLA',
+      score: 1.0,
+      is_master_container: false,
+      parent_id: null,
+      variant_label: 'PLA Red',
+    },
+    {
+      filamentdb_id: 'bbbbbbbbbbbbbbbbbbbbbbbb',
+      name: 'PLA Silk Red',
+      vendor: 'ELEGOO',
+      color: 'ff0000',
+      material: 'PLA',
+      score: 0.8,
+      is_master_container: false,
+      parent_id: null,
+      variant_label: 'PLA Silk Red',
+    },
+  ],
+}
+
+describe('Conflicts page — Add "link" suggestions dropdown', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(importConflictRecord).mockResolvedValue(mockImportResponse)
+    vi.mocked(getFilamentSuggestions).mockResolvedValue(mockSuggestionsResponse)
+  })
+
+  it('shows suggestions dropdown when user selects "Link to existing filament"', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    // Suggestions should load
+    await waitFor(() => {
+      expect(getFilamentSuggestions).toHaveBeenCalledWith(4)
+      expect(screen.getByText(/Suggested match/i)).toBeInTheDocument()
+    })
+  })
+
+  it('renders suggestion options in dropdown when suggestions are loaded', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => {
+      // Both suggestions should appear as options (score % in label)
+      expect(screen.getByText(/ELEGOO · PLA Red.*100%/)).toBeInTheDocument()
+      expect(screen.getByText(/ELEGOO · PLA Silk Red.*80%/)).toBeInTheDocument()
+    })
+  })
+
+  it('shows manual override field alongside the dropdown', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/24-char hex id/i)).toBeInTheDocument()
+    })
+  })
+
+  it('Preview is disabled when link mode and no suggestion/override selected', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => {
+      const previewBtn = screen.getByText('Preview import')
+      expect(previewBtn.closest('button')).toBeDisabled()
+    })
+  })
+
+  it('Preview enabled when a suggestion is selected from dropdown', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    // Select the first suggestion
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+    })
+
+    await waitFor(() => {
+      const previewBtn = screen.getByText('Preview import')
+      expect(previewBtn.closest('button')).not.toBeDisabled()
+    })
+  })
+
+  it('manual 24-hex id takes precedence when filled', async () => {
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/24-char hex id/i)).toBeInTheDocument())
+
+    const override = 'cccccccccccccccccccccccc'
+    fireEvent.change(screen.getByPlaceholderText(/24-char hex id/i), {
+      target: { value: override },
+    })
+
+    // Preview should now be enabled (manual id is valid 24-hex)
+    await waitFor(() => {
+      const previewBtn = screen.getByText('Preview import')
+      expect(previewBtn.closest('button')).not.toBeDisabled()
+    })
+
+    fireEvent.click(screen.getByText('Preview import'))
+
+    await waitFor(() => {
+      expect(importConflictRecord).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({
+          filament_action: 'link',
+          filamentdb_id: override,
+        })
+      )
+    })
+  })
+
+  it('shows empty-suggestions message when no matches returned', async () => {
+    vi.mocked(getFilamentSuggestions).mockResolvedValue({ suggestions: [] })
+
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => {
+      expect(screen.getByText(/No suggestions/i)).toBeInTheDocument()
+    })
   })
 })
 

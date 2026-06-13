@@ -12,6 +12,7 @@ flips wizard_completed; the decision state it consumes is what we persist here.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
@@ -28,7 +29,14 @@ from app.config import settings as _settings
 from app.core.color import sm_multicolor_to_fdb, to_sm_color
 from app.core.compat import sync_compatibility_errors
 from app.core.dates import spool_provenance_dates
-from app.core.engine import _fdb_snapshot_dict, _log, _sm_snapshot_dict, _upsert_snapshot
+from app.core.engine import (
+    _fdb_filament_identity,
+    _fdb_snapshot_dict,
+    _log,
+    _sm_filament_identity,
+    _sm_snapshot_dict,
+    _upsert_snapshot,
+)
 from app.core.material_tags import finish_ids_from_text, serialize_material_tags
 from app.core.matcher import (
     extract_finish_line,
@@ -1585,12 +1593,16 @@ async def _execute_spoolman_to_fdb(
                 spoolman_filament_id=item.sm_filament.id,
                 filamentdb_id=fdb_id,
                 filamentdb_parent_id=parent_fdb_id,
+                identity=json.dumps(_sm_filament_identity(item.sm_filament)),
             )
             db.add(fil_map)
             db.flush()
             fil_map_by_sm[item.sm_filament.id] = fil_map
         elif parent_fdb_id and fil_map.filamentdb_parent_id != parent_fdb_id:
             fil_map.filamentdb_parent_id = parent_fdb_id
+        # Opportunistic backfill: set identity if currently NULL (legacy row).
+        if fil_map.identity is None:
+            fil_map.identity = json.dumps(_sm_filament_identity(item.sm_filament))
 
         for spool_item in spool_items_by_fil.get(id(item), []):
             _spool_label = f"{_sm_label(item.sm_filament)} (spool {spool_item.sm_spool.id})"
@@ -1750,6 +1762,7 @@ async def _execute_fdb_to_spoolman(
                 spoolman_filament_id=sm_filament_id,
                 filamentdb_id=fdb_fil.id,
                 filamentdb_parent_id=parent_id,
+                identity=json.dumps(_fdb_filament_identity(fdb_fil)),
             )
             db.add(fil_map)
             db.flush()

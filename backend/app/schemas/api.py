@@ -215,12 +215,15 @@ class MappingDetailField(BaseModel):
 
 
 class MappingRow(BaseModel):
-    id: int  # SpoolMapping.id
+    id: int  # SpoolMapping.id for kind="spool"; FilamentMapping.id for kind="filament"
     status: MappingStatus
-    spoolman_spool_id: int
+    # kind="spool"    → a normal spool pair row (spoolman_spool_id and filamentdb_spool_id are set)
+    # kind="filament" → a filament-only row (no Spoolman spool; spool ids/weights are None)
+    kind: Literal["spool", "filament"] = "spool"
+    spoolman_spool_id: int | None = None       # None for kind="filament"
     spoolman_filament_id: int | None = None
     filamentdb_filament_id: str
-    filamentdb_spool_id: str
+    filamentdb_spool_id: str | None = None     # None for kind="filament"
     filamentdb_parent_id: str | None = None
     name: str | None = None
     vendor: str | None = None
@@ -233,7 +236,7 @@ class MappingRow(BaseModel):
     multi_color_direction: str | None = None   # "longitudinal" | "coaxial" | None
     remaining_weight: float | None = None      # SM spool remaining_weight (same as spoolman_weight; named for clarity)
     is_empty: bool = False                     # True when remaining_weight <= 0
-    conflict_id: int | None = None             # open Conflict.id for this spool (status=="conflict" rows)
+    conflict_id: int | None = None             # open Conflict.id for this spool/filament (status=="conflict" rows)
     detail: list[MappingDetailField] = []      # per-side values for the expandable row
 
 
@@ -241,6 +244,32 @@ class MappingUpdateRequest(BaseModel):
     filamentdb_filament_id: str | None = None
     filamentdb_spool_id: str | None = None
     filamentdb_parent_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Filament suggestions (conflict Add "link" UX — P2)
+# ---------------------------------------------------------------------------
+
+
+class FilamentSuggestion(BaseModel):
+    """One candidate FDB filament for the conflict Add "link" dropdown."""
+
+    filamentdb_id: str
+    name: str | None = None
+    vendor: str | None = None
+    color: str | None = None
+    material: str | None = None
+    score: float  # 0.0–1.0; 1.0 = exact key match
+    # True when this FDB filament is a master/parent (has variants or synthetic).
+    is_master_container: bool = False
+    # Set when this filament is a variant child: the FDB id of its parent.
+    parent_id: str | None = None
+    # Human-readable variant label (e.g. "Red", "Silk Blue") derived from the name.
+    variant_label: str | None = None
+
+
+class FilamentSuggestionsResponse(BaseModel):
+    suggestions: list[FilamentSuggestion]
 
 
 # ---------------------------------------------------------------------------

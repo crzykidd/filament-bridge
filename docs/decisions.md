@@ -1,5 +1,46 @@
 # Decision record
 
+## 2026-06-13 — FilamentMapping.identity column + filament-only rows in Synced Records
+
+**Why.** Spool-less imported filaments (Spoolman filament IDs 10, 14, 115, 120) had a
+`FilamentMapping` and existed in Filament DB but no `SpoolMapping` → invisible in Synced
+Records ("shows up in FDB, not in bridge"). The root cause: `build_mapping_rows` was
+spool-keyed (one row per `SpoolMapping`). The previous attempt failed because filament
+snapshots store only an `_mp_*` comparison projection — no name/vendor/color — so
+filament-only rows rendered blank.
+
+**Decisions (locked 2026-06-13).**
+
+- **Display data:** persist a JSON identity blob `{vendor, name, color_hex, material}` on a
+  new nullable `FilamentMapping.identity` column (add_column, nullable, no data migration).
+  Written at `FilamentMapping` creation time by both `_execute_spoolman_to_fdb` and
+  `_execute_fdb_to_spoolman` in `wizard.py`, using the existing `_sm_filament_identity` /
+  `_fdb_filament_identity` helpers from `engine.py`. Synthetic container parents leave
+  `identity=NULL`. `build_mapping_rows` degrades gracefully on NULL (name/vendor/color=None).
+
+- **Opportunistic backfill:** when an existing `FilamentMapping.identity` is None and the
+  SM/FDB filament is in hand during a sync cycle, the engine sets it so legacy rows self-heal
+  next cycle without a data migration.
+
+- **Row discriminator:** `kind: Literal["spool","filament"] = "spool"` on `MappingRow`.
+  Filament-only rows are `kind="filament"` with null spool ids/weights. FE hides
+  relink/unlink for `kind==="filament"` rows; DeepLinks already null-handles spool id.
+
+- **Shared status helper:** `core/filament_status.py::filament_mapping_status()` extracted
+  from the inline logic in `api/sync.py` and used by BOTH `sync.py` and `mappings.py` so
+  the filament-only row status (in_sync/pending/conflict) never drifts from the dashboard.
+
+- **Conflict Add "link" UX (P2):** new endpoint `GET /conflicts/{id}/filament-suggestions`
+  runs `match_filaments` (exact-key, score=1.0) then a fuzzy fallback built only from
+  existing normalizers (`normalize_vendor`, `strip_color_and_words`, `normalize_color`; top 8,
+  all score < 1.0). FE replaces the bare 24-char text field with a dropdown of suggestions
+  plus a manual 24-hex override (takes precedence when filled).
+
+- **single_record_import:** confirmed a thin wrapper over `_execute_spoolman_to_fdb` — no
+  drift; identity is set via the shared wizard execute path. Explicit-master parenting
+  (`master_filamentdb_id`) is single-record-only (no auto-cluster) — documented in
+  `docs/conflicts.md`.
+
 ## 2026-06-11 — OpenTag matcher v2.1: soften hard gates + capture fill-composite descriptors
 
 **Why.** v2's name-driven scoring was correct, but two pre-v2 hard gates still ran

@@ -19,6 +19,10 @@ class FilamentMapping(Base):
     # (created in generic_container variant_parent_mode).  Synthetic parents have
     # spoolman_filament_id = NULL and are excluded from sync/orphan detection.
     is_synthetic_parent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # JSON blob {vendor, name, color_hex, material} written at FilamentMapping creation
+    # time (wizard execute + single_record_import).  NULL for legacy rows and synthetic
+    # parents; build_mapping_rows degrades gracefully on NULL.
+    identity: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[object] = mapped_column(DateTime, nullable=False, default=func.now())
     updated_at: Mapped[object] = mapped_column(
         DateTime, nullable=False, default=func.now(), onupdate=func.now()

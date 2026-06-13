@@ -39,6 +39,8 @@ from app.schemas.api import (
     ConflictResponse,
     DivergenceContextResponse,
     DivergenceVariantEntry,
+    FilamentSuggestion,
+    FilamentSuggestionsResponse,
     WizardExecuteResponse,
 )
 
@@ -542,6 +544,187 @@ async def import_conflict_record(
         failed_filaments=_type_action_counts2.get(("filament", "failed"), 0),
         failed_spools=_type_action_counts2.get(("spool", "failed"), 0),
     )
+
+
+@router.get("/conflicts/{conflict_id}/filament-suggestions", response_model=FilamentSuggestionsResponse)
+async def get_filament_suggestions(
+    conflict_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> FilamentSuggestionsResponse:
+    """Return ranked FDB filament suggestions for the conflict Add "link" dropdown.
+
+    Only valid for SM→FDB conflicts (spoolman_id set) with field_name in
+    (new_filament, new_spool).
+
+    Matching strategy (plan §5):
+      1. Exact-key match via match_filaments (vendor+name+color normalised).
+         Matched/ambiguous items get score 1.0.
+      2. Fuzzy fallback (if step 1 yields nothing): rank ALL FDB filaments by a
+         composite score built from the matcher's own normalizers:
+           - vendor exact:  +0.5
+           - base-name match: +0.3 (strip_color_and_words vs normalize_name)
+           - color closeness: +0.2 (hex prefix similarity after normalize_color)
+         Top ~8 results are returned, all with score < 1.0.
+    """
+    from app.core.matcher import (
+        match_filaments,
+        normalize_color,
+        normalize_vendor,
+        strip_color_and_words,
+    )
+
+    c = db.query(Conflict).filter_by(id=conflict_id).first()
+    if c is None:
+        raise api_error(404, "conflict_not_found", f"No conflict with id {conflict_id}")
+
+    allowed_types = ("new_filament", "new_spool")
+    if c.field_name not in allowed_types:
+        raise api_error(
+            400, "import_not_supported",
+            f"Conflict {conflict_id} has field_name '{c.field_name}'; "
+            f"filament suggestions only available for: {', '.join(allowed_types)}",
+        )
+
+    if c.spoolman_id is None:
+        raise api_error(
+            400, "fdb_to_sm_unsupported",
+            "Filament suggestions are only available for Spoolman→Filament DB conflicts.",
+        )
+
+    spoolman = request.app.state.spoolman
+    filamentdb = request.app.state.filamentdb
+
+    # Resolve SM filament id from the conflict.
+    if c.field_name == "new_filament":
+        sm_filament_id = c.spoolman_id
+    else:
+        # new_spool: resolve filament id from the live spool.
+        try:
+            sm_spools_live = await spoolman.get_spools()
+            sm_spool_live = next((s for s in sm_spools_live if s.id == c.spoolman_id), None)
+            if sm_spool_live is None or sm_spool_live.filament is None:
+                raise api_error(
+                    404, "spool_not_found",
+                    f"Spoolman spool {c.spoolman_id} not found or has no filament",
+                )
+            sm_filament_id = sm_spool_live.filament.id
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise api_error(502, "upstream_fetch_failed",
+                            f"Could not resolve Spoolman spool to filament: {exc}")
+
+    try:
+        sm_filaments_all = await spoolman.get_filaments()
+        fdb_filaments_all = await filamentdb.get_filaments()
+    except Exception as exc:
+        raise api_error(502, "upstream_fetch_failed", f"Could not fetch upstream data: {exc}")
+
+    sm_fil = next((f for f in sm_filaments_all if f.id == sm_filament_id), None)
+    if sm_fil is None:
+        raise api_error(404, "filament_not_found",
+                        f"Spoolman filament {sm_filament_id} not found")
+
+    # ---- Detect master/synthetic containers ----
+    from app.models.mapping import FilamentMapping as _FilamentMapping
+    from app.api.wizard import _resolve_container_parent_marker
+
+    synth_fdb_ids: set[str] = {
+        m.filamentdb_id
+        for m in db.query(_FilamentMapping).filter_by(is_synthetic_parent=True).all()
+    }
+    marker = _resolve_container_parent_marker(db)
+
+    def _is_master(fdb) -> bool:
+        if fdb.id in synth_fdb_ids:
+            return True
+        if getattr(fdb, "hasVariants", False):
+            return True
+        if marker and fdb.name and fdb.name.endswith(f" {marker}"):
+            return True
+        return False
+
+    # ---- Step 1: exact-key match via match_filaments ----
+    mr = match_filaments([sm_fil], fdb_filaments_all)
+
+    suggestions: list[FilamentSuggestion] = []
+
+    if mr.matched or mr.ambiguous:
+        # Exact / ambiguous results all score 1.0.
+        for pair in mr.matched:
+            fdb = pair.fdb_filament
+            suggestions.append(FilamentSuggestion(
+                filamentdb_id=fdb.id,
+                name=fdb.name,
+                vendor=fdb.vendor,
+                color=fdb.color,
+                material=fdb.type,
+                score=1.0,
+                is_master_container=_is_master(fdb),
+                parent_id=getattr(fdb, "parentId", None),
+                variant_label=fdb.name,
+            ))
+        for _sm, cands in mr.ambiguous:
+            for fdb in cands:
+                suggestions.append(FilamentSuggestion(
+                    filamentdb_id=fdb.id,
+                    name=fdb.name,
+                    vendor=fdb.vendor,
+                    color=fdb.color,
+                    material=fdb.type,
+                    score=1.0,
+                    is_master_container=_is_master(fdb),
+                    parent_id=getattr(fdb, "parentId", None),
+                    variant_label=fdb.name,
+                ))
+    else:
+        # ---- Step 2: fuzzy fallback ----
+        # Build score from existing normalizer functions only (no new algorithm).
+        sm_vendor_norm = normalize_vendor(sm_fil.vendor.name if sm_fil.vendor else None)
+        sm_base = strip_color_and_words(sm_fil.name or "", sm_fil.color_hex)
+        sm_color_norm = normalize_color(sm_fil.color_hex)
+
+        scored: list[tuple[float, object]] = []
+        for fdb in fdb_filaments_all:
+            score = 0.0
+            fdb_vendor_norm = normalize_vendor(fdb.vendor)
+            fdb_base = strip_color_and_words(fdb.name or "", fdb.color)
+            fdb_color_norm = normalize_color(fdb.color)
+
+            if sm_vendor_norm and fdb_vendor_norm and sm_vendor_norm == fdb_vendor_norm:
+                score += 0.5
+            if sm_base and fdb_base and sm_base == fdb_base:
+                score += 0.3
+            # Color closeness: prefix match on normalized hex (first 6 chars).
+            if sm_color_norm and fdb_color_norm:
+                sm_c6 = sm_color_norm[:6]
+                fdb_c6 = fdb_color_norm[:6]
+                if sm_c6 and fdb_c6 and sm_c6 == fdb_c6:
+                    score += 0.2
+                elif sm_color_norm[:3] == fdb_color_norm[:3]:
+                    score += 0.1
+
+            if score > 0:
+                scored.append((score, fdb))
+
+        scored.sort(key=lambda t: t[0], reverse=True)
+        for score, fdb in scored[:8]:
+            suggestions.append(FilamentSuggestion(
+                filamentdb_id=fdb.id,
+                name=fdb.name,
+                vendor=fdb.vendor,
+                color=fdb.color,
+                material=fdb.type,
+                score=score,
+                is_master_container=_is_master(fdb),
+                parent_id=getattr(fdb, "parentId", None),
+                variant_label=fdb.name,
+            ))
+
+    # Sort by score descending then name.
+    suggestions.sort(key=lambda s: (-s.score, s.name or ""))
+    return FilamentSuggestionsResponse(suggestions=suggestions)
 
 
 @router.get("/conflicts/{conflict_id}/divergence-context", response_model=DivergenceContextResponse)

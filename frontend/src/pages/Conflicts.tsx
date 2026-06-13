@@ -6,6 +6,7 @@ import {
   bulkResolveConflicts,
   getDivergenceContext,
   importConflictRecord,
+  getFilamentSuggestions,
 } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
@@ -15,6 +16,7 @@ import type {
   ConflictResponse,
   DivergenceContextResponse,
   DivergenceVariantEntry,
+  FilamentSuggestion,
   WizardExecuteRecord,
   WizardExecuteResponse,
 } from '../api/types'
@@ -193,6 +195,22 @@ function ImportPreview({ records }: { records: WizardExecuteRecord[] }) {
 
 type ImportStep = 'form' | 'preview' | 'done'
 
+/** Format a suggestion label for the dropdown: "Vendor · Name (score%)" */
+function suggestionLabel(s: FilamentSuggestion): string {
+  const parts: string[] = []
+  if (s.vendor) parts.push(s.vendor)
+  if (s.name) parts.push(s.name)
+  const base = parts.join(' · ') || s.filamentdb_id
+  const pct = Math.round(s.score * 100)
+  const master = s.is_master_container ? ' [Master]' : ''
+  return `${base}${master} (${pct}%)`
+}
+
+/** Validate a 24-char lowercase hex MongoDB ObjectId string. */
+function is24Hex(s: string): boolean {
+  return /^[0-9a-fA-F]{24}$/.test(s.trim())
+}
+
 function NewRecordAddFlow({
   conflict,
   onResolved,
@@ -204,12 +222,38 @@ function NewRecordAddFlow({
 }) {
   const isSmToFdb = conflict.spoolman_id != null
   const [filamentAction, setFilamentAction] = useState<'create' | 'link'>('create')
-  const [filamentdbId, setFilamentdbId] = useState('')
+  // Suggestion selected from dropdown
+  const [selectedSuggestionId, setSelectedSuggestionId] = useState<string>('')
+  // Manual 24-char override (takes precedence when filled and valid)
+  const [manualId, setManualId] = useState('')
   const [tare, setTare] = useState('')
   const [step, setStep] = useState<ImportStep>('form')
   const [preview, setPreview] = useState<WizardExecuteResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // Suggestions state
+  const [suggestions, setSuggestions] = useState<FilamentSuggestion[] | null>(null)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [suggestionsErr, setSuggestionsErr] = useState<string | null>(null)
+
+  // Load suggestions when user switches to "link" mode
+  useEffect(() => {
+    if (filamentAction !== 'link' || !isSmToFdb) return
+    if (suggestions !== null) return  // already loaded
+    setSuggestionsLoading(true)
+    setSuggestionsErr(null)
+    getFilamentSuggestions(conflict.id)
+      .then(res => setSuggestions(res.suggestions))
+      .catch(e => setSuggestionsErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setSuggestionsLoading(false))
+  }, [filamentAction, isSmToFdb, conflict.id, suggestions])
+
+  // The effective FDB id: manual override wins if valid, else selected suggestion.
+  const effectiveFilamentdbId = manualId.trim() && is24Hex(manualId)
+    ? manualId.trim()
+    : selectedSuggestionId || null
+
+  const linkReady = filamentAction !== 'link' || effectiveFilamentdbId != null
 
   async function runPreview() {
     setLoading(true)
@@ -218,7 +262,7 @@ function NewRecordAddFlow({
       const res = await importConflictRecord(conflict.id, {
         dry_run: true,
         filament_action: filamentAction,
-        filamentdb_id: filamentAction === 'link' ? (filamentdbId.trim() || null) : null,
+        filamentdb_id: filamentAction === 'link' ? effectiveFilamentdbId : null,
         tare_override: tare.trim() ? parseFloat(tare) : null,
       })
       setPreview(res)
@@ -237,7 +281,7 @@ function NewRecordAddFlow({
       await importConflictRecord(conflict.id, {
         dry_run: false,
         filament_action: filamentAction,
-        filamentdb_id: filamentAction === 'link' ? (filamentdbId.trim() || null) : null,
+        filamentdb_id: filamentAction === 'link' ? effectiveFilamentdbId : null,
         tare_override: tare.trim() ? parseFloat(tare) : null,
       })
       setStep('done')
@@ -313,15 +357,61 @@ function NewRecordAddFlow({
           </div>
 
           {filamentAction === 'link' && (
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">FDB filament ID</label>
-              <input
-                type="text"
-                placeholder="24-char hex id…"
-                value={filamentdbId}
-                onChange={e => setFilamentdbId(e.target.value)}
-                className="flex-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              />
+            <div className="space-y-2">
+              {/* Suggestions dropdown */}
+              {suggestionsLoading && (
+                <p className="text-xs text-gray-400 dark:text-gray-500">Loading suggestions…</p>
+              )}
+              {suggestionsErr && (
+                <p className="text-xs text-red-500 dark:text-red-400">Could not load suggestions: {suggestionsErr}</p>
+              )}
+              {!suggestionsLoading && suggestions !== null && (
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">Suggested match</label>
+                  {suggestions.length === 0 ? (
+                    <span className="text-xs text-gray-400 dark:text-gray-500 italic">No suggestions — use the manual ID field below.</span>
+                  ) : (
+                    <select
+                      value={selectedSuggestionId}
+                      onChange={e => setSelectedSuggestionId(e.target.value)}
+                      className="flex-1 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    >
+                      <option value="">— pick a suggestion —</option>
+                      {suggestions.map(s => (
+                        <option key={s.filamentdb_id} value={s.filamentdb_id}>
+                          {suggestionLabel(s)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
+              {/* Manual 24-char hex override */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">
+                  Manual FDB ID
+                  <HelpTip text="24-character hex MongoDB ObjectId. Overrides the suggestion above when filled." />
+                </label>
+                <input
+                  type="text"
+                  placeholder="24-char hex id (optional override)…"
+                  value={manualId}
+                  onChange={e => setManualId(e.target.value)}
+                  className={`flex-1 border rounded px-3 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${
+                    manualId.trim() && !is24Hex(manualId)
+                      ? 'border-red-400 dark:border-red-500'
+                      : 'border-gray-300 dark:border-gray-600'
+                  }`}
+                />
+              </div>
+              {manualId.trim() && !is24Hex(manualId) && (
+                <p className="text-xs text-red-500 dark:text-red-400">Must be exactly 24 hex characters.</p>
+              )}
+              {effectiveFilamentdbId && (
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                  Will link to FDB ID: <span className="font-mono">{effectiveFilamentdbId}</span>
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -345,7 +435,7 @@ function NewRecordAddFlow({
       <div className="flex gap-2">
         <button
           onClick={runPreview}
-          disabled={loading || (filamentAction === 'link' && !filamentdbId.trim())}
+          disabled={loading || !linkReady || (manualId.trim() !== '' && !is24Hex(manualId))}
           className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
         >
           {loading ? 'Loading…' : 'Preview import'}

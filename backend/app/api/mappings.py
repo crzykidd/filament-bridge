@@ -10,6 +10,10 @@ Status enum (see docs/decisions.md for the contract):
   unlinked  — the spool mapping has no parent filament mapping
   pending   — a side has no snapshot yet (not baselined / awaiting first sync)
   in_sync   — both snapshots present, no open conflict
+
+Filament-only rows (kind="filament") are emitted for FilamentMappings that have
+no child SpoolMapping and a non-NULL spoolman_filament_id.  Synthetic container
+parents (is_synthetic_parent=True) are excluded.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.filament_status import filament_mapping_status
 from app.db import get_db
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping
@@ -98,7 +103,14 @@ def _build_detail(sm_filament: dict, fdb_snap: dict | None, fdb_fil_snap: dict |
 
 
 def build_mapping_rows(db: Session) -> list[MappingRow]:
-    """Assemble one MappingRow per spool mapping (shared with the dashboard)."""
+    """Assemble one MappingRow per spool mapping + filament-only rows (shared with dashboard).
+
+    Filament-only rows (kind="filament") are emitted for each FilamentMapping
+    that:
+      - has spoolman_filament_id set (not a synthetic container parent), AND
+      - has no child SpoolMapping (spool-less imported filament).
+    Their spool ids/weights are None; identity comes from FilamentMapping.identity.
+    """
     spool_mappings: list[SpoolMapping] = db.query(SpoolMapping).all()
     filament_mappings = {m.id: m for m in db.query(FilamentMapping).all()}
 
@@ -167,6 +179,7 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
         rows.append(
             MappingRow(
                 id=m.id,
+                kind="spool",
                 status=status,
                 spoolman_spool_id=m.spoolman_spool_id,
                 spoolman_filament_id=sm_filament.get("id"),
@@ -192,6 +205,81 @@ def build_mapping_rows(db: Session) -> list[MappingRow]:
                 ),
             )
         )
+
+    # ---- Filament-only rows ---------------------------------------------------
+    # Emit a row for each FilamentMapping that:
+    #   1. has a non-NULL spoolman_filament_id (not a synthetic container parent), AND
+    #   2. has no child SpoolMapping (spool-less imported filament).
+    spool_mapped_fm_ids: set[int] = {
+        m.filament_mapping_id
+        for m in spool_mappings
+        if m.filament_mapping_id is not None
+    }
+
+    # Pre-compute open conflict fdb_ids for filament-level status (using ALL open conflicts,
+    # not just spool-type — filament conflicts also affect filament-only rows).
+    open_conflict_fdb_ids: set[str] = {
+        c.filamentdb_filament_id
+        for c in db.query(Conflict).filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.filamentdb_filament_id.is_not(None),
+        ).all()
+        if c.filamentdb_filament_id
+    }
+    # conflict_id lookup for filament-level: fdb_filament_id → first open Conflict.id
+    conflict_id_by_fdb_filament: dict[str, int] = {}
+    for c in db.query(Conflict).filter(
+        Conflict.resolved_at.is_(None),
+        Conflict.filamentdb_filament_id.is_not(None),
+    ).all():
+        fid = c.filamentdb_filament_id
+        if fid and fid not in conflict_id_by_fdb_filament:
+            conflict_id_by_fdb_filament[fid] = c.id
+
+    for fm in filament_mappings.values():
+        # Skip synthetic container parents (NULL spoolman_filament_id) and filaments
+        # that already have spool rows (they appear via SpoolMapping above).
+        if fm.is_synthetic_parent or fm.spoolman_filament_id is None:
+            continue
+        if fm.id in spool_mapped_fm_ids:
+            continue
+
+        # Parse identity from the stored JSON blob; degrade to None on missing/NULL.
+        identity: dict = {}
+        if fm.identity:
+            try:
+                identity = json.loads(fm.identity)
+            except (json.JSONDecodeError, TypeError):
+                identity = {}
+
+        fil_status_str = filament_mapping_status(db, fm, open_conflict_fdb_ids)
+        fil_conflict_id = conflict_id_by_fdb_filament.get(fm.filamentdb_id)
+
+        rows.append(
+            MappingRow(
+                id=fm.id,
+                kind="filament",
+                status=fil_status_str,  # type: ignore[arg-type]
+                spoolman_spool_id=None,
+                spoolman_filament_id=fm.spoolman_filament_id,
+                filamentdb_filament_id=fm.filamentdb_id,
+                filamentdb_spool_id=None,
+                filamentdb_parent_id=fm.filamentdb_parent_id,
+                name=identity.get("name"),
+                vendor=identity.get("vendor"),
+                color=identity.get("color_hex"),
+                spoolman_weight=None,
+                filamentdb_weight=None,
+                last_synced=fm.updated_at,
+                multi_color_hexes=None,
+                multi_color_direction=None,
+                remaining_weight=None,
+                is_empty=False,
+                conflict_id=fil_conflict_id,
+                detail=[],
+            )
+        )
+
     return rows
 
 
@@ -240,7 +328,10 @@ def update_mapping(
             fm.filamentdb_parent_id = data["filamentdb_parent_id"]
     db.commit()
 
-    row = next((r for r in build_mapping_rows(db) if r.id == mapping_id), None)
+    row = next(
+        (r for r in build_mapping_rows(db) if r.kind == "spool" and r.id == mapping_id),
+        None,
+    )
     assert row is not None
     return row
 

@@ -202,10 +202,12 @@ export interface MappingDetailField {
 export interface MappingRow {
   id: number
   status: MappingStatus
-  spoolman_spool_id: number
+  /** "spool" = normal spool-pair row; "filament" = filament-only row (no SM spool). */
+  kind: 'spool' | 'filament'
+  spoolman_spool_id: number | null    // null for kind="filament"
   spoolman_filament_id: number | null
   filamentdb_filament_id: string
-  filamentdb_spool_id: string
+  filamentdb_spool_id: string | null  // null for kind="filament"
   filamentdb_parent_id: string | null
   name: string | null
   vendor: string | null
@@ -220,6 +222,26 @@ export interface MappingRow {
   is_empty: boolean
   conflict_id: number | null
   detail: MappingDetailField[]
+}
+
+// ---------------------------------------------------------------------------
+// Filament suggestions (conflict Add "link" UX)
+// ---------------------------------------------------------------------------
+
+export interface FilamentSuggestion {
+  filamentdb_id: string
+  name: string | null
+  vendor: string | null
+  color: string | null
+  material: string | null
+  score: number
+  is_master_container: boolean
+  parent_id: string | null
+  variant_label: string | null
+}
+
+export interface FilamentSuggestionsResponse {
+  suggestions: FilamentSuggestion[]
 }
 
 export interface MappingUpdateRequest {

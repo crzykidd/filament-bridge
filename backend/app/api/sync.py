@@ -19,11 +19,11 @@ from app.api.mappings import build_mapping_rows
 from app.core.compat import sync_compatibility_errors
 from app.core.dryrun import plan_dry_run
 from app.core.engine import run_sync_cycle
+from app.core.filament_status import filament_mapping_status
 from app.core.version import incompatibilities
 from app.db import get_db
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
-from app.models.snapshot import Snapshot
 from app.models.sync_log import SyncLog
 from app.schemas.api import (
     AutoSyncRequest,
@@ -147,25 +147,8 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
     )
     for fm in real_filament_mappings:
         filament_counts["total"] += 1
-        fdb_id = fm.filamentdb_id
-        if fdb_id in open_conflict_fdb_ids:
-            filament_counts["conflict"] += 1
-            continue
-        # Check whether both filament snapshots exist (baselined).
-        sm_snap = db.query(Snapshot).filter(
-            Snapshot.source == "spoolman",
-            Snapshot.entity_type == "filament",
-            Snapshot.entity_id == str(fm.spoolman_filament_id),
-        ).first()
-        fdb_snap = db.query(Snapshot).filter(
-            Snapshot.source == "filamentdb",
-            Snapshot.entity_type == "filament",
-            Snapshot.entity_id == fdb_id,
-        ).first()
-        if sm_snap and fdb_snap:
-            filament_counts["in_sync"] += 1
-        else:
-            filament_counts["pending"] += 1
+        status = filament_mapping_status(db, fm, open_conflict_fdb_ids)
+        filament_counts[status] += 1
 
     pending_conflicts = db.query(Conflict).filter(Conflict.resolved_at.is_(None)).count()
     last_sync_at = db.query(func.max(SyncLog.timestamp)).scalar()

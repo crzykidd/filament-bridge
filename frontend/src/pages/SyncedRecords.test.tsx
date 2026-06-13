@@ -62,6 +62,7 @@ function makeConflictRow(overrides?: Partial<MappingRow>): MappingRow {
   return {
     id: 1,
     status: 'conflict',
+    kind: 'spool',
     spoolman_spool_id: 10,
     spoolman_filament_id: 5,
     filamentdb_filament_id: 'fil-001',
@@ -87,6 +88,7 @@ function makeInSyncRow(overrides?: Partial<MappingRow>): MappingRow {
   return {
     id: 2,
     status: 'in_sync',
+    kind: 'spool',
     spoolman_spool_id: 20,
     spoolman_filament_id: 6,
     filamentdb_filament_id: 'fil-002',
@@ -101,6 +103,32 @@ function makeInSyncRow(overrides?: Partial<MappingRow>): MappingRow {
     multi_color_hexes: null,
     multi_color_direction: null,
     remaining_weight: 400,
+    is_empty: false,
+    conflict_id: null,
+    detail: [],
+    ...overrides,
+  }
+}
+
+function makeFilamentOnlyRow(overrides?: Partial<MappingRow>): MappingRow {
+  return {
+    id: 99,
+    status: 'pending',
+    kind: 'filament',
+    spoolman_spool_id: null,
+    spoolman_filament_id: 115,
+    filamentdb_filament_id: 'fil-115',
+    filamentdb_spool_id: null,
+    filamentdb_parent_id: null,
+    name: 'PLA Grey',
+    vendor: 'ELEGOO',
+    color: '808080',
+    spoolman_weight: null,
+    filamentdb_weight: null,
+    last_synced: null,
+    multi_color_hexes: null,
+    multi_color_direction: null,
+    remaining_weight: null,
     is_empty: false,
     conflict_id: null,
     detail: [],
@@ -167,5 +195,33 @@ describe('SyncedRecords — "See conflict" link', () => {
     ])
     const buttons = screen.getAllByRole('button', { name: /see conflict/i })
     expect(buttons).toHaveLength(2)
+  })
+})
+
+describe('SyncedRecords — filament-only rows (kind="filament")', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('renders a filament-only row with name and "(filament only)" hint', () => {
+    renderWithRows([makeFilamentOnlyRow()])
+    expect(screen.getByText('PLA Grey')).toBeInTheDocument()
+    expect(screen.getByText('(filament only)')).toBeInTheDocument()
+  })
+
+  it('renders filament-only and spool rows together without crash', () => {
+    renderWithRows([makeFilamentOnlyRow(), makeInSyncRow()])
+    expect(screen.getByText('PLA Grey')).toBeInTheDocument()
+    expect(screen.getByText('ELEGOO PLA Blue')).toBeInTheDocument()
+  })
+
+  it('filament-only row does not show "See conflict" when conflict_id is null', () => {
+    renderWithRows([makeFilamentOnlyRow({ conflict_id: null })])
+    expect(screen.queryByRole('button', { name: /see conflict/i })).not.toBeInTheDocument()
+  })
+
+  it('filament-only row shows "See conflict" when conflict_id is set', () => {
+    renderWithRows([makeFilamentOnlyRow({ status: 'conflict', conflict_id: 77 })])
+    expect(screen.getByRole('button', { name: /see conflict/i })).toBeInTheDocument()
   })
 })

@@ -9,6 +9,10 @@ import { HelpTip } from '../components/HelpTip'
 import type { MappingDetailField, MappingRow, MappingStatus } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
+function isFilamentRow(row: MappingRow): boolean {
+  return row.kind === 'filament'
+}
+
 const STATUS_OPTIONS: Array<{ value: MappingStatus | ''; label: string }> = [
   { value: '', label: 'All' },
   { value: 'in_sync', label: 'In Sync' },
@@ -170,8 +174,9 @@ export default function SyncedRecords() {
                 )}
                 {rows.map(row => {
                   const expanded = expandedIds.has(row.id)
+                  const filamentOnly = isFilamentRow(row)
                   return (
-                    <Fragment key={row.id}>
+                    <Fragment key={`${row.kind}-${row.id}`}>
                       <tr
                         className="hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer select-none"
                         onClick={() => toggleExpand(row.id)}
@@ -179,18 +184,27 @@ export default function SyncedRecords() {
                         <td className="w-8 px-2 py-3 text-center">
                           <span className={`inline-block text-gray-400 dark:text-gray-500 transition-transform ${expanded ? 'rotate-180' : ''}`}>▾</span>
                         </td>
-                        <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{row.name ?? '—'}</td>
+                        <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">
+                          {row.name ?? '—'}
+                          {filamentOnly && (
+                            <span className="ml-2 text-xs text-gray-400 dark:text-gray-500 font-normal">(filament only)</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.vendor ?? '—'}</td>
                         <td className="px-4 py-3">
                           <ColorDisplay
-                            colorHex={row.color}
+                            colorHex={row.color ?? undefined}
                             multiColorHexes={row.multi_color_hexes}
                             multiColorDirection={row.multi_color_direction}
                             showLabel
                           />
                         </td>
-                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtWeight(row.spoolman_weight, '(net)')}</td>
-                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtWeight(row.filamentdb_weight, '(gross)')}</td>
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                          {filamentOnly ? <span className="text-gray-400 dark:text-gray-500">—</span> : fmtWeight(row.spoolman_weight, '(net)')}
+                        </td>
+                        <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                          {filamentOnly ? <span className="text-gray-400 dark:text-gray-500">—</span> : fmtWeight(row.filamentdb_weight, '(gross)')}
+                        </td>
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex flex-col items-start gap-1">
                             <StatusBadge status={row.status} />
@@ -212,19 +226,27 @@ export default function SyncedRecords() {
                         <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                           <DeepLinks
                             filamentdbFilamentId={row.filamentdb_filament_id}
-                            spoolmanSpoolId={row.spoolman_spool_id}
-                            spoolmanFilamentId={row.spoolman_filament_id}
+                            spoolmanSpoolId={filamentOnly ? undefined : (row.spoolman_spool_id ?? undefined)}
+                            spoolmanFilamentId={row.spoolman_filament_id ?? undefined}
                           />
                         </td>
                       </tr>
                       {expanded && (
                         <tr className="bg-gray-50/60 dark:bg-gray-900/30">
                           <td colSpan={9} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700">
-                            <div className="flex items-center gap-1 mb-2">
-                              <span className="text-xs text-gray-400 dark:text-gray-500">Snapshot values</span>
-                              <HelpTip text="Last-known values per side from the bridge's snapshots — '—' means the field hasn't been baselined by a sync yet." />
-                            </div>
-                            <DetailGrid detail={row.detail} />
+                            {filamentOnly ? (
+                              <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+                                Filament only — no spool in Spoolman. This filament was imported but has no spool records.
+                              </p>
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-1 mb-2">
+                                  <span className="text-xs text-gray-400 dark:text-gray-500">Snapshot values</span>
+                                  <HelpTip text="Last-known values per side from the bridge's snapshots — '—' means the field hasn't been baselined by a sync yet." />
+                                </div>
+                                <DetailGrid detail={row.detail} />
+                              </>
+                            )}
                           </td>
                         </tr>
                       )}

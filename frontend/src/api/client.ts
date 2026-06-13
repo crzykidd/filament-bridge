@@ -17,6 +17,7 @@ import type {
   ConflictResponse,
   CycleResultResponse,
   DivergenceContextResponse,
+  FilamentSuggestionsResponse,
   FullResetResponse,
   HealthResponse,
   MappingRow,
@@ -142,6 +143,9 @@ export const getDivergenceContext = (conflictId: number) =>
 
 export const importConflictRecord = (conflictId: number, body: ConflictImportRequest) =>
   json<WizardExecuteResponse>(`/conflicts/${conflictId}/import`, 'POST', body)
+
+export const getFilamentSuggestions = (conflictId: number) =>
+  request<FilamentSuggestionsResponse>(`/conflicts/${conflictId}/filament-suggestions`)
 
 // ---------------------------------------------------------------------------
 // Mappings

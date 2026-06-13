@@ -81,10 +81,18 @@ only the bare id — identity is stored from the cycle that queued the conflict,
 created before this feature shipped may lack it.
 
 **Add** opens an inline import flow:
-1. **Choose filament action** — "Create new filament" (default) or "Link to existing" (enter the FDB filament ID for link).
-2. **Optional tare override** — overrides the spool_weight used for weight conversion.
-3. **Preview** (`dry_run=true`) — shows what would be created/updated without writing.
-4. **Confirm import** — executes the import (`POST /api/conflicts/{id}/import`), creates the filament in the target system, writes cross-reference IDs, and marks the conflict resolved.
+1. **Choose filament action** — "Create new filament" (default) or "Link to existing".
+2. **Link to existing** — the UI fetches `GET /api/conflicts/{id}/filament-suggestions` and
+   presents a ranked dropdown of Filament DB filaments that match the incoming Spoolman
+   filament (exact cross-reference matches score 1.0; fuzzy matches on vendor + name + color
+   fill the rest of the list, up to 8 results). You can also type a 24-character hex
+   Filament DB id directly into the override field. If you select a variant's parent
+   container, the import uses that parent as the explicit parent for single-record import
+   — it does **not** detach or regroup any existing variants.
+3. **Optional tare override** — overrides the spool_weight used for weight conversion.
+4. **Preview** (`dry_run=true`) — shows what would be created/updated without writing.
+5. **Confirm import** — executes the import (`POST /api/conflicts/{id}/import`), creates the
+   filament in the target system, writes cross-reference IDs, and marks the conflict resolved.
 
 **Dismiss** clears the notice without creating anything.
 
@@ -109,6 +117,22 @@ Select multiple `new_spool` or `new_filament` conflicts and click **Add selected
 open the Bulk Add modal. Each record is imported sequentially using "create new filament"
 as the default filament action. Records that require a specific FDB link or custom tare
 override should be handled individually via the per-conflict Add flow instead.
+
+## Synced Records — filament-only rows
+
+Synced Records shows two kinds of rows:
+
+- **Spool rows** (`kind: "spool"`) — a linked Spoolman spool + Filament DB spool pair.
+  These show weight columns, relink/unlink actions, and the full detail grid when expanded.
+- **Filament rows** (`kind: "filament"`) — a Spoolman filament that has a `FilamentMapping`
+  but no spools yet. Common for filaments imported by the wizard before any spool is added
+  in Spoolman. Displayed with a **(filament only)** hint, `—` for weight columns, and deep
+  links to each system's filament page. Relink/unlink are hidden for these rows. Once a
+  spool appears in Spoolman the engine maps it and the row becomes a spool row on the next
+  cycle.
+
+Synthetic parent container rows (created by the wizard in `generic_container` mode) do not
+appear in Synced Records — they are internal bridge plumbing, not real cross-system pairs.
 
 ## Avoiding conflicts in the first place
 

@@ -2570,6 +2570,21 @@ async def run_sync_cycle(
         if getattr(m, "is_synthetic_parent", False)
     }
 
+    # ---- Opportunistic identity backfill (OQ-1) ----
+    # Self-heal legacy FilamentMapping rows that were created before the identity
+    # column existed.  When the SM or FDB filament is in hand during this cycle,
+    # set the identity blob so build_mapping_rows can display filament-only rows.
+    if not dry_run:
+        for fm in filament_mappings:
+            if fm.identity is not None or fm.is_synthetic_parent:
+                continue
+            sm_fil = sm_filaments.get(fm.spoolman_filament_id) if fm.spoolman_filament_id else None
+            fdb_fil = fdb_filaments.get(fm.filamentdb_id)
+            if sm_fil is not None:
+                fm.identity = json.dumps(_sm_filament_identity(sm_fil))
+            elif fdb_fil is not None:
+                fm.identity = json.dumps(_fdb_filament_identity(fdb_fil))
+
     # ---- Resolve field mappings (FR-11) ----
     field_maps: list[FieldMapping] = []
     if filament_mappings:

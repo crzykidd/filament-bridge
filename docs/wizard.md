@@ -102,6 +102,13 @@ write-backs and finish-tag extras, merges OpenTag identity into Filament DB wher
 then creates spools (weight, location — found-or-created by name — and purchase/opened
 dates carried over) and writes the cross-reference IDs on both sides.
 
+At every `FilamentMapping` creation site, Execute stores an **identity blob**
+`{vendor, name, color_hex, material}` on the mapping. This allows Synced Records to
+display spool-less filaments (filament-only rows) with meaningful labels before any
+snapshot has been taken, and provides the data the conflict filament-suggestions endpoint
+needs to rank candidates. The sync engine opportunistically backfills this blob for legacy
+mappings created before this feature shipped.
+
 Failures are **per-record**: a name collision or API error records a failed row and the
 run continues. The result view puts failures front and center with the record name and the
 exact error, plus a full per-record table of everything created, updated, and skipped.
