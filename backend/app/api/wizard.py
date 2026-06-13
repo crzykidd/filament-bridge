@@ -113,6 +113,57 @@ def _is_409(exc: Exception) -> bool:
         and exc.response.status_code == 409
     )
 
+
+def _find_fdb_by_name(
+    target_name: str,
+    fdb_by_id: dict[str, "FDBFilament"],
+    *,
+    prefer_parent_id: str | None = None,
+    prefer_null_parent: bool = False,
+) -> "FDBFilament | None":
+    """Case-insensitive name lookup across live FDB filaments for find-or-attach on 409.
+
+    Returns the best-matching FDBFilament whose ``name`` matches ``target_name``
+    (case-insensitive, whitespace-normalised), or ``None`` if no match.
+
+    Tie-break rules (applied in order when multiple filaments share the same
+    normalised name):
+    1. Prefer the record whose ``parentId`` equals ``prefer_parent_id`` (used when
+       looking up a variant that should belong to a known container).
+    2. Prefer the record with a null ``parentId`` when ``prefer_null_parent=True``
+       (used when looking up a container, which has no parent of its own).
+    3. Otherwise return the first match in iteration order (arbitrary but stable
+       within a single execute call since ``fdb_by_id`` is built from the same
+       ``fdb_filaments`` list throughout the run).
+
+    The tie-break is intentionally documented here: a container lookup passes
+    ``prefer_null_parent=True`` so a same-named variant (which has a parentId) is
+    never confused with the container.  A variant lookup passes its expected
+    ``prefer_parent_id`` so the correct sibling variant wins when two filaments
+    share a name under different containers.
+    """
+    norm = (target_name or "").strip().lower()
+    if not norm:
+        return None
+    candidates = [f for f in fdb_by_id.values() if (f.name or "").strip().lower() == norm]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    # Tie-break 1: prefer matching parent_id
+    if prefer_parent_id is not None:
+        for c in candidates:
+            if c.parentId == prefer_parent_id:
+                return c
+    # Tie-break 2: prefer null parent (for container lookup)
+    if prefer_null_parent:
+        for c in candidates:
+            if c.parentId is None:
+                return c
+    # Fallback: first candidate
+    return candidates[0]
+
+
 # ---------------------------------------------------------------------------
 # Ref builders
 # ---------------------------------------------------------------------------
@@ -1233,6 +1284,7 @@ async def _execute_spoolman_to_fdb(
                     k: v for k, v in container_payload.items()
                     if v is not None or k == "color"
                 }
+                _synth_mapping_registered = False  # set True when mapping is handled in 409 path
                 try:
                     created_container = await filamentdb.create_filament(container_payload_clean)
                     container_fdb_id = created_container.id
@@ -1245,30 +1297,69 @@ async def _execute_spoolman_to_fdb(
                     )
                 except Exception as exc:
                     if _is_409(exc):
-                        err_msg = f"name collision: {display_name}"
-                        logger.warning(
-                            "wizard execute %s: 409 creating container '%s' (cluster %s) — skipping cluster",
-                            res.cycle_id, display_name, cluster_key,
+                        # find-or-attach: the container already exists (prior Add or wizard
+                        # import created it).  Look it up by its display name (case-insensitive,
+                        # prefer null parentId since containers have no parent of their own).
+                        existing_container = _find_fdb_by_name(
+                            display_name, fdb_by_id, prefer_null_parent=True
                         )
+                        if existing_container is not None:
+                            container_fdb_id = existing_container.id
+                            logger.info(
+                                "wizard execute %s: 409 on container '%s' — found existing FDB "
+                                "filament %s; attaching cluster to it (find-or-attach)",
+                                res.cycle_id, display_name, container_fdb_id,
+                            )
+                            # Ensure the synthetic FilamentMapping exists (don't duplicate).
+                            existing_synth_row = db.query(FilamentMapping).filter_by(
+                                filamentdb_id=container_fdb_id, is_synthetic_parent=True,
+                            ).first()
+                            if existing_synth_row is None:
+                                db.add(FilamentMapping(
+                                    spoolman_filament_id=None,
+                                    filamentdb_id=container_fdb_id,
+                                    filamentdb_parent_id=None,
+                                    is_synthetic_parent=True,
+                                ))
+                                db.flush()
+                            _synth_fdb_ids.add(container_fdb_id)
+                            fdb_by_id.setdefault(container_fdb_id, existing_container)
+                            _synth_mapping_registered = True  # mapping already handled above
+                            # Fall through to "Assign all cluster members" below.
+                        else:
+                            # Truly unresolvable name collision — record failure.
+                            err_msg = f"name collision (no existing FDB match): {display_name}"
+                            logger.warning(
+                                "wizard execute %s: 409 creating container '%s' (cluster %s) — "
+                                "no existing FDB filament found; skipping cluster",
+                                res.cycle_id, display_name, cluster_key,
+                            )
+                            res.add(db, "filament", "failed", error=err_msg,
+                                    label=display_name,
+                                    detail=f"failed to create container: {display_name}")
+                            continue  # skip setting parent for this cluster
                     else:
                         err_msg = str(exc)
                         logger.error(
                             "wizard execute %s: create container parent failed for cluster %s: %s",
                             res.cycle_id, cluster_key, exc,
                         )
-                    res.add(db, "filament", "failed", error=err_msg,
-                            label=display_name,
-                            detail=f"failed to create container: {display_name}")
-                    continue  # skip setting parent for this cluster
-                # Record the synthetic FilamentMapping.
-                db.add(FilamentMapping(
-                    spoolman_filament_id=None,
-                    filamentdb_id=container_fdb_id,
-                    filamentdb_parent_id=None,
-                    is_synthetic_parent=True,
-                ))
-                _synth_fdb_ids.add(container_fdb_id)
-                db.flush()
+                        res.add(db, "filament", "failed", error=err_msg,
+                                label=display_name,
+                                detail=f"failed to create container: {display_name}")
+                        continue  # skip setting parent for this cluster
+                # Record the synthetic FilamentMapping for the fresh-create path.
+                # The find-or-attach path sets _synth_mapping_registered=True and handles
+                # its own mapping registration above (guarded against duplication).
+                if not _synth_mapping_registered:
+                    db.add(FilamentMapping(
+                        spoolman_filament_id=None,
+                        filamentdb_id=container_fdb_id,
+                        filamentdb_parent_id=None,
+                        is_synthetic_parent=True,
+                    ))
+                    _synth_fdb_ids.add(container_fdb_id)
+                    db.flush()
 
             # Assign all cluster members to attach to this container.
             for m in members:
@@ -1345,19 +1436,61 @@ async def _execute_spoolman_to_fdb(
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
                 if _is_409(exc):
-                    err_msg = f"name collision: {payload.get('name', '?')}"
-                    logger.warning(
-                        "wizard execute %s: 409 creating FDB filament (SM %s, name '%s') — skipping",
-                        res.cycle_id, item.sm_filament.id, payload.get("name"),
+                    # find-or-attach: the FDB filament already exists (prior Add / wizard
+                    # import).  Look it up by name (case-insensitive), preferring a record
+                    # whose parentId matches the expected container (for generic_container
+                    # attach groups) or has no parent (for standalone creates).
+                    _fil_name = payload.get("name", "")
+                    _prefer_parent = attach_parent  # may be None for standalone
+                    found_fil = _find_fdb_by_name(
+                        _fil_name, fdb_by_id,
+                        prefer_parent_id=_prefer_parent,
+                        prefer_null_parent=(_prefer_parent is None),
                     )
+                    if found_fil is not None:
+                        item.fdb_id = found_fil.id
+                        fdb_by_id.setdefault(found_fil.id, found_fil)
+                        logger.info(
+                            "wizard execute %s: 409 creating FDB filament '%s' (SM %s) — "
+                            "found existing FDB filament %s; linking (find-or-attach)",
+                            res.cycle_id, _fil_name, item.sm_filament.id, found_fil.id,
+                        )
+                        # If this filament needs a container parent, set it now.
+                        if attach_parent and found_fil.parentId != attach_parent:
+                            try:
+                                await filamentdb.update_filament(
+                                    found_fil.id, {"parentId": attach_parent}
+                                )
+                            except Exception as _patch_exc:
+                                logger.warning(
+                                    "wizard execute %s: parentId patch on found FDB filament "
+                                    "%s failed: %s",
+                                    res.cycle_id, found_fil.id, _patch_exc,
+                                )
+                        res.add(db, "filament", "updated",
+                                detail="linked to existing FDB filament (find-or-attach on 409)",
+                                label=_sm_label(item.sm_filament),
+                                sm_filament_id=item.sm_filament.id, fdb_filament_id=found_fil.id)
+                        # item.error stays None → spool creation proceeds below
+                    else:
+                        err_msg = f"name collision (no existing FDB match): {_fil_name}"
+                        logger.warning(
+                            "wizard execute %s: 409 creating FDB filament (SM %s, name '%s') — "
+                            "no existing FDB filament found; skipping",
+                            res.cycle_id, item.sm_filament.id, _fil_name,
+                        )
+                        res.add(db, "filament", "failed", error=err_msg,
+                                label=_sm_label(item.sm_filament),
+                                sm_filament_id=item.sm_filament.id)
+                        item.error = err_msg
                 else:
                     err_msg = str(exc)
                     logger.error("wizard execute %s: create FDB filament failed (SM %s): %s",
                                  res.cycle_id, item.sm_filament.id, exc)
-                res.add(db, "filament", "failed", error=err_msg,
-                        label=_sm_label(item.sm_filament),
-                        sm_filament_id=item.sm_filament.id)
-                item.error = err_msg
+                    res.add(db, "filament", "failed", error=err_msg,
+                            label=_sm_label(item.sm_filament),
+                            sm_filament_id=item.sm_filament.id)
+                    item.error = err_msg
         if item.fdb_id and not item.error:
             # D3: for attach groups, master_map points to the existing FDB parent (not the created id)
             # so Pass 2 variants also receive parentId = existing_fdb_parent_id
@@ -1418,19 +1551,56 @@ async def _execute_spoolman_to_fdb(
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
             except Exception as exc:
                 if _is_409(exc):
-                    err_msg = f"name collision: {payload.get('name', '?')}"
-                    logger.warning(
-                        "wizard execute %s: 409 creating FDB variant (SM %s, name '%s') — skipping",
-                        res.cycle_id, item.sm_filament.id, payload.get("name"),
+                    # find-or-attach: variant already exists (prior Add / wizard run).
+                    # Look up by name, preferring the record whose parentId == master_fdb_id.
+                    _var_name = payload.get("name", "")
+                    found_var = _find_fdb_by_name(
+                        _var_name, fdb_by_id, prefer_parent_id=master_fdb_id
                     )
+                    if found_var is not None:
+                        item.fdb_id = found_var.id
+                        fdb_by_id.setdefault(found_var.id, found_var)
+                        logger.info(
+                            "wizard execute %s: 409 creating FDB variant '%s' (SM %s) — "
+                            "found existing FDB filament %s; linking (find-or-attach)",
+                            res.cycle_id, _var_name, item.sm_filament.id, found_var.id,
+                        )
+                        # Ensure the parentId is set to the correct container.
+                        if found_var.parentId != master_fdb_id:
+                            try:
+                                await filamentdb.update_filament(
+                                    found_var.id, {"parentId": master_fdb_id}
+                                )
+                            except Exception as _patch_exc:
+                                logger.warning(
+                                    "wizard execute %s: parentId patch on found variant FDB "
+                                    "filament %s failed: %s",
+                                    res.cycle_id, found_var.id, _patch_exc,
+                                )
+                        res.add(db, "filament", "updated",
+                                detail="linked to existing FDB variant (find-or-attach on 409)",
+                                label=_sm_label(item.sm_filament),
+                                sm_filament_id=item.sm_filament.id, fdb_filament_id=found_var.id)
+                        # item.error stays None → spool creation proceeds below
+                    else:
+                        err_msg = f"name collision (no existing FDB match): {_var_name}"
+                        logger.warning(
+                            "wizard execute %s: 409 creating FDB variant (SM %s, name '%s') — "
+                            "no existing FDB filament found; skipping",
+                            res.cycle_id, item.sm_filament.id, _var_name,
+                        )
+                        res.add(db, "filament", "failed", error=err_msg,
+                                label=_sm_label(item.sm_filament),
+                                sm_filament_id=item.sm_filament.id)
+                        item.error = err_msg
                 else:
                     err_msg = str(exc)
                     logger.error("wizard execute %s: create FDB variant failed (SM %s): %s",
                                  res.cycle_id, item.sm_filament.id, exc)
-                res.add(db, "filament", "failed", error=err_msg,
-                        label=_sm_label(item.sm_filament),
-                        sm_filament_id=item.sm_filament.id)
-                item.error = err_msg
+                    res.add(db, "filament", "failed", error=err_msg,
+                            label=_sm_label(item.sm_filament),
+                            sm_filament_id=item.sm_filament.id)
+                    item.error = err_msg
 
     # ---- Pass 2.5: Spoolman write-backs (Phase 3 reconcile) ----
     # For each SM filament in a group that has reconcile decisions, PATCH it with the canonical

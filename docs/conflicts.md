@@ -99,6 +99,27 @@ created before this feature shipped may lack it.
 On a successful import any open `new_spool` conflicts that were held pending this filament
 are not auto-resolved — they advance to normal new-spool handling on the next cycle.
 
+#### Idempotent Add (find-or-attach on 409)
+
+In `generic_container` mode, the bridge tries to create a colorless container parent and
+the color variant before seeding the spool. If those records already exist in Filament DB
+(from a prior Add or the wizard), the FDB API returns 409. The bridge **does not fail**
+on a 409 — instead it performs *find-or-attach*:
+
+1. **Container 409**: searches the live FDB filament list for a filament whose name
+   matches the intended container name (case-insensitive, prefer null `parentId`).
+   If found, attaches the cluster to that existing container and ensures the
+   `FilamentMapping(is_synthetic_parent=True)` row exists. If no match, records a
+   single failure (true collision — needs manual resolution).
+2. **Variant/standalone 409**: searches the live FDB filament list by the intended
+   variant name (case-insensitive, prefer `parentId == container_id`). If found,
+   links to that existing filament; patches its `parentId` to the container if needed.
+   If no match, records a single failure.
+
+The result: re-running Add after a prior successful Add, or adding a sibling variant
+under an existing master, produces **zero failures** and the conflict resolves. A
+genuinely new filament still creates fresh as before.
+
 ### New spool — "Add" or Dismiss
 
 The expanded card shows the spool's filament **vendor · name** and a color swatch,

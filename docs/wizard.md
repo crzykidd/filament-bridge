@@ -117,6 +117,24 @@ split (e.g. "2f / 5s") so it's clear how many filament pairs versus individual s
 were affected. `wizard_completed` only flips on a zero-failure run — fix the failures and
 re-run; nothing already imported is duplicated.
 
+### Idempotent re-runs — find-or-attach on 409
+
+Execute is safe to re-run. When a `generic_container` create 409s because the record
+already exists in Filament DB, Execute performs a *find-or-attach* instead of failing:
+
+- **Container 409**: searches the live FDB filament list by the container's display name
+  (case-insensitive; prefers a record with `parentId == null`). If found, the cluster
+  attaches to that existing container — no failure recorded.
+- **Variant/standalone 409**: searches by the intended variant name (prefers `parentId`
+  matching the cluster's container). If found, links to the existing record and patches
+  `parentId` if needed — no failure recorded.
+
+This means a second Add for a record that was already imported produces **zero failures**
+and the conflict resolves. A genuinely new record (no existing FDB match by name) still
+creates fresh as before. The tie-break rule for name lookups: prefer the record whose
+`parentId` matches the expected container for variants, or prefer `parentId == null` for
+containers. First match wins among remaining ties.
+
 Created Filament DB names always include vendor + material (+ finish) + color — e.g.
 "Hatchbox PLA Light Blue" — so bare Spoolman color names ("Light Blue", "Beige") can't
 collide across lines.

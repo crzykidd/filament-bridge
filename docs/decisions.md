@@ -1,5 +1,36 @@
 # Decision record
 
+## 2026-06-13 — find-or-attach on 409 in `_execute_spoolman_to_fdb` (idempotent conflict Add)
+
+**Root cause (proven from live logs).** In `generic_container` mode, conflict Add (via
+`POST /api/conflicts/{id}/import`) calls `_execute_spoolman_to_fdb` which tries to create
+a synthetic container + variant in FDB. Once those records exist (from a prior Add or wizard
+import), FDB returns 409. The old code recorded a failure and skipped the cluster, so
+nothing attached and the conflict never resolved — a doom loop of re-Add → 2× 409 → 2 failed
+→ conflict stays open.
+
+**Decision.** Make the create path idempotent via find-or-attach on 409:
+1. **Container 409**: look up the existing FDB filament by its intended display name
+   (case-insensitive, prefer `parentId == null`). If found, use it as the container and
+   ensure a `FilamentMapping(is_synthetic_parent=True)` row exists (no duplicate). If no
+   match, record a single failure (true collision).
+2. **Variant/standalone 409**: look up by the intended variant name (prefer
+   `parentId == container_id`). If found, link and patch `parentId` if needed. If no match,
+   record a single failure.
+3. Helper `_find_fdb_by_name()` added (wizard.py) for case-insensitive name lookup with
+   tie-break rules: prefer-parent-id beats prefer-null-parent beats first-match.
+
+**Invariants.**
+- Re-running Add for an already-imported record → zero failures, conflict resolves.
+- Adding a sibling variant under an existing master → zero failures, conflict resolves.
+- A genuinely new record (no name match in FDB) still creates fresh.
+- A true name collision with no findable existing match still records a failure.
+- Bulk-wizard execute shares the same code path — its behavior is unchanged for the
+  success case; find-or-attach only fires on 409.
+
+**Tests.** Four new tests in `test_conflicts_import.py`: re-run Add doom-loop scenario;
+sibling variant attach; fresh create regression; container 409 no-match still fails.
+
 ## 2026-06-13 — FilamentMapping.identity column + filament-only rows in Synced Records
 
 **Why.** Spool-less imported filaments (Spoolman filament IDs 10, 14, 115, 120) had a
