@@ -110,11 +110,11 @@ per-system warning explaining why sync is off — so you can see and fix it. An 
 version does *not* block sync (that is treated as a connectivity issue, surfaced as `degraded`
 health, not as "too old").
 
-Filament DB **1.37.0** is the latest tested release.
+Latest tested upstreams: **Filament DB 1.42.0** and **Spoolman 0.23.1**.
 
 - **Filament DB** — the bridge gates version-specific features automatically.
 - **Spoolman** — the bridge creates its required extra fields (`filamentdb_id`, `filamentdb_spool_id`, etc.) automatically on startup if they are missing.
-- Both upstream APIs are unauthenticated — the bridge needs no keys or tokens to talk to them. (The bridge's own UI/API has its own login; see [Security](#security).)
+- Both upstream APIs are unauthenticated **by default**. **Filament DB ≥ 1.39.0** can optionally require an API key (FDB's own `FILAMENTDB_API_KEY`); if you enable it, set the bridge's `FILAMENTDB_API_KEY` to the same value and the bridge sends `Authorization: Bearer <key>` on every Filament DB request. Spoolman's API has no auth. (The bridge's own UI/API has its own login; see [Security](#security).)
 
 ---
 

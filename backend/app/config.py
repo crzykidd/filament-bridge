@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     filamentdb_url: str
     spoolman_url: str
 
+    # Optional Bearer token for Filament DB's API-key auth (FDB >= 1.39.0, set
+    # via FDB's own FILAMENTDB_API_KEY). Empty = no auth header (default; FDB's
+    # API is unauthenticated unless that key is configured). When set, the bridge
+    # sends `Authorization: Bearer <key>` on every Filament DB request.
+    filamentdb_api_key: str = ""
+
     # Sync
     sync_interval_seconds: int = 120
 

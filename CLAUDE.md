@@ -232,6 +232,7 @@ filament-bridge/
 |---|---|---|---|
 | `FILAMENTDB_URL` | **Yes** | — | Base URL of Filament DB (e.g., `http://filament-db:3000`) |
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of Spoolman (e.g., `http://spoolman:7912`) |
+| `FILAMENTDB_API_KEY` | No | — | Bearer token for Filament DB's optional API-key auth (FDB ≥ 1.39.0, set via FDB's own `FILAMENTDB_API_KEY`). When set, the bridge sends `Authorization: Bearer <key>` on every Filament DB request. Empty = no auth header (FDB API unauthenticated). Spoolman's API has no auth. |
 | `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles (also runtime-editable via Settings) |
 | `PUID` | No | `1000` | User ID the container process runs as (entrypoint chowns `/data` then drops to this UID) |
 | `PGID` | No | `1000` | Group ID the container process runs as |

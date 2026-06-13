@@ -64,16 +64,20 @@ def _strip_computed(payload: dict) -> dict:
 
 
 class FilamentDBClient:
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, api_key: str = "") -> None:
         self._base_url = base_url.rstrip("/")
+        self._api_key = api_key or ""
         self._client: httpx.AsyncClient | None = None
         self._version: str | None = None
         self._version_fetched = False
 
     async def __aenter__(self) -> "FilamentDBClient":
+        # FDB API-key auth (FDB >= 1.39.0): send a Bearer token when configured.
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else None
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
             timeout=httpx.Timeout(15.0),
+            headers=headers,
         )
         return self
 

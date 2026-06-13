@@ -151,7 +151,7 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         db.close()
 
     app.state.spoolman = SpoolmanClient(settings.spoolman_url)
-    app.state.filamentdb = FilamentDBClient(settings.filamentdb_url)
+    app.state.filamentdb = FilamentDBClient(settings.filamentdb_url, settings.filamentdb_api_key)
 
     # Background task reference held so we can cancel it cleanly on shutdown.
     _dump_task: asyncio.Task | None = None

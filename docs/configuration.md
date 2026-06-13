@@ -16,6 +16,7 @@ Configuration lives in two layers:
 |---|---|---|---|
 | `FILAMENTDB_URL` | **Yes** | — | Base URL of your Filament DB instance. Trailing slash is stripped automatically. Example: `http://filament-db:3000` |
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of your Spoolman instance. Example: `http://spoolman:7912` |
+| `FILAMENTDB_API_KEY` | No | — | Bearer token for Filament DB's optional API-key auth (Filament DB ≥ 1.39.0, enabled by setting FDB's own `FILAMENTDB_API_KEY`). When set, the bridge sends `Authorization: Bearer <key>` on every Filament DB request. Leave empty unless you've turned on FDB's API key. Spoolman's API has no auth. |
 | `DATA_DIR` | No | `/data` | Directory for the SQLite state database (`bridge.db`), the OpenTag dataset cache, and backup files. Mount a persistent volume at this path. |
 
 ## Authentication
