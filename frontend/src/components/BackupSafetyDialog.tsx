@@ -116,7 +116,7 @@ export function BackupSafetyDialog({
             Back up before you continue
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            <strong className="text-amber-700 dark:text-amber-400">Alpha feature:</strong> this action writes to
+            <strong className="text-amber-700 dark:text-amber-400">Beta feature:</strong> this action writes to
             Spoolman and Filament DB. We recommend backing up both systems first.
           </p>
         </div>

@@ -4,9 +4,9 @@
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
-> ## ⚠️ ALPHA — back up your databases before any writes
+> ## ⚠️ BETA — back up your databases before any writes
 >
-> filament-bridge is **alpha** software that writes to both **Spoolman** and **Filament DB**.
+> filament-bridge is **beta** software that writes to both **Spoolman** and **Filament DB**.
 > **Before** running the Bulk Import Wizard, applying an OpenTag cleanup, or enabling
 > auto-sync, **back up all three databases** (Spoolman, Filament DB, and the bridge). See
 > [Backups](#backups). Test against non-critical data first.
@@ -21,6 +21,10 @@ Filament DB and Spoolman are both excellent tools that solve different parts of 
 - **Spoolman** excels at print-side inventory tracking — native OctoPrint and Moonraker/Klipper integration, real-time spool weight decrement during prints, Home Assistant integration, and broad ecosystem support.
 
 Neither can do what the other does well. filament-bridge keeps them in sync so you can use both without manual data entry. It runs as a single Docker container next to your existing instances, links records via Spoolman extra fields and Filament DB spool labels, and keeps its own state in SQLite — neither upstream system is ever modified beyond its documented REST API.
+
+It was built out of a real migration: moving filament management into Filament DB, but *first* cleaning up the existing spool data to a real standard ([OpenPrintTag](https://openprinttag.org)) on the way in — and keeping Spoolman fully working, because OctoPrint and Home Assistant talk to it directly and aren't going anywhere. That last part is why this is a continuous two-way sync, not a one-time export.
+
+There are **two ways to onboard**: just bridge the two systems and create your Filament DB records straight from Spoolman, or do a little cleanup work against OpenPrintTag first so your catalog lands standardized and Filament DB can keep pulling canonical updates later. **[Getting started](docs/getting-started.md) walks through both paths** and helps you pick.
 
 ---
 
@@ -81,6 +85,10 @@ docker compose -f docker-compose.dev.yml up -d --build
 ```
 
 ### First run
+
+New to the bridge? **[docs/getting-started.md](docs/getting-started.md)** explains the two
+onboarding paths (just-bridge-them vs. clean-up-against-OpenPrintTag-first) and walks through
+each. The short version:
 
 1. Open `http://localhost:8090`. The bridge asks you to **set an admin password**
    (authentication is on by default — set `AUTH_ENABLED=false` to skip it).
@@ -367,6 +375,7 @@ Both Filament DB and Spoolman continue to function independently. filament-bridg
 
 | Doc | What it covers |
 |---|---|
+| [docs/getting-started.md](docs/getting-started.md) | Why the bridge exists, the two onboarding paths, and a first-run walkthrough of each |
 | [docs/configuration.md](docs/configuration.md) | Every env var and runtime setting |
 | [docs/sync-model.md](docs/sync-model.md) | The sync engine: passes, snapshots, direction/policy resolution, version gating |
 | [docs/wizard.md](docs/wizard.md) | The Bulk Import Wizard, step by step |

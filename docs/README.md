@@ -6,6 +6,7 @@ Start with the top-level [README](../README.md) for what the bridge is and how t
 
 | Doc | What it covers |
 |---|---|
+| [getting-started.md](getting-started.md) | Why the bridge exists, the two onboarding paths, and a first-run walkthrough of each |
 | [configuration.md](configuration.md) | Every environment variable and runtime setting |
 | [wizard.md](wizard.md) | The Bulk Import Wizard, step by step |
 | [variant-parent-mode.md](variant-parent-mode.md) | `promote_color` vs `generic_container`, container naming, collision handling |
