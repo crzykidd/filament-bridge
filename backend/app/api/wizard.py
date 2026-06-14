@@ -2385,11 +2385,12 @@ async def wizard_preview(request: Request, db: Session = Depends(get_db)) -> Wiz
         _preview_marker = _resolve_container_parent_marker(db)
         _preview_kw = preview_variant_keywords
         for item in plan.filament_items:
-            if not item.resolved:
+            if item.action != "create" or item.error:
                 continue
             _ck = sm_variant_cluster_key(item.sm_filament, keywords=_preview_kw)
             if _ck not in _preview_container_names:
-                # Collect all resolved members for this cluster (approximate — use included sm)
+                # Only filaments being created contribute a container name; already-linked
+                # (action="skip", resolved=True) clusters must not produce container collisions.
                 _preview_container_names[_ck] = _container_display_name(
                     [item.sm_filament], _preview_kw, marker=_preview_marker
                 )
