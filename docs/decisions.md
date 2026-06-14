@@ -1,5 +1,28 @@
 # Decision record
 
+## 2026-06-13 — Debug: added POST /api/debug/clear-spoolman-opentag-ids
+
+Added a fourth standalone debug endpoint that blanks the three OpenPrintTag identity
+extras (`openprinttag_slug` / `openprinttag_uuid` / `openprinttag_ignore`) on every
+Spoolman **filament** that has any of them set. This is the filament-level analog of
+the existing `clear-spoolman-fdb-refs` (spool-level cross-ref clearer).
+
+**What it does:** Iterates `get_filaments()`; for each filament with at least one of the
+three extras set to a non-blank value, calls `update_filament(id, {"extra": {k: blank}})`
+for only those keys. Per-filament write failures increment `failed` without aborting the
+batch. If the initial `get_filaments()` call fails, returns 502.
+
+**Spoolman-only.** No bridge DB writes, no Filament DB writes, no record deletion.
+Not folded into `full-reset` — it's a standalone testing convenience.
+
+**UI:** Settings Danger Zone now has four buttons in debug mode: "Clear Spoolman
+cross-refs (Spoolman only)", "Clear Spoolman OpenPrintTag ids (Spoolman only)", "Reset
+bridge DB (bridge only)", and "Full reset (bridge DB + Spoolman links)".
+
+**Rationale:** During OpenTag matcher re-testing, all three identity extras need to be
+blanked on every Spoolman filament so the matcher can be re-run from a clean state.
+Without this tool, users had to blank each filament manually through the Spoolman UI.
+
 ## 2026-06-13 — Remove `opentag_color_keywords` user-override feature
 
 The `opentag_color_keywords` setting (env var `OPENTAG_COLOR_KEYWORDS`, BridgeConfig seed,

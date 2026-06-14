@@ -11,6 +11,12 @@ Endpoints:
     (filamentdb_id / filamentdb_spool_id / filamentdb_parent_id) on each spool
     that has any of them set. Returns {"cleared": <n>, "failed": <n>}.
 
+  POST /api/debug/clear-spoolman-opentag-ids
+    Fetches all Spoolman filaments; blanks the three OpenPrintTag identity extras
+    (openprinttag_slug / openprinttag_uuid / openprinttag_ignore) on each
+    filament that has any of them set. Writes to Spoolman only — does NOT touch
+    the bridge DB or Filament DB. Returns {"cleared": <n>, "failed": <n>}.
+
   POST /api/debug/reset-bridge-state
     Deletes all rows from FilamentMapping, SpoolMapping, Snapshot, Conflict, and
     SyncLog — local only, no upstream writes. Resets wizard_completed to false so
@@ -53,6 +59,13 @@ _XREF_EXTRAS = [
     settings.spoolman_field_filamentdb_id,
     settings.spoolman_field_filamentdb_spool_id,
     settings.spoolman_field_filamentdb_parent_id,
+]
+
+# The three filament-level OpenPrintTag identity/state extra field keys.
+_OPENTAG_EXTRAS = [
+    settings.spoolman_field_openprinttag_slug,
+    settings.spoolman_field_openprinttag_uuid,
+    settings.spoolman_field_openprinttag_ignore,
 ]
 
 
@@ -157,6 +170,52 @@ async def _blank_spoolman_xrefs(spoolman: object) -> tuple[int, int, str | None]
     return cleared, failed, None
 
 
+async def _blank_spoolman_opentag_ids(spoolman: object) -> tuple[int, int, str | None]:
+    """Fetch all Spoolman filaments and blank the three OpenPrintTag extras on each.
+
+    Returns ``(cleared, failed, error_message)``.  ``error_message`` is non-None
+    only when the initial filament fetch fails (in which case cleared=0, failed=0).
+    Per-filament write failures are counted in ``failed`` but do not abort the batch.
+    """
+    blank = encode_extra_value("")
+
+    try:
+        filaments = await spoolman.get_filaments()  # type: ignore[attr-defined]
+    except Exception as exc:
+        logger.error("blank-spoolman-opentag-ids: could not fetch filaments: %s", exc)
+        return 0, 0, str(exc)
+
+    cleared = 0
+    failed = 0
+
+    for filament in filaments:
+        extra = filament.extra or {}
+        keys_to_blank = [
+            k for k in _OPENTAG_EXTRAS
+            if k in extra and extra[k] not in (None, blank, '""', "")
+        ]
+        if not keys_to_blank:
+            continue
+        try:
+            await spoolman.update_filament(  # type: ignore[attr-defined]
+                filament.id,
+                {"extra": {k: blank for k in keys_to_blank}},
+            )
+            logger.info(
+                "blank-spoolman-opentag-ids: blanked extras %s on filament %d",
+                keys_to_blank, filament.id,
+            )
+            cleared += 1
+        except Exception as exc:
+            logger.warning(
+                "blank-spoolman-opentag-ids: failed to blank extras on filament %d: %s",
+                filament.id, exc,
+            )
+            failed += 1
+
+    return cleared, failed, None
+
+
 def _reset_bridge_tables(db: Session) -> tuple[int, int, int, int, int]:
     """Delete all rows from the five bridge state tables and reset wizard_completed.
 
@@ -199,6 +258,31 @@ async def clear_spoolman_fdb_refs(
     _require_debug_mode(db)
 
     cleared, failed, error = await _blank_spoolman_xrefs(request.app.state.spoolman)
+    if error is not None:
+        raise HTTPException(status_code=502, detail=error)
+
+    return ClearRefsResponse(cleared=cleared, failed=failed)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/debug/clear-spoolman-opentag-ids
+# ---------------------------------------------------------------------------
+
+
+@router.post("/debug/clear-spoolman-opentag-ids", response_model=ClearRefsResponse)
+async def clear_spoolman_opentag_ids(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ClearRefsResponse:
+    """Blank the three OpenPrintTag extras on every Spoolman filament that has any set.
+
+    Writes to Spoolman only — requires debug_mode=true.
+    Does NOT touch the bridge DB or Filament DB.
+    Errors per filament are logged but do not abort the batch.
+    """
+    _require_debug_mode(db)
+
+    cleared, failed, error = await _blank_spoolman_opentag_ids(request.app.state.spoolman)
     if error is not None:
         raise HTTPException(status_code=502, detail=error)
 

@@ -281,6 +281,9 @@ export const getReconcile = () => request<ReconcileResponse>('/reconcile')
 export const clearSpoolmanFdbRefs = () =>
   request<ClearRefsResponse>('/debug/clear-spoolman-fdb-refs', { method: 'POST' })
 
+export const clearSpoolmanOpentagIds = () =>
+  request<ClearRefsResponse>('/debug/clear-spoolman-opentag-ids', { method: 'POST' })
+
 export const resetBridgeState = () =>
   request<ResetStateResponse>('/debug/reset-bridge-state', { method: 'POST' })
 

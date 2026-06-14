@@ -22,6 +22,7 @@ vi.mock('../api/client', () => ({
   exportBackup: vi.fn(),
   importBackup: vi.fn(),
   clearSpoolmanFdbRefs: vi.fn(),
+  clearSpoolmanOpentagIds: vi.fn(),
   resetBridgeState: vi.fn(),
   fullReset: vi.fn(),
   authChangePassword: vi.fn(),
@@ -224,6 +225,13 @@ describe('Settings debug section — Full reset', () => {
     expect(fullReset).not.toHaveBeenCalled()
   })
 
+  it('renders the Clear Spoolman OpenPrintTag ids button when debug mode is on', () => {
+    render(<Settings />)
+    expect(
+      screen.getByRole('button', { name: /clear spoolman openprinttag ids \(spoolman only\)/i }),
+    ).toBeInTheDocument()
+  })
+
   it('does not render debug zone when debug_mode is off', () => {
     ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeConfig({ debug_mode: false }),
@@ -235,5 +243,6 @@ describe('Settings debug section — Full reset', () => {
     render(<Settings />)
     expect(screen.queryByRole('button', { name: /full reset/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /clear spoolman cross-refs/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /clear spoolman openprinttag ids/i })).not.toBeInTheDocument()
   })
 })

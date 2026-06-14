@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBlocker, Link } from 'react-router-dom'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy } from '../api/types'
@@ -230,6 +230,9 @@ export default function Settings() {
   const [showClearRefsDialog, setShowClearRefsDialog] = useState(false)
   const [clearRefsMsg, setClearRefsMsg] = useState('')
   const [clearingRefs, setClearingRefs] = useState(false)
+  const [showClearOpentagDialog, setShowClearOpentagDialog] = useState(false)
+  const [clearOpentagMsg, setClearOpentagMsg] = useState('')
+  const [clearingOpentag, setClearingOpentag] = useState(false)
   const [resettingState, setResettingState] = useState(false)
   const [resetStateMsg, setResetStateMsg] = useState('')
   const [showFullResetDialog, setShowFullResetDialog] = useState(false)
@@ -354,6 +357,21 @@ export default function Settings() {
       setClearRefsMsg(e instanceof Error ? e.message : 'Error clearing refs.')
     } finally {
       setClearingRefs(false)
+    }
+  }
+
+  async function doClearOpentagIds() {
+    setClearingOpentag(true)
+    setClearOpentagMsg('')
+    try {
+      const result = await clearSpoolmanOpentagIds()
+      setClearOpentagMsg(
+        `Cleared OpenPrintTag ids on ${result.cleared} filament(s)${result.failed > 0 ? ` (${result.failed} failed — see logs)` : ''}.`,
+      )
+    } catch (e) {
+      setClearOpentagMsg(e instanceof Error ? e.message : 'Error clearing OpenPrintTag ids.')
+    } finally {
+      setClearingOpentag(false)
     }
   }
 
@@ -584,6 +602,12 @@ export default function Settings() {
       actionLabel="Clear Filament DB references from Spoolman"
       onCancel={() => setShowClearRefsDialog(false)}
       onProceed={() => { setShowClearRefsDialog(false); void doClearRefs() }}
+    />
+    <BackupSafetyDialog
+      open={showClearOpentagDialog}
+      actionLabel="Clear Spoolman OpenPrintTag ids"
+      onCancel={() => setShowClearOpentagDialog(false)}
+      onProceed={() => { setShowClearOpentagDialog(false); void doClearOpentagIds() }}
     />
     {showFullResetDialog && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/70">
@@ -1247,6 +1271,30 @@ export default function Settings() {
               </button>
               {clearRefsMsg && (
                 <p className="text-xs text-gray-700 dark:text-gray-300">{clearRefsMsg}</p>
+              )}
+            </div>
+
+            {/* Clear Spoolman OpenPrintTag ids (Spoolman only) */}
+            <div className="space-y-2 border-t border-red-200 dark:border-red-800 pt-4">
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                Clear Spoolman OpenPrintTag ids <span className="font-normal text-gray-500 dark:text-gray-400">(Spoolman only)</span>
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Blanks <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">openprinttag_slug</code>,{' '}
+                <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">openprinttag_uuid</code>, and{' '}
+                <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">openprinttag_ignore</code> on every Spoolman filament that has any set.
+                Writes to Spoolman only — does NOT touch the bridge DB or Filament DB. Speeds up re-running the OpenTag matcher in testing.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowClearOpentagDialog(true)}
+                disabled={clearingOpentag}
+                className="px-4 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {clearingOpentag ? 'Clearing…' : 'Clear Spoolman OpenPrintTag ids (Spoolman only)'}
+              </button>
+              {clearOpentagMsg && (
+                <p className="text-xs text-gray-700 dark:text-gray-300">{clearOpentagMsg}</p>
               )}
             </div>
 

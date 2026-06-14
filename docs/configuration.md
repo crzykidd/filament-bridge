@@ -144,7 +144,7 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | `opentag_vendor_aliases` | env / seed | Import & matching | See `OPENTAG_VENDOR_ALIASES`. |
 | `api_token_enabled` | `false` | Security | Allow `Authorization: Bearer` / `X-API-Key` machine auth. |
 | `api_token` | (none) | Security | The token value; generate/regenerate in Settings (displayed masked). |
-| `debug_mode` | `false` | Debug mode | Reveals the Danger Zone and enables the three `/api/debug/*` reset endpoints (403 when off). Never enable in production. |
+| `debug_mode` | `false` | Debug mode | Reveals the Danger Zone and enables the four `/api/debug/*` reset endpoints (403 when off). Never enable in production. |
 
 The wizard also persists its own decision state in BridgeConfig
 (`import_direction`, `wizard_match_decisions`, `wizard_sm_variant_decisions`,

@@ -44,10 +44,12 @@ def _fresh_db():
     return session
 
 
-def _fake_spoolman(spools=None) -> AsyncMock:
+def _fake_spoolman(spools=None, filaments=None) -> AsyncMock:
     client = AsyncMock()
     client.get_spools = AsyncMock(return_value=spools or [])
     client.update_spool = AsyncMock(return_value=MagicMock())
+    client.get_filaments = AsyncMock(return_value=filaments or [])
+    client.update_filament = AsyncMock(return_value=MagicMock())
     return client
 
 
@@ -64,6 +66,15 @@ def _sm_spool(spool_id: int, extra: dict | None = None) -> SpoolmanSpool:
     return SpoolmanSpool(
         id=spool_id,
         filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        extra=extra or {},
+    )
+
+
+def _sm_filament(filament_id: int, extra: dict | None = None) -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=filament_id,
+        name="PLA",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
         extra=extra or {},
     )
 
@@ -410,3 +421,122 @@ def test_full_reset_no_bridge_rows_no_xrefs_returns_zeros(db):
     assert body["spoolman_cleared"] == 0
     assert body["spoolman_failed"] == 0
     assert body["spoolman_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# clear-spoolman-opentag-ids with debug_mode off
+# ---------------------------------------------------------------------------
+
+
+def test_clear_opentag_ids_403_when_debug_mode_off(db):
+    """clear-spoolman-opentag-ids returns 403 when debug_mode is false (default)."""
+    client = _client(db)
+    resp = client.post("/api/debug/clear-spoolman-opentag-ids")
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["code"] == "debug_mode_required"
+
+
+# ---------------------------------------------------------------------------
+# clear-spoolman-opentag-ids with debug_mode=true
+# ---------------------------------------------------------------------------
+
+
+def test_clear_opentag_ids_blanks_extras_on_matching_filaments(db):
+    """Filaments with at least one OpenTag extra set get all three blanked; others skipped."""
+    set_config_value(db, "debug_mode", True)
+    db.commit()
+
+    blank = encode_extra_value("")
+    # Filament 1: has slug and uuid set, ignore is empty (already blank)
+    fil1 = _sm_filament(1, extra={
+        "openprinttag_slug": encode_extra_value("bambu-pla-basic-black"),
+        "openprinttag_uuid": encode_extra_value("abc-123"),
+        "openprinttag_ignore": encode_extra_value(""),
+    })
+    # Filament 2: has only ignore set to "1"
+    fil2 = _sm_filament(2, extra={
+        "openprinttag_ignore": encode_extra_value("1"),
+    })
+    # Filament 3: no OpenTag extras at all
+    fil3 = _sm_filament(3, extra={})
+
+    spoolman = _fake_spoolman(filaments=[fil1, fil2, fil3])
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/clear-spoolman-opentag-ids")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Filament 1: slug + uuid are set (ignore is already blank → skipped)
+    # Filament 2: ignore is set
+    # So 2 filaments get updated
+    assert body["cleared"] == 2
+    assert body["failed"] == 0
+
+    assert spoolman.update_filament.await_count == 2
+
+    calls_by_id = {call.args[0]: call.args[1] for call in spoolman.update_filament.await_args_list}
+    assert 1 in calls_by_id
+    assert 2 in calls_by_id
+
+    # Filament 1: slug and uuid should be blanked
+    fil1_extra = calls_by_id[1]["extra"]
+    assert fil1_extra["openprinttag_slug"] == blank
+    assert fil1_extra["openprinttag_uuid"] == blank
+
+    # Filament 2: ignore should be blanked
+    fil2_extra = calls_by_id[2]["extra"]
+    assert fil2_extra["openprinttag_ignore"] == blank
+
+
+def test_clear_opentag_ids_counts_failures_without_aborting(db):
+    """Per-filament errors are logged and counted; the batch continues."""
+    set_config_value(db, "debug_mode", True)
+    db.commit()
+
+    fil1 = _sm_filament(1, extra={"openprinttag_slug": encode_extra_value("slug-a")})
+    fil2 = _sm_filament(2, extra={"openprinttag_slug": encode_extra_value("slug-b")})
+    spoolman = _fake_spoolman(filaments=[fil1, fil2])
+
+    async def _update_side_effect(filament_id, payload):
+        if filament_id == 1:
+            raise RuntimeError("Spoolman unavailable")
+        return MagicMock()
+
+    spoolman.update_filament = AsyncMock(side_effect=_update_side_effect)
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/clear-spoolman-opentag-ids")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cleared"] == 1
+    assert body["failed"] == 1
+
+
+def test_clear_opentag_ids_no_extras_returns_zero(db):
+    """When no filaments have OpenTag extras, cleared and failed are both 0."""
+    set_config_value(db, "debug_mode", True)
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=[_sm_filament(1), _sm_filament(2)])
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/clear-spoolman-opentag-ids")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cleared"] == 0
+    assert body["failed"] == 0
+    spoolman.update_filament.assert_not_called()
+
+
+def test_clear_opentag_ids_502_when_get_filaments_raises(db):
+    """Returns 502 if the initial get_filaments() call fails."""
+    set_config_value(db, "debug_mode", True)
+    db.commit()
+
+    spoolman = _fake_spoolman()
+    spoolman.get_filaments = AsyncMock(side_effect=RuntimeError("connection refused"))
+    client = _client(db, spoolman)
+
+    resp = client.post("/api/debug/clear-spoolman-opentag-ids")
+    assert resp.status_code == 502
+    assert "connection refused" in resp.json()["detail"]
