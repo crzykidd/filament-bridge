@@ -800,3 +800,48 @@ class SyncLogResponse(BaseModel):
 
 class SyncLogDeleteResponse(BaseModel):
     deleted: int
+
+
+# ---------------------------------------------------------------------------
+# Reconcile report (read-only — no upstream writes)
+# ---------------------------------------------------------------------------
+
+
+class ReconcileMatchRow(BaseModel):
+    """A matched pair of filaments (one SM, one FDB) with spool roll-ups."""
+
+    spoolman: FilamentRef
+    filamentdb: FilamentRef
+    confidence: float
+    # True when the pair came from an existing cross-ref (xref pre-pass, conf 1.0).
+    # False when matched by exact normalized vendor+name+color key.
+    linked: bool
+    spoolman_spools: int
+    filamentdb_spools: int
+    spoolman_weight: float | None
+    filamentdb_weight: float | None
+
+
+class ReconcileMissingRow(BaseModel):
+    """A filament that exists on one side only."""
+
+    ref: FilamentRef
+    spool_count: int
+    weight_total: float | None
+
+
+class ReconcileSummary(BaseModel):
+    spoolman_filaments: int
+    filamentdb_filaments: int
+    matched: int
+    only_in_spoolman: int
+    only_in_filamentdb: int
+    ambiguous: int
+
+
+class ReconcileResponse(BaseModel):
+    summary: ReconcileSummary
+    matched: list[ReconcileMatchRow]
+    only_in_spoolman: list[ReconcileMissingRow]
+    only_in_filamentdb: list[ReconcileMissingRow]
+    ambiguous: list[AmbiguousRow]

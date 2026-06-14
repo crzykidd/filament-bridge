@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { getSyncStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/client'
 import { usePoll } from '../api/hooks'
 import { SystemStatusBadge } from '../components/StatusBadge'
@@ -382,6 +382,22 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Reconcile entry point */}
+      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5 flex items-center justify-between">
+        <div>
+          <p className="font-medium text-gray-900 dark:text-gray-100 text-sm">Reconcile</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            Compare Spoolman and Filament DB — see what's matched, missing, or ambiguous.
+          </p>
+        </div>
+        <Link
+          to="/reconcile"
+          className="px-3 py-1.5 text-sm font-medium rounded bg-indigo-600 text-white hover:bg-indigo-700 whitespace-nowrap"
+        >
+          View report
+        </Link>
+      </div>
 
       {data?.pending_conflicts != null && data.pending_conflicts > 0 && (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-4 flex items-center justify-between">

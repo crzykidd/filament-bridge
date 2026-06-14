@@ -29,6 +29,7 @@ import type {
   OpenTagIgnoreResponse,
   OpenTagMatchesResponse,
   OpenTagSearchResponse,
+  ReconcileResponse,
   ResetStateResponse,
   SMVariancesDecisionsRequest,
   SyncLogDeleteResponse,
@@ -266,6 +267,12 @@ export const getOpenTagSearch = (
   params.set('limit', String(limit))
   return request<OpenTagSearchResponse>(`/openprinttag/search?${params.toString()}`)
 }
+
+// ---------------------------------------------------------------------------
+// Reconcile
+// ---------------------------------------------------------------------------
+
+export const getReconcile = () => request<ReconcileResponse>('/reconcile')
 
 // ---------------------------------------------------------------------------
 // Debug reset tools (only available when debug_mode=true)

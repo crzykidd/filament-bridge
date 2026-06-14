@@ -35,6 +35,7 @@ from app.api import debug as debug_router
 from app.api import health as health_router
 from app.api import version as version_router
 from app.api import mappings as mappings_router
+from app.api import reconcile as reconcile_router
 from app.api import opentag as opentag_router
 from app.api import sync as sync_router
 from app.api import sync_log as sync_log_router
@@ -253,6 +254,7 @@ _auth_dep = [Depends(require_auth)]
 app.include_router(sync_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(conflicts_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(mappings_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(reconcile_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(config_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(wizard_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)

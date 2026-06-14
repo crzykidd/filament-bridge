@@ -869,6 +869,46 @@ export interface AuthStatusResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Reconcile report (read-only)
+// ---------------------------------------------------------------------------
+
+export interface ReconcileMatchRow {
+  spoolman: FilamentRef
+  filamentdb: FilamentRef
+  confidence: number
+  /** True when the pair came from an existing cross-ref (xref pre-pass).
+   *  False when matched by exact normalized vendor+name+color key. */
+  linked: boolean
+  spoolman_spools: number
+  filamentdb_spools: number
+  spoolman_weight: number | null
+  filamentdb_weight: number | null
+}
+
+export interface ReconcileMissingRow {
+  ref: FilamentRef
+  spool_count: number
+  weight_total: number | null
+}
+
+export interface ReconcileSummary {
+  spoolman_filaments: number
+  filamentdb_filaments: number
+  matched: number
+  only_in_spoolman: number
+  only_in_filamentdb: number
+  ambiguous: number
+}
+
+export interface ReconcileResponse {
+  summary: ReconcileSummary
+  matched: ReconcileMatchRow[]
+  only_in_spoolman: ReconcileMissingRow[]
+  only_in_filamentdb: ReconcileMissingRow[]
+  ambiguous: AmbiguousRow[]
+}
+
+// ---------------------------------------------------------------------------
 // Error envelope (from api/errors.py)
 // ---------------------------------------------------------------------------
 

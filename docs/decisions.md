@@ -1,5 +1,33 @@
 # Decision record
 
+## 2026-06-13 — Reconcile page: read-only, on-demand, no fuzzy suggestions
+
+**Feature.** New `/reconcile` page and `GET /api/reconcile` endpoint that compares
+Spoolman and Filament DB at the filament level and shows four buckets: matched pairs,
+only-in-Spoolman, only-in-Filament-DB, and ambiguous.
+
+**Read-only, write-nothing.** The endpoint fetches from both upstreams but writes
+nothing — no mapping rows, no cross-ref fields, no upstream records. Acting on a
+missing item remains the Bulk Import Wizard's job. This is enforced by the router
+containing zero mutating calls.
+
+**On-demand fetch, not auto-polled.** A full read of both upstream filament + spool
+lists is too heavy to poll automatically. The page exposes a visible Refresh button;
+`useApi` fires once on mount. `usePoll` was explicitly rejected.
+
+**No fuzzy / near-miss suggestions.** The prompt scope-cut this explicitly. Only the
+matcher's existing cross-ref (xref pre-pass) + exact normalized vendor+name+color key
+matching is used. Missing filaments are listed plainly with no "possible match" hints.
+
+**`linked` flag semantics.** A matched pair is `linked=True` iff the SM filament's id
+appeared in `xref_by_sm_filament` (cross-ref via Spoolman spool `filamentdb_id` extra
+field) AND the stored FDB id equals the paired FDB filament's id. A pair matched only
+by the exact-key pass is `linked=False`.
+
+**Import pattern.** `_sm_ref` and `_fdb_ref` are imported directly from
+`app.api.wizard` rather than being lifted to a shared module, to avoid drift. Both
+helpers are pure functions with no side effects.
+
 ## 2026-06-13 — find-or-attach on 409 in `_execute_spoolman_to_fdb` (idempotent conflict Add)
 
 **Root cause (proven from live logs).** In `generic_container` mode, conflict Add (via

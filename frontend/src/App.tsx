@@ -14,6 +14,7 @@ import Conflicts from './pages/Conflicts'
 import SyncLog from './pages/SyncLog'
 import Settings from './pages/Settings'
 import OpenTagCleanup from './pages/OpenTagCleanup'
+import Reconcile from './pages/Reconcile'
 import DocsViewer from './pages/DocsViewer'
 import { WizardShell } from './pages/Wizard'
 import Login from './pages/Login'
@@ -33,6 +34,7 @@ const router = createBrowserRouter(
       <Route path="sync-log" element={<SyncLog />} />
       <Route path="settings" element={<Settings />} />
       <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
+      <Route path="reconcile" element={<Reconcile />} />
       <Route path="wizard/*" element={<WizardShell />} />
       <Route path="docs" element={<DocsViewer />} />
       <Route path="docs/:slug" element={<DocsViewer />} />

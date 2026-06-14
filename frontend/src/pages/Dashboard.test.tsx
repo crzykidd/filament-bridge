@@ -22,6 +22,7 @@ vi.mock('../api/client', () => ({
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => vi.fn(),
+  Link: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
 }))
 
 vi.mock('../components/DeepLinkContext', () => ({

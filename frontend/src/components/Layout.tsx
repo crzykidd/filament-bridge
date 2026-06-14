@@ -217,6 +217,7 @@ function SidebarThemeToggle() {
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', exact: true },
   { to: '/synced-records', label: 'Synced Records', exact: false },
+  { to: '/reconcile', label: 'Reconcile', exact: false },
   { to: '/conflicts', label: 'Conflicts', exact: false },
   { to: '/sync-log', label: 'Sync Log', exact: false },
   { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
