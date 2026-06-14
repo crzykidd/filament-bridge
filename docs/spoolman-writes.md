@@ -105,7 +105,7 @@ Only the fields the user confirmed (not marked "keep mine") are written.
 | Entity | Op | Field(s) | Trigger |
 |---|---|---|---|
 | Filament | update | `name` | User confirmed the reviewable name field (defaults to the OpenTag material name) |
-| Filament | update | `vendor` → `vendor_id` | User confirmed the Manufacturer field; resolved via find-or-create (`_ensure_vendor`: `get_vendors` + `create_vendor`). **This is the only OpenTag path that may CREATE a new Spoolman vendor.** |
+| Filament | update | `vendor` → `vendor_id` | User confirmed the Manufacturer field; the Manufacturer row surfaces whenever SM vendor and OpenTag brand differ by any visible character (including case-only). Resolved via find-or-create (`_ensure_vendor`): exact trimmed name match against existing vendors; creates a new vendor if no exact match. Re-points THIS filament only — existing vendor never renamed, other filaments never touched. A case-only diff intentionally creates a near-duplicate vendor (accepted trade-off). **This is the only OpenTag path that may CREATE a new Spoolman vendor.** |
 | Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes`, `multi_color_direction` (any subset) | User confirmed in the review/confirm UI |
 | Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
 | Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |

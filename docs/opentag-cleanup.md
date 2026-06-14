@@ -105,9 +105,13 @@ Badges: a grey **OPT** chip means the filament is already tagged and in sync wit
 candidate; amber means it's tagged but the data has drifted; a **multicolor mismatch** chip
 warns when Spoolman has multicolor data but the candidate is single-color.
 
-The **Manufacturer** row only appears when the Spoolman vendor and the OpenTag brand
-actually differ — accepting it re-points the filament to the right vendor (created in
-Spoolman if needed; this is the only path in the tool that can create a vendor).
+The **Manufacturer** row appears whenever the Spoolman vendor name and the OpenTag brand
+name differ in any visible way, including case-only differences (e.g. "Elegoo" vs
+"ELEGOO").  Accepting it re-points **only this filament** to a vendor with OpenTag's
+exact canonical spelling (created in Spoolman if no vendor with that exact name exists;
+this is the only path in the tool that can create a vendor).  The existing vendor is
+never renamed; other filaments under the old vendor are never touched.  A case-only
+diff intentionally creates a near-duplicate vendor — that trade-off is accepted.
 
 ### Manual search
 

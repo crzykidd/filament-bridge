@@ -4702,20 +4702,28 @@ def test_build_field_rows_vendor_row_absent_when_names_same():
     assert len(vendor_rows) == 0, "Vendor row should be absent when vendor names match"
 
 
-def test_build_field_rows_vendor_row_absent_when_normalized_match():
-    """normalize_vendor equality (case-insensitive) suppresses the vendor row."""
+def test_build_field_rows_vendor_row_present_when_only_case_differs():
+    """A case-only difference MUST surface the vendor row (exact-strip comparison).
+
+    Under the new behavior the vendor row is omitted ONLY when the raw strings are
+    identical after .strip() (case-sensitive).  "PRUSAMENT" vs "Prusament" differs
+    in case, so the row must be included so the apply path can re-point the filament
+    to a vendor with OpenTag's exact canonical spelling.
+    """
     from app.api.opentag import _build_field_rows
 
-    # SM vendor "PRUSAMENT" vs OPT "Prusament" — differ only in case → normalize to same
+    # SM vendor "PRUSAMENT" vs OPT "Prusament" — differ only in case → row surfaces
     sm = _sm_fil(sm_id=11, vendor="PRUSAMENT", material="PLA", color_hex="FF6B00")
     opt_fields = opt_to_spoolman_fields(_OPT_PRUSAMENT_PLA_ORANGE)
 
     rows = _build_field_rows(sm, opt_fields)
     vendor_rows = [r for r in rows if r.field == "vendor"]
 
-    assert len(vendor_rows) == 0, (
-        "Vendor row must be absent when only casing differs (normalize_vendor matches)"
-    )
+    assert len(vendor_rows) == 1, "Expected exactly one vendor row when only casing differs"
+    vendor_row = vendor_rows[0]
+    assert vendor_row.spoolman_value == "PRUSAMENT"
+    assert vendor_row.opentag_value == "Prusament"
+    assert vendor_row.suggested_value == "Prusament"
 
 
 # ---------------------------------------------------------------------------
@@ -4978,6 +4986,81 @@ async def test_apply_vendor_no_duplicate_when_name_appears_twice_in_same_run():
     assert fake_sm.create_vendor.call_count == 1, (
         f"create_vendor should be called once, was called {fake_sm.create_vendor.call_count} times"
     )
+
+
+@pytest.mark.asyncio
+async def test_apply_vendor_case_only_diff_creates_canonical_and_repoints():
+    """Apply: when existing vendor is "Elegoo" but decision value is "ELEGOO" (case-only diff),
+    a NEW canonical vendor "ELEGOO" is created and the filament is re-pointed to it.
+
+    Exact-name matching means "Elegoo" (id=5) is NOT reused for "ELEGOO".  The accepted
+    trade-off is a near-duplicate vendor in Spoolman; only this filament is re-pointed.
+    """
+    patched_payloads: list[tuple] = []
+
+    async def _fake_patch(fil_id, payload):
+        patched_payloads.append((fil_id, payload))
+        from app.schemas.spoolman import SpoolmanFilament as _SF
+        return MagicMock(spec=_SF)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import SpoolmanVendor as _SV
+
+    fake_sm = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_fake_patch)
+    # Existing vendor is "Elegoo" (id=5) — lowercase-e spelling
+    fake_sm.get_vendors = AsyncMock(return_value=[
+        _SV(id=5, name="Elegoo"),
+    ])
+    # create_vendor returns the new canonical "ELEGOO" vendor (id=99)
+    fake_sm.create_vendor = AsyncMock(return_value=_SV(id=99, name="ELEGOO"))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.merge_filament_settings = AsyncMock()
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+
+    client = TestClient(app)
+    request_body = {
+        "decisions": [
+            {
+                "spoolman_filament_id": 42,
+                "ignored": False,
+                "fdb_filament_id": None,
+                "openprinttag_slug": None,
+                "openprinttag_uuid": None,
+                "fields": [
+                    # decision value is the OpenTag canonical spelling "ELEGOO"
+                    {"field": "vendor", "value": "ELEGOO", "keep_mine": False},
+                    {"field": "material", "value": "PLA", "keep_mine": False},
+                ],
+            }
+        ]
+    }
+    resp = client.post("/api/openprinttag/apply", json=request_body)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+    assert data["errors"] == 0
+
+    # create_vendor must have been called once with the exact OpenTag spelling
+    fake_sm.create_vendor.assert_called_once_with({"name": "ELEGOO"})
+
+    # PATCH must carry the NEW vendor id (99), NOT the existing "Elegoo" id (5)
+    assert len(patched_payloads) == 1
+    _, payload = patched_payloads[0]
+    assert payload.get("vendor_id") == 99, (
+        f"Expected vendor_id=99 (new ELEGOO), got payload={payload!r}"
+    )
+
+    # "vendor" must appear in fields_written
+    result = data["results"][0]
+    assert "vendor" in result["fields_written"]
 
 
 # ---------------------------------------------------------------------------

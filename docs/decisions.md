@@ -1,5 +1,34 @@
 # Decision record
 
+## 2026-06-13 — OpenTag apply: re-point this filament to exact-named canonical vendor
+
+**Behavior.** The OpenTag cleanup apply path (`POST /api/openprinttag/apply`) standardizes
+the manufacturer name by re-pointing only the affected filament to a vendor with OpenTag's
+exact canonical brand spelling.  The existing Spoolman vendor record is never renamed; no
+other filaments are touched.
+
+**Vendor row surfacing.** `_build_field_rows` now suppresses the vendor row only when the
+raw SM vendor name and OpenTag brand string are identical after `.strip()` (case-sensitive
+equality).  Previously the comparison used `normalize_vendor` (case-folding + hyphens →
+spaces), which silently swallowed case-only differences like "Elegoo" vs "ELEGOO".
+
+**Vendor find-or-create.** `_ensure_vendor` in the apply loop now indexes existing vendors
+by exact trimmed name (`vendor_id_by_name: dict[str, int]`) instead of the normalized form.
+When the decision value "ELEGOO" does not appear verbatim in the index (even if "Elegoo" id=5
+exists), a new vendor "ELEGOO" is created and the filament's `vendor_id` is updated.
+
+**Accepted trade-off.** A case-only difference intentionally creates a near-duplicate vendor
+in Spoolman (e.g. "ELEGOO" alongside "Elegoo").  The user was presented this choice and
+accepted it.  Only the filament being applied is re-pointed; the old vendor and all other
+filaments remain untouched.
+
+**Tests added/changed.** `test_build_field_rows_vendor_row_absent_when_normalized_match`
+renamed and inverted to `test_build_field_rows_vendor_row_present_when_only_case_differs`
+(asserts row IS present for "PRUSAMENT" vs "Prusament").  New integration test
+`test_apply_vendor_case_only_diff_creates_canonical_and_repoints` confirms `create_vendor`
+is called with the exact OpenTag spelling and the PATCH carries the new vendor_id, not the
+existing near-match id.
+
 ## 2026-06-13 — Reconcile page: read-only, on-demand, no fuzzy suggestions
 
 **Feature.** New `/reconcile` page and `GET /api/reconcile` endpoint that compares

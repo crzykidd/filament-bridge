@@ -236,17 +236,24 @@ def _build_field_rows(
     deduplicates them if decision.openprinttag_slug/uuid also sets them.
 
     The ``vendor`` field is ONLY included when the Spoolman vendor name and the
-    OpenTag brand name differ after ``normalize_vendor`` normalization.  When they
-    match (same-vendor match, no alias involved) the row is omitted — there is
-    nothing to change.
+    OpenTag brand name differ after a plain ``.strip()`` comparison (case-sensitive).
+    A case-only difference like "Elegoo" vs "ELEGOO" DOES surface the row so the
+    apply path can re-point this filament to a vendor with OpenTag's exact canonical
+    name.  Exact-equal strings (same brand, same casing) suppress the row.
     """
     rows = []
     for field, opt_value in opt_fields.items():
         sm_value = _current_spoolman_value(sm_filament, field)
         if field == "vendor":
-            # Only show the vendor row when there is an actual name difference
-            # (e.g. Spoolman "Prusa" vs OpenTag "Prusament" via alias).
-            if normalize_vendor(sm_value) == normalize_vendor(opt_value):
+            # Omit the vendor row only when the raw strings are identical after
+            # stripping surrounding whitespace (case-sensitive equality).  A
+            # case-only difference deliberately surfaces the row so _ensure_vendor
+            # can find-or-create a vendor with OpenTag's exact canonical spelling
+            # and re-point this filament.  Accepted trade-off: a case-only diff
+            # may create a near-duplicate vendor in Spoolman (e.g. "ELEGOO"
+            # alongside "Elegoo"); only this filament is re-pointed, others
+            # are never touched.
+            if (sm_value or "").strip() == (opt_value or "").strip():
                 continue
         rows.append(OpenTagFieldRow(
             field=field,
@@ -772,30 +779,38 @@ async def opentag_apply(
             f"Could not ensure the OpenTag extra fields exist in Spoolman: {exc}",
         ) from exc
 
-    # Build vendor index once per apply call (normalized name → vendor_id).
+    # Build vendor index once per apply call (exact trimmed name → vendor_id).
+    # Exact-name matching (not normalize_vendor) is intentional: standardizing on
+    # OpenTag's canonical spelling requires distinguishing "Elegoo" from "ELEGOO".
+    # A case-only diff therefore creates a separate canonical vendor and re-points
+    # only this filament — the accepted trade-off documented in decisions.md.
+    # First occurrence wins when two existing vendors share the same trimmed name.
     # New vendors created during this run are cached here to avoid duplicates.
     try:
         existing_vendors = await sm.get_vendors()
     except Exception:
         existing_vendors = []
-    vendor_id_by_norm: dict[str, int] = {
-        normalize_vendor(v.name): v.id for v in existing_vendors
-    }
+    vendor_id_by_name: dict[str, int] = {}
+    for v in existing_vendors:
+        key = v.name.strip()
+        if key not in vendor_id_by_name:
+            vendor_id_by_name[key] = v.id
 
     async def _ensure_vendor(name: str) -> int | None:
         """Resolve a vendor name to a Spoolman vendor_id, creating it if missing.
 
-        Uses normalized comparison so "Prusament" and "prusament" map to the same
-        entry.  New vendors are cached in ``vendor_id_by_norm`` within this apply
-        call so no duplicate is created even if the same name appears multiple times.
+        Uses exact (trimmed) name matching so "ELEGOO" and "Elegoo" are treated as
+        distinct vendors.  New vendors are cached in ``vendor_id_by_name`` within
+        this apply call so no duplicate is created even if the same name appears
+        multiple times in one batch.
         """
-        norm = normalize_vendor(name)
-        if not norm:
+        key = name.strip()
+        if not key:
             return None
-        if norm in vendor_id_by_norm:
-            return vendor_id_by_norm[norm]
+        if key in vendor_id_by_name:
+            return vendor_id_by_name[key]
         created = await sm.create_vendor({"name": name})
-        vendor_id_by_norm[norm] = created.id
+        vendor_id_by_name[key] = created.id
         logger.info("opentag apply: created Spoolman vendor %r (id=%d)", name, created.id)
         return created.id
 
