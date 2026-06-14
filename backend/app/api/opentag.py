@@ -515,23 +515,17 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     dataset_lexicon: dict[str, list[str]] | None = dataset.get("lexicon")
     _record_last_count(dataset["count"])
     tag_map = _settings.parsed_material_tag_ids
-    # Load vendor alias map and color-keywords map once — BridgeConfig value overrides
-    # the env default.  Wrapped in try/except so tests without a real DB fall back to
-    # the env default gracefully.
+    # Load vendor alias map once — BridgeConfig value overrides the env default.
+    # Wrapped in try/except so tests without a real DB fall back to the env default.
     from app.api.config import get_config_value
-    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS, parse_color_keywords_config
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
     try:
         with SessionLocal() as _db:
             aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
-            color_kw_raw: str = get_config_value(_db, "opentag_color_keywords", _settings.opentag_color_keywords) or ""
     except Exception:
         aliases_raw = _settings.opentag_vendor_aliases
-        color_kw_raw = _settings.opentag_color_keywords
     vendor_aliases: dict[str, str] = _parse_vendor_aliases(aliases_raw)
-    # Merge user overrides on top of seed defaults
     color_map: dict[str, str] = dict(DEFAULT_COLOR_KEYWORDS)
-    if color_kw_raw.strip():
-        color_map.update(parse_color_keywords_config(color_kw_raw))
 
     sm_filaments = await sm.get_filaments()
 
@@ -1004,20 +998,16 @@ async def opentag_search(
     dataset_lexicon: dict[str, list[str]] | None = cache.get("lexicon")
     tag_map = _settings.parsed_material_tag_ids
 
-    # Load vendor aliases and color synonyms
+    # Load vendor aliases — BridgeConfig value overrides the env default.
     from app.api.config import get_config_value
-    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS, parse_color_keywords_config
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
     try:
         with SessionLocal() as _db:
             aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
-            color_kw_raw: str = get_config_value(_db, "opentag_color_keywords", _settings.opentag_color_keywords) or ""
     except Exception:
         aliases_raw = _settings.opentag_vendor_aliases
-        color_kw_raw = _settings.opentag_color_keywords
     vendor_aliases = _parse_vendor_aliases(aliases_raw)
     color_map = dict(DEFAULT_COLOR_KEYWORDS)
-    if color_kw_raw.strip():
-        color_map.update(parse_color_keywords_config(color_kw_raw))
 
     limit = min(limit, 50)
 

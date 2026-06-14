@@ -86,7 +86,6 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     import_direction: null,
     variant_line_keywords: '',
     opentag_vendor_aliases: '',
-    opentag_color_keywords: '',
     weight_sync_direction: 'spoolman_to_filamentdb',
     weight_conflict_policy: 'manual',
     material_properties_sync_direction: 'filamentdb_to_spoolman',

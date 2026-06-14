@@ -105,7 +105,6 @@ cost, color) are synced by dedicated passes and need no mapping — see
 |---|---|---|---|
 | `MATERIAL_TAG_IDS` | No | (seed list) | Override the default finish-keyword→OpenPrintTag-ID map. CSV of `keyword=id` pairs (e.g. `silk=17,matte=16`). Empty uses the built-in seed list from `core/material_tags.py`. |
 | `OPENTAG_VENDOR_ALIASES` | No | — | Map Spoolman vendor names to OpenPrintTag brand names for the matcher's brand pre-filter. CSV of `spoolman_vendor=opentag_brand` pairs (e.g. `prusa=prusament`). Case-insensitive. **Runtime-editable**; new installs seed `prusa=prusament, polyterra=polymaker`. |
-| `OPENTAG_COLOR_KEYWORDS` | No | — | Map color/marketing words to canonical base colors for the matcher (e.g. `galaxy=black,cool=grey`). Merged on top of the built-in seed map. **Runtime-editable**; new installs seed `galaxy=black, cool=grey, jet=black`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag slug. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag UUID. |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the locally cached OpenPrintTag dataset is considered stale and re-fetched. |
@@ -143,7 +142,6 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | `container_parent_marker` | env (`(Master)`) | Import & matching | Marker on generic-container names; checkbox + text field, visible in `generic_container` mode. |
 | `variant_line_keywords` | env seed | Import & matching | See `VARIANT_LINE_KEYWORDS`. |
 | `opentag_vendor_aliases` | env / seed | Import & matching | See `OPENTAG_VENDOR_ALIASES`. |
-| `opentag_color_keywords` | env / seed | Import & matching | See `OPENTAG_COLOR_KEYWORDS`. |
 | `api_token_enabled` | `false` | Security | Allow `Authorization: Bearer` / `X-API-Key` machine auth. |
 | `api_token` | (none) | Security | The token value; generate/regenerate in Settings (displayed masked). |
 | `debug_mode` | `false` | Debug mode | Reveals the Danger Zone and enables the three `/api/debug/*` reset endpoints (403 when off). Never enable in production. |

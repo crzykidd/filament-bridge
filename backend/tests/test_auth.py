@@ -67,7 +67,6 @@ def _mock_settings(auth_enabled: bool) -> MagicMock:
     ms.sync_interval_seconds = 120
     ms.variant_line_keywords = ""
     ms.opentag_vendor_aliases = ""
-    ms.opentag_color_keywords = ""
     ms.container_parent_marker = "(Master)"
     return ms
 

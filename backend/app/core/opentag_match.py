@@ -43,8 +43,8 @@ from app.schemas.spoolman import SpoolmanFilament
 # (silver→grey, galaxy→black, cool→grey, etc.).  Reduce to ONLY genuine
 # linguistic equivalences.  Marketing names and distinct shades are NOT collapsed.
 #
-# The ``opentag_color_keywords`` setting / env var now feeds OVERRIDES into this
-# map (synonyms-only), not the primary matching mechanism.
+# Only true linguistic equivalences belong here; marketing names and distinct
+# shades are NOT collapsed.
 # ---------------------------------------------------------------------------
 
 #: True synonym map applied to both sides before multiset comparison.
@@ -312,25 +312,6 @@ def _base_color(tokens: set[str], color_map: dict[str, str]) -> str:
         if base:
             return base
     return ""
-
-
-def parse_color_keywords_config(csv: str) -> dict[str, str]:
-    """Parse a ``keyword=base_color`` CSV string into a color-synonyms map.
-
-    In v2 this feeds COLOR_SYNONYMS overrides (synonyms-only), not the primary
-    matching mechanism.  Blank entries and entries without ``=`` are silently ignored.
-    """
-    result: dict[str, str] = {}
-    for pair in csv.split(","):
-        pair = pair.strip()
-        if "=" not in pair:
-            continue
-        kw, base = pair.split("=", 1)
-        kw = kw.strip().lower()
-        base = base.strip().lower()
-        if kw:
-            result[kw] = base
-    return result
 
 
 # ---------------------------------------------------------------------------

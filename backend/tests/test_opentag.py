@@ -5578,22 +5578,6 @@ def test_base_color_bonus_marketing_name_galaxy_cool():
     assert _base_color({"jet"}, DEFAULT_COLOR_KEYWORDS) == ""
 
 
-def test_parse_color_keywords_config_basic():
-    """parse_color_keywords_config parses CSV of 'keyword=base' pairs correctly."""
-    from app.core.opentag_match import parse_color_keywords_config
-    result = parse_color_keywords_config("galaxy=black,cool=grey,jet=black")
-    assert result == {"galaxy": "black", "cool": "grey", "jet": "black"}
-
-
-def test_parse_color_keywords_config_ignores_blanks():
-    """parse_color_keywords_config silently ignores blank entries and entries without '='."""
-    from app.core.opentag_match import parse_color_keywords_config
-    result = parse_color_keywords_config(",galaxy=black,,foo,=bar,")
-    assert "galaxy" in result
-    assert "" not in result
-    assert "foo" not in result
-
-
 # ---------------------------------------------------------------------------
 # Updates-available: has_update, ignored_updates, updates_count
 # ---------------------------------------------------------------------------

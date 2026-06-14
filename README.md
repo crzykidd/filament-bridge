@@ -308,7 +308,6 @@ All connection configuration is via environment variables; the service refuses t
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | Marker appended to generic-container parent names; empty = none (runtime-editable) |
 | `MATERIAL_TAG_IDS` | No | (seed list) | CSV of `keyword=id` pairs overriding the default finish-tag ID map |
 | `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenTag brand matching (runtime-editable) |
-| `OPENTAG_COLOR_KEYWORDS` | No | — | CSV of `keyword=base_color` pairs for the OpenTag color matcher (runtime-editable) |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman extra field for the OpenPrintTag slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman extra field for the OpenPrintTag UUID |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the locally cached OpenPrintTag dataset is considered stale |

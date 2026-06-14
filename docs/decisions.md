@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-13 — Remove `opentag_color_keywords` user-override feature
+
+The `opentag_color_keywords` setting (env var `OPENTAG_COLOR_KEYWORDS`, BridgeConfig seed,
+Settings "Color word mappings" section) has been **removed** entirely.
+
+**Why.** The v2 matcher policy (locked 2026-06-11) restricts `COLOR_SYNONYMS` to true
+linguistic equivalences only — marketing collapses like `galaxy=black`, `cool=grey`,
+`jet=black` degrade multicolor matching by collapsing semantically distinct tokens.
+The new-install seed was seeding exactly those invalid collapses, and the Settings UI
+was actively teaching users to add more. The built-in `DEFAULT_COLOR_KEYWORDS` /
+`COLOR_SYNONYMS` map already covers the only legitimate synonyms (`gray→grey`,
+`violet→purple`, `magenta→pink`, `transparent→clear`, `navy→blue`), so the override
+adds only downside.
+
+**What was removed.** `parse_color_keywords_config` function; `opentag_color_keywords`
+field in `Settings` (config.py), `BridgeConfig._DEFAULTS`, `ConfigResponse`,
+`ConfigUpdateRequest`, `ConfigUpdateRequest` (frontend types.ts); `colorKeywords` state,
+dirty-check clause, `vcolorkw` derived value, save-payload field, and the "Color word
+mappings" UI section in Settings.tsx. All docs (CLAUDE.md, configuration.md,
+opentag-matching.md) updated in the same commit. No DB migration: existing stored values
+simply become dead (never read).
+
 ## 2026-06-13 — Reconcile: master/container parents are intentional; shown as variant annotation, never as missing
 
 **Behavior.** The read-only Reconcile report (`GET /api/reconcile`) now excludes

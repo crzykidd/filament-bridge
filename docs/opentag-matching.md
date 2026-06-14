@@ -205,9 +205,7 @@ In v2 the map is **synonyms-only** — genuine linguistic equivalences only:
 | `navy` | `blue` |
 
 Marketing names (`galaxy`, `cool`, `jet`, `ocean`, …) return `""` (unmapped) and
-are therefore excluded from the color bag. The `opentag_color_keywords` env var /
-runtime setting feeds **additional synonyms** into this map — it no longer serves
-as a primary color-recognition mechanism.
+are therefore excluded from the color bag.
 
 ## Pre-filter gates (v2.1)
 
