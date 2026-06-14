@@ -16,10 +16,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.api.wizard import _fdb_ref, _sm_ref
+from app.api.wizard import _fdb_ref, _resolve_container_parent_marker, _sm_ref
 from app.config import settings as _settings
 from app.core.matcher import match_filaments
 from app.db import get_db
+from app.models.mapping import FilamentMapping
 from app.schemas.api import (
     AmbiguousRow,
     ReconcileMatchRow,
@@ -27,6 +28,7 @@ from app.schemas.api import (
     ReconcileResponse,
     ReconcileSummary,
 )
+from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import decode_extra_value
 
 router = APIRouter()
@@ -68,6 +70,29 @@ async def get_reconcile(
         fdb_filaments,
         xref_by_sm_filament=xref_by_sm_filament or None,
     )
+
+    # ---------------------------------------------------------------------------
+    # Master / container-parent detection
+    # Mirrors wizard.py _is_master_fdb exactly: synthetic-parent DB rows, the
+    # hasVariants flag on the FDB record, and the configured name-suffix marker.
+    # ---------------------------------------------------------------------------
+    _synth_fdb_ids: set[str] = {
+        m.filamentdb_id
+        for m in db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
+    }
+    _marker = _resolve_container_parent_marker(db)
+
+    def _is_master(fdb: FDBFilament) -> bool:
+        if fdb.id in _synth_fdb_ids:
+            return True
+        if getattr(fdb, "hasVariants", False):
+            return True
+        if _marker and fdb.name and fdb.name.endswith(f" {_marker}"):
+            return True
+        return False
+
+    # id → FDBFilament map for parent-name resolution on matched rows.
+    fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}
 
     # ---------------------------------------------------------------------------
     # Spool roll-ups — SM side
@@ -123,6 +148,12 @@ async def get_reconcile(
             filamentdb_spools=fdb_spool_count.get(p.fdb_filament.id, 0),
             spoolman_weight=sm_spool_weight.get(p.spoolman_filament.id),
             filamentdb_weight=fdb_spool_weight.get(p.fdb_filament.id),
+            # Resolve parent name for variant annotation; None for top-level filaments.
+            variant_of=(
+                fdb_by_id[p.fdb_filament.parentId].name
+                if p.fdb_filament.parentId and p.fdb_filament.parentId in fdb_by_id
+                else None
+            ),
         )
         for p in mr.matched
     ]
@@ -136,6 +167,8 @@ async def get_reconcile(
         for sm in mr.unmatched_spoolman
     ]
 
+    # Exclude master/container-parent FDB filaments — they have no Spoolman counterpart
+    # by design and should never appear as "missing" items requiring action.
     only_fdb_rows: list[ReconcileMissingRow] = [
         ReconcileMissingRow(
             ref=_fdb_ref(fdb),
@@ -143,6 +176,7 @@ async def get_reconcile(
             weight_total=fdb_spool_weight.get(fdb.id),
         )
         for fdb in mr.unmatched_fdb
+        if not _is_master(fdb)
     ]
 
     ambiguous_rows: list[AmbiguousRow] = [

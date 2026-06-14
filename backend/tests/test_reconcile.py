@@ -17,6 +17,7 @@ from sqlalchemy.pool import StaticPool
 from app.api import reconcile
 from app.db import Base, get_db
 from app.models.config import seed_defaults
+from app.models.mapping import FilamentMapping
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
@@ -95,6 +96,8 @@ def _fdb_filament(
     name: str,
     color: str,
     spools: list[dict] | None = None,
+    has_variants: bool = False,
+    parent_id: str | None = None,
 ) -> FDBFilament:
     spool_dicts = spools or []
     return FDBFilament.model_validate(
@@ -105,6 +108,8 @@ def _fdb_filament(
             "color": color,
             "spoolWeight": 200.0,
             "spools": spool_dicts,
+            "hasVariants": has_variants,
+            "parentId": parent_id,
         }
     )
 
@@ -321,4 +326,134 @@ def test_reconcile_summary_counts():
     assert s["only_in_spoolman"] == 1
     assert s["only_in_filamentdb"] == 2
     assert s["ambiguous"] == 0
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Master / container-parent exclusion tests
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_master_hasvariants_excluded_from_only_fdb():
+    """A FDB filament with hasVariants=True must NOT appear in only_in_filamentdb."""
+    db = _fresh_db()
+    # Master filament (no SM counterpart — by design)
+    master = _fdb_filament("fdb-master", "ELEGOO", "PLA", "#000000", has_variants=True)
+    # Unrelated normal FDB filament with no SM match
+    orphan = _fdb_filament("fdb-orphan", "Bambu", "ASA", "#0000ff")
+
+    tc = _client(
+        db,
+        spoolman=_fake_spoolman(filaments=[], spools=[]),
+        filamentdb=_fake_filamentdb(filaments=[master, orphan]),
+    )
+    r = tc.get("/api/reconcile")
+    assert r.status_code == 200
+    data = r.json()
+
+    # Master must be hidden; orphan must still appear
+    assert data["summary"]["only_in_filamentdb"] == 1
+    fdb_ids = [row["ref"]["filamentdb_filament_id"] for row in data["only_in_filamentdb"]]
+    assert "fdb-master" not in fdb_ids
+    assert "fdb-orphan" in fdb_ids
+    db.close()
+
+
+def test_reconcile_synthetic_parent_excluded_from_only_fdb():
+    """A FDB filament whose id appears in FilamentMapping(is_synthetic_parent=True) is excluded."""
+    db = _fresh_db()
+    # Register the master as a synthetic parent in the bridge DB
+    db.add(FilamentMapping(filamentdb_id="fdb-synth-master", is_synthetic_parent=True))
+    db.commit()
+
+    master = _fdb_filament("fdb-synth-master", "ELEGOO", "PLA (Master)", "#000000")
+    orphan = _fdb_filament("fdb-orphan2", "Bambu", "PETG", "#ffffff")
+
+    tc = _client(
+        db,
+        spoolman=_fake_spoolman(filaments=[], spools=[]),
+        filamentdb=_fake_filamentdb(filaments=[master, orphan]),
+    )
+    r = tc.get("/api/reconcile")
+    assert r.status_code == 200
+    data = r.json()
+
+    assert data["summary"]["only_in_filamentdb"] == 1
+    fdb_ids = [row["ref"]["filamentdb_filament_id"] for row in data["only_in_filamentdb"]]
+    assert "fdb-synth-master" not in fdb_ids
+    assert "fdb-orphan2" in fdb_ids
+    db.close()
+
+
+def test_reconcile_master_excluded_not_counted_in_summary():
+    """Summary only_in_filamentdb count excludes masters, so count == filtered list length."""
+    db = _fresh_db()
+    master = _fdb_filament("fdb-master", "ELEGOO", "PLA", "#000000", has_variants=True)
+    normal = _fdb_filament("fdb-normal", "Bambu", "TPU", "#ffffff")
+
+    tc = _client(
+        db,
+        spoolman=_fake_spoolman(filaments=[], spools=[]),
+        filamentdb=_fake_filamentdb(filaments=[master, normal]),
+    )
+    r = tc.get("/api/reconcile")
+    assert r.status_code == 200
+    data = r.json()
+
+    # Summary count must equal the list length (both excluding the master)
+    assert data["summary"]["only_in_filamentdb"] == len(data["only_in_filamentdb"])
+    assert data["summary"]["only_in_filamentdb"] == 1
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# Variant annotation on matched rows
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_matched_variant_of_populated():
+    """A matched FDB filament with a parentId resolving to another FDB filament
+    carries variant_of == parent name."""
+    db = _fresh_db()
+    # Master FDB filament (no SM counterpart — excluded from missing)
+    master = _fdb_filament("fdb-master", "ELEGOO", "PLA", "#000000", has_variants=True)
+    # Variant FDB filament pointing to the master
+    variant = _fdb_filament("fdb-variant", "ELEGOO", "PLA Red", "#ff0000", parent_id="fdb-master")
+
+    sm_fil = _sm_filament(1, "ELEGOO", "PLA Red", "ff0000")
+
+    tc = _client(
+        db,
+        spoolman=_fake_spoolman(filaments=[sm_fil], spools=[]),
+        filamentdb=_fake_filamentdb(filaments=[master, variant]),
+    )
+    r = tc.get("/api/reconcile")
+    assert r.status_code == 200
+    data = r.json()
+
+    assert data["summary"]["matched"] == 1
+    row = data["matched"][0]
+    assert row["filamentdb"]["filamentdb_filament_id"] == "fdb-variant"
+    assert row["variant_of"] == "PLA"
+    db.close()
+
+
+def test_reconcile_matched_no_parentid_variant_of_none():
+    """A matched FDB filament with no parentId has variant_of == None."""
+    db = _fresh_db()
+    sm_fil = _sm_filament(1, "ELEGOO", "PLA", "ff0000")
+    fdb_fil = _fdb_filament("fdb-1", "ELEGOO", "PLA", "#ff0000")
+
+    tc = _client(
+        db,
+        spoolman=_fake_spoolman(filaments=[sm_fil], spools=[]),
+        filamentdb=_fake_filamentdb(filaments=[fdb_fil]),
+    )
+    r = tc.get("/api/reconcile")
+    assert r.status_code == 200
+    data = r.json()
+
+    assert data["summary"]["matched"] == 1
+    row = data["matched"][0]
+    assert row["variant_of"] is None
     db.close()

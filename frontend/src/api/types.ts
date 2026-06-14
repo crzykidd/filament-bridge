@@ -883,6 +883,8 @@ export interface ReconcileMatchRow {
   filamentdb_spools: number
   spoolman_weight: number | null
   filamentdb_weight: number | null
+  /** Name of the FDB parent filament when this row is a variant child; null for top-level filaments. */
+  variant_of?: string | null
 }
 
 export interface ReconcileMissingRow {

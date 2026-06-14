@@ -820,6 +820,9 @@ class ReconcileMatchRow(BaseModel):
     filamentdb_spools: int
     spoolman_weight: float | None
     filamentdb_weight: float | None
+    # Name of the FDB parent filament when this row is a variant child (parentId set);
+    # None for top-level filaments.
+    variant_of: str | None = None
 
 
 class ReconcileMissingRow(BaseModel):

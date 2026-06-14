@@ -27,6 +27,9 @@ function MatchedRow({ row }: { row: ReconcileMatchRow }) {
       <td className="px-4 py-3">
         <div className="font-medium text-gray-900 dark:text-gray-100">{row.filamentdb.name ?? '—'}</div>
         <div className="text-xs text-gray-400 dark:text-gray-500">{row.filamentdb.vendor ?? '—'}</div>
+        {row.variant_of && (
+          <div className="text-xs text-gray-500 dark:text-gray-400">Variant of {row.variant_of}</div>
+        )}
       </td>
       <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300">
         <div>{fmtSpools(row.spoolman_spools)} · {fmtWeight(row.spoolman_weight)}</div>

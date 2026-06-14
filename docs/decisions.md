@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-13 — Reconcile: master/container parents are intentional; shown as variant annotation, never as missing
+
+**Behavior.** The read-only Reconcile report (`GET /api/reconcile`) now excludes
+master/container-parent FDB filaments from the `only_in_filamentdb` bucket and from the
+summary count.  These filaments have no Spoolman counterpart by design — the bridge creates
+them as synthetic hierarchy containers — so surfacing them as "missing" items is noise, not
+signal.
+
+**Detection.** The `_is_master` predicate in `reconcile.py` mirrors `_is_master_fdb` from
+`wizard.py` verbatim: (1) `FilamentMapping.is_synthetic_parent == True` for bridge-created
+containers, (2) `FDBFilament.hasVariants == True` as a fallback for externally-created
+parents, (3) name ends with `f" {marker}"` where `marker = _resolve_container_parent_marker(db)`.
+
+**Variant annotation.** Matched rows whose FDB filament carries a non-null `parentId` that
+resolves in the fetched filament set now carry `variant_of: str` — the parent's name.  The
+frontend renders this as a small muted "Variant of {name}" subtitle under the FDB filament
+name in the Matched table.  The parent itself never appears as its own row.
+
+**Tests added.** Five new tests in `test_reconcile.py`: masters excluded via `hasVariants`,
+masters excluded via `is_synthetic_parent`, summary count equals filtered list length,
+`variant_of` populated for a variant child, `variant_of` is None for a top-level filament.
+
 ## 2026-06-13 — OpenTag apply: re-point this filament to exact-named canonical vendor
 
 **Behavior.** The OpenTag cleanup apply path (`POST /api/openprinttag/apply`) standardizes
