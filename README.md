@@ -18,11 +18,13 @@ Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) 
 Filament DB and Spoolman are both excellent tools that solve different parts of the filament management problem:
 
 - **Filament DB** excels at material profile management — deep slicer integration (PrusaSlicer, OrcaSlicer, Bambu Studio), per-printer/nozzle calibration storage, material science properties, NFC tag support, and AI-powered data sheet import.
-- **Spoolman** excels at print-side inventory tracking — native OctoPrint and Moonraker/Klipper integration, real-time spool weight decrement during prints, Home Assistant integration, and broad ecosystem support.
+- **Spoolman** is a long-standing inventory solution with native connections to OctoPrint, Moonraker/Klipper, and Home Assistant (among others), plus a broad surrounding ecosystem. If you want to start using Filament DB but still rely on features Spoolman offers, this tool lets you combine both experiences instead of choosing one.
 
-Neither can do what the other does well. filament-bridge keeps them in sync so you can use both without manual data entry. It runs as a single Docker container next to your existing instances, links records via Spoolman extra fields and Filament DB spool labels, and keeps its own state in SQLite — neither upstream system is ever modified beyond its documented REST API.
+filament-bridge keeps the two in sync so you can use both without manual data entry. It runs as a single Docker container next to your existing instances, links records via Spoolman extra fields and Filament DB spool labels, and keeps its own state in SQLite — neither upstream system is ever modified beyond its documented REST API.
 
-It was built out of a real migration: moving filament management into Filament DB, but *first* cleaning up the existing spool data to a real standard ([OpenPrintTag](https://openprinttag.org)) on the way in — and keeping Spoolman fully working, because OctoPrint and Home Assistant talk to it directly and aren't going anywhere. That last part is why this is a continuous two-way sync, not a one-time export.
+It also cleans up your spool and brand names in Spoolman against [OpenPrintTag](https://openprinttag.org) before pushing that standardized data into Filament DB — automating what would otherwise be tedious manual data hygiene.
+
+It was built out of a real migration: moving filament management into Filament DB while keeping Spoolman fully working, because OctoPrint and Home Assistant talk to it directly and aren't going anywhere. That last part is why this is a continuous two-way sync, not a one-time export.
 
 There are **two ways to onboard**: just bridge the two systems and create your Filament DB records straight from Spoolman, or do a little cleanup work against OpenPrintTag first so your catalog lands standardized and Filament DB can keep pulling canonical updates later. **[Getting started](docs/getting-started.md) walks through both paths** and helps you pick.
 
