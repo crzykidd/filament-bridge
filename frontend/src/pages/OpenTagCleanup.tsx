@@ -391,7 +391,12 @@ function FilamentCard({
                   ? 'bg-gray-200 dark:bg-gray-700 border-gray-400 dark:border-gray-600 text-gray-700 dark:text-gray-200'
                   : 'bg-white dark:bg-gray-800 border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20'
               }`}
-              onClick={() => onIgnore(!ignored)}
+              onClick={() => {
+                // When un-ignoring, just change status — keep the card collapsed so the
+                // list doesn't balloon. The user can hit the ▼ arrow to expand details.
+                if (ignored) setExpanded(false)
+                onIgnore(!ignored)
+              }}
             >
               {ignored ? 'unignore' : 'ignore match'}
             </button>
