@@ -11,7 +11,7 @@ filament-bridge is a bidirectional sync service between [Filament DB](https://gi
 This project adopts engineering standards from the crzynet `homelab-configs` repo. **Read [`standards.md`](standards.md) at session start** whenever the work could touch branching, commits, PRs, releases, or handoff prompts — it lists every standard and the pinned version this repo actually implements. The hard per-session rules are inlined below; the rest is linked, not restated.
 
 <!--
-Source: standards/code-checkin-and-pr @ v1.1.0 (crzynet/homelab-configs).
+Source: standards/code-checkin-and-pr @ v1.2.0 (crzynet/homelab-configs).
 Paste the section below verbatim into the adopting project's CLAUDE.md.
 The full standard (publishing matrix, retention, CI check definitions) lives at:
 https://gitea.crzynet.com/crzynet/homelab-configs/src/branch/main/standards/code-checkin-and-pr/README.md
