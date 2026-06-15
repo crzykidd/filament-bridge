@@ -280,11 +280,19 @@ if _static_dir.is_dir():
     # routes survive a hard refresh / direct load / shared deep link. Registered
     # after the /api routers, so the API always wins; unknown /api paths still 404
     # as JSON rather than silently returning the SPA shell.
+    _static_root = _static_dir.resolve()
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def _spa_fallback(full_path: str) -> FileResponse:
         if full_path.startswith("api"):
             raise HTTPException(status_code=404)
-        candidate = _static_dir / full_path
-        if full_path and candidate.is_file():
+        # Resolve and confine to the static root so a crafted path
+        # (e.g. "../../etc/passwd") can't escape the served directory.
+        candidate = (_static_root / full_path).resolve()
+        if (
+            full_path
+            and candidate.is_relative_to(_static_root)
+            and candidate.is_file()
+        ):
             return FileResponse(candidate)
         return FileResponse(_index)
