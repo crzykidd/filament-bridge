@@ -1,0 +1,61 @@
+# Development/testing stack — runs the bridge plus its own Spoolman + Filament DB + MongoDB.
+# For a normal deployment use docker-compose.yml and point it at your existing Spoolman/Filament DB.
+services:
+  filament-bridge:
+    # Pass BUILD_CHANNEL=dev and the current git SHA so the version badge shows the dev suffix.
+    # Stamp with: GIT_COMMIT=$(git rev-parse --short HEAD) docker compose -f docker-compose.dev.yml build
+    build:
+      context: .
+      args:
+        BUILD_CHANNEL: dev
+        GIT_COMMIT: ${GIT_COMMIT:-}
+    ports:
+      - "8090:8090"
+    volumes:
+      - ~/projects/filament-bridge/private_data/filament-bridge:/data
+    environment:
+      FILAMENTDB_URL: http://filament-db:3000
+      SPOOLMAN_URL: http://spoolman:7912
+      # DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/...
+      DEBUG_STARTUP_DUMP: true
+      CHANGES_LOG_ENABLED: true
+    depends_on:
+      - filament-db
+      - spoolman
+    restart: unless-stopped
+
+  filament-db:
+    image: ghcr.io/hyiger/filament-db:latest
+    ports:
+      - "3000:3000"
+    environment:
+      # Filament DB is a Next.js app backed by MongoDB — it 500s on every API
+      # call without this. State lives in MongoDB, not a local volume.
+      MONGODB_URI: mongodb://mongo:27017/filamentdb
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    volumes:
+      - ~/projects/filament-bridge/private_data/filament-db:/data/db
+    restart: unless-stopped
+
+  spoolman:
+    image: ghcr.io/donkie/spoolman:latest
+    ports:
+      - "7912:7912"
+    environment:
+      # Spoolman defaults to 8000 internally; pin it to 7912 so both the host
+      # mapping above and the in-network http://spoolman:7912 (used by the bridge
+      # service) resolve to the same port.
+      SPOOLMAN_PORT: "7912"
+    volumes:
+      - ~/projects/filament-bridge/private_data/spoolman:/home/app/.local/share/spoolman
+    restart: unless-stopped
+
+volumes:
+  bridge-data:
+  mongo-data:
+  spoolman-data:

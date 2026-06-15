@@ -1,0 +1,89 @@
+import { useState } from 'react'
+import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import type { WizardTareOverride } from '../../api/types'
+import Step1Connectivity from './Step1Connectivity'
+import Step2Direction from './Step2Direction'
+import Step3Matches from './Step3Matches'
+import StepVariances from './StepVariances'
+import StepNPreview from './StepNPreview'
+import Step6Execute from './Step6Execute'
+
+const STEPS = [
+  { path: 'connectivity', label: 'Connectivity' },
+  { path: 'direction', label: 'Direction' },
+  { path: 'matches', label: 'Matches' },
+  { path: 'variances', label: 'Variances' },
+  { path: 'preview', label: 'Preview' },
+  { path: 'execute', label: 'Execute' },
+]
+
+function Stepper({ current }: { current: number }) {
+  return (
+    <div className="flex items-center gap-0 mb-8">
+      {STEPS.map((s, i) => (
+        <div key={s.path} className="flex items-center">
+          <div className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold border-2 ${
+            i < current
+              ? 'bg-indigo-600 border-indigo-600 text-white'
+              : i === current
+                ? 'border-indigo-600 text-indigo-600 bg-white dark:bg-gray-900 dark:text-indigo-400 dark:border-indigo-400'
+                : 'border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-900'
+          }`}>
+            {i + 1}
+          </div>
+          <span className={`ml-2 text-sm ${
+            i === current
+              ? 'text-indigo-600 dark:text-indigo-400 font-medium'
+              : 'text-gray-400 dark:text-gray-500'
+          }`}>
+            {s.label}
+          </span>
+          {i < STEPS.length - 1 && (
+            <div className={`mx-3 h-0.5 w-8 ${i < current ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'}`} />
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function WizardShell() {
+  const navigate = useNavigate()
+  const [step, setStep] = useState(0)
+  const [tareOverrides, setTareOverrides] = useState<WizardTareOverride[]>([])
+
+  function goTo(idx: number) {
+    setStep(idx)
+    navigate(`/wizard/${STEPS[idx].path}`)
+  }
+
+  function next() { if (step < STEPS.length - 1) goTo(step + 1) }
+  function prev() { if (step > 0) goTo(step - 1) }
+
+  const ctx = { next, prev, goTo, step, tareOverrides, setTareOverrides }
+
+  return (
+    <div className="p-8 max-w-4xl">
+      <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-6">Bulk Import Wizard</h1>
+      <Stepper current={step} />
+      <Routes>
+        <Route index element={<Navigate to="connectivity" replace />} />
+        <Route path="connectivity" element={<Step1Connectivity {...ctx} />} />
+        <Route path="direction" element={<Step2Direction {...ctx} />} />
+        <Route path="matches" element={<Step3Matches {...ctx} />} />
+        <Route path="variances" element={<StepVariances {...ctx} />} />
+        <Route path="preview" element={<StepNPreview {...ctx} />} />
+        <Route path="execute" element={<Step6Execute {...ctx} />} />
+      </Routes>
+    </div>
+  )
+}
+
+export type WizardCtx = {
+  next: () => void
+  prev: () => void
+  goTo: (idx: number) => void
+  step: number
+  tareOverrides: WizardTareOverride[]
+  setTareOverrides: (o: WizardTareOverride[]) => void
+}

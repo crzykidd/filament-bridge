@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [dev, main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check backend/
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+
+  config-validate:
+    name: Config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Validate config files
+        run: |
+          python3 << 'EOF'
+          import json, yaml, glob, sys
+          errors = []
+          for f in ['docker-compose.yml', 'docker-compose.dev.yml']:
+              try: yaml.safe_load(open(f).read())
+              except Exception as e: errors.append(f'{f}: {e}')
+          for f in ['.claude/settings.json', 'frontend/package.json'] + sorted(glob.glob('frontend/tsconfig*.json')):
+              try: json.load(open(f))
+              except Exception as e: errors.append(f'{f}: {e}')
+          if errors:
+              for e in errors: print(f'FAIL: {e}', file=sys.stderr)
+              sys.exit(1)
+          print('All config files valid')
+          EOF
+
+  migration-check:
+    name: Migration check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - name: Run migrations to head
+        working-directory: backend
+        env:
+          FILAMENTDB_URL: http://localhost
+          SPOOLMAN_URL: http://localhost
+          DATA_DIR: /tmp/alembic-check
+        run: alembic upgrade head
+      - name: Assert at head
+        working-directory: backend
+        env:
+          FILAMENTDB_URL: http://localhost
+          SPOOLMAN_URL: http://localhost
+          DATA_DIR: /tmp/alembic-check
+        run: |
+          alembic current 2>&1 | grep -q '(head)' || \
+            { echo 'ERROR: database is not at alembic head'; exit 1; }
+
+  compose-validate:
+    name: Compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+
+  image-build:
+    name: Image build
+    runs-on: ubuntu-latest
+    # The job always runs so the required "CI / Image build" check reports a
+    # conclusion on push events too (a job skipped via job-level `if:` leaves the
+    # required context unsatisfied → PRs stuck "blocked"). The actual build stays
+    # PR-only so push events never build an image.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        if: github.event_name == 'pull_request'
+      - name: Build Docker image (no push)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - run: pytest
+        working-directory: backend

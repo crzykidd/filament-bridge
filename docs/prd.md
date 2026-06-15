@@ -26,7 +26,7 @@ A bidirectional sync service that runs as a Docker sidecar alongside both Filame
 - Pydantic models for Spoolman and Filament DB response shapes
 
 **Frontend:** React SPA
-- TypeScript + React for the initial sync wizard, dashboard, conflict resolution, and sync log views
+- TypeScript + React for the Bulk Import Wizard, dashboard, conflict resolution, and sync log views
 - Vite for build tooling
 - Tailwind CSS for styling
 - Communicates with the FastAPI backend via REST
@@ -43,16 +43,35 @@ A bidirectional sync service that runs as a Docker sidecar alongside both Filame
 filament-bridge/
 ├── backend/                 — Python FastAPI application
 │   ├── app/
-│   │   ├── api/             — REST endpoints (sync, conflicts, config, health)
+│   │   ├── api/             — REST endpoints (sync, conflicts, mappings, config, health,
+│   │   │                       wizard, opentag, backup, sync_log, debug, auth, version)
 │   │   ├── core/            — sync engine, diff logic, field mapping
-│   │   ├── models/          — SQLAlchemy models (mapping, conflicts, log)
+│   │   │   ├── engine.py        — main sync loop: snapshot, diff, apply, log
+│   │   │   ├── sync_policy.py   — two-axis direction+policy resolver (resolve_sync_action)
+│   │   │   ├── conflict_apply.py— master_divergence resolve→apply actions (Phase B)
+│   │   │   ├── planner.py       — wizard execution planner
+│   │   │   ├── dryrun.py        — dry-run preview helpers
+│   │   │   ├── differ.py        — snapshot diff, change classification
+│   │   │   ├── matcher.py       — fuzzy matching, variant cluster keys, finish-line extraction
+│   │   │   ├── fields.py        — field mapping resolution (auto-match + explicit)
+│   │   │   ├── weight.py        — net↔gross conversion, change threshold
+│   │   │   ├── color.py         — multicolor/gradient conversion (FDB ↔ Spoolman)
+│   │   │   ├── material_tags.py — finish-tag detection and serialization
+│   │   │   ├── dates.py         — Spoolman timestamp → FDB date provenance mapping
+│   │   │   ├── version.py       — semver helpers + MIN_FDB / MIN_SPOOLMAN gates
+│   │   │   ├── compat.py        — shared upstream-version compatibility check
+│   │   │   ├── opentag_match.py — OPTMaterial → Spoolman field mapper + scorer
+│   │   │   └── opentag_cache.py — local OpenTag dataset cache (JSON, TTL-gated); direct tarball fetch + parse
+│   │   ├── models/          — SQLAlchemy models (mapping, conflicts, log, snapshot, config)
+│   │   ├── schemas/         — Pydantic models (bridge API, Filament DB, Spoolman shapes)
 │   │   ├── services/        — Filament DB client, Spoolman client
 │   │   └── main.py          — FastAPI app, scheduler setup, static file serving
 │   └── requirements.txt
 ├── frontend/                — React SPA
 │   ├── src/
 │   │   ├── components/      — shared UI components
-│   │   ├── pages/           — wizard, dashboard, conflicts, log
+│   │   ├── pages/           — Wizard/, Dashboard.tsx, Conflicts.tsx, SyncLog.tsx,
+│   │   │                       SyncedRecords.tsx, Settings.tsx, OpenTagCleanup.tsx
 │   │   └── App.tsx
 │   ├── package.json
 │   └── vite.config.ts
@@ -86,8 +105,8 @@ GET /api/v1/vendor ◄───────────────────�
                      (skip)       changed]       changed]
                                      │               │
                                      ▼               ▼
-                              [Apply to other]  [Queue as
-                               side via API]     conflict]
+                       resolve_sync_action()   [Queue as
+                       (direction + policy)    conflict]
                                      │
                           ┌──────────┴──────────┐
                           ▼                     ▼
@@ -95,6 +114,26 @@ GET /api/v1/vendor ◄───────────────────�
               (update Spoolman)          :id/spools/:sid/usage
                                         (update Filament DB)
 ```
+
+The engine runs multiple per-cycle passes over the mapped filament/spool pairs:
+
+| Pass | Function | Notes |
+|---|---|---|
+| Weight | (inline in `run_sync_cycle`) | Spoolman ↔ FDB; `newest_wins` available (weight-only) |
+| Field mapping | `_apply_field_changes` | FR-11 mapped extra fields; follows material_properties direction |
+| Cost | `_sync_cost` | Filament price, spool-price-first effective cost; FDB→SM writes filament price only |
+| Temperatures | `_sync_material_props` | Native bed/nozzle temps: SM `settings_bed_temp`/`settings_extruder_temp` ↔ FDB `temperatures.bed`/`.nozzle` (read-modify-write preserves sibling temps) |
+| Native scalars | `_sync_material_scalars` | SM `material`/`density`/`diameter`/`spool_weight`/`weight` ↔ FDB `type`/`density`/`diameter`/`spoolWeight`/`netFilamentWeight`; SM→FDB writes are master/variant-gated (see FR-11) |
+| Multicolor | `_sync_multicolor` | Requires FDB ≥ 1.33.0; `color_hex`/`multi_color_hexes`/`multi_color_direction` ↔ FDB `color`/`secondaryColors`/`optTags` |
+| Finish tags | `_sync_finish_tags` | Requires FDB ≥ 1.33.0; `optTags` (managed subset) ↔ Spoolman `extra.filamentdb_material_tags` |
+| New spools | `_handle_new_sm_spool` / `_handle_new_fdb_spool` | FR-12; gated by `new_spool_sync_direction` |
+| Stale-mapping purge | `_purge_stale_mapping` + orphaned-FilamentMapping cleanup | Removes bridge-local rows when no live, still-linked counterpart exists (see FR-13) |
+| OpenTag identity | `_sync_opentag_identity` | Propagates `openprinttag_slug`/`uuid` from Spoolman extra fields into FDB `settings{}` bag |
+
+All field-level passes (everything except weight and new-spool creation) follow the
+`material_properties` direction + conflict policy. Every pass stores per-side snapshot
+baselines and refreshes BOTH sides to the post-write agreed value after a successful
+write, so propagated changes are never re-detected as fresh changes (anti-ping-pong).
 
 ### Cross-reference ID storage
 
@@ -114,7 +153,7 @@ Field names are configurable via environment variables.
 
 ## Functional requirements
 
-### P0 — Initial sync wizard
+### P0 — Bulk Import Wizard
 
 #### FR-1: Connectivity check
 - On first access to the web UI, verify connectivity to both Filament DB and Spoolman APIs
@@ -123,56 +162,118 @@ Field names are configurable via environment variables.
 
 #### FR-2: Direction selection
 - User chooses initial import direction: "Import from Spoolman" or "Import from Filament DB"
-- This sets the initial source of truth for the mapping process
-- User also configures ongoing source-of-truth per data category:
-  - Spool weight: Spoolman (recommended) or Filament DB
-  - Material properties: Filament DB (recommended) or Spoolman
-  - New spool creation: User's choice
+- This sets the data flow for the wizard execution (FR-7) only — it does **not** configure ongoing sync settings
+- Ongoing sync direction and conflict policy are configured in Settings (FR-8); see that section for the full two-axis model and default values
 
 #### FR-3: Auto-matching
 - Read all filaments and spools from both systems
-- Match records by vendor name + filament name + color (fuzzy matching for case, whitespace, vendor aliases)
-- Produce three lists:
+- **Cross-reference pre-match:** any Spoolman filament whose spools carry a live
+  `filamentdb_id` extra field is matched at confidence 1.0 before fuzzy matching runs
+  (stale references fall through to fuzzy matching)
+- Match remaining records by vendor name + filament name + color (fuzzy matching for case,
+  whitespace, hyphen/underscore normalization, vendor aliases)
+- Produce three buckets:
   - **Matched pairs** — high-confidence matches, ready to link
   - **Unmatched (source side)** — records that exist in the source but not the target, to be created
   - **Ambiguous** — multiple possible matches, need user resolution
 
-#### FR-4: Match review and conflict resolution UI
-- Display all three lists with side-by-side comparison
-- For ambiguous matches: user picks the correct pairing or marks as "create new"
-- For unmatched: user confirms creation or skips
-- Highlight vendor name deduplication issues (e.g., "ELEGOO" vs "Elegoo") and offer normalization
-- **Every record row displays two icon links:** one linking directly to that spool/filament in Filament DB's web UI, one linking directly to that spool/filament in Spoolman's web UI. Icons should be visually distinct (e.g., Filament DB logo/color and Spoolman logo/color). Links open in new tabs.
+#### FR-4: Match review UI
+- Single unified table of all rows (matched / ambiguous / unmatched-SM / unmatched-FDB),
+  with group-by (status / material / brand), sort, full-text search, per-column filters,
+  and a status filter
+- Tri-state checkboxes include/exclude rows per group or for the whole table; ambiguous
+  rows offer per-candidate Link buttons plus create/skip
+- Bridge-owned synthetic container parents render as a purple **Master / Parent** status
+  (not "Unmatched (FDB)") and are excluded from bulk actions
+- An **OPT badge** marks Spoolman filaments already tagged with an `openprinttag_uuid`;
+  a filter shows tagged-only rows
+- **Rescan** re-fetches both systems and prunes stale decisions; decisions persist in
+  BridgeConfig (`wizard_match_decisions`) so the wizard is resumable
+- Vendor-dedup hints surface rows where vendor names differ but normalize equal
+  (e.g. "ELEGOO" vs "Elegoo")
+- **Every record row displays two text-badge links:** "FDB" (blue badge) linking directly to that spool/filament in Filament DB's web UI, and "SM" (emerald badge) linking directly to Spoolman's web UI. Links open in new tabs.
 
 #### FR-5: Weight conversion review
-- For each spool being synced from Spoolman → Filament DB, show the weight conversion:
-  - Spoolman net weight → Filament DB gross weight (add tare)
-  - Display the tare weight source (Spoolman's `filament.spool_weight` or default)
-  - User can override tare weight per spool or per filament
-- For Filament DB → Spoolman direction, show the reverse conversion
+- Tare (empty-reel weight) is reviewed in the **Variances** step: one editable tare per
+  variant group (the master's) and one per standalone filament; rows that fall back to the
+  200 g default are flagged
+- Overrides are expanded to per-spool `tare_overrides` and submitted with Execute
+  (not persisted in BridgeConfig)
+- For the Filament DB → Spoolman direction, a per-spool weight-conversion table
+  (net/gross/tare/source) with per-spool override is shown instead
 
-#### FR-6: Variant grouping (optional step)
-- Analyze matched filaments for potential parent/variant relationships
-- Group by vendor + material type (stripping color from name)
-- Suggest parent assignment — user confirms or skips
-- Write `filamentdb_parent_id` to Spoolman extra fields for grouped filaments
+#### FR-6: Variances — variant grouping and reconciliation (Spoolman → FDB)
+- A **variant parent mode** must be chosen in Settings before this direction can preview or
+  execute (`409 variant_parent_mode_unset` otherwise):
+  - `promote_color` — one color in each cluster is promoted to be the FDB parent; the rest
+    become variants
+  - `generic_container` — a colorless, bridge-owned container parent is created for every
+    cluster (even single-color); every color is a child. Containers have no Spoolman
+    counterpart (`is_synthetic_parent`, `spoolman_filament_id = NULL`) and never sync.
+    See `docs/variant-parent-mode.md`.
+- Included filaments are clustered by `(vendor, material, finish-line)` — the finish token
+  (silk, matte, cf, …) is parsed from the name using the configurable
+  `VARIANT_LINE_KEYWORDS` list so distinct lines never merge
+- Members whose shared print properties conflict with the suggested master are pre-flagged
+  **suggested standalone**; the user can move members between groups, create manual groups,
+  make members standalone, or Ignore (skip) a filament entirely
+- When an existing FDB parent line matches a cluster, the group offers
+  **attach to existing parent** vs **create new parent**
+- **Per-group property reconciliation:** conflicting shared properties
+  (type/density/diameter/nozzle/bed/spool weight) get a pick-a-value UI (master value,
+  any member's value, or manual). The reconciled values seed the FDB create AND are
+  written back to every Spoolman filament in the group at execute (the only place the
+  bridge corrects existing Spoolman data outside the OpenTag tool)
+- Decisions persist in BridgeConfig (`wizard_sm_variant_decisions`,
+  `wizard_variances_reconcile`)
 
-#### FR-7: Execute initial sync
+#### FR-7: Execute import
 - Write cross-reference IDs to both systems
-- Create missing records in the target system
-- Apply weight conversions
-- Log all actions for audit trail
-- Report: created, updated, skipped, failed — with details for each
+- Create missing records in the target system; **created FDB filament names are always
+  vendor + material [+ finish] + color** (e.g. "Hatchbox PLA Light Blue") so bare-color
+  Spoolman names can never collide globally; the container marker (default `(Master)`)
+  appears only on generic-container parents
+- Per-record failure isolation: any create/update error (including FDB 409 name
+  collisions) records a `failed` row and the batch continues; container-name collisions
+  can be **renamed or skipped per cluster** at Preview (`wizard_container_name_overrides`)
+- Stale local mappings whose FDB target was deleted upstream are detected by the planner
+  and **recreated** (old mapping + snapshots removed) instead of being skipped as
+  "already linked"
+- Apply weight conversions (seed weights are SET on create — usage entries are only for
+  ongoing decrements, FR-9); spool location is carried over (FDB locations are
+  found-or-created by name) along with purchase/opened provenance dates
+- If `never_import_empties` is on, spools with zero remaining weight are skipped at both preview and execute
+- Post-create passes: Spoolman reconcile write-back (FR-6), finish-tag extra-field
+  write-back, and OpenTag identity merge into FDB `settings{}` (scoped exception)
+- Log all actions for audit trail; report created / updated / skipped / failed with a
+  human-readable label and error detail per record; failures are surfaced prominently in
+  the Execute result view
+- `wizard_completed` flips only on a zero-failure run; the wizard is re-runnable and
+  idempotent — already-linked records are skipped
 
 ### P0 — Continuous sync engine
 
-#### FR-8: Sync cycle
-- On configured interval (env var `SYNC_INTERVAL_SECONDS`), poll both APIs
+#### FR-8: Sync cycle and runtime settings
+- On configured interval (`SYNC_INTERVAL_SECONDS` env var, or the runtime override in Settings), poll both APIs
 - Diff current state against last-known snapshot
-- For each changed record, determine sync direction based on source-of-truth config
-- Apply changes to the other system via API calls
-- Update the local snapshot
+- For each changed record, `resolve_sync_action` is called with the category's `direction` and `conflict_policy`:
+  - If only one side changed: propagate to the other (regardless of policy)
+  - If both sides changed under `two_way`: apply the conflict policy (`manual` → queue; `spoolman_wins`/`filamentdb_wins` → push; `newest_wins` → compare timestamps, fall back to queue if indeterminate)
+  - One-way directions: only the source side can propagate; drift on the locked side is NOOP
+- Resolved by `core/sync_policy.py:resolve_sync_action`. Each category has two independent axes:
+  - **`direction`** — `two_way` | `spoolman_to_filamentdb` | `filamentdb_to_spoolman`
+  - **`conflict_policy`** — `manual` | `spoolman_wins` | `filamentdb_wins` | `newest_wins`
+    (consulted only when `direction == "two_way"` AND both sides changed)
+  - **Weight:** direction defaults `spoolman_to_filamentdb`; `newest_wins` available (Spoolman exposes a spool modification timestamp)
+  - **Material properties:** direction defaults `filamentdb_to_spoolman`; `newest_wins` rejected (Spoolman has no per-filament mtime)
+  - **New spool creation:** direction only (no conflict policy); defaults `two_way`
+- Apply changes to the other system via API calls; update the local snapshot
 - Auto-sync is disabled by default — must be explicitly enabled after initial sync
+- **Runtime-editable settings** (all configurable in Settings UI, stored in SQLite):
+  - `sync_interval_seconds` — interval override (env var is the start-up fallback)
+  - `never_import_empties` — skip zero-weight spools during wizard preview/execute
+  - `sync_log_retention_days` — auto-prune log entries older than N days (default 30)
+  - `debug_mode` — enable reset/clear endpoints (see Debug tools below)
 
 #### FR-9: Spool weight sync (Spoolman → Filament DB)
 - Detect weight decrease in Spoolman (remaining_weight dropped)
@@ -182,14 +283,38 @@ Field names are configurable via environment variables.
 
 #### FR-10: Spool weight sync (Filament DB → Spoolman)
 - Detect weight change in Filament DB (usage logged or manual adjustment)
-- Compute the new net weight: `totalWeight - spoolWeight - sum(usageHistory.grams)`
-- Call `PUT /api/v1/spool/{id}` with `{ remaining_weight: new_net_weight }`
+- Compute the new net weight: `totalWeight - spoolWeight` (tare). **Do NOT subtract
+  `usageHistory`** — Filament DB reduces `totalWeight` directly when usage is logged, so
+  it is already the current gross; subtracting usage double-counts (this caused a runaway
+  decrement loop, fixed 2026-06-10 — see `docs/decisions.md`)
+- Call `PATCH /api/v1/spool/{id}` with `{ remaining_weight: new_net_weight }`
+- After any weight propagation (either direction) BOTH side snapshots are refreshed to the
+  post-write agreed values to prevent ping-pong re-detection
 
 #### FR-11: Field mapping sync
 - For configured field mappings (env var `FIELD_MAPPINGS`), sync values between Filament DB filament fields and Spoolman extra fields
 - Auto-match: if a Spoolman extra field name matches a Filament DB field name exactly, sync automatically (unless excluded via `FIELD_MAPPING_EXCLUDES`)
 - Explicit mapping: `FIELD_MAPPINGS=density=sm_density,temperatures.nozzle=nozzle_temp` overrides auto-match
-- Direction follows source-of-truth config for material properties
+- Direction + conflict policy follow the `material_properties` category settings
+- **Native temperatures** — bed/nozzle temps are native fields on BOTH sides, so they are
+  synced by a dedicated pass (`_sync_material_props`): SM `settings_bed_temp` /
+  `settings_extruder_temp` ↔ FDB `temperatures.bed` / `.nozzle` (FDB writes
+  read-modify-write the `temperatures` object so sibling temps survive)
+- **Native shared filament scalars** — five fields with a direct FDB↔SM counterpart are synced by the dedicated `_sync_material_scalars` pass:
+  - SM `material` ↔ FDB `type` (name remap)
+  - SM `density` ↔ FDB `density`
+  - SM `diameter` ↔ FDB `diameter`
+  - SM `spool_weight` ↔ FDB `spoolWeight`
+  - SM `weight` ↔ FDB `netFilamentWeight`
+  - These fields are handled OUTSIDE the generic extra-field mapper (they are native, not extra-field)
+  - Snapshots keyed `_mp_<sm_field>` coexist with `_mc_sig`, `_cost`, `_finish_sig` via `_merge_snapshot`
+  - **Master/variant gate (PUSH_SM_TO_FDB):**
+    - Standalone or already-overridden variant → write directly
+    - Inherited AND SM value matches resolved (inherited) value → skip (no redundant override)
+    - Inherited AND SM value diverges → queue a `master_divergence` conflict; the human
+      resolves it with an explicit action that the bridge then applies upstream (FR-16)
+  - `conflict_type` column on `Conflict`: `"cross_system"` (standard both-sides-changed) or `"master_divergence"` (inherited-field divergence)
+  - Per-field dedup: `_has_open_conflict` accepts `conflict_type` so cross_system and master_divergence conflicts on the same field+ids deduplicate independently
 
 #### FR-12: New record detection
 - When a new spool appears in Spoolman (no `filamentdb_spool_id` extra field):
@@ -202,10 +327,18 @@ Field names are configurable via environment variables.
   - If unmatched: queue as conflict
 
 #### FR-13: Conflict detection and queuing
-- A conflict occurs when the same field on the same record changes on both sides between sync cycles
-- Conflicts are never auto-resolved — they go into a queue
-- Conflict record includes: entity type, entity IDs on both sides, field name, value on each side, timestamps
-- Queue persists across restarts
+- Conflicts are never auto-resolved — they always go into a queue for human decision
+- Conflict record includes: entity type, entity IDs on both sides, field name, value on each side, timestamps, and a `conflict_type`
+- Queue persists across restarts; open conflicts are deduplicated (same field + IDs + type only queued once)
+- Three classes of conflict:
+
+**Both-sides-changed conflicts** (`conflict_type = "cross_system"`) — when `direction == "two_way"` and `conflict_policy == "manual"` (or `newest_wins` falls back): the same field changed on both sides since the last snapshot. The field name is the changed field (e.g. `weight`, `color`, `cost`, `material_tags`, `multicolor`, `density`, `bed_temp`).
+
+**Master-divergence conflicts** (`conflict_type = "master_divergence"`) — an SM→FDB write of a native scalar would override a variant's inherited master value (FR-11 gate). Resolved via the explicit-action workflow in FR-16.
+
+**Upstream-deletion conflicts** — when a previously mapped spool is missing from one side AND a live, still-linked counterpart exists on the other side ("still linked" = the surviving Spoolman spool still carries the `filamentdb_spool_id` cross-reference), `_queue_deletion_conflict` fires. The field name is the sentinel `DELETION_FIELD = "__record_deleted__"`. The surviving side carries a descriptor `{ "exists": true, "deleted_side": "spoolman"|"filamentdb" }`; the deleted side value is null. Resolution via the conflict UI removes the orphaned bridge mapping and both snapshots (`api/conflicts.py:_cleanup_orphaned_mapping`).
+
+**Stale-connection purge (no conflict):** when BOTH sides are gone, or the FDB spool is gone and the surviving Spoolman spool's cross-reference was cleared, there is no live link to protect — the engine silently purges its own `SpoolMapping` + snapshots, auto-resolves any open deletion conflict (`resolution="auto_stale_purge"`), and logs an audit entry. Orphaned `FilamentMapping` rows (non-synthetic, no remaining spool mappings, FDB filament absent) are purged the same cycle. Bridge-local rows only — upstream records are never deleted.
 
 #### FR-14: Validation dry run
 - Before enabling auto-sync, user can trigger a dry run
@@ -217,19 +350,46 @@ Field names are configurable via environment variables.
 
 #### FR-15: Dashboard
 - Show sync status: last sync time, next scheduled sync, records in sync, pending conflicts
-- Connectivity status for both systems
+- Connectivity status for both systems, including per-system minimum-version warnings
+- When a known upstream version is below its minimum, a red "Sync disabled" banner lists
+  the reasons and the sync buttons are disabled (`sync_blocked` / `sync_blocked_reasons`
+  from `GET /api/sync/status`)
 - Quick stats: total filaments, total spools, synced vs unsynced counts
 
 #### FR-16: Conflict resolution UI
-- List all pending conflicts with details
-- For each: show both values, let user pick one or enter a manual value
-- **Every conflict row displays two icon links** to the affected record in Filament DB and Spoolman (same pattern as FR-4)
-- Resolving a conflict applies the chosen value to both systems on the next sync cycle
+- Collapsible, sortable conflict rows with type badges (Deleted record / New spool /
+  Weight / Multicolor / Property / Master divergence), type filters, bulk resolve,
+  expand/collapse-all, and a `?highlight=<id>` deep-link target (used by Synced Records'
+  "See conflict" button)
+- For each standard conflict: show both values, let user pick one or enter a manual value
+- **Every conflict row displays two text-badge links** — "FDB" (blue) linking to Filament DB, "SM" (emerald) linking to Spoolman — to the affected record (same URL patterns as FR-4)
+- **Standard (cross_system) conflicts are record-only:** resolving records the chosen value
+  and removes the conflict from the open queue — it does NOT write the value upstream.
+  Deletion conflicts additionally clean up the orphaned bridge mapping and snapshots.
+  New-spool conflicts are dismiss-only notices (creation happens via the wizard).
+- **Master-divergence conflicts apply upstream on resolve** (human-approved, never silent).
+  The expanded card fetches `GET /conflicts/{id}/divergence-context` (master + full variant
+  line with live values and inherited/overridden status) and offers three actions:
+  - `apply_all` — write the incoming value to the FDB master + every explicitly-overridden
+    variant, and to every mapped Spoolman filament in the line; sibling master-divergence
+    conflicts on the same field+line auto-resolve
+  - `variant_override` — write to this variant only (becomes its own setting); master and
+    siblings untouched
+  - `ignore` — no writes; current values are stored as baselines so the divergence is not
+    re-queued next cycle
+  - Snapshots refresh for every successfully-written record (failed writes keep their old
+    baseline so the next cycle retries); any upstream failure returns 502 and leaves the
+    conflict open
 
 #### FR-17: Sync log
-- Scrollable log of all sync actions with timestamps
-- Filter by: entity type, direction, action type (create, update, conflict)
-- **Each log entry includes icon links** to the affected record in both systems where applicable
+- Scrollable log of all sync actions with timestamps (paginated, newest first)
+- Filter by: entity type, direction, action type (create, update, skip, conflict, error)
+- **Window selector** (last 10 / last 25 sync cycles / all) limits display to the most
+  recent cycles without deleting entries; window mode groups rows under per-cycle headers
+- **Clear log** action permanently deletes all log entries from SQLite (confirmation required)
+- Entries older than `sync_log_retention_days` (default 30; 0 = forever) are pruned
+  automatically at the start of each auto-sync tick
+- **Each log entry includes text-badge links** ("FDB"/"SM") to the affected record in both systems where applicable
 - Useful for debugging unexpected changes
 
 #### FR-18: Manual sync trigger
@@ -239,23 +399,25 @@ Field names are configurable via environment variables.
 #### FR-19: Synced records view
 - Table of all synced spool/filament pairs showing current state on both sides
 - Columns: name, vendor, color, Spoolman weight, Filament DB weight, sync status, last synced
-- **Each row displays two icon links** to the record in Filament DB and Spoolman
+- **Each row displays two text-badge links** ("FDB"/"SM") to the record in Filament DB and Spoolman
 - Sortable and filterable
+- **Hide empty spools** toggle (hides spools where Spoolman remaining_weight ≈ 0)
 - Visual indicators for: in sync (green), pending sync (yellow), conflict (red), unlinked (grey)
 
 ### P2 — Enhanced features
 
-#### FR-20: Discord notifications
-- On conflict: post to configured Discord webhook with conflict details
-- On sync error: post with error details and retry status
-- Optional: daily summary of sync activity
+#### FR-20: Discord notifications *(Not implemented — v0.2.0)*
+- `DISCORD_WEBHOOK_URL` env var is declared and validated, but no posting code exists
+- On conflict: post to configured Discord webhook with conflict details *(planned)*
+- On sync error: post with error details and retry status *(planned)*
+- Optional: daily summary of sync activity *(planned)*
 
-#### FR-21: Spoolman archive/retire sync
-- When a spool is archived in Spoolman, set `retired: true` on the Filament DB spool
-- When a spool is retired in Filament DB, archive it in Spoolman
+#### FR-21: Spoolman archive/retire sync *(Partial — v0.2.0)*
+- Archived Spoolman spools are detected and excluded from sync cycles
+- Symmetric propagation (`retired: true` in FDB ↔ `archived` in Spoolman) is not yet implemented
 
-#### FR-22: Print history enrichment
-- When a weight decrement is synced from Spoolman, optionally create a `POST /api/print-history` record in Filament DB
+#### FR-22: Print history enrichment *(Not implemented — v0.2.0)*
+- Planned: when a weight decrement is synced from Spoolman, optionally create a `POST /api/print-history` record in Filament DB
 - Would require OctoPrint job metadata (filename, duration) — may need an OctoPrint API call or Spoolman webhook
 
 #### FR-23: Bulk operations
@@ -263,17 +425,65 @@ Field names are configurable via environment variables.
 - Bulk assign variants
 - Bulk update tare weights
 
+#### FR-23b: OpenTag (OpenPrintTag) Cleanup tool
+A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag community dataset and apply corrections.
+
+- **Dataset:** fetched directly from the OpenPrintTag GitHub tarball (no FDB involvement), cached locally at `DATA_DIR/opentag_cache.json` with a TTL of `OPENTAG_CACHE_MAX_AGE_HOURS`. Brand names, material properties, and secondary colors are all parsed in a single tarball download by `core/opentag_cache.py` (`_parse_tarball`).
+- **Matching** (`core/opentag_match.py`): per-Spoolman-filament scoring by material family, vendor/brand (via `OPENTAG_VENDOR_ALIASES` map), color name similarity, hex proximity, and finish-tag overlap. Color-profile pre-filter (single/coextruded/gradient) prevents cross-profile matches. UUID exact-match bypasses fuzzy scoring for filaments already tagged by a prior run.
+- **Review UI** (`frontend/src/pages/OpenTagCleanup.tsx`): per-filament card with a best match + up to 5 alternate candidates. Each candidate shows per-field comparison (current Spoolman value vs OpenTag suggestion). User selects a candidate and can mark individual fields "keep mine" or edit the suggested value. The **Manufacturer** field (vendor) shows only when the Spoolman vendor name and OpenTag brand differ after normalization.
+- **Apply** (`POST /api/openprinttag/apply`): writes confirmed fields to Spoolman; for the vendor field, resolves or creates the Spoolman vendor via find-or-create (`_ensure_vendor`). After the Spoolman write, stamps `openprinttag_slug`/`openprinttag_uuid` into the linked FDB filament's `settings{}` bag via `FilamentDBClient.merge_filament_settings()` (the approved scoped exception).
+- Routes: `GET /api/openprinttag/status`, `POST /api/openprinttag/refresh`, `GET /api/openprinttag/matches`, `POST /api/openprinttag/apply`.
+
+#### FR-23c: Debug mode and reset tools
+- `debug_mode` is a runtime-editable BridgeConfig flag (default `false`), toggled in Settings
+- When `debug_mode` is `false`, all three debug endpoints return **403**
+- `POST /api/debug/clear-spoolman-fdb-refs` — blanks the three `filamentdb_*` cross-ref extras on every Spoolman spool that has any set. Spoolman side only; the bridge DB is untouched.
+- `POST /api/debug/reset-bridge-state` — deletes all rows from the five bridge state tables (mappings, snapshots, conflicts, sync log) and re-arms the wizard (`wizard_completed = false`). Bridge side only; BridgeConfig settings other than `wizard_completed` are preserved; upstream systems are untouched.
+- `POST /api/debug/full-reset` — both cleanups in one call (Spoolman cross-refs first, then the bridge DB). A Spoolman failure does not abort the local reset; it is reported in `spoolman_error`.
+- Neither tool ever deletes records in Filament DB or Spoolman.
+- These are development/testing tools and must never be called in an automated workflow.
+
 #### FR-24: Backup and restore
-- **Export** the bridge's sync state (mapping table, configuration, conflict queue) as a JSON file via the web UI or API (`GET /api/backup`)
-- **Import/restore** a previously exported backup via the web UI or API (`POST /api/backup`)
-- Backup includes: all spool/filament mappings with cross-reference IDs, source-of-truth settings, field mapping configuration, unresolved conflicts, and sync log history
+- **Export** the bridge's sync state (mapping table, configuration, conflict queue) as a JSON file via `GET /api/backup/export`
+- **Import/restore** a previously exported backup via `POST /api/backup/import`
+- Backup includes: all spool/filament mappings with cross-reference IDs, runtime config, and unresolved conflicts
 - Does NOT include data from Filament DB or Spoolman themselves — only the bridge's own state
 - Useful for: migrating the bridge to a new host, recovering from a corrupted SQLite database, or resetting and re-importing after a configuration change
-- Backup file is versioned with a schema version for forward compatibility
+- Backup file is versioned with a schema version for forward compatibility; import is idempotent
+- **Upstream backup proxies (pre-write safety dialog):**
+  - `POST /api/backup/spoolman` — proxies to Spoolman's `POST /api/v1/backup`; Spoolman writes the archive to its own data volume
+  - `POST /api/backup/filamentdb` — fetches Filament DB's `GET /api/snapshot` (full JSON backup: filaments, locations, print history, catalogs, tombstones) and writes it to `DATA_DIR/backups/filamentdb-snapshot-<timestamp>.json`; the bridge's data volume must be mounted for the file to survive a restart. Note: unlike Spoolman, FDB delivers the snapshot to the caller rather than writing it internally, so the bridge stores it.
 
-#### FR-25: Configuration export/import
-- Separate from the full backup: export just the bridge configuration (URLs, field mappings, source-of-truth settings, sync interval) as a shareable config file
-- Useful for users sharing their setup or restoring after a fresh install without re-running the initial sync wizard
+#### FR-25: Configuration-only export *(Not implemented — folded into full backup)*
+- Originally planned as a separate config-only export; folded into `GET /api/backup/export` which includes config in the full dump
+
+#### FR-26: Authentication and API token
+- Optional single-account password auth, enabled by default (`AUTH_ENABLED` env var)
+- First visit shows a Setup screen (set admin password, bcrypt-hashed in BridgeConfig);
+  subsequent visits show Login. Sessions are a stateless signed `fb_session` httpOnly
+  cookie (itsdangerous TimestampSigner, 30-day max-age, secret auto-generated and persisted)
+- All `/api/*` routes require auth except `GET /api/health`, `GET /api/version`, and the
+  `/api/auth/*` endpoints; the SPA shell itself is public
+- Optional single **API token** for machine access (`Authorization: Bearer` or `X-API-Key`,
+  constant-time compare); enable/regenerate in Settings → Security; displayed masked
+- Lockout recovery: set `AUTH_ENABLED=false`, restart, change the password in Settings,
+  re-enable. Full model in `docs/security.md`.
+
+#### FR-27: Version display and update check
+- Sidebar shows the running version (build label includes `-dev+<sha>` on dev-channel
+  builds) linking to its GitHub release
+- The backend checks the GitHub releases API server-side (cached 6 h, degrades gracefully);
+  when a newer release exists an "↑ vX.Y.Z" pill appears and a one-time release-notes modal
+  is shown (per-version localStorage dismissal; suppressed on first run and on dev builds)
+- `GET /api/version` is public. Channel/commit are baked in at image build time
+  (`BUILD_CHANNEL` / `GIT_COMMIT` build args → `BRIDGE_CHANNEL` / `BRIDGE_COMMIT`).
+  Details in `docs/version-update-check.md`.
+
+#### FR-28: UI shell
+- Light / dark / system theme (localStorage-persisted, pre-paint script avoids white flash)
+- Required-settings gate: when a required setting is unset (currently
+  `variant_parent_mode`), a modal prompts the user to visit Settings before using the bridge
+- All timestamps render in the browser's local timezone
 
 ---
 
@@ -313,39 +523,42 @@ Field names are configurable via environment variables.
 - Backup/restore available for the bridge's own state
 
 ### NFR-7: Deep-linkable
-- Every spool and filament reference in the UI includes direct links to both Filament DB and Spoolman web UIs
-- Link format: `{FILAMENTDB_URL}/filament/{id}` and `{SPOOLMAN_URL}/#/spool/{id}` (configurable URL patterns)
+- Every spool and filament reference in the UI includes direct text-badge links ("FDB" / "SM") to both Filament DB and Spoolman web UIs
+- Link format: `{FILAMENTDB_URL}/filaments/{id}` and `{SPOOLMAN_URL}/spool/show/{id}` (verified against live instances)
 - Links open in new tabs
 
 ---
 
 ## UI deep link pattern
 
-Throughout the web UI, every record that maps to a spool or filament in either system displays two icon links:
+Throughout the web UI, every record that maps to a spool or filament in either system displays two text-badge links:
 
-| Icon | Target | URL pattern |
+| Badge | Target | URL pattern |
 |---|---|---|
-| 🔵 Filament DB icon | Filament detail page | `{FILAMENTDB_URL}/filament/{filamentdb_id}` |
-| 🟢 Spoolman icon | Spool detail page | `{SPOOLMAN_URL}/#/spool/{spoolman_id}` |
+| **FDB** (blue) | Filament detail page (spool rows link here too — no standalone spool page) | `{FILAMENTDB_URL}/filaments/{filamentdb_id}` |
+| **SM** (emerald) | Spool / filament detail page | `{SPOOLMAN_URL}/spool/show/{spoolman_id}` · `/filament/show/{id}` |
 
-These appear in: the initial sync wizard match review (FR-4), the synced records view (FR-19), the conflict resolution UI (FR-16), and the sync log (FR-17). URL base paths are derived from the configured `FILAMENTDB_URL` and `SPOOLMAN_URL` environment variables.
+These appear in: the Bulk Import Wizard match review (FR-4), the synced records view (FR-19), the conflict resolution UI (FR-16), and the sync log (FR-17). URL base paths are derived from the configured `FILAMENTDB_URL` and `SPOOLMAN_URL` environment variables.
 
 ---
 
 ## Open questions
 
-1. **Sync granularity for weight** — do we sync on every weight change, or only when the delta exceeds a threshold? Small rounding differences between the two systems could cause unnecessary sync churn.
+> Pre-2026-05-28 questions resolved against the live crzynet instances. Post-2026-05-28
+> questions resolved by code (see `docs/decisions.md` for full write-ups).
 
-2. **Spoolman extra field creation** — can the bridge auto-create the required extra fields in Spoolman via API, or does the user need to create them manually first?
+1. **Sync granularity for weight** — ✅ **Resolved by code.** Sync only when the delta ≥ a configurable threshold (default ~2g) to avoid net/gross rounding churn. Implemented in `core/weight.py:weight_changed`.
 
-3. **Filament DB variant creation via API** — `POST /api/filaments` with `parentId` set should create a variant, but need to confirm this works and that inherited fields resolve correctly.
+2. **Spoolman extra field creation** — ✅ **Resolved by code.** The bridge creates its cross-ref fields via `POST /api/v1/field/{entity_type}/{key}` on startup (`ensure_extra_fields()`). Extra-field text values round-trip JSON-double-quoted via `encode_extra_value`/`decode_extra_value`.
 
-4. **OctoPrint 2.0 impact** — OctoPrint 2.0 may change Spoolman integration patterns. Monitor RC releases.
+3. **Filament DB variant creation via API** — ✅ **Resolved by code.** `parentId` links variants; `GET /api/filaments/:id` resolves inheritance server-side in `_inherited[]`/`_parent`/`_variants`. Fields in `_inherited[]` are skipped by `core/fields.py:should_skip_inherited`.
 
-5. **Moonraker compatibility** — Moonraker's Spoolman proxy may affect how the bridge sees weight updates. Need to test.
+4. **OctoPrint 2.0 impact** — ⏳ **Deferred (monitor).** No bridge code depends on it; watch RC releases.
 
-6. **Rate limiting** — neither Filament DB nor Spoolman document rate limits, but aggressive polling on short intervals with large inventories could be an issue. May need to implement incremental sync (only fetch changed records) rather than full snapshot on each cycle.
+5. **Moonraker compatibility** — ⏳ **Deferred.** Test once the sync engine is fully validated.
 
-7. **Multi-printer attribution** — when multiple OctoPrint instances decrement the same spool in Spoolman between sync cycles, the bridge sees one aggregate delta. Is losing per-printer attribution acceptable, or should the bridge try to correlate with OctoPrint job data?
+6. **Rate limiting / full-snapshot diff** — ✅ **Resolved by code.** Full-snapshot diff each cycle; `GET /api/v1/spool?limit=1000` returns all spools (incl. archived — filtered `archived == false` client-side). Add incremental fetch only if a larger inventory demands it.
 
-8. **Filament DB and Spoolman URL path patterns** — need to confirm the exact URL structure for deep links into both web UIs. Filament DB uses Next.js routing (likely `/filament/{id}`), Spoolman uses hash routing (`/#/spool/{id}`).
+7. **Multi-printer attribution** — ✅ **Resolved.** Accept the aggregate delta; per-printer attribution is out of scope (documented, not silently dropped).
+
+8. **Filament DB and Spoolman URL path patterns** — ✅ **Resolved by code.** Filament DB `{FILAMENTDB_URL}/filaments/{id}` (plural, no standalone spool page); Spoolman `{SPOOLMAN_URL}/spool/show/{id}` and `/filament/show/{id}` (no hash routing). UI renders text badges "FDB"/"SM", not vendor logos.

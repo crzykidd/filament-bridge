@@ -1,0 +1,19 @@
+# filament-bridge — standard deployment.
+# Spoolman and Filament DB are separate projects you run yourself; point the bridge at them
+# with the URLs below. For a full local stack (bridge + Spoolman + Filament DB + Mongo) for
+# development/testing, use docker-compose.dev.yml instead.
+services:
+  filament-bridge:
+    image: ghcr.io/crzykidd/filament-bridge:latest
+    ports:
+      - "8090:8090"
+    volumes:
+      - bridge-data:/data        # REQUIRED — persists the SQLite state database
+    environment:
+      FILAMENTDB_URL: http://your-filament-db-host:3000   # your existing Filament DB
+      SPOOLMAN_URL: http://your-spoolman-host:7912         # your existing Spoolman
+      # DISCORD_WEBHOOK_URL: https://discord.com/api/webhooks/...
+    restart: unless-stopped
+
+volumes:
+  bridge-data:

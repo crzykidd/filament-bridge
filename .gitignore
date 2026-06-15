@@ -1,9 +1,12 @@
 # Private data (user-specific exports, configs, API dumps)
 private_data/
 
-# Node
+# Node / frontend
 node_modules/
 dist/
+.vite/
+*.tsbuildinfo
+coverage/
 .env
 .env.*
 !.env.example
@@ -22,6 +25,20 @@ Thumbs.db
 docker-compose.override.yml
 compose.dev.yml
 
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
 # Logs
 *.log
 logs/
+
+# Claude Code per-machine local settings (never commit)
+.claude/settings.local.json

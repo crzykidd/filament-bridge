@@ -1,0 +1,1076 @@
+"""OpenTag cleanup tool — GET /api/openprinttag/matches, POST /api/openprinttag/refresh,
+POST /api/openprinttag/apply.
+
+Standalone tool: match Spoolman filaments against the OpenPrintTag dataset
+(fetched directly from the OpenPrintTag GitHub tarball, cached locally), review
+per-field, confirm, and apply writes to Spoolman + push slug/uuid into FDB
+settings bag.
+
+Route prefix note: the path token "opentag" (without "print") collides with the
+Qubit OpenTag web-analytics product on EasyList/uBlock filter lists and is
+blocked by ad blockers.  The routes use "openprinttag" instead, which is safe.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+from fastapi import APIRouter, Request
+from pydantic import BaseModel
+
+from app.api.errors import api_error
+from app.config import settings as _settings
+from app.core.change_log import record_change as _record_change
+from app.core.log_safe import scrub as _scrub
+from app.core.matcher import normalize_vendor
+from app.core.opentag_cache import _load_cache, get_cache_metadata, load_opentag_dataset
+from app.core.opentag_match import (
+    build_ngram_index,
+    color_profile_compatible_soft,
+    decompose_name,
+    families_gate_compatible,
+    find_best_match,
+    material_family,
+    opt_color_profile,
+    opt_to_spoolman_fields,
+    resolve_opentag_brand,
+    score_candidate,
+    sm_color_profile,
+)
+from app.schemas.spoolman import SpoolmanFilament as _SpoolmanFilament, SpoolmanVendor as _SpoolmanVendor
+from app.db import SessionLocal
+from app.schemas.spoolman import decode_extra_value, encode_extra_value
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Response / request models
+# ---------------------------------------------------------------------------
+
+
+class OpenTagDatasetMeta(BaseModel):
+    fetched_at: str | None
+    count: int
+    stale: bool
+
+
+class OpenTagCacheStatus(BaseModel):
+    """Lightweight cache metadata — returned without fetching from FDB."""
+    exists: bool
+    fetched_at: str | None
+    count: int
+    stale: bool
+    max_age_hours: int
+    # Largest record count seen on any prior successful grab, persisted in
+    # BridgeConfig so the "first load downloads ~N records" hint stays accurate
+    # (and survives cache-file deletion) as the upstream dataset grows.
+    last_count: int = 0
+
+
+class OpenTagFieldRow(BaseModel):
+    """Per-field comparison row for the review step."""
+    field: str
+    spoolman_value: Any
+    opentag_value: Any
+    # suggested value = opentag_value by default (caller may override)
+    suggested_value: Any
+
+
+class OpenTagCandidate(BaseModel):
+    """One candidate match for a Spoolman filament — best or alternate."""
+    opt_uuid: str | None
+    opt_slug: str | None
+    opt_brand: str | None
+    opt_name: str | None
+    opt_color_hex: str | None
+    confidence: float
+    multicolor_mismatch: bool = False
+    fields: list[OpenTagFieldRow]
+
+
+class OpenTagFilamentMatch(BaseModel):
+    """Comparison entry for one Spoolman filament."""
+    spoolman_filament_id: int
+    spoolman_name: str
+    spoolman_vendor: str | None
+    spoolman_material: str | None
+    spoolman_color_hex: str | None
+    opt_uuid: str | None
+    opt_slug: str | None
+    opt_brand: str | None
+    opt_name: str | None
+    confidence: float
+    fields: list[OpenTagFieldRow]
+    alternates: list[dict[str, Any]]  # top alternate OPTMaterial dicts (kept for compat)
+    # Structured candidates list: candidates[0] is the best match, followed by up to 5
+    # alternates.  Each carries its own per-field comparison and identity (slug/uuid).
+    candidates: list[OpenTagCandidate] = []
+    ignored: bool = False
+    # True when SM filament is multicolor but the matched OPT entry is NOT
+    # (no secondaryColors AND no arrangement tag).  Also set on no-match rows
+    # when the SM filament is multicolor but no compatible OPT entry was found.
+    multicolor_mismatch: bool = False
+    # Human-readable reason why a no-match row has no match.  None on matched rows.
+    no_match_reason: str | None = None
+    # True when the filament already has an openprinttag_uuid and at least one
+    # non-identity field differs (data drift).  Excludes filaments that the user
+    # has suppressed via the openprinttag_ignore extra field.
+    has_update: bool = False
+    # True when the user has set openprinttag_ignore="1" to suppress future update
+    # flagging for this filament.
+    ignored_updates: bool = False
+
+
+class OpenTagMatchesResponse(BaseModel):
+    dataset: OpenTagDatasetMeta
+    matches: list[OpenTagFilamentMatch]
+    # Count of already-tagged filaments with data drift (excluding ignored ones)
+    updates_count: int = 0
+
+
+# Apply request ---------------------------------------------------------------
+
+
+class OpenTagFieldDecision(BaseModel):
+    """User's final choice for one field of one filament."""
+    field: str               # e.g. "material", "color_hex", "extra.openprinttag_slug"
+    value: Any               # the value to write (may be edited vs OpenTag default)
+    keep_mine: bool = False  # True → skip this field entirely
+
+
+class OpenTagFilamentDecision(BaseModel):
+    spoolman_filament_id: int
+    ignored: bool = False
+    fields: list[OpenTagFieldDecision] = []
+    # FDB filament id for settings-bag merge (None if no mapping yet)
+    fdb_filament_id: str | None = None
+    # Slug/uuid always carried separately for FDB settings-bag write
+    openprinttag_slug: str | None = None
+    openprinttag_uuid: str | None = None
+
+
+class OpenTagApplyRequest(BaseModel):
+    decisions: list[OpenTagFilamentDecision]
+
+
+class OpenTagApplyFilamentResult(BaseModel):
+    spoolman_filament_id: int
+    status: str  # "ok" | "ignored" | "error"
+    error: str | None = None
+    fields_written: list[str] = []
+    fdb_settings_updated: bool = False
+
+
+class OpenTagApplyResponse(BaseModel):
+    applied: int
+    ignored: int
+    errors: int
+    results: list[OpenTagApplyFilamentResult]
+
+
+class OpenTagIgnoreResponse(BaseModel):
+    spoolman_filament_id: int
+    ignored_updates: bool
+
+
+class OpenTagSearchResponse(BaseModel):
+    """Response from the manual search endpoint."""
+    results: list[OpenTagCandidate]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_vendor_aliases(aliases_csv: str) -> dict[str, str]:
+    """Parse a ``spoolman_vendor=opentag_brand`` CSV string into a normalized dict.
+
+    Both sides are passed through ``normalize_vendor`` so casing/whitespace are
+    handled consistently.  Blank entries and entries without ``=`` are ignored.
+    """
+    result: dict[str, str] = {}
+    for pair in aliases_csv.split(","):
+        pair = pair.strip()
+        if "=" not in pair:
+            continue
+        sm_raw, opentag_raw = pair.split("=", 1)
+        sm_key = normalize_vendor(sm_raw.strip())
+        opentag_val = normalize_vendor(opentag_raw.strip())
+        if sm_key and opentag_val:
+            result[sm_key] = opentag_val
+    return result
+
+
+def _current_spoolman_value(sm_filament: Any, field: str) -> Any:
+    """Extract the current value of a Spoolman field (including extra.* fields).
+
+    The special ``vendor`` field returns the filament's current vendor name
+    (``sm_filament.vendor.name``) rather than a direct attribute lookup, because
+    ``vendor`` on a SpoolmanFilament is a nested object, not a scalar.
+    """
+    if field.startswith("extra."):
+        key = field[len("extra."):]
+        raw = sm_filament.extra.get(key)
+        return decode_extra_value(raw)
+    if field == "vendor":
+        return sm_filament.vendor.name if sm_filament.vendor else None
+    return getattr(sm_filament, field, None)
+
+
+def _build_field_rows(
+    sm_filament: Any,
+    opt_fields: dict[str, Any],
+) -> list[OpenTagFieldRow]:
+    """Build per-field comparison rows, SM current vs OPT suggested.
+
+    Each row's spoolman_value is the filament's CURRENT live value (native attr
+    for native fields, decoded extra[key] for extra.* fields), so the "old" column
+    in the review UI reflects reality.
+
+    openprinttag_slug and openprinttag_uuid are included as rows (their spoolman_value
+    shows any existing identity), NOT excluded. The frontend must NOT push them
+    separately — they flow through the generic field-rows path. _build_sm_patch
+    deduplicates them if decision.openprinttag_slug/uuid also sets them.
+
+    The ``vendor`` field is ONLY included when the Spoolman vendor name and the
+    OpenTag brand name differ after a plain ``.strip()`` comparison (case-sensitive).
+    A case-only difference like "Elegoo" vs "ELEGOO" DOES surface the row so the
+    apply path can re-point this filament to a vendor with OpenTag's exact canonical
+    name.  Exact-equal strings (same brand, same casing) suppress the row.
+    """
+    rows = []
+    for field, opt_value in opt_fields.items():
+        sm_value = _current_spoolman_value(sm_filament, field)
+        if field == "vendor":
+            # Omit the vendor row only when the raw strings are identical after
+            # stripping surrounding whitespace (case-sensitive equality).  A
+            # case-only difference deliberately surfaces the row so _ensure_vendor
+            # can find-or-create a vendor with OpenTag's exact canonical spelling
+            # and re-point this filament.  Accepted trade-off: a case-only diff
+            # may create a near-duplicate vendor in Spoolman (e.g. "ELEGOO"
+            # alongside "Elegoo"); only this filament is re-pointed, others
+            # are never touched.
+            if (sm_value or "").strip() == (opt_value or "").strip():
+                continue
+        rows.append(OpenTagFieldRow(
+            field=field,
+            spoolman_value=sm_value,
+            opentag_value=opt_value,
+            suggested_value=opt_value,
+        ))
+    return rows
+
+
+_IDENTITY_FIELDS = frozenset(["extra.openprinttag_slug", "extra.openprinttag_uuid"])
+
+
+def _normalize_field_value(v: Any) -> str:
+    """Normalize a field value for comparison (mirrors frontend normalizeFieldValue)."""
+    if v is None:
+        return ""
+    s = str(v).strip().lower()
+    if s in ("", "—"):
+        return ""
+    return s
+
+
+def _data_differs(candidate: OpenTagCandidate) -> bool:
+    """Return True when any non-identity field in this candidate has a different
+    normalized value between Spoolman and OpenTag."""
+    return any(
+        _normalize_field_value(row.spoolman_value) != _normalize_field_value(row.opentag_value)
+        for row in candidate.fields
+        if row.field not in _IDENTITY_FIELDS
+    )
+
+
+def _build_candidate(
+    sm_fil: Any,
+    material: dict[str, Any],
+    confidence: float,
+    tag_map: dict[str, Any],
+) -> OpenTagCandidate:
+    """Build an OpenTagCandidate from a material dict for a given SM filament.
+
+    Computes the per-field comparison (SM current vs this candidate's OPT values),
+    the multicolor_mismatch flag, and assembles the identity fields.
+    """
+    opt_fields = opt_to_spoolman_fields(material, tag_map)
+    field_rows = _build_field_rows(sm_fil, opt_fields)
+    opt_profile = opt_color_profile(material, tag_map)
+    sm_profile = sm_color_profile(sm_fil)
+    mismatch = sm_profile != "single" and opt_profile == "single"
+    return OpenTagCandidate(
+        opt_uuid=material.get("uuid"),
+        opt_slug=material.get("slug"),
+        opt_brand=material.get("brandName"),
+        opt_name=material.get("name"),
+        opt_color_hex=material.get("color"),
+        confidence=confidence,
+        multicolor_mismatch=mismatch,
+        fields=field_rows,
+    )
+
+
+def _build_sm_patch(
+    decision: OpenTagFilamentDecision,
+) -> tuple[dict[str, Any], dict[str, str], str | None]:
+    """Build the Spoolman PATCH payload, FDB settings keys, and optional vendor name.
+
+    Returns (patch_payload, fdb_settings_keys, vendor_name):
+    - patch_payload: dict ready to PATCH SM filament (native fields + extra).
+      The ``vendor`` field is NEVER put here — it is a relation (vendor_id) that
+      requires a find-or-create resolution step in the caller.
+    - fdb_settings_keys: {"openprinttag_slug": ..., "openprinttag_uuid": ...}
+      — only keys that are non-None
+    - vendor_name: the chosen vendor NAME string when the vendor field decision is
+      non-keep_mine and non-null; None otherwise.  The caller must resolve this to a
+      vendor_id via find-or-create and include vendor_id in the filament PATCH.
+    """
+    native: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    fdb_keys: dict[str, str] = {}
+    vendor_name: str | None = None
+
+    for fd in decision.fields:
+        if fd.keep_mine:
+            continue
+        if fd.value is None:
+            continue
+        if fd.field == "vendor":
+            # vendor is a relation — extract the name; caller resolves to vendor_id
+            vendor_name = str(fd.value)
+            continue
+        if fd.field.startswith("extra."):
+            key = fd.field[len("extra."):]
+            extra[key] = encode_extra_value(fd.value)
+        else:
+            native[fd.field] = fd.value
+
+    if extra:
+        native["extra"] = extra
+
+    # Slug/uuid always written to SM extra AND to FDB settings bag
+    slug_field = _settings.spoolman_field_openprinttag_slug
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+
+    if decision.openprinttag_slug:
+        # Ensure it's in the SM patch too (may already be there from fields)
+        if "extra" not in native:
+            native["extra"] = {}
+        if slug_field not in native["extra"]:
+            native["extra"][slug_field] = encode_extra_value(decision.openprinttag_slug)
+        fdb_keys["openprinttag_slug"] = decision.openprinttag_slug
+
+    if decision.openprinttag_uuid:
+        if "extra" not in native:
+            native["extra"] = {}
+        if uuid_field not in native["extra"]:
+            native["extra"][uuid_field] = encode_extra_value(decision.openprinttag_uuid)
+        fdb_keys["openprinttag_uuid"] = decision.openprinttag_uuid
+
+    return native, fdb_keys, vendor_name
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+_LAST_COUNT_KEY = "opentag_last_count"
+
+
+def _record_last_count(count: int) -> None:
+    """Persist the most recent dataset record count to BridgeConfig.
+
+    Lets the UI show an accurate "first load downloads ~N records" hint that
+    tracks the growing upstream dataset and survives cache-file deletion.
+    Best-effort: never let a persistence hiccup fail the fetch.
+    """
+    if count <= 0:
+        return
+    from app.api.config import set_config_value
+    try:
+        with SessionLocal() as _db:
+            set_config_value(_db, _LAST_COUNT_KEY, int(count))
+            _db.commit()
+    except Exception:  # pragma: no cover - best-effort persistence
+        logger.warning("opentag: failed to persist last record count", exc_info=True)
+
+
+def _read_last_count() -> int:
+    """Read the persisted last record count from BridgeConfig (0 if never set)."""
+    from app.api.config import get_config_value
+    try:
+        with SessionLocal() as _db:
+            return int(get_config_value(_db, _LAST_COUNT_KEY, 0) or 0)
+    except Exception:  # pragma: no cover - tests without a real DB
+        return 0
+
+
+@router.get("/openprinttag/status", response_model=OpenTagCacheStatus)
+async def opentag_status() -> OpenTagCacheStatus:
+    """Return local cache metadata WITHOUT fetching from FDB.
+
+    Fast and side-effect free — the page can call this on mount to show the
+    dataset state (count, age, stale) instantly, before any slow fetch begins.
+    """
+    meta = get_cache_metadata(_settings.data_dir, _settings.opentag_cache_max_age_hours)
+    return OpenTagCacheStatus(
+        exists=meta["fetched_at"] is not None,
+        fetched_at=meta["fetched_at"],
+        count=meta["count"],
+        stale=meta["stale"],
+        max_age_hours=_settings.opentag_cache_max_age_hours,
+        last_count=max(meta["count"], _read_last_count()),
+    )
+
+
+@router.post("/openprinttag/refresh", response_model=OpenTagDatasetMeta)
+async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
+    """Force a fresh download of the OpenTag dataset from OpenPrintTag."""
+    try:
+        result = await load_opentag_dataset(
+            _settings.data_dir,
+            _settings.opentag_cache_max_age_hours,
+            force=True,
+        )
+    except httpx.TimeoutException as exc:
+        logger.error("opentag refresh: timed out downloading dataset from OpenPrintTag: %s", exc)
+        raise api_error(
+            504,
+            "opentag_fetch_timeout",
+            "Timed out downloading the OpenTag dataset from OpenPrintTag — "
+            "it downloads a large tarball; try again.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "opentag refresh: OpenPrintTag/GitHub returned HTTP %d: %s",
+            exc.response.status_code, exc,
+        )
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            f"Failed to download the OpenTag dataset from OpenPrintTag "
+            f"(HTTP {exc.response.status_code} — GitHub may be rate-limiting or unavailable).",
+        ) from exc
+    except httpx.RequestError as exc:
+        logger.error("opentag refresh: connection error downloading dataset from OpenPrintTag: %s", exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            "Could not reach api.github.com to download the OpenTag dataset — "
+            "check that the bridge container has outbound HTTPS access.",
+        ) from exc
+    _record_last_count(result["count"])
+    return OpenTagDatasetMeta(
+        fetched_at=result["fetched_at"],
+        count=result["count"],
+        stale=result["stale"],
+    )
+
+
+@router.get("/openprinttag/matches", response_model=OpenTagMatchesResponse)
+async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
+    """Return per-Spoolman-filament OpenTag matches with per-field comparison."""
+    sm: Any = request.app.state.spoolman
+
+    try:
+        dataset = await load_opentag_dataset(
+            _settings.data_dir,
+            _settings.opentag_cache_max_age_hours,
+            force=False,
+        )
+    except httpx.TimeoutException as exc:
+        logger.error("opentag matches: timed out downloading dataset from OpenPrintTag: %s", exc)
+        raise api_error(
+            504,
+            "opentag_fetch_timeout",
+            "Timed out downloading the OpenTag dataset from OpenPrintTag — "
+            "it downloads a large tarball; try again.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "opentag matches: OpenPrintTag/GitHub returned HTTP %d: %s",
+            exc.response.status_code, exc,
+        )
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            f"Failed to download the OpenTag dataset from OpenPrintTag "
+            f"(HTTP {exc.response.status_code} — GitHub may be rate-limiting or unavailable).",
+        ) from exc
+    except httpx.RequestError as exc:
+        logger.error("opentag matches: connection error downloading dataset from OpenPrintTag: %s", exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            "Could not reach api.github.com to download the OpenTag dataset — "
+            "check that the bridge container has outbound HTTPS access.",
+        ) from exc
+    materials: list[dict[str, Any]] = dataset["materials"]
+    dataset_lexicon: dict[str, list[str]] | None = dataset.get("lexicon")
+    _record_last_count(dataset["count"])
+    tag_map = _settings.parsed_material_tag_ids
+    # Load vendor alias map once — BridgeConfig value overrides the env default.
+    # Wrapped in try/except so tests without a real DB fall back to the env default.
+    from app.api.config import get_config_value
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
+    try:
+        with SessionLocal() as _db:
+            aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
+    except Exception:
+        aliases_raw = _settings.opentag_vendor_aliases
+    vendor_aliases: dict[str, str] = _parse_vendor_aliases(aliases_raw)
+    color_map: dict[str, str] = dict(DEFAULT_COLOR_KEYWORDS)
+
+    sm_filaments = await sm.get_filaments()
+
+    # Build ngram_index and effective_synonyms ONCE — used by both the color-profile
+    # gate (color_profile_compatible_soft → opt_color_arity → decompose_name) and
+    # find_best_match → score_candidate → decompose_name.  Building them once ensures
+    # consistency and avoids O(candidates) rebuilds inside the gate.
+    ngram_index = build_ngram_index(dataset_lexicon)
+    effective_synonyms: dict[str, str] = dict(color_map)
+
+    # Build a brand index once — keyed by normalize_vendor(brandName) — so each SM
+    # filament only scores its own brand's candidates instead of all ~11k materials.
+    # normalize_vendor now treats hyphens as spaces, so "VOXEL-pla" and "Voxel PLA"
+    # both produce "voxel pla" and map to the same bucket.
+    materials_by_brand: dict[str, list[dict[str, Any]]] = {}
+    # Also build a UUID index for exact-match bypass (filament already tagged by a prior run).
+    by_uuid: dict[str, dict[str, Any]] = {}
+    for m in materials:
+        if not isinstance(m, dict):
+            continue
+        brand_key = normalize_vendor(m.get("brandName"))
+        materials_by_brand.setdefault(brand_key, []).append(m)
+        if m.get("uuid"):
+            by_uuid[m["uuid"]] = m
+
+    n_filaments = len(sm_filaments)
+    n_materials = len(materials)
+    n_brands = len(materials_by_brand)
+    logger.info(
+        "opentag matches: scoring %d filaments against %d materials across %d brands",
+        n_filaments, n_materials, n_brands,
+    )
+
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+    ignore_field = _settings.spoolman_field_openprinttag_ignore
+
+    matched = 0
+    no_match = 0
+    matches: list[OpenTagFilamentMatch] = []
+    for sm_fil in sm_filaments:
+        # Read per-filament flags from Spoolman extra fields.
+        existing_uuid = decode_extra_value(sm_fil.extra.get(uuid_field))
+        ignored_updates = bool(decode_extra_value(sm_fil.extra.get(ignore_field)))
+
+        # Exact-UUID match: if the SM filament already carries an openprinttag_uuid that
+        # maps to a known material, return that material at confidence 1.0 — skip fuzzy.
+        if existing_uuid and existing_uuid in by_uuid:
+            best = by_uuid[existing_uuid]
+            confidence = 1.0
+            matched += 1
+            best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+            differs = _data_differs(best_candidate)
+            has_update = differs and not ignored_updates
+            matches.append(OpenTagFilamentMatch(
+                spoolman_filament_id=sm_fil.id,
+                spoolman_name=sm_fil.name,
+                spoolman_vendor=sm_fil.vendor.name if sm_fil.vendor else None,
+                spoolman_material=sm_fil.material,
+                spoolman_color_hex=sm_fil.color_hex,
+                opt_uuid=best.get("uuid"),
+                opt_slug=best.get("slug"),
+                opt_brand=best.get("brandName"),
+                opt_name=best.get("name"),
+                confidence=confidence,
+                fields=best_candidate.fields,
+                alternates=[],
+                candidates=[best_candidate],
+                multicolor_mismatch=best_candidate.multicolor_mismatch,
+                has_update=has_update,
+                ignored_updates=ignored_updates,
+            ))
+            continue
+
+        # Resolve the SM vendor name through the alias map before looking up brand candidates.
+        # This allows e.g. "Prusa" to find "Prusament" entries when aliases contain that pair.
+        sm_brand_key = resolve_opentag_brand(
+            sm_fil.vendor.name if sm_fil.vendor else None, vendor_aliases
+        )
+        filtered_candidates = materials_by_brand.get(sm_brand_key, [])
+
+        # Color-profile gate (v2.1 — name-aware + soft):
+        # When the OPT entry has complete arrangement + hex data, apply the strict
+        # profiles_compatible check.  When data is incomplete/absent, use effective
+        # color arity (max of hex count and name-decomposed color count) so that OPT
+        # entries with descriptive multi-color names but missing hex data (e.g.
+        # "Temperature Color Change Purple to Red") are not incorrectly dropped.
+        sm_profile = sm_color_profile(sm_fil)
+        # Compute SM arity: max of name-decomposed color count and hex field count.
+        sm_parsed_gate = decompose_name(
+            sm_fil.name, sm_fil.vendor.name if sm_fil.vendor else None, sm_fil.material,
+            tag_map=tag_map, ngram_index=ngram_index, color_synonyms=effective_synonyms,
+        )
+        sm_arity_gate = sum(sm_parsed_gate.colors.values())
+        if sm_fil.multi_color_hexes:
+            hex_arity = 1 + len([h for h in sm_fil.multi_color_hexes.split(",") if h.strip()])
+            sm_arity_gate = max(sm_arity_gate, hex_arity)
+        filtered_candidates = [
+            c for c in filtered_candidates
+            if isinstance(c, dict) and color_profile_compatible_soft(
+                sm_profile, sm_arity_gate, c, tag_map, ngram_index, effective_synonyms
+            )
+        ]
+
+        # Polymer-family gate (v2.1 — widened by PLA-biopolymer bucket):
+        # PLA/PHA/LW-PLA/HTPLA/rPLA are mutually gate-compatible (ColorFabb composites
+        # are inconsistently typed in OPT as PHA even when sold as "PLA" blends).
+        # All other cross-family pairs (ASA≠PETG, PC≠PETG, etc.) remain strictly gated.
+        # Only gate when the SM filament has a non-empty / known material
+        # (unknown SM material → don't gate, score all candidates).
+        sm_fam = material_family(sm_fil.material, tag_map)
+        if sm_fam:
+            filtered_candidates = [
+                c for c in filtered_candidates
+                if families_gate_compatible(
+                    sm_fam,
+                    material_family(c.get("type") or c.get("abbreviation") or "", tag_map),
+                )
+            ]
+
+        match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases, color_map=color_map, lexicon=dataset_lexicon)
+        best = match_result["best"]
+        confidence = match_result["confidence"]
+        alternates = match_result["alternates"]
+        alternate_scores = match_result["alternate_scores"]
+
+        if best is None:
+            # Include low-confidence / no-match filaments with empty field rows.
+            # Flag multicolor_mismatch when SM is multicolor but no match was found
+            # (the color-profile pre-filter means incompatible OPT entries were excluded,
+            # but the SM side was multicolor — signal that to the user).
+            no_match += 1
+            mismatch = sm_profile != "single"
+            sm_vendor = sm_fil.vendor.name if sm_fil.vendor else None
+            sm_material = sm_fil.material
+
+            # Compute a human-readable explanation for the no-match condition.
+            if sm_brand_key not in materials_by_brand:
+                no_match_reason: str | None = (
+                    f'Manufacturer "{sm_vendor}" not found in OpenTag '
+                    f'(add a mapping in Settings)'
+                )
+            elif not filtered_candidates:
+                no_match_reason = (
+                    f'No {sm_material or "matching"} match for {sm_vendor} in OpenTag'
+                )
+            elif mismatch:
+                no_match_reason = "Spoolman is multicolor; no multicolor OpenTag match"
+            else:
+                best_conf = confidence  # confidence == best_score seen (below threshold)
+                no_match_reason = f"No confident match (best {round(best_conf * 100)}%)"
+
+            matches.append(OpenTagFilamentMatch(
+                spoolman_filament_id=sm_fil.id,
+                spoolman_name=sm_fil.name,
+                spoolman_vendor=sm_vendor,
+                spoolman_material=sm_material,
+                spoolman_color_hex=sm_fil.color_hex,
+                opt_uuid=None,
+                opt_slug=None,
+                opt_brand=None,
+                opt_name=None,
+                confidence=confidence,
+                fields=[],
+                alternates=alternates,
+                candidates=[],
+                multicolor_mismatch=mismatch,
+                no_match_reason=no_match_reason,
+                ignored_updates=ignored_updates,
+            ))
+            continue
+
+        matched += 1
+
+        # multicolor_mismatch: SM is multicolor but the matched OPT entry is NOT
+        # (no secondaryColors AND no arrangement tag).
+        best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+
+        # Build structured candidates list: best first, then up to 5 alternates.
+        structured_candidates: list[OpenTagCandidate] = [best_candidate]
+        for alt_mat, alt_score in zip(alternates, alternate_scores):
+            structured_candidates.append(_build_candidate(sm_fil, alt_mat, alt_score, tag_map))
+
+        # has_update: already tagged (has existing_uuid) and data has drifted,
+        # but the user has not suppressed this filament via openprinttag_ignore.
+        differs = _data_differs(best_candidate)
+        has_update = bool(existing_uuid) and differs and not ignored_updates
+
+        matches.append(OpenTagFilamentMatch(
+            spoolman_filament_id=sm_fil.id,
+            spoolman_name=sm_fil.name,
+            spoolman_vendor=sm_fil.vendor.name if sm_fil.vendor else None,
+            spoolman_material=sm_fil.material,
+            spoolman_color_hex=sm_fil.color_hex,
+            opt_uuid=best.get("uuid"),
+            opt_slug=best.get("slug"),
+            opt_brand=best.get("brandName"),
+            opt_name=best.get("name"),
+            confidence=confidence,
+            fields=best_candidate.fields,
+            alternates=alternates,
+            candidates=structured_candidates,
+            multicolor_mismatch=best_candidate.multicolor_mismatch,
+            has_update=has_update,
+            ignored_updates=ignored_updates,
+        ))
+
+    logger.info("opentag matches: %d matched, %d no-match", matched, no_match)
+
+    updates_count = sum(1 for m in matches if m.has_update)
+    dataset_meta = OpenTagDatasetMeta(
+        fetched_at=dataset["fetched_at"],
+        count=dataset["count"],
+        stale=dataset["stale"],
+    )
+    return OpenTagMatchesResponse(dataset=dataset_meta, matches=matches, updates_count=updates_count)
+
+
+@router.post("/openprinttag/apply", response_model=OpenTagApplyResponse)
+async def opentag_apply(
+    body: OpenTagApplyRequest,
+    request: Request,
+) -> OpenTagApplyResponse:
+    """Apply user-confirmed field choices to Spoolman, then push slug/uuid to FDB settings bag.
+
+    Each filament decision is applied independently; per-filament errors are
+    non-fatal. Only fields not marked keep_mine are written. Only fields with
+    a non-None value are written.
+
+    Before the decision loop, ensure the required Spoolman extra fields exist so that
+    PATCH writes to openprinttag_slug / openprinttag_uuid / filamentdb_material_tags
+    never 422 due to undefined field keys.
+    """
+    sm: Any = request.app.state.spoolman
+    fdb: Any = request.app.state.filamentdb
+
+    # Self-heal: create any missing Spoolman extra fields before any write attempt.
+    # ensure_extra_fields is idempotent — it only POSTs fields that are not yet defined.
+    try:
+        await sm.ensure_extra_fields()
+    except Exception as exc:
+        logger.error("opentag apply: could not ensure Spoolman extra fields: %s", exc)
+        raise api_error(
+            502,
+            "opentag_field_setup_failed",
+            f"Could not ensure the OpenTag extra fields exist in Spoolman: {exc}",
+        ) from exc
+
+    # Build vendor index once per apply call (exact trimmed name → vendor_id).
+    # Exact-name matching (not normalize_vendor) is intentional: standardizing on
+    # OpenTag's canonical spelling requires distinguishing "Elegoo" from "ELEGOO".
+    # A case-only diff therefore creates a separate canonical vendor and re-points
+    # only this filament — the accepted trade-off documented in decisions.md.
+    # First occurrence wins when two existing vendors share the same trimmed name.
+    # New vendors created during this run are cached here to avoid duplicates.
+    try:
+        existing_vendors = await sm.get_vendors()
+    except Exception:
+        existing_vendors = []
+    vendor_id_by_name: dict[str, int] = {}
+    for v in existing_vendors:
+        key = v.name.strip()
+        if key not in vendor_id_by_name:
+            vendor_id_by_name[key] = v.id
+
+    async def _ensure_vendor(name: str) -> int | None:
+        """Resolve a vendor name to a Spoolman vendor_id, creating it if missing.
+
+        Uses exact (trimmed) name matching so "ELEGOO" and "Elegoo" are treated as
+        distinct vendors.  New vendors are cached in ``vendor_id_by_name`` within
+        this apply call so no duplicate is created even if the same name appears
+        multiple times in one batch.
+        """
+        key = name.strip()
+        if not key:
+            return None
+        if key in vendor_id_by_name:
+            return vendor_id_by_name[key]
+        created = await sm.create_vendor({"name": name})
+        vendor_id_by_name[key] = created.id
+        logger.info("opentag apply: created Spoolman vendor %r (id=%d)", name, created.id)
+        return created.id
+
+    results: list[OpenTagApplyFilamentResult] = []
+    applied = 0
+    ignored = 0
+    errors = 0
+
+    for decision in body.decisions:
+        if decision.ignored:
+            ignored += 1
+            results.append(OpenTagApplyFilamentResult(
+                spoolman_filament_id=decision.spoolman_filament_id,
+                status="ignored",
+            ))
+            continue
+
+        patch, fdb_keys, vendor_name = _build_sm_patch(decision)
+        fields_written: list[str] = []
+        fdb_settings_updated = False
+
+        try:
+            # Resolve vendor find-or-create and add vendor_id to the PATCH payload.
+            if vendor_name:
+                vendor_id = await _ensure_vendor(vendor_name)
+                if vendor_id is not None:
+                    patch["vendor_id"] = vendor_id
+
+            if patch:
+                await sm.update_filament(decision.spoolman_filament_id, patch)
+                # Track written fields for the response
+                for fd in decision.fields:
+                    if not fd.keep_mine and fd.value is not None:
+                        fields_written.append(fd.field)
+                if vendor_name and "vendor_id" in patch:
+                    # Ensure "vendor" appears exactly once in fields_written
+                    if "vendor" not in fields_written:
+                        fields_written.append("vendor")
+                if decision.openprinttag_slug:
+                    fields_written.append(f"extra.{_settings.spoolman_field_openprinttag_slug}")
+                if decision.openprinttag_uuid:
+                    fields_written.append(f"extra.{_settings.spoolman_field_openprinttag_uuid}")
+                # dedupe
+                fields_written = list(dict.fromkeys(fields_written))
+                logger.info(
+                    "opentag apply: patched SM filament %d fields=%s",
+                    decision.spoolman_filament_id, fields_written,
+                )
+                _record_change(
+                    action="update",
+                    direction="filamentdb_to_spoolman",
+                    entity_type="filament",
+                    spoolman_id=decision.spoolman_filament_id,
+                    field_name="opentag_apply",
+                    new_value=fields_written,
+                    cycle_id="opentag-apply",
+                )
+
+            # FDB settings-bag merge (Phase 5 scoped exception)
+            if fdb_keys and decision.fdb_filament_id:
+                await fdb.merge_filament_settings(decision.fdb_filament_id, fdb_keys)
+                fdb_settings_updated = True
+                logger.info(
+                    "opentag apply: merged OpenTag identity into FDB filament %s: %s",
+                    decision.fdb_filament_id, list(fdb_keys.keys()),
+                )
+                _record_change(
+                    action="update",
+                    direction="spoolman_to_filamentdb",
+                    entity_type="filament",
+                    fdb_filament_id=decision.fdb_filament_id,
+                    spoolman_id=decision.spoolman_filament_id,
+                    field_name="opentag_identity",
+                    new_value=list(fdb_keys.keys()),
+                    cycle_id="opentag-apply",
+                )
+
+            applied += 1
+            results.append(OpenTagApplyFilamentResult(
+                spoolman_filament_id=decision.spoolman_filament_id,
+                status="ok",
+                fields_written=fields_written,
+                fdb_settings_updated=fdb_settings_updated,
+            ))
+        except Exception as exc:
+            errors += 1
+            # Include Spoolman's response body when available so the error log
+            # shows Spoolman's detail message (e.g. field type mismatch) rather
+            # than just the HTTP status code.
+            resp_body: str = ""
+            if hasattr(exc, "response") and exc.response is not None:
+                try:
+                    resp_body = f" — response: {exc.response.text}"
+                except Exception:
+                    pass
+            logger.error(
+                "opentag apply: error for SM filament %d: %s%s",
+                decision.spoolman_filament_id, exc, resp_body,
+            )
+            results.append(OpenTagApplyFilamentResult(
+                spoolman_filament_id=decision.spoolman_filament_id,
+                status="error",
+                error=str(exc),
+            ))
+
+    return OpenTagApplyResponse(
+        applied=applied,
+        ignored=ignored,
+        errors=errors,
+        results=results,
+    )
+
+
+@router.post("/openprinttag/ignore/{filament_id}", response_model=OpenTagIgnoreResponse)
+async def opentag_set_ignore(
+    filament_id: int,
+    request: Request,
+    ignored: bool = True,
+) -> OpenTagIgnoreResponse:
+    """Set or clear the openprinttag_ignore flag on a Spoolman filament.
+
+    When ignored=true (default), the filament is excluded from the "updates available"
+    count and banner.  Call with ignored=false to un-ignore.
+
+    The flag is stored as a Spoolman extra field (``openprinttag_ignore``) on the filament,
+    so it travels with the record and persists across bridge restarts and cache clears.
+    """
+    sm: Any = request.app.state.spoolman
+
+    # Ensure the extra field exists before writing.
+    try:
+        await sm.ensure_extra_fields()
+    except Exception as exc:
+        logger.warning("opentag ignore: ensure_extra_fields failed: %s", exc)
+
+    ignore_field = _settings.spoolman_field_openprinttag_ignore
+    # Spoolman text extras are JSON-quoted; "1" = ignored, "" = not ignored.
+    value = encode_extra_value("1") if ignored else encode_extra_value("")
+    try:
+        await sm.update_filament(filament_id, {"extra": {ignore_field: value}})
+        logger.info(
+            "opentag ignore: set %s=%s on SM filament %d",
+            _scrub(ignore_field), _scrub(ignored), filament_id,
+        )
+    except Exception as exc:
+        resp_body = ""
+        if hasattr(exc, "response") and exc.response is not None:
+            try:
+                resp_body = f" — response: {exc.response.text}"
+            except Exception:
+                pass
+        logger.error(
+            "opentag ignore: could not update SM filament %d: %s%s",
+            filament_id, _scrub(exc), _scrub(resp_body),
+        )
+        raise api_error(
+            502,
+            "opentag_ignore_failed",
+            f"Could not update Spoolman filament {filament_id}: {exc}",
+        ) from exc
+
+    return OpenTagIgnoreResponse(spoolman_filament_id=filament_id, ignored_updates=ignored)
+
+
+@router.get("/openprinttag/search", response_model=OpenTagSearchResponse)
+async def opentag_search(
+    brand: str = "",
+    material: str = "",
+    q: str = "",
+    limit: int = 20,
+) -> OpenTagSearchResponse:
+    """Manual free-text search within the cached OpenTag dataset.
+
+    Scores a synthetic SpoolmanFilament (built from ``brand``, ``material``, ``q``)
+    through the same ``score_candidate`` as the automatic matcher — no duplicate scorer.
+
+    Query params:
+    - ``brand``:    Optional brand name to pre-filter (same logic as automatic brand pre-filter).
+    - ``material``: Optional material type (polymer) to pre-filter.
+    - ``q``:        Free-text query (usually the color/modifier part of a filament name).
+    - ``limit``:    Max results (default 20, max 50).
+
+    Returns the top ``limit`` scored candidates sorted by score descending.
+    """
+    # Load cached dataset (no network fetch — must already be cached)
+    cache = _load_cache(_settings.data_dir)
+    if cache is None or not cache.get("materials"):
+        return OpenTagSearchResponse(results=[])
+
+    materials: list[dict[str, Any]] = [m for m in cache.get("materials", []) if isinstance(m, dict)]
+    dataset_lexicon: dict[str, list[str]] | None = cache.get("lexicon")
+    tag_map = _settings.parsed_material_tag_ids
+
+    # Load vendor aliases — BridgeConfig value overrides the env default.
+    from app.api.config import get_config_value
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
+    try:
+        with SessionLocal() as _db:
+            aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
+    except Exception:
+        aliases_raw = _settings.opentag_vendor_aliases
+    vendor_aliases = _parse_vendor_aliases(aliases_raw)
+    color_map = dict(DEFAULT_COLOR_KEYWORDS)
+
+    limit = min(limit, 50)
+
+    # Brand pre-filter (same logic as automatic matcher)
+    if brand:
+        resolved_brand = resolve_opentag_brand(brand, vendor_aliases)
+        materials_by_brand: dict[str, list[dict[str, Any]]] = {}
+        for m in materials:
+            bk = normalize_vendor(m.get("brandName"))
+            materials_by_brand.setdefault(bk, []).append(m)
+        materials = materials_by_brand.get(resolved_brand, [])
+
+    # Material (polymer family) pre-filter
+    if material:
+        sm_fam = material_family(material, tag_map)
+        if sm_fam:
+            materials = [
+                c for c in materials
+                if material_family(c.get("type") or c.get("abbreviation") or "", tag_map) in ("", sm_fam)
+            ]
+
+    if not materials:
+        return OpenTagSearchResponse(results=[])
+
+    # Build a synthetic SM filament from the query params so we can reuse score_candidate
+    # unchanged (no duplicate scorer — as per plan).
+    synthetic_sm = _SpoolmanFilament(
+        id=0,
+        name=q or "",
+        vendor=_SpoolmanVendor(id=0, name=brand) if brand else None,
+        material=material or None,
+        color_hex=None,
+        extra={},
+    )
+
+    scored = [
+        (score_candidate(synthetic_sm, opt, tag_map, vendor_aliases, color_map, dataset_lexicon), opt)
+        for opt in materials
+    ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    results: list[OpenTagCandidate] = []
+    for conf, mat in scored[:limit]:
+        opt_fields = opt_to_spoolman_fields(mat, tag_map)
+        sm_for_fields = _SpoolmanFilament(
+            id=0,
+            name=q or "",
+            vendor=_SpoolmanVendor(id=0, name=brand) if brand else None,
+            material=material or None,
+            color_hex=None,
+            extra={},
+        )
+        field_rows = _build_field_rows(sm_for_fields, opt_fields)
+        results.append(OpenTagCandidate(
+            opt_uuid=mat.get("uuid"),
+            opt_slug=mat.get("slug"),
+            opt_brand=mat.get("brandName"),
+            opt_name=mat.get("name"),
+            opt_color_hex=mat.get("color"),
+            confidence=conf,
+            multicolor_mismatch=False,
+            fields=field_rows,
+        ))
+
+    return OpenTagSearchResponse(results=results)

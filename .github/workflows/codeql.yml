@@ -1,0 +1,34 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '30 4 * * 1'  # Monday 04:30 UTC
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          # Security-focused suite; code style/quality is owned by ruff + tsc in CI.
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

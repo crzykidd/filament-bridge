@@ -1,0 +1,69 @@
+"""Shared test fixtures for the filament-bridge test suite."""
+
+import os
+import tempfile
+
+# app.config validates required env vars at import time (and app.db creates a
+# data dir). Set self-contained defaults BEFORE importing any app module so the
+# whole suite runs with a bare `cd backend && pytest`.
+os.environ.setdefault("FILAMENTDB_URL", "http://filamentdb.test")
+os.environ.setdefault("SPOOLMAN_URL", "http://spoolman.test")
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="filament-bridge-test-"))
+
+# Prevent real HTTP calls to api.github.com during tests.  Tests that need the
+# tarball fetch mock app.core.opentag_cache._fetch_from_tarball themselves; all
+# others get a fast empty-list stub so load_opentag_dataset stays side-effect-free.
+from unittest.mock import AsyncMock, patch as _patch  # noqa: E402
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.api.config import set_config_value
+from app.db import Base
+from app.models.config import seed_defaults
+from app.models.conflict import Conflict  # noqa: F401  ensure table is created
+from app.models.mapping import FilamentMapping, SpoolMapping  # noqa: F401
+from app.models.snapshot import Snapshot  # noqa: F401
+from app.models.sync_log import SyncLog  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _no_github_tarball_fetch():
+    """Stub out _fetch_from_tarball for every test.
+
+    Tests that explicitly need tarball-parsing behavior patch
+    ``app.core.opentag_cache._fetch_from_tarball`` themselves; all other tests
+    get an empty-list stub so ``load_opentag_dataset`` stays fast and makes no
+    real network calls to api.github.com.
+    """
+    with _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        new=AsyncMock(return_value=[]),
+    ):
+        yield
+
+
+@pytest.fixture()
+def db() -> Session:
+    """In-memory SQLite session with all bridge tables created and defaults seeded."""
+    # StaticPool shares ONE in-memory connection across threads — required because
+    # FastAPI's TestClient runs sync route handlers in a worker thread, which would
+    # otherwise get its own (empty) :memory: database.
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    session = SessionLocal()
+    seed_defaults(session)
+    # Default to "promote_color" in tests so existing wizard-execute tests do not
+    # hit the variant_parent_mode == "unset" gate.  Tests that specifically verify
+    # the gate or test "generic_container" behavior set the mode explicitly.
+    set_config_value(session, "variant_parent_mode", "promote_color")
+    session.commit()
+    yield session
+    session.close()
