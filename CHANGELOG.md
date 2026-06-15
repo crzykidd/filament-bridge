@@ -319,5 +319,18 @@ GitHub release.
 - docker-compose made fully deployable; SPA route fallback added so browser-side navigation
   does not return 404.
 
+### Security
+
+- **SPA static-file route confined to the static root** — the catch-all frontend route
+  resolved the request path against the static directory and served any file that existed,
+  so a crafted path (e.g. URL-encoded `../`) could escape it. The resolved path is now
+  required to stay within the static root before it is served (path-traversal / CWE-22).
+- **Untrusted values sanitized before logging** — exception text and upstream API response
+  bodies logged by the OpenTag-ignore and conflict apply/import handlers are now flattened
+  (CR/LF and control chars stripped via `core/log_safe.scrub`) so they cannot forge or
+  inject extra log lines (CWE-117).
+- **CodeQL code scanning** added to CI (security-extended suite, Python + JS/TS) as a
+  required check on `main`.
+
 [Unreleased]: https://github.com/crzykidd/filament-bridge/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/crzykidd/filament-bridge/releases/tag/v0.2.0
