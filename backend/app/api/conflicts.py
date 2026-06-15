@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.api.config import get_config_value
 from app.api.errors import api_error
+from app.core.log_safe import scrub as _scrub
 from app.db import get_db
 from app.models.conflict import DELETION_FIELD, Conflict
 from app.models.mapping import SpoolMapping
@@ -290,7 +291,7 @@ async def resolve_conflict(
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(
-                "apply_master_divergence failed for conflict %d: %s", conflict_id, exc
+                "apply_master_divergence failed for conflict %d: %s", conflict_id, _scrub(exc)
             )
             raise api_error(
                 502, "upstream_write_failed",
@@ -439,7 +440,7 @@ async def import_conflict_record(
     except Exception as exc:
         import logging as _logging
         _logging.getLogger(__name__).error(
-            "import_conflict_record %d: upstream error: %s", conflict_id, exc
+            "import_conflict_record %d: upstream error: %s", conflict_id, _scrub(exc)
         )
         raise api_error(
             502, "upstream_write_failed",

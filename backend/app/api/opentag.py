@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from app.api.errors import api_error
 from app.config import settings as _settings
 from app.core.change_log import record_change as _record_change
+from app.core.log_safe import scrub as _scrub
 from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import _load_cache, get_cache_metadata, load_opentag_dataset
 from app.core.opentag_match import (
@@ -946,8 +947,8 @@ async def opentag_set_ignore(
     try:
         await sm.update_filament(filament_id, {"extra": {ignore_field: value}})
         logger.info(
-            "opentag ignore: set %s=%r on SM filament %d",
-            ignore_field, ignored, filament_id,
+            "opentag ignore: set %s=%s on SM filament %d",
+            _scrub(ignore_field), _scrub(ignored), filament_id,
         )
     except Exception as exc:
         resp_body = ""
@@ -958,7 +959,7 @@ async def opentag_set_ignore(
                 pass
         logger.error(
             "opentag ignore: could not update SM filament %d: %s%s",
-            filament_id, exc, resp_body,
+            filament_id, _scrub(exc), _scrub(resp_body),
         )
         raise api_error(
             502,
