@@ -39,3 +39,6 @@ htmlcov/
 # Logs
 *.log
 logs/
+
+# Claude Code per-machine local settings (never commit)
+.claude/settings.local.json
