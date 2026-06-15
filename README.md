@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.1.0-blue)
+![version](https://img.shields.io/badge/version-0.2.0-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -46,6 +46,26 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 - **Backup & restore** — export/import the bridge's own state (mappings, config, open conflicts) as JSON
 - **Version badge + update check** — the sidebar shows the running version and surfaces new GitHub releases (checked server-side, cached 6 h)
 - **Debug reset tools** — a gated Danger Zone (off by default) with three reset tools for clean re-testing: clear Spoolman cross-refs, reset the bridge DB, or both at once
+
+---
+
+## What's New
+
+### v0.2.0 (2026-06-15)
+
+First public release. The bridge is feature-complete for two-way sync between Filament DB and Spoolman:
+
+- **Bulk Import Wizard** — re-runnable six-step wizard with fuzzy matching, variant grouping, dry-run preview, and per-record execute reporting
+- **Continuous sync engine** — snapshot/diff/apply loop with per-category sync direction + conflict policy (two-axis model) for weight, material properties, and new-spool creation
+- **Conflict queue** — conflicts are always queued for human decision, never silently resolved; includes the master-divergence resolve workflow for variant inheritance
+- **OpenTag (OpenPrintTag) cleanup tool** — match Spoolman filaments against the community dataset, review per field, and stamp canonical slug/UUID into both systems
+- **Variant parent modes** — `promote_color` or `generic_container`, building Filament DB's parent/variant hierarchy from Spoolman's flat list
+- **Weight-model translation** — net↔gross conversion with Spoolman decrements logged as Filament DB usage entries (audit trail preserved)
+- **Structured multicolor/gradient, finish-tag, and bed/nozzle temperature sync**
+- **Minimum upstream version enforcement** — sync is hard-gated below Filament DB 1.33.0 / Spoolman 0.22.0
+- **Single-account auth + optional API token**, light/dark/system theme, version badge with GitHub update check, and a pre-write backup safeguard
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ---
 
@@ -438,8 +458,8 @@ alembic upgrade head
 
 ## Changelog
 
-No release has been cut yet. Notable changes are tracked in [CHANGELOG.md](CHANGELOG.md)
-under `[Unreleased]`; per-release entries will appear here starting with v0.1.0.
+The first release is **v0.2.0**. Per-release notes live in [CHANGELOG.md](CHANGELOG.md);
+recent highlights are summarized under [What's New](#whats-new).
 
 ---
 

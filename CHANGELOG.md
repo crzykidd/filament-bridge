@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-15
+
 ### Added
 
 - **Minimum upstream version enforcement** — the bridge now declares minimum supported
@@ -317,4 +319,5 @@ GitHub release.
 - docker-compose made fully deployable; SPA route fallback added so browser-side navigation
   does not return 404.
 
-[Unreleased]: https://github.com/crzykidd/filament-bridge/compare/HEAD...HEAD
+[Unreleased]: https://github.com/crzykidd/filament-bridge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/crzykidd/filament-bridge/releases/tag/v0.2.0

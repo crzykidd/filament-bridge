@@ -406,17 +406,17 @@ Field names are configurable via environment variables.
 
 ### P2 — Enhanced features
 
-#### FR-20: Discord notifications *(Not implemented — v0.1.0)*
+#### FR-20: Discord notifications *(Not implemented — v0.2.0)*
 - `DISCORD_WEBHOOK_URL` env var is declared and validated, but no posting code exists
 - On conflict: post to configured Discord webhook with conflict details *(planned)*
 - On sync error: post with error details and retry status *(planned)*
 - Optional: daily summary of sync activity *(planned)*
 
-#### FR-21: Spoolman archive/retire sync *(Partial — v0.1.0)*
+#### FR-21: Spoolman archive/retire sync *(Partial — v0.2.0)*
 - Archived Spoolman spools are detected and excluded from sync cycles
 - Symmetric propagation (`retired: true` in FDB ↔ `archived` in Spoolman) is not yet implemented
 
-#### FR-22: Print history enrichment *(Not implemented — v0.1.0)*
+#### FR-22: Print history enrichment *(Not implemented — v0.2.0)*
 - Planned: when a weight decrement is synced from Spoolman, optionally create a `POST /api/print-history` record in Filament DB
 - Would require OctoPrint job metadata (filename, duration) — may need an OctoPrint API call or Spoolman webhook
 
