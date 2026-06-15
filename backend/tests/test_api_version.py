@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 
+from app import __version__ as APP_VERSION
 from app.api.version import _is_newer, _parse_semver
 
 
@@ -91,7 +92,7 @@ class TestVersionEndpoint:
             resp = client.get("/api/version")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["current"] == "0.1.0"
+        assert data["current"] == APP_VERSION
         assert data["update_available"] is False
         assert data["latest"] is None
 
