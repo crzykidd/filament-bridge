@@ -15,5 +15,8 @@ def scrub(value: object) -> str:
     Replaces CR/LF with spaces and drops any remaining non-printable
     characters so untrusted text can't break out of its log line.
     """
-    text = str(value).replace("\r", " ").replace("\n", " ")
-    return "".join(ch if (ch.isprintable() or ch == " ") else " " for ch in text)
+    # Drop non-printable control chars first, then strip CR/LF last so the
+    # newline-removing replace is the final transformation on the returned
+    # value (the pattern static analyzers recognise as a log-injection barrier).
+    text = "".join(ch if (ch.isprintable() or ch == " ") else " " for ch in str(value))
+    return text.replace("\r", " ").replace("\n", " ")

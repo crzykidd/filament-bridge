@@ -16,6 +16,7 @@ Phase 4: /static is mounted when the directory exists (built image only)
 import asyncio
 import json
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -280,19 +281,19 @@ if _static_dir.is_dir():
     # routes survive a hard refresh / direct load / shared deep link. Registered
     # after the /api routers, so the API always wins; unknown /api paths still 404
     # as JSON rather than silently returning the SPA shell.
-    _static_root = _static_dir.resolve()
+    _static_root = os.path.realpath(str(_static_dir))
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def _spa_fallback(full_path: str) -> FileResponse:
         if full_path.startswith("api"):
             raise HTTPException(status_code=404)
-        # Resolve and confine to the static root so a crafted path
-        # (e.g. "../../etc/passwd") can't escape the served directory.
-        candidate = (_static_root / full_path).resolve()
+        # Normalise, then require the result to stay under the static root so a
+        # crafted path (e.g. "../../etc/passwd") can't escape the served dir.
+        candidate = os.path.realpath(os.path.join(_static_root, full_path))
         if (
             full_path
-            and candidate.is_relative_to(_static_root)
-            and candidate.is_file()
+            and (candidate == _static_root or candidate.startswith(_static_root + os.sep))
+            and os.path.isfile(candidate)
         ):
             return FileResponse(candidate)
         return FileResponse(_index)
