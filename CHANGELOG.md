@@ -45,6 +45,12 @@ GitHub release.
   independently — a filament can hold several spools, so the two totals legitimately differ and
   green-but-unequal totals are not a mismatch. Master detection is now a single shared helper
   (`core/masters.is_master_fdb`) reused by the wizard, reconcile, and health surfaces.
+- **Help tooltips no longer clipped by the sidebar or page header** — the `?` HelpTip bubble
+  was absolutely positioned within the page flow and got cut off near the left edge and top of
+  the screen. It now renders in a portal with fixed positioning, flips above/below to stay in
+  view, and clamps horizontally so it's always fully visible. Dashboard section headers
+  (Spools / Filaments / Connected systems) were also made larger and higher-contrast so the
+  sections read as distinct blocks.
 
 ## [0.2.0] — 2026-06-15
 

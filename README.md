@@ -223,7 +223,7 @@ Each data category is configured independently on two axes in Settings:
   `spoolman_wins`, `filamentdb_wins`, or `newest_wins` (weight only — Spoolman exposes no
   per-filament modification timestamp)
 
-Defaults: weight syncs Spoolman→FDB; material properties sync FDB→Spoolman; new spools sync two-way.
+Defaults: weight syncs Spoolman→FDB; material properties sync FDB→Spoolman; new spools and archive/retire both sync two-way.
 
 <img src="docs/images/settings-direction-policy.png" alt="Settings — per-category sync direction and conflict policy controls for weight, material properties, and new records" width="760">
 
@@ -232,7 +232,9 @@ Defaults: weight syncs Spoolman→FDB; material properties sync FDB→Spoolman; 
 Beyond spool weight, the engine syncs the shared filament surface per cycle: material/type,
 density, diameter, spool (tare) weight, net filament weight, bed/nozzle temperatures, cost,
 structured multicolor/gradient colors, OpenPrintTag finish tags, and any extra fields you map
-via `FIELD_MAPPINGS`. The full pass-by-pass model lives in [docs/sync-model.md](docs/sync-model.md).
+via `FIELD_MAPPINGS`. It also mirrors each synced spool's **archive/retire lifecycle state**
+between the two systems (see [below](#archive--retire-lifecycle)). The full pass-by-pass model
+lives in [docs/sync-model.md](docs/sync-model.md).
 
 <img src="docs/images/synced-records.png" alt="Synced Records — paired spools with an expanded row showing field-by-field Spoolman vs Filament DB values and deep links to each system" width="820">
 
@@ -242,6 +244,20 @@ Spoolman tracks **net filament weight** (`remaining_weight` excludes the reel). 
 
 - Spoolman → Filament DB: weight decrements are logged as usage entries — never raw overwrites
 - Filament DB → Spoolman: `remaining_weight = totalWeight − spoolWeight`
+
+### Archive / retire (lifecycle)
+
+Once a spool is synced, its lifecycle state stays in step across both systems: archiving a
+spool in Spoolman retires it in Filament DB, and retiring it in Filament DB archives it in
+Spoolman — un-archiving/un-retiring mirrors back the same way. It runs as its own category
+(`archive_sync`, default `two_way` / `manual`), and the final weight always settles **before**
+the archive bit propagates, so a depleted-then-archived spool never lands on the other side
+with a stale weight. A one-sided change is a clean push; only a genuine both-sides divergence
+queues a conflict.
+
+This is separate from the wizard's **Skip empty & archived spools on import** setting, which
+only controls whether already-dead spools are pulled in during a bulk import — it does not
+affect ongoing lifecycle mirroring.
 
 ### Variant tracking
 
