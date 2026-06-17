@@ -22,7 +22,11 @@ from fastapi import APIRouter, Body, Depends, Request
 from sqlalchemy.orm import Session
 
 from app import __version__
-from app.api.config import get_config_value, set_config_value
+from app.api.config import (
+    get_config_value,
+    resolve_container_parent_marker,
+    set_config_value,
+)
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.config import settings as _settings
@@ -37,6 +41,7 @@ from app.core.engine import (
     _sm_snapshot_dict,
     _upsert_snapshot,
 )
+from app.core.masters import is_master_fdb
 from app.core.material_tags import finish_ids_from_text, serialize_material_tags
 from app.core.matcher import (
     extract_finish_line,
@@ -226,12 +231,9 @@ def _resolve_variant_parent_mode(db: Session) -> VariantParentMode:
     return "unset"
 
 
-def _resolve_container_parent_marker(db: Session) -> str:
-    """Return the effective container_parent_marker from BridgeConfig (or env default)."""
-    raw = get_config_value(db, "container_parent_marker", None)
-    if raw is None:
-        return _settings.container_parent_marker
-    return str(raw)
+# The marker resolver lives in app.api.config (next to the config-store helpers); kept
+# under this name so existing imports (e.g. reconcile.py) continue to work.
+_resolve_container_parent_marker = resolve_container_parent_marker
 
 
 def _container_display_name(
@@ -372,14 +374,7 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
     _marker_matches = _resolve_container_parent_marker(db)
 
     def _is_master_fdb(fdb: FDBFilament) -> bool:
-        if fdb.id in _synth_fdb_ids_matches:
-            return True
-        if getattr(fdb, "hasVariants", False):
-            return True
-        # Heuristic: name ends with the configured marker (space + marker)
-        if _marker_matches and fdb.name and fdb.name.endswith(f" {_marker_matches}"):
-            return True
-        return False
+        return is_master_fdb(fdb, _marker_matches, _synth_fdb_ids_matches)
 
     matched = [
         MatchPairRow(

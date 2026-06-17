@@ -1,5 +1,36 @@
 # Decision record
 
+## 2026-06-17 — Dashboard counts: spools vs filaments are independent; break out master filaments (GitHub #3)
+
+**Context.** A user read the Dashboard's "In Sync = 49" next to "Filament DB = 38" as a sync
+failure. Verified against the live instance: 49 is the **Spools** In-Sync tile (49 spool
+mappings) and 38 is the **Filaments** Total tile (38 real filament mappings); 49 spools live on
+38 filaments (6 own >1). Both are correct — it is normal spool-per-filament fan-out, not a bug,
+and synthetic masters are already excluded from the 38. The reporter's masters instinct did,
+however, expose a real inconsistency: the **Connected systems → Filament DB** tile reported the
+raw FDB total (50, including the 13 `(Master)` containers) — the only bridge surface that did
+not exclude them.
+
+**Decision (presentational; no count is recomputed as "correct"/"wrong").**
+- The fix is clarity, confirmed with the user: row 1 is Spools, row 2 is Filaments, counted
+  independently. Added help text on both Dashboard sections stating a filament can hold several
+  spools, so the two totals legitimately differ.
+- The Connected systems → Filament DB line now **breaks out** real filaments and masters
+  (`filaments: 37  masters: 13`) instead of dropping or hiding them — chosen over silently
+  showing 37 so the line reconciles with both the rest of the bridge and Filament DB's own UI
+  (which shows 50). The breakout appears only when masters > 0, so it is **self-gating**:
+  `promote_color`/`unset` installs have no masters and see no change — no `variant_parent_mode`
+  branch needed.
+- Master detection consolidated into one canonical helper `core/masters.is_master_fdb(fil,
+  marker, synthetic_ids)` (signals: synthetic-parent id ∪ `hasVariants` ∪ marker-suffix), now
+  reused by `wizard.py`, `reconcile.py`, and the new `services/filamentdb.health()` count, so
+  the previously-divergent copies can't drift. `services/filamentdb.health()` gained a
+  `container_marker` param and returns `master_filament_count`; `api/health._check_filamentdb`
+  resolves the marker from a request-scoped session (the `/health` route now takes
+  `db: Session = Depends(get_db)`), and `db` is optional so connectivity-only callers
+  (wizard/sync) are unaffected. The marker resolver moved to `api/config` next to the other
+  config-store helpers.
+
 ## 2026-06-17 — Synced Records FDB color: capture a display hex for every mapped filament (GitHub #2)
 
 **Context.** Synced Records showed "—" for the Filament DB color on solid filaments (e.g.

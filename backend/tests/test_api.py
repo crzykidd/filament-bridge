@@ -2006,6 +2006,29 @@ def test_health_warns_when_fdb_too_old_for_multicolor(db):
     assert any("1.33.0" in w for w in fdb_sys["warnings"])
 
 
+def test_health_breaks_out_master_filaments(db):
+    """generic_container mode: the FDB line shows real filaments + masters separately (#3)."""
+    fdb = _fake_filamentdb()
+    fdb.health = AsyncMock(return_value={
+        "version": "1.49.0", "filament_count": 50, "master_filament_count": 13, "spool_count": 49})
+    body = _client(db, filamentdb=fdb).get("/api/health").json()
+    counts = body["systems"]["filamentdb"]["counts"]
+    assert counts["filaments"] == 37   # 50 total − 13 masters
+    assert counts["masters"] == 13
+    assert counts["spools"] == 49
+
+
+def test_health_no_master_breakout_when_none(db):
+    """No synthetic masters (promote_color/unset) → no masters key, count unchanged."""
+    fdb = _fake_filamentdb()
+    fdb.health = AsyncMock(return_value={
+        "version": "1.49.0", "filament_count": 12, "master_filament_count": 0, "spool_count": 20})
+    body = _client(db, filamentdb=fdb).get("/api/health").json()
+    counts = body["systems"]["filamentdb"]["counts"]
+    assert counts["filaments"] == 12
+    assert "masters" not in counts
+
+
 def test_health_no_spoolman_warning_when_current(db):
     sm = _fake_spoolman()
     sm.health = AsyncMock(return_value={

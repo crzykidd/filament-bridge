@@ -37,6 +37,14 @@ GitHub release.
   `secondaryColors`) also now resolve a representative hex instead of "—", and the FDB color is
   normalized to the Spoolman convention so a truly in-sync color reads as matched. Existing
   records self-heal on the next sync cycle.
+- **Dashboard count clarity for master/container filaments (#3)** — when `generic_container`
+  mode is in use, the "Connected systems → Filament DB" line now breaks out real filaments and
+  synthetic master/container parents separately (e.g. `filaments: 37  masters: 13` instead of a
+  lone `filaments: 50`), so it reconciles with the rest of the bridge (which excludes masters).
+  The Spools and Filaments dashboard sections also gained help text clarifying they are counted
+  independently — a filament can hold several spools, so the two totals legitimately differ and
+  green-but-unequal totals are not a mismatch. Master detection is now a single shared helper
+  (`core/masters.is_master_fdb`) reused by the wizard, reconcile, and health surfaces.
 
 ## [0.2.0] — 2026-06-15
 

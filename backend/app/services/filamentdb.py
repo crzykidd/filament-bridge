@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+from app.core.masters import is_master_fdb
 from app.schemas.filamentdb import FDBFilament, FDBFilamentDetail
 
 logger = logging.getLogger(__name__)
@@ -276,20 +277,26 @@ class FilamentDBClient:
         self._version_fetched = True
         return self._version
 
-    async def health(self) -> dict[str, Any]:
+    async def health(self, container_marker: str | None = None) -> dict[str, Any]:
         """Probe Filament DB and return version + record counts.
 
         Uses the filament list endpoint for counts and ``/api/openapi`` for the version
         (no dedicated health endpoint exists). The version is refreshed on each probe so
         an upstream upgrade is detected without restarting the bridge.
         Raises on network/HTTP errors so the caller can report the system as unreachable.
+
+        ``master_filament_count`` is the number of synthetic container/master parents
+        (``generic_container`` mode) so the caller can present real filaments separately;
+        detected from FDB-observable signals (``hasVariants`` / the configured marker).
         """
         self._version_fetched = False  # force a fresh version read per probe
         version = await self.get_version()
         filaments = await self.get_filaments()
         spool_count = sum(len(f.spools) for f in filaments)
+        master_count = sum(1 for f in filaments if is_master_fdb(f, container_marker))
         return {
             "version": version,
             "filament_count": len(filaments),
+            "master_filament_count": master_count,
             "spool_count": spool_count,
         }

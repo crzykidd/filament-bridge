@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.api.wizard import _fdb_ref, _resolve_container_parent_marker, _sm_ref
 from app.config import settings as _settings
+from app.core.masters import is_master_fdb
 from app.core.matcher import match_filaments
 from app.db import get_db
 from app.models.mapping import FilamentMapping
@@ -83,13 +84,7 @@ async def get_reconcile(
     _marker = _resolve_container_parent_marker(db)
 
     def _is_master(fdb: FDBFilament) -> bool:
-        if fdb.id in _synth_fdb_ids:
-            return True
-        if getattr(fdb, "hasVariants", False):
-            return True
-        if _marker and fdb.name and fdb.name.endswith(f" {_marker}"):
-            return True
-        return False
+        return is_master_fdb(fdb, _marker, _synth_fdb_ids)
 
     # id → FDBFilament map for parent-name resolution on matched rows.
     fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}

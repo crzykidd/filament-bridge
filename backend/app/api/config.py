@@ -48,6 +48,18 @@ def get_config_value(db: Session, key: str, default: Any = None) -> Any:
     return json.loads(row.value) if row else default
 
 
+def resolve_container_parent_marker(db: Session) -> str:
+    """Return the effective container_parent_marker from BridgeConfig (or env default).
+
+    An explicitly-stored empty string is honored (means "no marker suffix"); only a
+    missing key falls back to the env/start-up default.
+    """
+    raw = get_config_value(db, "container_parent_marker", None)
+    if raw is None:
+        return _settings.container_parent_marker
+    return str(raw)
+
+
 def set_config_value(db: Session, key: str, value: Any) -> None:
     """Upsert one BridgeConfig key (value is JSON-encoded)."""
     value_json = json.dumps(value)
