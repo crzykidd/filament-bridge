@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.2.1-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -56,6 +56,13 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.2.1 (2026-06-17)
+
+- **Bidirectional archive/retire sync** — a synced spool's lifecycle state now mirrors both ways (archive in Spoolman ↔ retire in Filament DB), with the final weight settling before the archive bit propagates so nothing lands with a stale weight (FR-21)
+- **Fix** — the Filament DB color now shows in Synced Records for solid filaments instead of "—" (#2)
+- **Fix** — the Dashboard's Filament DB line breaks out real filaments vs synthetic master/container parents, and the Spools/Filaments sections read as distinct counts rather than a mismatch (#3)
+- **Fix** — help tooltips are no longer clipped by the sidebar or page header
 
 ### v0.2.0 (2026-06-15)
 

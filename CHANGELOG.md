@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-17
+
 ### Added
 
 - **Bidirectional archive/retire lifecycle sync (FR-21)** — a mapped spool's lifecycle
