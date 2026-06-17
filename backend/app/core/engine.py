@@ -26,6 +26,7 @@ from app.core.color import (
     apply_finish_tags,
     arrangement_from_tags,
     fdb_multicolor_to_sm,
+    fdb_representative_hex,
     multicolor_signature,
     sm_multicolor_signature,
     sm_multicolor_to_fdb,
@@ -809,6 +810,19 @@ async def _sync_multicolor(
         if sm_fil is None or fdb_list is None:
             continue
 
+        # Capture a representative FDB display color for EVERY mapped filament — solid and
+        # multicolor alike — so Synced Records shows the FDB color even for purely-solid
+        # filaments, which the multicolor-sync logic below skips. Without this, a solid
+        # filament's ``_mc_color`` is never written and its color renders as "—" in the UI
+        # (GitHub #2). Derived from the list view (no detail fetch needed); the multicolor
+        # path below refines it from the variant-resolved detail when applicable.
+        if not dry_run:
+            _merge_snapshot(
+                db, "filamentdb", "filament", m.filamentdb_id,
+                {"_mc_color": fdb_representative_hex(
+                    fdb_list.color, fdb_list.secondaryColors, fdb_list.optTags)},
+            )
+
         sm_is_mc = bool(sm_fil.multi_color_hexes)
         fdb_is_mc = bool(fdb_list.secondaryColors) or arrangement_from_tags(fdb_list.optTags) != "solid"
         if not (sm_is_mc or fdb_is_mc):
@@ -856,9 +870,19 @@ async def _sync_multicolor(
         sm_sig_then = sm_snap.get("_mc_sig") if sm_snap else None
         fdb_sig_then = fdb_snap.get("_mc_sig") if fdb_snap else None
 
-        # Capture the resolved FDB color hex for the Synced Records display (§3 in Phase A).
+        # Capture a single representative FDB color hex for the Synced Records display.
+        # Multicolor filaments store color=null with the real hexes in secondaryColors[]
+        # (arrangement in optTags), so the bare `color` field is None and renders "—".
+        # fdb_representative_hex resolves one display hex (single → color; gradient →
+        # primary; coextruded → first secondary; colorless container → None).
         # Stored as _mc_color in the FDB filament snapshot alongside _mc_sig.
-        fdb_color_now = fdb_detail.color if fdb_detail else None
+        fdb_color_now = (
+            fdb_representative_hex(
+                fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags
+            )
+            if fdb_detail
+            else None
+        )
 
         def _store(sm_sig: str, fdb_sig: str) -> None:
             _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_mc_sig": sm_sig})

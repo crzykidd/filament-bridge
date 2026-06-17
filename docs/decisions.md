@@ -1,5 +1,33 @@
 # Decision record
 
+## 2026-06-17 — Synced Records FDB color: capture a display hex for every mapped filament (GitHub #2)
+
+**Context.** Synced Records showed "—" for the Filament DB color on solid filaments (e.g.
+"Beige"), even when the color was set and matched Spoolman. Verified against the live
+instance: FDB "ELEGOO PLA Beige" has `color="#DAC7A0"` and its bridge snapshot carried
+`_cost`/`_finish_sig`/`_mp_*` but no `_mc_color`. The detail reads `_mc_color`
+(`api/mappings.py`), which was written **only** by the multicolor sync pass `_sync_multicolor`
+— and that pass `continue`s on purely-solid filaments before storing anything
+(`engine.py`, "purely solid — the generic color field sync handles it"). So 25 of 37 FDB
+filament snapshots (the solids) never captured a display color. A secondary problem: when the
+pass did write `_mc_color`, it stored the bare `color` field, which is `null` for
+coextruded/gradient filaments (real hexes live in `secondaryColors`) → also "—".
+
+**Decision.**
+- The display color is captured for **every** mapped filament, not just multicolor ones. The
+  capture moved to the top of `_sync_multicolor`'s loop (before the solid-skip `continue`),
+  gated on `not dry_run`, using the list-view color; the multicolor path still refines it from
+  the variant-resolved detail.
+- New helper `core/color.py:fdb_representative_hex(color, secondary_colors, opt_tags)` resolves
+  one representative display hex (single → `color`; gradient → primary; coextruded → first
+  secondary; colorless container → `None`). Built on the existing `fdb_multicolor_to_sm` so
+  multicolor filaments stop rendering "—".
+- The stored hex is normalized to the Spoolman convention at the read site
+  (`mappings.py:_build_detail` via `to_sm_color`) so a truly in-sync solid color reads as
+  matched against `color_hex` (FDB stores `#AEB8C1`, Spoolman stores `AEB8C1`).
+- Genuinely colorless records (Master/container parents) correctly stay `None`/"—" — no color
+  is synthesized. Existing stale snapshots self-heal on the next sync cycle (no backfill).
+
 ## 2026-06-17 — Archive/retire to sync bidirectionally for already-synced spools (FR-21 symmetric, design agreed)
 
 **Context.** Archive/retire lifecycle state is import-only and one-directional today

@@ -24,6 +24,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.color import to_sm_color
 from app.core.filament_status import filament_mapping_status
 from app.db import get_db
 from app.models.conflict import Conflict
@@ -70,7 +71,9 @@ def _build_detail(sm_filament: dict, fdb_snap: dict | None, fdb_fil_snap: dict |
       ``_mp_density``              — density (scalar pass)
       ``_mp_diameter``             — diameter (scalar pass)
       ``_cost``                    — cost (cost pass)
-      ``_mc_color``                — resolved color hex (multicolor pass)
+      ``_mc_color``                — representative display hex (multicolor pass:
+                                       single→color, gradient→primary,
+                                       coextruded→first secondary; None if colorless)
 
     Fields with no stored FDB counterpart (not yet baselined) show ``None``
     (rendered as "—" in the UI).
@@ -96,9 +99,12 @@ def _build_detail(sm_filament: dict, fdb_snap: dict | None, fdb_fil_snap: dict |
                            filamentdb=fdb_fil.get("_mp_diameter")),
         MappingDetailField(field="cost", label="Cost",
                            spoolman=sm_filament.get("price"), filamentdb=fdb_fil.get("_cost")),
+        # Normalize the stored FDB hex to the Spoolman convention (bare, no leading
+        # '#') so a truly in-sync single color reads as matched against color_hex
+        # (FDB stores "#AEB8C1", Spoolman stores "AEB8C1").
         MappingDetailField(field="color", label="Color",
                            spoolman=sm_filament.get("color_hex"),
-                           filamentdb=fdb_fil.get("_mc_color")),
+                           filamentdb=to_sm_color(fdb_fil.get("_mc_color"))),
     ]
 
 

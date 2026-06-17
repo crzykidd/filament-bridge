@@ -26,6 +26,18 @@ GitHub release.
   writes the chosen state to both systems. The "Never import empties" setting was relabeled
   "Skip empty & archived spools on import" to clarify it is import-only (config key unchanged).
 
+### Fixed
+
+- **Synced Records now shows the Filament DB color for solid filaments (#2)** — the FDB color
+  cell rendered "—" for purely-solid filaments (e.g. "Beige") even when the color was set and
+  in sync. The display value (`_mc_color`) was written only by the multicolor sync pass, which
+  skips solid filaments, so most filaments never captured a color for display. The engine now
+  captures a representative display hex for **every** mapped filament (solid and multicolor)
+  each cycle. Multicolor filaments (which store `color=null` with the real hexes in
+  `secondaryColors`) also now resolve a representative hex instead of "—", and the FDB color is
+  normalized to the Spoolman convention so a truly in-sync color reads as matched. Existing
+  records self-heal on the next sync cycle.
+
 ## [0.2.0] — 2026-06-15
 
 ### Added

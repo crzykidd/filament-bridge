@@ -634,6 +634,51 @@ async def test_multicolor_first_sight_stores_baseline(db):
 
 
 @pytest.mark.asyncio
+async def test_solid_filament_captures_mc_color_for_display(db):
+    """GitHub #2: a purely-solid filament (no multicolor either side) must still get its
+    representative FDB color captured as ``_mc_color`` so Synced Records shows the FDB color
+    instead of "—". The multicolor-sync logic skips solids, so the capture must happen for
+    every mapped filament regardless."""
+    sm_fil = _sm_fil(color_hex="dac7a0")          # solid, matches FDB
+    fdb_list = _fdb_list_fil(color="#DAC7A0")     # solid — no secondaryColors/optTags
+    fdb_detail = _fdb_detail_fil(color="#DAC7A0")
+    _add_filament_mapping(db)
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _mc_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # No multicolor write happened (solid), but the display color was still captured.
+    fdb_client.update_filament.assert_not_called()
+    assert _snap_value(db, "filamentdb", "filament", FDB_FIL_ID, "_mc_color") == "#DAC7A0"
+
+
+@pytest.mark.asyncio
+async def test_solid_filament_mc_color_not_captured_on_dry_run(db):
+    """Dry run must not mutate snapshots — the display-color capture is write-gated too."""
+    sm_fil = _sm_fil(color_hex="dac7a0")
+    fdb_list = _fdb_list_fil(color="#DAC7A0")
+    fdb_detail = _fdb_detail_fil(color="#DAC7A0")
+    _add_filament_mapping(db)
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _mc_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=True, cycle_id=CYCLE_ID)
+
+    assert db.query(Snapshot).filter_by(
+        source="filamentdb", entity_type="filament", entity_id=FDB_FIL_ID
+    ).first() is None
+
+
+@pytest.mark.asyncio
 async def test_sync_blocked_when_fdb_below_minimum(db):
     """FDB below the minimum supported version (1.33.0) hard-blocks the whole
     cycle: no upstream fetches/writes, blocked_reasons set."""
