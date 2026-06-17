@@ -1,5 +1,52 @@
 # Decision record
 
+## 2026-06-17 — FDB spool `instanceId` is NOT used for cross-reference; keep `label`
+
+**Context.** Filament DB 1.48.0 moved the 5-byte hex roll ID (`instanceId`) from the
+filament onto each **spool**, and 1.49.0 made it **user-editable**. Format (verified in
+FDB `src/models/Filament.ts`): the auto-generated default is
+`crypto.randomBytes(5).toString("hex")` → **10 lowercase hex chars** ("Prusament
+format"); a user-set value is validated as `[A-Za-z0-9._-]{1,128}` and must be unique
+(partial-unique index, scoped to non-deleted documents). It lives on both the filament
+and the spool subdoc during the transition; the spool one is canonical going forward.
+
+**Considered.** Optionally (Settings toggle) mirror the Spoolman spool ID into the FDB
+spool's `instanceId` using a user-chosen numeric prefix to stay 10 chars and globally
+unique — e.g. prefix `1` + zero-padded id → `1000000042`. This would give a single
+human-readable roll number derivable in both systems.
+
+**Decision: declined the write path. The bridge does NOT write `instanceId`. The
+Spoolman spool ID stays in the FDB spool `label` field (`FILAMENTDB_SPOOLMAN_ID_FIELD`,
+default `label`), backed by the `SpoolMapping` table.**
+
+**Rationale.**
+- `instanceId` is FDB's **physical-tag match key** — desktop and mobile scanners resolve
+  QR/NFC against it (1.48), and 1.49 made it editable precisely so users can store their
+  *real* Prusament roll IDs / NFC tag IDs. Overwriting it with a synthetic cross-ref
+  number would break scan-by-tag, stomp user-entered values, and strand already-printed
+  labels / written tags (FDB does not re-write tags when the ID changes).
+- Linkage is **already solved**: the Spoolman spool ID is stored in the FDB spool `label`
+  field *and* in the bridge's SQLite `SpoolMapping`. Encoding it into `instanceId` is a
+  redundant third copy.
+- It's **one-directional decoration**: Spoolman cannot read FDB's `instanceId`, so it adds
+  no new sync capability on either side.
+- The proposed `1000000xxx` encoding only holds 3 digits of ID (≤999 spools) before
+  overflow; a safe scheme would need `prefix + 9-digit zero-pad`, reinforcing that this is
+  fiddly for little gain.
+
+**Future-looking (not implemented).** If `instanceId` is interesting to the bridge at all,
+the valuable direction is the opposite — **read** it (and the new `Filament.openprinttagSnapshot`
+field added in 1.47.2) so the bridge can *surface* the user's real roll ID / OpenPrintTag
+identity (e.g. mirror into a Spoolman extra field), adding information rather than
+destroying it. Needs the `openprinttagSnapshot` schema from `/api-docs` before any work.
+
+**Upstream review context.** Reviewed FDB releases 1.43.0 → 1.49.0 (latest): no breaking
+changes for the bridge. We address spools by the stable subdoc `_id` and send minimal PUT
+payloads (`{label}` / `{totalWeight}`), so the per-spool/editable `instanceId` is never
+clobbered; `instanceId` is also in `_strip_computed` for the filament path. 1.44.0
+(hide out-of-stock) is a UI-only filter — `GET /api/filaments` still returns all records.
+`MIN_FDB` stays `1.33.0`. README "latest tested" should be bumped 1.42.0 → 1.49.0.
+
 ## 2026-06-13 — Debug: added POST /api/debug/clear-spoolman-opentag-ids
 
 Added a fourth standalone debug endpoint that blanks the three OpenPrintTag identity
