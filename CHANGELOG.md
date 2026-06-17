@@ -9,6 +9,51 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-06-17
+
+### Added
+
+- **Bidirectional archive/retire lifecycle sync (FR-21)** — a mapped spool's lifecycle
+  state now mirrors between Spoolman (`archived`) and Filament DB (`retired`) in both
+  directions: archiving/retiring one side flips the other, and un-archiving/un-retiring
+  mirrors back too (re-enabling weight sync). A new `archive_sync` policy category
+  (`archive_sync_direction`, default `two_way`; `archive_conflict_policy`, default `manual`)
+  governs it from Settings → Archive / retire sync; `newest_wins` is rejected (422) since
+  the state is a boolean with no timestamp. The wizard import gate is preserved — *unmapped*
+  archived spools are still never auto-imported; only *mapped-pair* diffing includes archived
+  spools. The lifecycle pass runs **after** the weight pass, so a depleted-and-archived spool
+  settles its final decrement and FDB usage-log entry (and refreshes both snapshots) before
+  the archive bit mirrors. A one-sided flip is a clean push; only a both-sides-diverge-to-
+  opposite-states case queues a `cross_system` lifecycle conflict, whose human resolution
+  writes the chosen state to both systems. The "Never import empties" setting was relabeled
+  "Skip empty & archived spools on import" to clarify it is import-only (config key unchanged).
+
+### Fixed
+
+- **Synced Records now shows the Filament DB color for solid filaments (#2)** — the FDB color
+  cell rendered "—" for purely-solid filaments (e.g. "Beige") even when the color was set and
+  in sync. The display value (`_mc_color`) was written only by the multicolor sync pass, which
+  skips solid filaments, so most filaments never captured a color for display. The engine now
+  captures a representative display hex for **every** mapped filament (solid and multicolor)
+  each cycle. Multicolor filaments (which store `color=null` with the real hexes in
+  `secondaryColors`) also now resolve a representative hex instead of "—", and the FDB color is
+  normalized to the Spoolman convention so a truly in-sync color reads as matched. Existing
+  records self-heal on the next sync cycle.
+- **Dashboard count clarity for master/container filaments (#3)** — when `generic_container`
+  mode is in use, the "Connected systems → Filament DB" line now breaks out real filaments and
+  synthetic master/container parents separately (e.g. `filaments: 37  masters: 13` instead of a
+  lone `filaments: 50`), so it reconciles with the rest of the bridge (which excludes masters).
+  The Spools and Filaments dashboard sections also gained help text clarifying they are counted
+  independently — a filament can hold several spools, so the two totals legitimately differ and
+  green-but-unequal totals are not a mismatch. Master detection is now a single shared helper
+  (`core/masters.is_master_fdb`) reused by the wizard, reconcile, and health surfaces.
+- **Help tooltips no longer clipped by the sidebar or page header** — the `?` HelpTip bubble
+  was absolutely positioned within the page flow and got cut off near the left edge and top of
+  the screen. It now renders in a portal with fixed positioning, flips above/below to stay in
+  view, and clamps horizontally so it's always fully visible. Dashboard section headers
+  (Spools / Filaments / Connected systems) were also made larger and higher-contrast so the
+  sections read as distinct blocks.
+
 ## [0.2.0] — 2026-06-15
 
 ### Added

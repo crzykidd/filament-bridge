@@ -12,11 +12,14 @@ import asyncio
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app import __version__
+from app.api.config import resolve_container_parent_marker
 from app.config import settings
+from app.db import get_db
 from app.core.version import (
     MIN_FDB,
     MIN_SPOOLMAN,
@@ -69,24 +72,34 @@ async def _check_spoolman(request: Request) -> SystemHealth:
         return SystemHealth(status="error", url=url, error=str(exc))
 
 
-async def _check_filamentdb(request: Request) -> SystemHealth:
+async def _check_filamentdb(request: Request, db: Session | None = None) -> SystemHealth:
     url = settings.filamentdb_url
     try:
-        info = await request.app.state.filamentdb.health()
+        # Marker resolution needs a DB session; callers that only probe connectivity
+        # (wizard/sync) omit it — masters are then detected via hasVariants alone, which
+        # is harmless since they don't surface the filaments/masters breakout.
+        marker = resolve_container_parent_marker(db) if db is not None else None
+        info = await request.app.state.filamentdb.health(container_marker=marker)
         warnings: list[str] = []
         if not version_gte(info.get("version"), MIN_FDB):
             warnings.append(
                 f"Filament DB < {format_version(MIN_FDB)} — the minimum supported version; "
                 "structured multicolor, finish-tag, and temperature sync are disabled below it"
             )
+        # Present real filaments and synthetic master/container parents separately so the
+        # count reconciles with the rest of the bridge (which excludes masters). The
+        # breakout only appears when masters exist — i.e. generic_container mode (#3).
+        total = info["filament_count"]
+        masters = info.get("master_filament_count", 0)
+        counts: dict[str, int] = {"filaments": total - masters if masters else total}
+        if masters:
+            counts["masters"] = masters
+        counts["spools"] = info["spool_count"]
         return SystemHealth(
             status="ok",
             url=url,
             version=info.get("version"),
-            counts={
-                "filaments": info["filament_count"],
-                "spools": info["spool_count"],
-            },
+            counts=counts,
             warnings=warnings,
         )
     except Exception as exc:
@@ -95,10 +108,10 @@ async def _check_filamentdb(request: Request) -> SystemHealth:
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health(request: Request) -> HealthResponse:
+async def health(request: Request, db: Session = Depends(get_db)) -> HealthResponse:
     spoolman_result, filamentdb_result = await asyncio.gather(
         _check_spoolman(request),
-        _check_filamentdb(request),
+        _check_filamentdb(request, db),
     )
 
     systems = {

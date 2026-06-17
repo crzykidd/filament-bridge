@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.2.1-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -11,14 +11,18 @@ Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) 
 > auto-sync, **back up all three databases** (Spoolman, Filament DB, and the bridge). See
 > [Backups](#backups). Test against non-critical data first.
 
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="filament-bridge Dashboard — in-sync spool and filament counts, connected-system health with versions, and sync controls" width="820">
+</p>
+
 ---
 
 ## Why?
 
 Filament DB and Spoolman are both excellent tools that solve different parts of the filament management problem:
 
-- **Filament DB** excels at material profile management — deep slicer integration (PrusaSlicer, OrcaSlicer, Bambu Studio), per-printer/nozzle calibration storage, material science properties, NFC tag support, and AI-powered data sheet import.
-- **Spoolman** is a long-standing inventory solution with native connections to OctoPrint, Moonraker/Klipper, and Home Assistant (among others), plus a broad surrounding ecosystem. If you want to start using Filament DB but still rely on features Spoolman offers, this tool lets you combine both experiences instead of choosing one.
+- **[Filament DB](https://github.com/hyiger/filament-db)** excels at material profile management — deep slicer integration (PrusaSlicer, OrcaSlicer, Bambu Studio), per-printer/nozzle calibration storage, material science properties, NFC tag support, and AI-powered data sheet import.
+- **[Spoolman](https://github.com/Donkie/Spoolman)** is a long-standing inventory solution with native connections to OctoPrint, Moonraker/Klipper, and Home Assistant (among others), plus a broad surrounding ecosystem. If you want to start using Filament DB but still rely on features Spoolman offers, this tool lets you combine both experiences instead of choosing one.
 
 filament-bridge keeps the two in sync so you can use both without manual data entry. It runs as a single Docker container next to your existing instances, links records via Spoolman extra fields and Filament DB spool labels, and keeps its own state in SQLite — neither upstream system is ever modified beyond its documented REST API.
 
@@ -47,9 +51,18 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 - **Version badge + update check** — the sidebar shows the running version and surfaces new GitHub releases (checked server-side, cached 6 h)
 - **Debug reset tools** — a gated Danger Zone (off by default) with three reset tools for clean re-testing: clear Spoolman cross-refs, reset the bridge DB, or both at once
 
+<img src="docs/images/wizard-matches.png" alt="Bulk Import Wizard, Matches step — fuzzy vendor/name/color pairing of Spoolman and Filament DB records with per-row status and bulk actions" width="760">
+
 ---
 
 ## What's New
+
+### v0.2.1 (2026-06-17)
+
+- **Bidirectional archive/retire sync** — a synced spool's lifecycle state now mirrors both ways (archive in Spoolman ↔ retire in Filament DB), with the final weight settling before the archive bit propagates so nothing lands with a stale weight (FR-21)
+- **Fix** — the Filament DB color now shows in Synced Records for solid filaments instead of "—" (#2)
+- **Fix** — the Dashboard's Filament DB line breaks out real filaments vs synthetic master/container parents, and the Spools/Filaments sections read as distinct counts rather than a mismatch (#3)
+- **Fix** — help tooltips are no longer clipped by the sidebar or page header
 
 ### v0.2.0 (2026-06-15)
 
@@ -140,7 +153,7 @@ per-system warning explaining why sync is off — so you can see and fix it. An 
 version does *not* block sync (that is treated as a connectivity issue, surfaced as `degraded`
 health, not as "too old").
 
-Latest tested upstreams: **Filament DB 1.42.0** and **Spoolman 0.23.1**.
+Latest tested upstreams: **Filament DB 1.49.0** and **Spoolman 0.23.1**.
 
 - **Filament DB** — the bridge gates version-specific features automatically.
 - **Spoolman** — the bridge creates its required extra fields (`filamentdb_id`, `filamentdb_spool_id`, etc.) automatically on startup if they are missing.
@@ -217,14 +230,20 @@ Each data category is configured independently on two axes in Settings:
   `spoolman_wins`, `filamentdb_wins`, or `newest_wins` (weight only — Spoolman exposes no
   per-filament modification timestamp)
 
-Defaults: weight syncs Spoolman→FDB; material properties sync FDB→Spoolman; new spools sync two-way.
+Defaults: weight syncs Spoolman→FDB; material properties sync FDB→Spoolman; new spools and archive/retire both sync two-way.
+
+<img src="docs/images/settings-direction-policy.png" alt="Settings — per-category sync direction and conflict policy controls for weight, material properties, and new records" width="760">
 
 ### What syncs
 
 Beyond spool weight, the engine syncs the shared filament surface per cycle: material/type,
 density, diameter, spool (tare) weight, net filament weight, bed/nozzle temperatures, cost,
 structured multicolor/gradient colors, OpenPrintTag finish tags, and any extra fields you map
-via `FIELD_MAPPINGS`. The full pass-by-pass model lives in [docs/sync-model.md](docs/sync-model.md).
+via `FIELD_MAPPINGS`. It also mirrors each synced spool's **archive/retire lifecycle state**
+between the two systems (see [below](#archive--retire-lifecycle)). The full pass-by-pass model
+lives in [docs/sync-model.md](docs/sync-model.md).
+
+<img src="docs/images/synced-records.png" alt="Synced Records — paired spools with an expanded row showing field-by-field Spoolman vs Filament DB values and deep links to each system" width="820">
 
 ### Weight model translation
 
@@ -233,6 +252,20 @@ Spoolman tracks **net filament weight** (`remaining_weight` excludes the reel). 
 - Spoolman → Filament DB: weight decrements are logged as usage entries — never raw overwrites
 - Filament DB → Spoolman: `remaining_weight = totalWeight − spoolWeight`
 
+### Archive / retire (lifecycle)
+
+Once a spool is synced, its lifecycle state stays in step across both systems: archiving a
+spool in Spoolman retires it in Filament DB, and retiring it in Filament DB archives it in
+Spoolman — un-archiving/un-retiring mirrors back the same way. It runs as its own category
+(`archive_sync`, default `two_way` / `manual`), and the final weight always settles **before**
+the archive bit propagates, so a depleted-then-archived spool never lands on the other side
+with a stale weight. A one-sided change is a clean push; only a genuine both-sides divergence
+queues a conflict.
+
+This is separate from the wizard's **Skip empty & archived spools on import** setting, which
+only controls whether already-dead spools are pulled in during a bulk import — it does not
+affect ongoing lifecycle mirroring.
+
 ### Variant tracking
 
 Filament DB uses parent/variant inheritance (one parent with shared settings, color variants underneath). Spoolman is flat — one filament per color. The bridge tracks the relationship via Spoolman extra fields (`filamentdb_id`, `filamentdb_parent_id`) and builds the hierarchy at import time according to your [variant parent mode](docs/variant-parent-mode.md). When a Spoolman change would override a variant's *inherited* setting, the bridge queues a master-divergence conflict instead of silently detaching the variant from its parent — you decide whether the change applies to the whole line, just that variant, or not at all.
@@ -240,6 +273,8 @@ Filament DB uses parent/variant inheritance (one parent with shared settings, co
 ### Conflict resolution
 
 All conflicts are queued — never silently resolved — and shown on the Conflicts page with both values and deep links. Resolving a standard conflict records your choice; resolving a master-divergence conflict applies your chosen action upstream. Details in [docs/conflicts.md](docs/conflicts.md).
+
+<img src="docs/images/conflicts.png" alt="Conflicts page — queued new-filament and conflict entries with per-entry Add/Dismiss and resolution actions; nothing is auto-resolved" width="760">
 
 ---
 
@@ -299,6 +334,8 @@ The OpenTag tool matches your Spoolman filaments against the [OpenPrintTag](http
 3. Confirm and apply — the bridge writes the confirmed fields to Spoolman (creating vendors via find-or-create where you approved a manufacturer change) and stamps `openprinttag_slug`/`openprinttag_uuid` into both systems
 
 Vendor-name and color-word mappings for the matcher are editable in Settings. Full guide: [docs/opentag-cleanup.md](docs/opentag-cleanup.md).
+
+<img src="docs/images/opentag-review.png" alt="OpenTag Cleanup — match list across the catalog with an expanded filament showing field-by-field Filament DB / Spoolman / use-value comparison and per-field keep-mine controls" width="820">
 
 ---
 

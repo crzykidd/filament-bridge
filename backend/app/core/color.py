@@ -198,6 +198,33 @@ def fdb_multicolor_to_sm(
     }
 
 
+def fdb_representative_hex(
+    color: str | None,
+    secondary_colors: list | None,
+    opt_tags: list | None,
+) -> str | None:
+    """Single representative display hex for a Filament DB filament's color state.
+
+    Multicolor FDB filaments store ``color=null`` with the real hexes in
+    ``secondaryColors[]`` (arrangement in ``optTags``: 29 coextruded, 28 gradient),
+    so the bare ``color`` field is ``None`` and renders as "—" in the UI even though
+    the filament has a real color.  This derives one representative hex via the same
+    structured mapping the Spoolman side uses (``fdb_multicolor_to_sm``):
+
+      - single / solid          → the ``color`` hex
+      - gradient (tag 28)       → the primary hex (first of multi_color_hexes)
+      - coextruded (tag 29)     → the first secondary hex (first of multi_color_hexes)
+      - genuinely colorless      → ``None`` (container/Master parents — no color synthesized)
+
+    Returns a Filament-DB-convention ``#RRGGBB`` value (or ``None``).
+    """
+    sm = fdb_multicolor_to_sm(color, secondary_colors, opt_tags)
+    rep = sm["color_hex"]
+    if not rep and sm["multi_color_hexes"]:
+        rep = sm["multi_color_hexes"].split(",")[0]
+    return to_fdb_color(rep)
+
+
 def multicolor_signature(
     color: str | None,
     secondary_colors: list | None,

@@ -110,6 +110,34 @@ def _seed_matprop_config(db, direction: str = "filamentdb_to_spoolman", policy: 
     db.commit()
 
 
+def _seed_archive_config(db, direction: str = "two_way", policy: str = "manual"):
+    """Set archive/retire lifecycle sync direction and conflict policy in BridgeConfig."""
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="archive_sync_direction", value=json.dumps(direction)))
+    db.merge(BridgeConfig(key="archive_conflict_policy", value=json.dumps(policy)))
+    db.commit()
+
+
+def _sm_spool_arch(spool_id: int, remaining: float, archived: bool, extra: dict | None = None) -> SpoolmanSpool:
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=remaining,
+        archived=archived,
+        extra=extra or {},
+    )
+
+
+def _fdb_filament_ret(fid: str, spool_id: str, total_weight: float, retired: bool, tare: float = 200.0) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": fid,
+        "name": "PLA",
+        "vendor": "elegoo",
+        "spoolWeight": tare,
+        "spools": [{"_id": spool_id, "totalWeight": total_weight, "retired": retired}],
+    })
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -238,9 +266,10 @@ async def test_archived_imported_spool_no_pingpong(db):
     """An imported archived→retired spool must not be re-animated or bounced.
 
     Mirrors the wizard importing SM spool #65 (archived, used up) as a RETIRED FDB
-    spool with a SpoolMapping. The mapped-pair loop must hit the archived-skip branch
-    (engine.py ~2380) every cycle: no weight diff, no usage log, no FDB→SM decrement,
-    no conflict, no duplicate-spool creation on either side — across multiple cycles.
+    spool with a SpoolMapping. Both sides are already in the dead state, so the
+    mapped-pair loop must NOOP every cycle: no weight diff, no usage log, no FDB→SM
+    decrement, no lifecycle conflict, no lifecycle mirror, no duplicate-spool creation
+    on either side — across multiple cycles.
     """
     sm_spool = SpoolmanSpool(
         id=65,
@@ -270,12 +299,11 @@ async def test_archived_imported_spool_no_pingpong(db):
         r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="arch-c1")
         r2 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="arch-c2")
 
-    # No spurious work on either cycle — the archived pair is skipped, not synced.
+    # No spurious work on either cycle — both sides already dead → NOOP, not synced.
     for r in (r1, r2):
         assert r.updated == 0, f"archived pair must not update; got {r.updated}"
         assert r.conflicts == 0, f"archived pair must not conflict; got {r.conflicts}"
         assert r.errors == 0
-        assert r.skipped >= 1, "archived pair must hit the skip branch"
     # No writes to either system for the archived/retired spool.
     fdb_client.log_usage.assert_not_called()
     fdb_client.update_spool.assert_not_called()
@@ -606,6 +634,51 @@ async def test_multicolor_first_sight_stores_baseline(db):
 
 
 @pytest.mark.asyncio
+async def test_solid_filament_captures_mc_color_for_display(db):
+    """GitHub #2: a purely-solid filament (no multicolor either side) must still get its
+    representative FDB color captured as ``_mc_color`` so Synced Records shows the FDB color
+    instead of "—". The multicolor-sync logic skips solids, so the capture must happen for
+    every mapped filament regardless."""
+    sm_fil = _sm_fil(color_hex="dac7a0")          # solid, matches FDB
+    fdb_list = _fdb_list_fil(color="#DAC7A0")     # solid — no secondaryColors/optTags
+    fdb_detail = _fdb_detail_fil(color="#DAC7A0")
+    _add_filament_mapping(db)
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _mc_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # No multicolor write happened (solid), but the display color was still captured.
+    fdb_client.update_filament.assert_not_called()
+    assert _snap_value(db, "filamentdb", "filament", FDB_FIL_ID, "_mc_color") == "#DAC7A0"
+
+
+@pytest.mark.asyncio
+async def test_solid_filament_mc_color_not_captured_on_dry_run(db):
+    """Dry run must not mutate snapshots — the display-color capture is write-gated too."""
+    sm_fil = _sm_fil(color_hex="dac7a0")
+    fdb_list = _fdb_list_fil(color="#DAC7A0")
+    fdb_detail = _fdb_detail_fil(color="#DAC7A0")
+    _add_filament_mapping(db)
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_filamentdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as mock_settings, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _mc_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=True, cycle_id=CYCLE_ID)
+
+    assert db.query(Snapshot).filter_by(
+        source="filamentdb", entity_type="filament", entity_id=FDB_FIL_ID
+    ).first() is None
+
+
+@pytest.mark.asyncio
 async def test_sync_blocked_when_fdb_below_minimum(db):
     """FDB below the minimum supported version (1.33.0) hard-blocks the whole
     cycle: no upstream fetches/writes, blocked_reasons set."""
@@ -738,8 +811,10 @@ async def test_sm_deletion_queues_conflict(db):
 
 
 @pytest.mark.asyncio
-async def test_archived_sm_spool_logs_skip_no_conflict(db):
-    """Archived Spoolman spool is in sm_all_ids → skip logged, no deletion conflict."""
+async def test_archived_sm_spool_with_unknown_baseline_is_noop(db):
+    """Archived mapped spool whose snapshot lacks an 'archived' baseline must NOT be
+    treated as a fresh flip — a missing baseline defaults to the current value so the
+    pair is a clean NOOP (no conflict, no spurious mirror, no skip-as-deletion)."""
     archived_spool = SpoolmanSpool(
         id=1,
         filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
@@ -749,19 +824,25 @@ async def test_archived_sm_spool_logs_skip_no_conflict(db):
     )
     fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
     _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    # Legacy snapshots: no 'archived'/'retired' keys, weights already in agreement.
     _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
     _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
 
     spoolman = _fake_spoolman(spools=[archived_spool])
     fdb_client = _fake_filamentdb(filaments=[fdb_fil])
 
-    result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
 
     assert result.conflicts == 0
-    assert result.skipped == 1
+    assert result.updated == 0
+    assert result.errors == 0
     assert db.query(Conflict).count() == 0
-    skip_log = db.query(SyncLog).filter_by(action="skip").first()
-    assert skip_log is not None
+    # No upstream writes for either system.
+    fdb_client.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2926,3 +3007,267 @@ async def test_variant_member_unset_mode_held_for_review(db):
     fdb_client.create_filament.assert_not_called()
     c = db.query(Conflict).filter_by(entity_type="filament", field_name="new_filament", spoolman_id=70).first()
     assert c is not None, "Expected new_filament conflict when variant_parent_mode=unset"
+
+
+# ---------------------------------------------------------------------------
+# Archive / retire lifecycle sync (FR-21 symmetric)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_sm_archive_pushes_fdb_retire(db):
+    """Mapped spool flips archived=true in SM (FDB unchanged) → engine sets FDB
+    retired=true, both snapshots converge, no ping-pong next cycle, no conflict."""
+    sm = _sm_spool_arch(1, 800.0, archived=True)
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=False)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": False})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-1")
+
+    assert r1.conflicts == 0
+    assert r1.updated == 1
+    assert fdb_client.update_spool.call_count == 1
+    assert fdb_client.update_spool.call_args.args[2] == {"retired": True}
+    # Snapshots converged.
+    assert _snap_value(db, "spoolman", "spool", "1", "archived") is True
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "retired") is True
+
+    # No ping-pong: FDB now retired, SM still archived, snapshots converged.
+    fdb_after = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=True)
+    fdb_client2 = _fake_filamentdb(filaments=[fdb_after])
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman, fdb_client2, dry_run=False, cycle_id="lc-1b")
+    assert r2.updated == 0
+    assert r2.conflicts == 0
+    fdb_client2.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_fdb_retire_pushes_sm_archive(db):
+    """Mapped spool flips retired=true in FDB (SM unchanged) → engine sets SM
+    archived=true, converges, no ping-pong."""
+    sm = _sm_spool_arch(1, 800.0, archived=False)
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=True)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": False})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-2")
+
+    assert r1.conflicts == 0
+    assert r1.updated == 1
+    assert spoolman.update_spool.call_count == 1
+    assert spoolman.update_spool.call_args.args[1] == {"archived": True}
+    assert _snap_value(db, "spoolman", "spool", "1", "archived") is True
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "retired") is True
+
+    # No ping-pong next cycle.
+    sm_after = _sm_spool_arch(1, 800.0, archived=True)
+    spoolman2 = _fake_spoolman(spools=[sm_after])
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman2, fdb_client, dry_run=False, cycle_id="lc-2b")
+    assert r2.updated == 0
+    assert r2.conflicts == 0
+    spoolman2.update_spool.assert_not_called()
+    fdb_client.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_depletion_and_archive_same_cycle_weight_first(db):
+    """THE ORDERING GUARANTEE: a mapped spool's remaining drops to ~0 g AND archived
+    flips true in the same cycle → the engine logs the final usage decrement in FDB
+    FIRST (correct post-decrement totalWeight + usage entry source=spoolman), THEN sets
+    retired=true. FDB ends retired with the decremented weight and the usage entry."""
+    # SM dropped 800 → 0 (used 800) and archived in the same cycle.
+    sm = _sm_spool_arch(1, 0.0, archived=True)
+    # FDB still shows the pre-decrement gross (1000 = 800 net + 200 tare), not retired.
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=False, tare=200.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": False})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-dep")
+
+    assert r.conflicts == 0
+    assert r.errors == 0
+    # Weight pass logged the final usage decrement of 800 g with source=spoolman.
+    assert fdb_client.log_usage.call_count == 1
+    usage_args, usage_kwargs = fdb_client.log_usage.call_args
+    # positional: (filament_id, spool_id, grams)
+    assert usage_args[2] == pytest.approx(800.0)
+    assert usage_kwargs.get("source") == "spoolman"
+    # Lifecycle pass set retired=true (separate update_spool call).
+    retired_calls = [c for c in fdb_client.update_spool.call_args_list if c.args[2] == {"retired": True}]
+    assert len(retired_calls) == 1, "lifecycle must set retired=true after weight settles"
+    # FDB snapshot ends with the decremented gross weight AND retired=true.
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "totalWeight") == pytest.approx(200.0)
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "retired") is True
+    assert _snap_value(db, "spoolman", "spool", "1", "archived") is True
+    # SM snapshot weight converged too (no stale weight that would re-fire next cycle).
+    assert _snap_value(db, "spoolman", "spool", "1", "remaining_weight") == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_unarchive_mirrors_back(db):
+    """Un-archive (true→false) in SM mirrors to FDB retired=false and re-enables sync."""
+    sm = _sm_spool_arch(1, 800.0, archived=False)
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=True)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": True})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": True})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-un")
+
+    assert r.conflicts == 0
+    assert fdb_client.update_spool.call_args.args[2] == {"retired": False}
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "retired") is False
+    assert _snap_value(db, "spoolman", "spool", "1", "archived") is False
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_both_flip_same_state_noop(db):
+    """Both sides flip to the SAME dead state in one cycle → NOOP, snapshots converge,
+    no conflict, no writes."""
+    sm = _sm_spool_arch(1, 800.0, archived=True)
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=True)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": False})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-both")
+
+    assert r.conflicts == 0
+    assert r.errors == 0
+    fdb_client.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    assert _snap_value(db, "spoolman", "spool", "1", "archived") is True
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "retired") is True
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_divergence_queues_cross_system_conflict(db):
+    """Genuine divergence (SM archives, FDB un-retires) with policy=manual → one
+    cross_system lifecycle conflict queued; no writes; no re-queue next cycle."""
+    sm = _sm_spool_arch(1, 800.0, archived=True)        # flipped false→true
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=False)  # flipped true→false
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": True})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-div")
+
+    assert r1.conflicts == 1
+    fdb_client.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    conflict = db.query(Conflict).filter_by(entity_type="spool", field_name="lifecycle").first()
+    assert conflict is not None
+    assert conflict.conflict_type == "cross_system"
+
+    # No re-queue next cycle while the conflict is open.
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-div2")
+    assert r2.conflicts == 0
+    assert db.query(Conflict).filter_by(entity_type="spool", field_name="lifecycle").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_one_way_sm_to_fdb_ignores_fdb_flip(db):
+    """direction=spoolman_to_filamentdb → an FDB-side retire flip does NOT write SM."""
+    sm = _sm_spool_arch(1, 800.0, archived=False)
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=True)  # FDB flipped
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": False})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-1way")
+
+    assert r.conflicts == 0
+    spoolman.update_spool.assert_not_called()  # SM never written under SM→FDB lock
+    # FDB-side drift snapshot converges (locked destination) so it doesn't re-fire.
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "retired") is True
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_unmapped_archived_spool_not_imported(db):
+    """An UNMAPPED archived spool on an already-mapped filament during ongoing sync is
+    still NOT imported, even with new_spool_policy=auto_import (import gate preserved)."""
+    # SM filament 10 is already mapped to FDB fil-9; spool 500 on it is unmapped + archived.
+    # fil-9 has no spools so there is no FDB→SM new-spool noise to confound the assertion.
+    archived = _sm_spool_arch(500, 0.0, archived=True)
+    fdb = FDBFilament.model_validate({
+        "_id": "fil-9", "name": "PLA", "vendor": "elegoo", "spoolWeight": 200.0, "spools": [],
+    })
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-9"))
+    db.flush()
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+    from app.api.config import set_config_value
+    set_config_value(db, "new_spool_policy", "auto_import")
+    db.commit()
+
+    spoolman = _fake_spoolman(spools=[archived])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-unmapped")
+
+    # The archived unmapped spool must not be created in FDB (still excluded from
+    # the active-only new-spool detection set).
+    fdb_client.create_spool.assert_not_called()
+    assert r.created == 0

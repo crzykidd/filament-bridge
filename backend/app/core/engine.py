@@ -26,6 +26,7 @@ from app.core.color import (
     apply_finish_tags,
     arrangement_from_tags,
     fdb_multicolor_to_sm,
+    fdb_representative_hex,
     multicolor_signature,
     sm_multicolor_signature,
     sm_multicolor_to_fdb,
@@ -437,6 +438,19 @@ def _sm_snapshot_dict(
     return d
 
 
+def _refresh_lifecycle_snapshots(
+    db: Session, sm_spool_id: int, fdb_spool_id: str, sm_archived: bool, fdb_retired: bool
+) -> None:
+    """Converge BOTH lifecycle bits to the agreed value (anti-ping-pong).
+
+    Merges (not full upsert) so the weight / field baselines the weight + field passes
+    already wrote in this cycle are preserved.  Same both-sides-refresh rule the weight
+    pass uses — see the 2026-06-10 weight ping-pong decision in docs/decisions.md.
+    """
+    _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"archived": sm_archived})
+    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"retired": fdb_retired})
+
+
 def _fdb_snapshot_dict(spool: FDBSpool, filament_detail=None, field_maps: list[FieldMapping] | None = None) -> dict:
     """Build the snapshot dict for a FDB spool.  If filament_detail and field_maps
     are provided the mapped FDB field values are embedded under _field_values so the
@@ -796,6 +810,19 @@ async def _sync_multicolor(
         if sm_fil is None or fdb_list is None:
             continue
 
+        # Capture a representative FDB display color for EVERY mapped filament — solid and
+        # multicolor alike — so Synced Records shows the FDB color even for purely-solid
+        # filaments, which the multicolor-sync logic below skips. Without this, a solid
+        # filament's ``_mc_color`` is never written and its color renders as "—" in the UI
+        # (GitHub #2). Derived from the list view (no detail fetch needed); the multicolor
+        # path below refines it from the variant-resolved detail when applicable.
+        if not dry_run:
+            _merge_snapshot(
+                db, "filamentdb", "filament", m.filamentdb_id,
+                {"_mc_color": fdb_representative_hex(
+                    fdb_list.color, fdb_list.secondaryColors, fdb_list.optTags)},
+            )
+
         sm_is_mc = bool(sm_fil.multi_color_hexes)
         fdb_is_mc = bool(fdb_list.secondaryColors) or arrangement_from_tags(fdb_list.optTags) != "solid"
         if not (sm_is_mc or fdb_is_mc):
@@ -843,9 +870,19 @@ async def _sync_multicolor(
         sm_sig_then = sm_snap.get("_mc_sig") if sm_snap else None
         fdb_sig_then = fdb_snap.get("_mc_sig") if fdb_snap else None
 
-        # Capture the resolved FDB color hex for the Synced Records display (§3 in Phase A).
+        # Capture a single representative FDB color hex for the Synced Records display.
+        # Multicolor filaments store color=null with the real hexes in secondaryColors[]
+        # (arrangement in optTags), so the bare `color` field is None and renders "—".
+        # fdb_representative_hex resolves one display hex (single → color; gradient →
+        # primary; coextruded → first secondary; colorless container → None).
         # Stored as _mc_color in the FDB filament snapshot alongside _mc_sig.
-        fdb_color_now = fdb_detail.color if fdb_detail else None
+        fdb_color_now = (
+            fdb_representative_hex(
+                fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags
+            )
+            if fdb_detail
+            else None
+        )
 
         def _store(sm_sig: str, fdb_sig: str) -> None:
             _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {"_mc_sig": sm_sig})
@@ -2451,6 +2488,8 @@ async def run_sync_cycle(
     weight_policy: str = config.get("weight_conflict_policy", "manual")
     matprop_direction: str = config.get("material_properties_sync_direction", "filamentdb_to_spoolman")
     matprop_policy: str = config.get("material_properties_conflict_policy", "manual")
+    archive_direction: str = config.get("archive_sync_direction", "two_way")
+    archive_policy: str = config.get("archive_conflict_policy", "manual")
     new_spool_direction: str = config.get("new_spool_sync_direction", "two_way")
     # New-record handling policies.
     new_filament_policy: str = config.get("new_filament_policy", "manual_review") or "manual_review"
@@ -2502,7 +2541,12 @@ async def run_sync_cycle(
         result.errors += 1
         return result
 
+    # Active-only set: used for NEW-spool detection so an unmapped archived spool is
+    # never auto-imported during ongoing sync (preserves the wizard import gate).
     sm_spools: dict[int, SpoolmanSpool] = {s.id: s for s in sm_spools_all if not s.archived}
+    # Active + archived set: used for MAPPED-pair diffing so a mapped spool that flips
+    # to archived still reaches the differ and its lifecycle state can be mirrored.
+    sm_spools_with_archived: dict[int, SpoolmanSpool] = {s.id: s for s in sm_spools_all}
     sm_all_ids: set[int] = {s.id for s in sm_spools_all}  # includes archived
     sm_filaments: dict[int, Any] = {f.id: f for f in sm_filaments_all}
     fdb_filaments: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments_all}
@@ -2597,7 +2641,10 @@ async def run_sync_cycle(
 
     # ---- Process mapped spool pairs ----
     for mapping in spool_mappings:
-        sm_spool = sm_spools.get(mapping.spoolman_spool_id)
+        # Mapped pairs look up against active + archived so a mapped spool that flips
+        # to archived still reaches the diff loop (its archive bit gets mirrored to FDB
+        # in the lifecycle pass). Unmapped archived spools never enter this loop.
+        sm_spool = sm_spools_with_archived.get(mapping.spoolman_spool_id)
         fdb_entry = fdb_spool_index.get(mapping.filamentdb_spool_id)
 
         if sm_spool is None:
@@ -2649,7 +2696,11 @@ async def run_sync_cycle(
                         _queue_deletion_conflict(db, cycle_id, mapping, deleted_side="spoolman")
                     result.conflicts += 1
             else:
-                # Present but archived — keep existing skip behavior.
+                # Defensive: the SM spool id is in sm_all_ids but missing from the
+                # combined (active + archived) lookup — should be impossible since the
+                # combined dict is keyed by every fetched spool. Treat as a benign skip
+                # rather than a deletion. (Mapped archived spools now reach the diff loop
+                # and are mirrored by the lifecycle pass; they no longer land here.)
                 if dry_run:
                     fdb_fil = fdb_filaments.get(mapping.filamentdb_filament_id)
                     result.preview.append({
@@ -2659,7 +2710,7 @@ async def run_sync_cycle(
                         "label": _preview_label(fdb_filament=fdb_fil),
                         "field": None,
                         "old": None, "new": None,
-                        "reason": "Spoolman spool archived or not in active set",
+                        "reason": "Spoolman spool not in active set",
                         "spoolman_id": mapping.spoolman_spool_id,
                         "fdb_filament_id": mapping.filamentdb_filament_id,
                         "fdb_spool_id": mapping.filamentdb_spool_id,
@@ -2670,7 +2721,7 @@ async def run_sync_cycle(
                         spoolman_id=mapping.spoolman_spool_id,
                         fdb_filament_id=mapping.filamentdb_filament_id,
                         fdb_spool_id=mapping.filamentdb_spool_id,
-                        error_message="SM spool not in active set (archived?)",
+                        error_message="SM spool not in current fetch set",
                     )
                 result.skipped += 1
             continue
@@ -2967,6 +3018,168 @@ async def run_sync_cycle(
             if not dry_run:
                 _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
                 _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+
+        # ---- Lifecycle (archive/retire) sync ----
+        # Runs AFTER the weight pass on purpose. A spool is usually archived/retired
+        # right as it hits ~0 g, so the final weight decrement (and its FDB usage-log
+        # audit entry) must settle first — otherwise the far side lands retired/archived
+        # carrying a stale weight and missing its final usage entry.
+        #
+        # The flags come from the changeset computed at the top of the pair (against the
+        # pre-cycle snapshot), so the weight pass refreshing the snapshot dicts above
+        # (which rebuild ``archived``/``retired`` from the live spool) does NOT clobber
+        # the detection — we already captured the flip in ``cs``.
+        lifecycle_sm_changed = cs.sm_archive_change is not None
+        lifecycle_fdb_changed = cs.fdb_retire_change is not None
+
+        # Target converged boolean for whichever side we push to.
+        sm_archived_now = bool(sm_spool.archived)
+        fdb_retired_now = bool(fdb_spool.retired)
+
+        # When BOTH sides changed but they landed on the SAME state (e.g. both archived
+        # in this cycle), there is no real divergence — converge silently. Only a both-
+        # changed-to-OPPOSITE-states case is a genuine conflict. The resolver only sees
+        # booleans, so collapse the agreeing-both-changed case to a NOOP up front.
+        both_changed_converged = (
+            lifecycle_sm_changed and lifecycle_fdb_changed
+            and sm_archived_now == fdb_retired_now
+        )
+
+        if (lifecycle_sm_changed or lifecycle_fdb_changed) and not both_changed_converged:
+            # booleans → never timestamp-eligible (sm_ts/fdb_ts stay None).
+            lifecycle_action = resolve_sync_action(
+                sm_changed=lifecycle_sm_changed,
+                fdb_changed=lifecycle_fdb_changed,
+                direction=archive_direction,
+                policy=archive_policy,
+            )
+
+            if lifecycle_action == SyncAction.QUEUE_CONFLICT:
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "spool", "lifecycle",
+                        spoolman_id=sm_spool.id,
+                        fdb_spool_id=fdb_spool.id,
+                        conflict_type="cross_system",
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "spool", "lifecycle",
+                            spoolman_id=sm_spool.id,
+                            fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id,
+                            spoolman_value=sm_archived_now,
+                            filamentdb_value=fdb_retired_now,
+                            conflict_type="cross_system",
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict",
+                        "entity_type": "spool",
+                        "direction": None,
+                        "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                        "field": "lifecycle",
+                        "old": sm_archived_now,
+                        "new": fdb_retired_now,
+                        "reason": "both sides changed archive/retire (old=SM archived, new=FDB retired)",
+                        "spoolman_id": sm_spool.id,
+                        "fdb_filament_id": fdb_filament_id,
+                        "fdb_spool_id": fdb_spool.id,
+                    })
+                    result.conflicts += 1
+
+            elif lifecycle_action == SyncAction.PUSH_SM_TO_FDB:
+                # SM archived state is authoritative → mirror to FDB.retired.
+                target = sm_archived_now
+                try:
+                    if not dry_run:
+                        await filamentdb.update_spool(fdb_filament_id, fdb_spool.id, {"retired": target})
+                        _refresh_lifecycle_snapshots(db, sm_spool.id, fdb_spool.id, target, target)
+                        _log(
+                            db, cycle_id, "spoolman_to_filamentdb", "update", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, field_name="lifecycle",
+                            old_value="retired" if fdb_retired_now else "live",
+                            new_value=(
+                                "retired in FDB (archived in Spoolman)" if target
+                                else "live in FDB (un-archived in Spoolman)"
+                            ),
+                        )
+                    else:
+                        result.preview.append({
+                            "action": "update",
+                            "entity_type": "spool",
+                            "direction": "spoolman_to_filamentdb",
+                            "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                            "field": "lifecycle",
+                            "old": fdb_retired_now, "new": target,
+                            "reason": "retired in FDB" if target else "un-retired in FDB",
+                            "spoolman_id": sm_spool.id,
+                            "fdb_filament_id": fdb_filament_id,
+                            "fdb_spool_id": fdb_spool.id,
+                        })
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: SM→FDB lifecycle sync failed spool %s: %s", cycle_id, sm_spool.id, exc)
+                    if not dry_run:
+                        _log(
+                            db, cycle_id, "spoolman_to_filamentdb", "error", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, error_message=str(exc),
+                        )
+                    result.errors += 1
+
+            elif lifecycle_action == SyncAction.PUSH_FDB_TO_SM:
+                # FDB retired state is authoritative → mirror to SM.archived.
+                target = fdb_retired_now
+                try:
+                    if not dry_run:
+                        await spoolman.update_spool(sm_spool.id, {"archived": target})
+                        _refresh_lifecycle_snapshots(db, sm_spool.id, fdb_spool.id, target, target)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "update", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, field_name="lifecycle",
+                            old_value="archived" if sm_archived_now else "active",
+                            new_value=(
+                                "archived in Spoolman (retired in FDB)" if target
+                                else "active in Spoolman (un-retired in FDB)"
+                            ),
+                        )
+                    else:
+                        result.preview.append({
+                            "action": "update",
+                            "entity_type": "spool",
+                            "direction": "filamentdb_to_spoolman",
+                            "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                            "field": "lifecycle",
+                            "old": sm_archived_now, "new": target,
+                            "reason": "archived in Spoolman" if target else "un-archived in Spoolman",
+                            "spoolman_id": sm_spool.id,
+                            "fdb_filament_id": fdb_filament_id,
+                            "fdb_spool_id": fdb_spool.id,
+                        })
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: FDB→SM lifecycle sync failed spool %s: %s", cycle_id, sm_spool.id, exc)
+                    if not dry_run:
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "error", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, error_message=str(exc),
+                        )
+                    result.errors += 1
+
+            else:
+                # NOOP (e.g. a locked one-way destination drifted) — converge both
+                # snapshot lifecycle bits so the change is not re-detected next cycle.
+                if not dry_run:
+                    _refresh_lifecycle_snapshots(db, sm_spool.id, fdb_spool.id, sm_archived_now, fdb_retired_now)
+
+        elif both_changed_converged and not dry_run:
+            # Both sides flipped to the same state in one cycle — no write needed, just
+            # converge the snapshot lifecycle bits so it doesn't re-fire next cycle.
+            _refresh_lifecycle_snapshots(db, sm_spool.id, fdb_spool.id, sm_archived_now, fdb_retired_now)
 
         # ---- Field mapping sync (FR-11) ----
         if field_maps:

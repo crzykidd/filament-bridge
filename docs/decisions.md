@@ -1,5 +1,170 @@
 # Decision record
 
+## 2026-06-17 — Dashboard counts: spools vs filaments are independent; break out master filaments (GitHub #3)
+
+**Context.** A user read the Dashboard's "In Sync = 49" next to "Filament DB = 38" as a sync
+failure. Verified against the live instance: 49 is the **Spools** In-Sync tile (49 spool
+mappings) and 38 is the **Filaments** Total tile (38 real filament mappings); 49 spools live on
+38 filaments (6 own >1). Both are correct — it is normal spool-per-filament fan-out, not a bug,
+and synthetic masters are already excluded from the 38. The reporter's masters instinct did,
+however, expose a real inconsistency: the **Connected systems → Filament DB** tile reported the
+raw FDB total (50, including the 13 `(Master)` containers) — the only bridge surface that did
+not exclude them.
+
+**Decision (presentational; no count is recomputed as "correct"/"wrong").**
+- The fix is clarity, confirmed with the user: row 1 is Spools, row 2 is Filaments, counted
+  independently. Added help text on both Dashboard sections stating a filament can hold several
+  spools, so the two totals legitimately differ.
+- The Connected systems → Filament DB line now **breaks out** real filaments and masters
+  (`filaments: 37  masters: 13`) instead of dropping or hiding them — chosen over silently
+  showing 37 so the line reconciles with both the rest of the bridge and Filament DB's own UI
+  (which shows 50). The breakout appears only when masters > 0, so it is **self-gating**:
+  `promote_color`/`unset` installs have no masters and see no change — no `variant_parent_mode`
+  branch needed.
+- Master detection consolidated into one canonical helper `core/masters.is_master_fdb(fil,
+  marker, synthetic_ids)` (signals: synthetic-parent id ∪ `hasVariants` ∪ marker-suffix), now
+  reused by `wizard.py`, `reconcile.py`, and the new `services/filamentdb.health()` count, so
+  the previously-divergent copies can't drift. `services/filamentdb.health()` gained a
+  `container_marker` param and returns `master_filament_count`; `api/health._check_filamentdb`
+  resolves the marker from a request-scoped session (the `/health` route now takes
+  `db: Session = Depends(get_db)`), and `db` is optional so connectivity-only callers
+  (wizard/sync) are unaffected. The marker resolver moved to `api/config` next to the other
+  config-store helpers.
+
+## 2026-06-17 — Synced Records FDB color: capture a display hex for every mapped filament (GitHub #2)
+
+**Context.** Synced Records showed "—" for the Filament DB color on solid filaments (e.g.
+"Beige"), even when the color was set and matched Spoolman. Verified against the live
+instance: FDB "ELEGOO PLA Beige" has `color="#DAC7A0"` and its bridge snapshot carried
+`_cost`/`_finish_sig`/`_mp_*` but no `_mc_color`. The detail reads `_mc_color`
+(`api/mappings.py`), which was written **only** by the multicolor sync pass `_sync_multicolor`
+— and that pass `continue`s on purely-solid filaments before storing anything
+(`engine.py`, "purely solid — the generic color field sync handles it"). So 25 of 37 FDB
+filament snapshots (the solids) never captured a display color. A secondary problem: when the
+pass did write `_mc_color`, it stored the bare `color` field, which is `null` for
+coextruded/gradient filaments (real hexes live in `secondaryColors`) → also "—".
+
+**Decision.**
+- The display color is captured for **every** mapped filament, not just multicolor ones. The
+  capture moved to the top of `_sync_multicolor`'s loop (before the solid-skip `continue`),
+  gated on `not dry_run`, using the list-view color; the multicolor path still refines it from
+  the variant-resolved detail.
+- New helper `core/color.py:fdb_representative_hex(color, secondary_colors, opt_tags)` resolves
+  one representative display hex (single → `color`; gradient → primary; coextruded → first
+  secondary; colorless container → `None`). Built on the existing `fdb_multicolor_to_sm` so
+  multicolor filaments stop rendering "—".
+- The stored hex is normalized to the Spoolman convention at the read site
+  (`mappings.py:_build_detail` via `to_sm_color`) so a truly in-sync solid color reads as
+  matched against `color_hex` (FDB stores `#AEB8C1`, Spoolman stores `AEB8C1`).
+- Genuinely colorless records (Master/container parents) correctly stay `None`/"—" — no color
+  is synthesized. Existing stale snapshots self-heal on the next sync cycle (no backfill).
+
+## 2026-06-17 — Archive/retire to sync bidirectionally for already-synced spools (FR-21 symmetric, design agreed)
+
+**Context.** Archive/retire lifecycle state is import-only and one-directional today
+(FR-21 "Partial"). A mapped spool archived in Spoolman drops out of the active set
+(`engine.py:2505` filters `if not s.archived`) and silently stops syncing while staying
+live in FDB; a spool retired in FDB never propagates to Spoolman (the differ never reads
+`retired`). Users archive/retire depleted spools routinely, so paired spools drift out of
+sync. Design agreed with the user; implementation tracked in
+`prompts/2026-06-17-archive-retire-bidirectional-sync.md`.
+
+**Decisions.**
+- **Keep the bulk-import gate, add post-sync mirroring** — intentionally asymmetric. The
+  wizard's `never_import_empties` gate (which also skips archived spools at import) stays:
+  unmapped archived spools are NOT auto-imported during ongoing sync. But a spool that
+  flips archived/retired *after* it's mapped IS mirrored to the other side. Import is about
+  not cluttering FDB with already-dead inventory; mirroring is about keeping already-paired
+  spools honest.
+- **Split the archived-spool filter by purpose.** New-spool detection keeps the active-only
+  set (preserves the import gate); mapped-pair diffing uses active + archived so the
+  archive transition reaches the differ. The data is already fetched (the Spoolman client
+  returns active + archived).
+- **Mirror both directions of the boolean flip** — archive→retire and un-archive→un-retire.
+  Same mechanism; un-archiving re-enables weight sync for the pair.
+- **New independent policy category `archive_sync`** (two axes: `archive_sync_direction`
+  default `two_way`, `archive_conflict_policy` default `manual`), resolved by the existing
+  `resolve_sync_action`. No timestamps → `newest_wins` is not applicable to this category.
+- **No new conflict type.** Reuse `cross_system`. The common one-sided flip is a clean push,
+  not a conflict; only genuine divergence (both sides flipped to opposite states since the
+  last snapshot) queues a conflict — consistent with the "never auto-resolve conflicts" rule.
+- **Weight settles before the archive bit — ordering is a correctness requirement.** The
+  lifecycle pass runs AFTER the weight pass, not before. A spool is usually archived/retired
+  right as it hits ~0 g; the final weight decrement and its FDB usage-log audit entry
+  (`POST …/usage`, `source:"spoolman"`) must be propagated and both snapshots refreshed
+  *before* the archive/retire bit is mirrored. Mirror first and the far side would land
+  retired/archived carrying a stale (too-high) weight with its final usage entry lost. Do not
+  skip the weight pass for an about-to-be-archived spool; a spool already dead on both sides
+  from a prior cycle NOOPs the weight pass naturally (snapshots converged).
+- **Anti-ping-pong is mandatory.** After any lifecycle push, refresh BOTH snapshots to the
+  converged value (same rule as the 2026-06-10 weight fix below).
+- **Reword, don't rename.** The `never_import_empties` config key stays; only its
+  human-facing label/help text is reworded to make clear it skips empty AND archived spools
+  at import and that ongoing sync mirrors lifecycle state regardless of the setting.
+
+**As built.** Implemented as designed above, with two deviations the implementer flagged:
+
+- **Lifecycle conflict resolution writes upstream** via a scoped
+  `core/conflict_apply.py:apply_lifecycle_conflict` rather than the generic record-only
+  `cross_system` resolve path. A normal `cross_system` resolution only records the chosen
+  value (no upstream write), but a lifecycle conflict's choice is a concrete boolean state,
+  so resolving it (`spoolman`/`filamentdb`/`manual`) writes that boolean to BOTH systems
+  (`spoolman.update_spool({"archived": …})` + `filamentdb.update_spool({"retired": …})`),
+  refreshes both snapshots, and logs under a `conflict_apply` cycle id. The conflicts API
+  routes `field_name == "lifecycle"` to this helper before the generic record-only branch;
+  an upstream failure leaves the conflict open (`502 upstream_write_failed`).
+- **Both-changed-to-same-state collapses to a converge before the resolver is called.** The
+  engine detects `both_changed_converged` (both sides flipped this cycle AND landed on the
+  same state, e.g. both archived) up front and treats it as a NOOP-with-snapshot-refresh,
+  so `resolve_sync_action` / `QUEUE_CONFLICT` is only ever reached for a genuine
+  opposite-state divergence. This keeps the common "user archived in both systems"
+  case from spuriously queuing a conflict.
+
+**Context.** Filament DB 1.48.0 moved the 5-byte hex roll ID (`instanceId`) from the
+filament onto each **spool**, and 1.49.0 made it **user-editable**. Format (verified in
+FDB `src/models/Filament.ts`): the auto-generated default is
+`crypto.randomBytes(5).toString("hex")` → **10 lowercase hex chars** ("Prusament
+format"); a user-set value is validated as `[A-Za-z0-9._-]{1,128}` and must be unique
+(partial-unique index, scoped to non-deleted documents). It lives on both the filament
+and the spool subdoc during the transition; the spool one is canonical going forward.
+
+**Considered.** Optionally (Settings toggle) mirror the Spoolman spool ID into the FDB
+spool's `instanceId` using a user-chosen numeric prefix to stay 10 chars and globally
+unique — e.g. prefix `1` + zero-padded id → `1000000042`. This would give a single
+human-readable roll number derivable in both systems.
+
+**Decision: declined the write path. The bridge does NOT write `instanceId`. The
+Spoolman spool ID stays in the FDB spool `label` field (`FILAMENTDB_SPOOLMAN_ID_FIELD`,
+default `label`), backed by the `SpoolMapping` table.**
+
+**Rationale.**
+- `instanceId` is FDB's **physical-tag match key** — desktop and mobile scanners resolve
+  QR/NFC against it (1.48), and 1.49 made it editable precisely so users can store their
+  *real* Prusament roll IDs / NFC tag IDs. Overwriting it with a synthetic cross-ref
+  number would break scan-by-tag, stomp user-entered values, and strand already-printed
+  labels / written tags (FDB does not re-write tags when the ID changes).
+- Linkage is **already solved**: the Spoolman spool ID is stored in the FDB spool `label`
+  field *and* in the bridge's SQLite `SpoolMapping`. Encoding it into `instanceId` is a
+  redundant third copy.
+- It's **one-directional decoration**: Spoolman cannot read FDB's `instanceId`, so it adds
+  no new sync capability on either side.
+- The proposed `1000000xxx` encoding only holds 3 digits of ID (≤999 spools) before
+  overflow; a safe scheme would need `prefix + 9-digit zero-pad`, reinforcing that this is
+  fiddly for little gain.
+
+**Future-looking (not implemented).** If `instanceId` is interesting to the bridge at all,
+the valuable direction is the opposite — **read** it (and the new `Filament.openprinttagSnapshot`
+field added in 1.47.2) so the bridge can *surface* the user's real roll ID / OpenPrintTag
+identity (e.g. mirror into a Spoolman extra field), adding information rather than
+destroying it. Needs the `openprinttagSnapshot` schema from `/api-docs` before any work.
+
+**Upstream review context.** Reviewed FDB releases 1.43.0 → 1.49.0 (latest): no breaking
+changes for the bridge. We address spools by the stable subdoc `_id` and send minimal PUT
+payloads (`{label}` / `{totalWeight}`), so the per-spool/editable `instanceId` is never
+clobbered; `instanceId` is also in `_strip_computed` for the filament path. 1.44.0
+(hide out-of-stock) is a UI-only filter — `GET /api/filaments` still returns all records.
+`MIN_FDB` stays `1.33.0`. README "latest tested" should be bumped 1.42.0 → 1.49.0.
+
 ## 2026-06-13 — Debug: added POST /api/debug/clear-spoolman-opentag-ids
 
 Added a fourth standalone debug endpoint that blanks the three OpenPrintTag identity

@@ -18,6 +18,12 @@ _DEFAULTS = {
     "weight_conflict_policy": '"manual"',
     "material_properties_sync_direction": '"filamentdb_to_spoolman"',
     "material_properties_conflict_policy": '"manual"',
+    # Archive/retire lifecycle sync for already-mapped spool pairs.
+    # two_way mirrors a one-sided archive/retire flip to the other system; a genuine
+    # both-sides-diverge flip queues a manual cross_system conflict. newest_wins is
+    # NOT applicable (booleans aren't timestamp-eligible) and is rejected at the API.
+    "archive_sync_direction": '"two_way"',
+    "archive_conflict_policy": '"manual"',
     # New spool creation direction: two_way = bidirectional (= today's behavior).
     "new_spool_sync_direction": '"two_way"',
     # New-record handling policies (ongoing sync, not wizard).

@@ -593,7 +593,10 @@ def test_build_detail_reads_snapshot_keys(db):
     assert by_field["material"].filamentdb == "PETG"
     assert by_field["density"].filamentdb == 1.27
     assert by_field["diameter"].filamentdb == 1.75
-    assert by_field["color"].filamentdb == "#aabbcc"
+    # FDB color is normalized to the Spoolman convention (bare, no leading '#') so a
+    # truly in-sync color reads as matched against color_hex (GitHub #2).
+    assert by_field["color"].filamentdb == "aabbcc"
+    assert by_field["color"].spoolman == "aabbcc"
     assert by_field["cost"].filamentdb == 24.99
     assert by_field["weight"].filamentdb == 1200.0
     assert by_field["weight"].spoolman == 900.0

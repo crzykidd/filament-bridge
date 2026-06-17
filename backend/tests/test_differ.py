@@ -258,3 +258,77 @@ class TestFinishStrippedTypeDiffer:
         assert not cs.sm_field_changes
         assert not cs.fdb_field_changes
         assert not cs.field_conflicts
+
+
+def _sm_spool_arch(spool_id: int, remaining: float, archived: bool) -> SpoolmanSpool:
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=SpoolmanFilament(id=1, name="PLA"),
+        remaining_weight=remaining,
+        archived=archived,
+    )
+
+
+def _fdb_spool_ret(spool_id: str, total: float, retired: bool) -> FDBSpool:
+    return FDBSpool(**{"_id": spool_id, "totalWeight": total, "retired": retired})
+
+
+class TestLifecycleDiff:
+    def test_no_lifecycle_change(self):
+        cs = diff_spool_pair(
+            _sm_spool_arch(1, 800.0, False), _fdb_spool_ret("a", 1000.0, False), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "archived": False},
+            fdb_snapshot={"totalWeight": 1000.0, "retired": False},
+            threshold=THRESHOLD,
+        )
+        assert cs.sm_archive_change is None
+        assert cs.fdb_retire_change is None
+        assert not cs.archive_conflict
+
+    def test_sm_archive_flip_detected(self):
+        cs = diff_spool_pair(
+            _sm_spool_arch(1, 800.0, True), _fdb_spool_ret("a", 1000.0, False), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "archived": False},
+            fdb_snapshot={"totalWeight": 1000.0, "retired": False},
+            threshold=THRESHOLD,
+        )
+        assert cs.sm_archive_change is not None
+        assert cs.sm_archive_change.old_value is False
+        assert cs.sm_archive_change.new_value is True
+        assert cs.fdb_retire_change is None
+        assert not cs.archive_conflict
+
+    def test_fdb_retire_flip_detected(self):
+        cs = diff_spool_pair(
+            _sm_spool_arch(1, 800.0, False), _fdb_spool_ret("a", 1000.0, True), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "archived": False},
+            fdb_snapshot={"totalWeight": 1000.0, "retired": False},
+            threshold=THRESHOLD,
+        )
+        assert cs.fdb_retire_change is not None
+        assert cs.fdb_retire_change.new_value is True
+        assert cs.sm_archive_change is None
+        assert not cs.archive_conflict
+
+    def test_both_flip_is_archive_conflict(self):
+        cs = diff_spool_pair(
+            _sm_spool_arch(1, 800.0, True), _fdb_spool_ret("a", 1000.0, False), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "archived": False},
+            fdb_snapshot={"totalWeight": 1000.0, "retired": True},
+            threshold=THRESHOLD,
+        )
+        assert cs.archive_conflict is True
+        assert cs.sm_archive_change is not None
+        assert cs.fdb_retire_change is not None
+
+    def test_missing_baseline_not_treated_as_flip(self):
+        # Legacy snapshot with no archived/retired keys → defaults to current → no flip.
+        cs = diff_spool_pair(
+            _sm_spool_arch(1, 800.0, True), _fdb_spool_ret("a", 1000.0, True), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0},
+            fdb_snapshot={"totalWeight": 1000.0},
+            threshold=THRESHOLD,
+        )
+        assert cs.sm_archive_change is None
+        assert cs.fdb_retire_change is None
+        assert not cs.archive_conflict

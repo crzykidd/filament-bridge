@@ -48,6 +48,18 @@ def get_config_value(db: Session, key: str, default: Any = None) -> Any:
     return json.loads(row.value) if row else default
 
 
+def resolve_container_parent_marker(db: Session) -> str:
+    """Return the effective container_parent_marker from BridgeConfig (or env default).
+
+    An explicitly-stored empty string is honored (means "no marker suffix"); only a
+    missing key falls back to the env/start-up default.
+    """
+    raw = get_config_value(db, "container_parent_marker", None)
+    if raw is None:
+        return _settings.container_parent_marker
+    return str(raw)
+
+
 def set_config_value(db: Session, key: str, value: Any) -> None:
     """Upsert one BridgeConfig key (value is JSON-encoded)."""
     value_json = json.dumps(value)
@@ -132,6 +144,8 @@ def _config_response(db: Session) -> ConfigResponse:
         weight_conflict_policy=cfg.get("weight_conflict_policy", "manual"),
         material_properties_sync_direction=cfg.get("material_properties_sync_direction", "filamentdb_to_spoolman"),
         material_properties_conflict_policy=cfg.get("material_properties_conflict_policy", "manual"),
+        archive_sync_direction=cfg.get("archive_sync_direction", "two_way"),
+        archive_conflict_policy=cfg.get("archive_conflict_policy", "manual"),
         new_spool_sync_direction=cfg.get("new_spool_sync_direction", "two_way"),
         new_filament_policy=cfg.get("new_filament_policy", "manual_review") or "manual_review",
         new_spool_policy=cfg.get("new_spool_policy", "manual_review") or "manual_review",
@@ -171,6 +185,20 @@ def update_config(
                 "message": (
                     "newest_wins is not supported for material_properties — "
                     "Spoolman exposes no per-filament modification timestamp."
+                ),
+            },
+        )
+
+    # newest_wins is also meaningless for archive/retire — the state is a boolean,
+    # not a timestamped value, so there is no "newer" side to pick.
+    if payload.archive_conflict_policy == "newest_wins":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_conflict_policy",
+                "message": (
+                    "newest_wins is not supported for archive_sync — archive/retire "
+                    "is a boolean state with no comparable timestamp."
                 ),
             },
         )

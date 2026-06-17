@@ -5,6 +5,7 @@ from app.core.color import (
     TAG_GRADIENT,
     apply_finish_tags,
     fdb_multicolor_to_sm,
+    fdb_representative_hex,
     multicolor_signature,
     sm_multicolor_signature,
     sm_multicolor_to_fdb,
@@ -297,4 +298,40 @@ class TestApplyFinishTags:
         result = apply_finish_tags(["bad", None, 17], {16})
         assert 17 not in result  # 17 is a managed ID → replaced
         assert 16 in result
+
+
+# ---------------------------------------------------------------------------
+# fdb_representative_hex — single display hex for the Synced Records detail
+# (GitHub issue #2: multicolor FDB filaments stored color=null → rendered "—")
+# ---------------------------------------------------------------------------
+
+
+class TestFdbRepresentativeHex:
+    def test_single_color_returns_that_color_prefixed(self):
+        assert fdb_representative_hex("#AEB8C1", [], []) == "#AEB8C1"
+
+    def test_single_color_bare_input_gets_prefixed(self):
+        assert fdb_representative_hex("AEB8C1", None, None) == "#AEB8C1"
+
+    def test_coextruded_returns_first_secondary(self):
+        # color=null, ≥2 secondaries, optTag 29 → first secondary is representative.
+        rep = fdb_representative_hex(
+            None, ["#485CC7", "#04A584", "#F5F5F5"], [17, TAG_COEXTRUDED]
+        )
+        assert rep == "#485CC7"
+
+    def test_gradient_returns_primary(self):
+        # gradient (optTag 28): primary color is the representative (first in CSV).
+        rep = fdb_representative_hex("#FF0000", ["#00FF00"], [TAG_GRADIENT])
+        assert rep == "#FF0000"
+
+    def test_colorless_container_returns_none(self):
+        # Master/container parents: color=null, no secondaries → no synthesized color.
+        assert fdb_representative_hex(None, [], []) is None
+        assert fdb_representative_hex(None, None, None) is None
+
+    def test_coextruded_single_secondary_falls_back_to_that_hex(self):
+        # < 2 secondaries on a coextruded tag → treated as single by fdb_multicolor_to_sm.
+        rep = fdb_representative_hex(None, ["#123456"], [TAG_COEXTRUDED])
+        assert rep == "#123456"
 
