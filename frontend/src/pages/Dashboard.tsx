@@ -172,7 +172,7 @@ export default function Dashboard() {
 
       {/* Spools sync state */}
       <div>
-        <h2 className="flex items-center text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2">
+        <h2 className="flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
           Spools
           <HelpTip text="Spool-pair sync state, counted independently of filaments. One filament can hold several spools, so this total normally won't equal the filament total below — that's expected, not a mismatch." />
         </h2>
@@ -196,7 +196,7 @@ export default function Dashboard() {
 
       {/* Filaments sync state */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2">
+        <h2 className="flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
           Filaments
           <HelpTip text="Filament-pair sync state, counted independently of spools above. Excludes synthetic container parents (bridge-only, no Spoolman counterpart); when those exist they appear as a separate 'masters' count under Connected systems." />
         </h2>
@@ -357,7 +357,7 @@ export default function Dashboard() {
       {/* Systems */}
       {data?.systems && (
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5">
-          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Connected systems</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-3">Connected systems</h2>
           <div className="space-y-3">
             {Object.entries(data.systems).map(([name, sys]) => (
               <div key={name}>
