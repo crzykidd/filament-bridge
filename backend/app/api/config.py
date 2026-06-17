@@ -132,6 +132,8 @@ def _config_response(db: Session) -> ConfigResponse:
         weight_conflict_policy=cfg.get("weight_conflict_policy", "manual"),
         material_properties_sync_direction=cfg.get("material_properties_sync_direction", "filamentdb_to_spoolman"),
         material_properties_conflict_policy=cfg.get("material_properties_conflict_policy", "manual"),
+        archive_sync_direction=cfg.get("archive_sync_direction", "two_way"),
+        archive_conflict_policy=cfg.get("archive_conflict_policy", "manual"),
         new_spool_sync_direction=cfg.get("new_spool_sync_direction", "two_way"),
         new_filament_policy=cfg.get("new_filament_policy", "manual_review") or "manual_review",
         new_spool_policy=cfg.get("new_spool_policy", "manual_review") or "manual_review",
@@ -171,6 +173,20 @@ def update_config(
                 "message": (
                     "newest_wins is not supported for material_properties — "
                     "Spoolman exposes no per-filament modification timestamp."
+                ),
+            },
+        )
+
+    # newest_wins is also meaningless for archive/retire — the state is a boolean,
+    # not a timestamped value, so there is no "newer" side to pick.
+    if payload.archive_conflict_policy == "newest_wins":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_conflict_policy",
+                "message": (
+                    "newest_wins is not supported for archive_sync — archive/retire "
+                    "is a boolean state with no comparable timestamp."
                 ),
             },
         )

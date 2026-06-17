@@ -170,6 +170,68 @@ def _auto_resolve_siblings(
         )
 
 
+async def apply_lifecycle_conflict(
+    conflict: Conflict,
+    resolution: str,
+    db: Session,
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+) -> None:
+    """Apply a human-chosen resolution for a boolean archive/retire lifecycle conflict.
+
+    Lifecycle conflicts are ``cross_system`` conflicts with ``field_name == "lifecycle"``.
+    Unlike other ``cross_system`` conflicts (which resolve record-only), the user's choice
+    here is a concrete boolean state that we converge by writing it to BOTH systems, then
+    refreshing both spool snapshots so the engine does not re-queue the conflict next cycle.
+
+    ``resolution``:
+      - "spoolman"   → adopt the Spoolman archived state on both sides.
+      - "filamentdb" → adopt the Filament DB retired state on both sides.
+      - "manual"     → adopt the explicit boolean stored in ``conflict.resolved_value``
+                       (already set by the caller before this is invoked).
+
+    Raises on upstream failure (caller leaves the conflict open).
+    """
+    spoolman_archived = bool(_decode(conflict.spoolman_value))
+    fdb_retired = bool(_decode(conflict.filamentdb_value))
+
+    if resolution == "spoolman":
+        target = spoolman_archived
+    elif resolution == "filamentdb":
+        target = fdb_retired
+    else:  # manual — explicit boolean recorded on the row
+        target = bool(_decode(conflict.resolved_value))
+
+    sm_spool_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_filament_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    fdb_spool_id: str = conflict.filamentdb_spool_id  # type: ignore[assignment]
+
+    cycle_id = f"conflict-apply-{conflict.id}-{uuid.uuid4().hex[:8]}"
+
+    # Write the converged state to BOTH systems. Either may already match `target`;
+    # the writes are idempotent.
+    await spoolman.update_spool(sm_spool_id, {"archived": target})
+    await filamentdb.update_spool(fdb_filament_id, fdb_spool_id, {"retired": target})
+
+    # Refresh both snapshot lifecycle bits to the converged value (anti-ping-pong).
+    _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"archived": target})
+    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"retired": target})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "spool",
+        spoolman_id=sm_spool_id,
+        fdb_filament_id=fdb_filament_id,
+        fdb_spool_id=fdb_spool_id,
+        field_name="lifecycle",
+        old_value="diverged",
+        new_value=("retired/archived" if target else "live/active"),
+    )
+
+    conflict.resolution = resolution
+    conflict.resolved_value = json.dumps(target)
+    conflict.resolved_at = datetime.datetime.now(datetime.timezone.utc)
+
+
 async def apply_master_divergence(
     conflict: Conflict,
     action: str,

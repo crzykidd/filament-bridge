@@ -301,10 +301,35 @@ async def resolve_conflict(
         db.refresh(c)
         return _to_response(c, db)
 
-    # All other conflict types: record-only resolution (no upstream writes).
     if payload.resolution == "manual" and payload.value is None:
         raise api_error(422, "manual_value_required", "A manual resolution requires a value")
 
+    # Lifecycle (archive/retire) conflicts converge by WRITING the chosen boolean state
+    # to both systems (human-approved, not silent auto-apply), then refreshing snapshots
+    # so the conflict does not re-queue. All other cross_system conflicts stay record-only.
+    if c.field_name == "lifecycle":
+        from app.core.conflict_apply import apply_lifecycle_conflict
+        # Pre-record the manual boolean so the apply helper can read it.
+        if payload.resolution == "manual":
+            c.resolved_value = json.dumps(bool(payload.value))
+        spoolman = request.app.state.spoolman
+        filamentdb = request.app.state.filamentdb
+        try:
+            await apply_lifecycle_conflict(c, payload.resolution, db, spoolman, filamentdb)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "apply_lifecycle_conflict failed for conflict %d: %s", conflict_id, _scrub(exc)
+            )
+            raise api_error(
+                502, "upstream_write_failed",
+                f"Upstream write failed; conflict not resolved. Detail: {exc}"
+            )
+        db.commit()
+        db.refresh(c)
+        return _to_response(c, db)
+
+    # All other conflict types: record-only resolution (no upstream writes).
     c.resolution = payload.resolution
     c.resolved_value = json.dumps(_resolved_value(c, payload.resolution, payload.value))
     c.resolved_at = datetime.datetime.now(datetime.timezone.utc)

@@ -91,6 +91,8 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     weight_conflict_policy: 'manual',
     material_properties_sync_direction: 'filamentdb_to_spoolman',
     material_properties_conflict_policy: 'manual',
+    archive_sync_direction: 'two_way',
+    archive_conflict_policy: 'manual',
     new_spool_sync_direction: 'two_way',
     new_filament_policy: 'manual_review',
     new_spool_policy: 'manual_review',

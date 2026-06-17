@@ -770,3 +770,84 @@ def test_api_divergence_context_returns_correct_shape():
     assert v["fdb_id"] == VARIANT_FDB_ID
     assert v["spoolman_filament_id"] == SM_FIL_ID
     assert v["inherited"] is True
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle (archive/retire) cross_system conflict resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_lifecycle_conflict_writes_both_sides_and_converges():
+    """Resolving a lifecycle cross_system conflict writes the chosen boolean to BOTH
+    systems and refreshes both snapshots so it does not re-queue."""
+    from app.core.conflict_apply import apply_lifecycle_conflict
+
+    db = _make_db()
+    # Diverged: SM archived=true, FDB retired=false.
+    c = Conflict(
+        entity_type="spool",
+        field_name="lifecycle",
+        conflict_type="cross_system",
+        spoolman_id=7,
+        filamentdb_filament_id="fil-7",
+        filamentdb_spool_id="spool-7",
+        spoolman_value=json.dumps(True),
+        filamentdb_value=json.dumps(False),
+    )
+    db.add(c)
+    # Seed snapshots in the diverged state.
+    db.add(Snapshot(source="spoolman", entity_type="spool", entity_id="7",
+                    data=json.dumps({"remaining_weight": 0.0, "archived": True})))
+    db.add(Snapshot(source="filamentdb", entity_type="spool", entity_id="spool-7",
+                    data=json.dumps({"totalWeight": 200.0, "retired": False})))
+    db.commit()
+
+    spoolman = AsyncMock()
+    spoolman.update_spool = AsyncMock(return_value=MagicMock())
+    filamentdb = AsyncMock()
+    filamentdb.update_spool = AsyncMock(return_value={})
+
+    # Resolution "spoolman" → adopt SM archived (True) on both sides.
+    await apply_lifecycle_conflict(c, "spoolman", db, spoolman, filamentdb)
+    db.commit()
+
+    spoolman.update_spool.assert_awaited_once_with(7, {"archived": True})
+    filamentdb.update_spool.assert_awaited_once_with("fil-7", "spool-7", {"retired": True})
+    assert c.resolved_at is not None
+    assert json.loads(c.resolved_value) is True
+    sm_snap = db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="7").first()
+    fdb_snap = db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-7").first()
+    assert json.loads(sm_snap.data)["archived"] is True
+    assert json.loads(fdb_snap.data)["retired"] is True
+
+
+@pytest.mark.asyncio
+async def test_apply_lifecycle_conflict_filamentdb_resolution():
+    """Resolution 'filamentdb' adopts the FDB retired state on both sides."""
+    from app.core.conflict_apply import apply_lifecycle_conflict
+
+    db = _make_db()
+    c = Conflict(
+        entity_type="spool", field_name="lifecycle", conflict_type="cross_system",
+        spoolman_id=8, filamentdb_filament_id="fil-8", filamentdb_spool_id="spool-8",
+        spoolman_value=json.dumps(True), filamentdb_value=json.dumps(False),
+    )
+    db.add(c)
+    db.add(Snapshot(source="spoolman", entity_type="spool", entity_id="8",
+                    data=json.dumps({"archived": True})))
+    db.add(Snapshot(source="filamentdb", entity_type="spool", entity_id="spool-8",
+                    data=json.dumps({"retired": False})))
+    db.commit()
+
+    spoolman = AsyncMock()
+    spoolman.update_spool = AsyncMock(return_value=MagicMock())
+    filamentdb = AsyncMock()
+    filamentdb.update_spool = AsyncMock(return_value={})
+
+    await apply_lifecycle_conflict(c, "filamentdb", db, spoolman, filamentdb)
+    db.commit()
+
+    spoolman.update_spool.assert_awaited_once_with(8, {"archived": False})
+    filamentdb.update_spool.assert_awaited_once_with("fil-8", "spool-8", {"retired": False})
+    assert json.loads(c.resolved_value) is False

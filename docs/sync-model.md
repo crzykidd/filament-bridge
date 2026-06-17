@@ -13,10 +13,15 @@ Every cycle (scheduled, or via **Sync now**):
    the version check, no writes. An unknown version does not block (that's a connectivity
    concern, surfaced as `degraded` health).
 2. **Snapshot fetch.** All Spoolman spools + filaments and all Filament DB filaments
-   (with embedded spools) are fetched. Archived Spoolman spools are excluded from sync.
+   (with embedded spools) are fetched. The archived-spool filter is **split by purpose**:
+   *new-spool detection* uses the active-only set (so an unmapped archived spool is never
+   auto-imported — the wizard import gate is preserved), while *mapped-pair diffing* uses
+   the active + archived set (so a mapped spool that flips to archived still reaches the
+   differ and its lifecycle state can be mirrored).
 3. **Mapped-pair processing.** For every `SpoolMapping`, the pair's current values are
    diffed against the last stored snapshots. First sight of a pair just stores a baseline
-   (no writes). Then the weight pass and the field-mapping pass run per pair.
+   (no writes). Then the weight pass, the **lifecycle (archive/retire) pass** (after
+   weight — see below), and the field-mapping pass run per pair.
 4. **Stale-link handling.** A mapped record missing upstream either queues a deletion
    conflict (a live, still-linked counterpart exists) or purges the bridge-local mapping
    (nothing left to protect). See [conflicts.md](conflicts.md).
@@ -42,14 +47,30 @@ policy)`:
 | One side changed | push | NOOP (drift ignored) | push to the other side |
 | Both sides changed | push (source wins by definition) | — | apply the conflict policy: `manual` → queue, `spoolman_wins`/`filamentdb_wins` → push, `newest_wins` → compare timestamps (weight only; indeterminate → queue) |
 
-Weight uses the `weight` category settings; every other pass uses `material_properties`.
-New-spool creation has a direction but no policy.
+Weight uses the `weight` category settings; the lifecycle pass uses the `archive_sync`
+category; every other pass uses `material_properties`. New-spool creation has a direction
+but no policy.
+
+### Why the lifecycle pass runs after the weight pass
+
+A spool is usually archived/retired right as it hits ~0 g, so the depletion (final weight
+decrement) and the lifecycle flip often arrive in the **same** cycle. The weight pass must
+settle first: it propagates the final decrement, logs the FDB usage-log audit entry
+(`POST …/usage`, `source:"spoolman"`), and refreshes both snapshots — *before* the lifecycle
+pass mirrors the archive/retire bit. Mirror first and the far side would land
+retired/archived carrying a stale (too-high) weight with its final usage entry lost. (A
+spool already dead on both sides from a prior cycle NOOPs the weight pass naturally, since
+its snapshots already converged — no special skip is needed.) After any lifecycle push the
+engine refreshes **both** snapshots' lifecycle bits to the converged value, the same
+anti-ping-pong invariant the weight pass follows; a both-sides-flip-to-same-state case
+writes nothing but still refreshes both snapshots so it doesn't re-fire next cycle.
 
 ## The passes
 
 | Pass | What syncs | Notes |
 |---|---|---|
 | **Weight** | SM `remaining_weight` ↔ FDB spool `totalWeight` | SM→FDB decrements are logged as **usage entries** (audit trail preserved); increases update `totalWeight` directly. FDB→SM writes `remaining_weight = totalWeight − tare`. Changes below `sync_weight_threshold_grams` (default 2 g) are ignored. |
+| **Lifecycle (archive/retire)** | SM spool `archived` ↔ FDB spool `retired` | Boolean mirror for **mapped pairs only**, runs **after** the weight pass. A one-sided flip (either direction, archive or un-archive) is a clean push; both sides flipping to the *same* state converges silently; only a both-sides-flip-to-*opposite*-states divergence queues a `cross_system` conflict with `field_name="lifecycle"`. Uses the `archive_sync` category (`archive_sync_direction` / `archive_conflict_policy`); `newest_wins` is not applicable to a boolean. |
 | **Field mapping** | configured/auto-matched Spoolman *extra* fields ↔ FDB fields | `FIELD_MAPPINGS` / exact-name auto-match; inherited FDB variant fields are skipped (writing them would detach the variant from its parent). |
 | **Cost** | SM effective price ↔ FDB `cost` | SM side uses the first spool with a price, falling back to the filament price; FDB→SM writes the *filament* price only — never per-spool prices. |
 | **Temperatures** | SM `settings_bed_temp` / `settings_extruder_temp` ↔ FDB `temperatures.bed` / `.nozzle` | FDB writes read-modify-write the `temperatures` object so sibling temps survive. |

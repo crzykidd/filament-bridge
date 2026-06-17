@@ -290,6 +290,10 @@ class ConfigResponse(BaseModel):
     weight_conflict_policy: ConflictPolicy = "manual"
     material_properties_sync_direction: SyncDirection2 = "filamentdb_to_spoolman"
     material_properties_conflict_policy: ConflictPolicy = "manual"
+    # Archive/retire lifecycle sync (mirrors SM archived ↔ FDB retired for mapped pairs).
+    # newest_wins is rejected (booleans aren't timestamp-eligible) — same as material_properties.
+    archive_sync_direction: SyncDirection2 = "two_way"
+    archive_conflict_policy: ConflictPolicy = "manual"
     new_spool_sync_direction: SyncDirection2 = "two_way"
     # New-record handling policies
     # manual_review (default) → queue an actionable conflict; auto_import → create immediately.
@@ -327,6 +331,9 @@ class ConfigUpdateRequest(BaseModel):
     weight_conflict_policy: ConflictPolicy | None = None
     material_properties_sync_direction: SyncDirection2 | None = None
     material_properties_conflict_policy: ConflictPolicy | None = None
+    # Archive/retire lifecycle sync.
+    archive_sync_direction: SyncDirection2 | None = None
+    archive_conflict_policy: ConflictPolicy | None = None
     new_spool_sync_direction: SyncDirection2 | None = None
     # New-record handling policies
     new_filament_policy: NewRecordPolicy | None = None

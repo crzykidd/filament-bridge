@@ -271,7 +271,9 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `new_filament_policy` | `manual_review` | What the engine does when it detects an unmapped filament: `manual_review` queues an actionable `new_filament` conflict; `auto_import` creates it immediately using the wizard code path. Falls back to `manual_review` if `variant_parent_mode` is `unset` and the filament looks like a variant-cluster member. |
 | `new_spool_policy` | `manual_review` | What the engine does when an unmapped spool appears on an already-mapped filament: `manual_review` queues a `new_spool` conflict; `auto_import` creates it immediately. A spool is always held when its filament is unmapped, regardless of this setting. |
 | `debug_mode` | `false` | Enables `POST /api/debug/clear-spoolman-fdb-refs`, `POST /api/debug/reset-bridge-state`, and `POST /api/debug/full-reset` (403 when off) |
-| `never_import_empties` | `false` | Wizard skips spools with zero remaining weight at preview/execute |
+| `never_import_empties` | `false` | **Import-only** (UI label: "Skip empty & archived spools on import"). Wizard + ongoing new-spool import skip spools with zero remaining weight or that are archived, at preview/execute. Does NOT affect ongoing archive/retire lifecycle mirroring for already-mapped pairs (that runs regardless). Config key unchanged. |
+| `archive_sync_direction` | `two_way` | Direction for the archive/retire lifecycle category (`two_way` / `spoolman_to_filamentdb` / `filamentdb_to_spoolman`). Mirrors SM `archived` ↔ FDB `retired` for already-mapped spool pairs. |
+| `archive_conflict_policy` | `manual` | Conflict policy for the archive/retire category (consulted only under `two_way` when both sides diverge to opposite states): `manual` / `spoolman_wins` / `filamentdb_wins`. `newest_wins` is rejected at the API (422) — the state is a boolean with no timestamp. |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
 | `api_token_enabled` | `false` | When `true`, requests may authenticate via `Authorization: Bearer <token>` or `X-API-Key`. Toggle in Settings → Security. |
@@ -296,6 +298,19 @@ Spoolman `remaining_weight` is net filament. Filament DB `totalWeight` is gross 
 - **After any weight propagation the engine must refresh BOTH side snapshots to the post-write
   agreed values** (SM `remaining_weight` and FDB `totalWeight`), or the propagated change is
   re-detected as a fresh change on the other side next cycle → ping-pong.
+
+### Archive/retire lifecycle sync
+Archive/retire lifecycle state mirrors **bidirectionally for already-mapped spool pairs**:
+SM `archived` ↔ FDB `retired`. A dedicated lifecycle pass runs **after** the weight pass on
+purpose — a spool is usually archived right as it hits ~0 g, so the final weight decrement
+(and its FDB usage-log entry) must settle and both snapshots refresh *before* the archive
+bit mirrors, or the far side lands retired/archived with a stale weight and a missing usage
+entry. One-sided flips (either direction, archive or un-archive) are clean pushes; only a
+both-sides-flip-to-opposite-states divergence queues a `cross_system` conflict
+(`field_name="lifecycle"`). Governed by the `archive_sync` category (`archive_sync_direction`
+/ `archive_conflict_policy`). The wizard import gate (`never_import_empties`) still keeps
+*unmapped* archived spools out of auto-import — only mapped pairs are mirrored. After any
+lifecycle push, refresh BOTH snapshots (same anti-ping-pong rule as weight).
 
 ### Filament DB API endpoints the bridge uses
 - `GET /api/filaments` — list all filaments with embedded spools

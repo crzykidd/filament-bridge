@@ -412,9 +412,12 @@ Field names are configurable via environment variables.
 - On sync error: post with error details and retry status *(planned)*
 - Optional: daily summary of sync activity *(planned)*
 
-#### FR-21: Spoolman archive/retire sync *(Partial — v0.2.0)*
-- Archived Spoolman spools are detected and excluded from sync cycles
-- Symmetric propagation (`retired: true` in FDB ↔ `archived` in Spoolman) is not yet implemented
+#### FR-21: Spoolman archive/retire sync
+- Lifecycle state mirrors **bidirectionally for already-mapped spool pairs**: archiving a spool in Spoolman (`archived`) retires it in Filament DB (`retired: true`), retiring it in FDB archives it in Spoolman, and both un-flips mirror back too (un-archive re-enables weight sync)
+- A dedicated `archive_sync` policy category governs it: `archive_sync_direction` (default `two_way`) and `archive_conflict_policy` (default `manual`). `newest_wins` is rejected (the state is a boolean with no comparable timestamp)
+- **Import gate preserved (intentionally asymmetric):** *unmapped* archived spools are still NOT auto-imported during ongoing sync — only the *mapped-pair* diffing set includes archived spools so a post-mapping flip is mirrored. Import is about not cluttering FDB with already-dead inventory; mirroring keeps already-paired spools honest
+- **Weight settles before the archive bit:** the lifecycle pass runs after the weight pass, so a depleted-and-archived spool propagates its final decrement and FDB usage-log entry (and refreshes both snapshots) before the archive/retire bit mirrors — never retired/archived with a stale weight or missing its final usage entry
+- A one-sided flip is a clean push (not a conflict). Only genuine divergence (both sides flipped to opposite states since the last snapshot) queues a `cross_system` conflict with `field_name="lifecycle"`; resolving it writes the chosen boolean to both systems and refreshes both snapshots. Both sides flipping to the same state converges silently
 
 #### FR-22: Print history enrichment *(Not implemented — v0.2.0)*
 - Planned: when a weight decrement is synced from Spoolman, optionally create a `POST /api/print-history` record in Filament DB

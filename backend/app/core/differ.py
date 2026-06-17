@@ -45,6 +45,11 @@ class SpoolPairChangeset:
     fdb_field_changes: list[FieldChange] = field(default_factory=list)
     field_conflicts: list[str] = field(default_factory=list)  # fdb_path names
 
+    # Lifecycle (archive/retire) — boolean diff, no threshold
+    sm_archive_change: FieldChange | None = None   # SM spool.archived flipped
+    fdb_retire_change: FieldChange | None = None   # FDB spool.retired flipped
+    archive_conflict: bool = False                 # both sides flipped
+
 
 def diff_spool_pair(
     sm_spool: "SpoolmanSpool",
@@ -87,6 +92,25 @@ def diff_spool_pair(
         cs.fdb_weight_change = FieldChange("totalWeight", fdb_w_snap, fdb_w_now)
     if sm_wc and fdb_wc:
         cs.weight_conflict = True
+
+    # ---- Lifecycle (archive/retire) diff ----
+    # Boolean state, so a plain inequality against the snapshot is the change test.
+    # When a snapshot lacks the key (legacy rows), default to the current value so a
+    # missing baseline is NOT mistaken for a flip (no spurious push on first sight).
+    sm_arch_now = bool(sm_spool.archived)
+    sm_arch_snap = bool(sm_snapshot.get("archived", sm_arch_now))
+    fdb_ret_now = bool(fdb_spool.retired)
+    fdb_ret_snap = bool(fdb_snapshot.get("retired", fdb_ret_now))
+
+    sm_ac = sm_arch_snap != sm_arch_now
+    fdb_rc = fdb_ret_snap != fdb_ret_now
+
+    if sm_ac:
+        cs.sm_archive_change = FieldChange("archived", sm_arch_snap, sm_arch_now)
+    if fdb_rc:
+        cs.fdb_retire_change = FieldChange("retired", fdb_ret_snap, fdb_ret_now)
+    if sm_ac and fdb_rc:
+        cs.archive_conflict = True
 
     # ---- Field mapping diff ----
     if field_maps and sm_extra_decoded is not None and fdb_field_values is not None:

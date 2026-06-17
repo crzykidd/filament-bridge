@@ -45,7 +45,7 @@ privileges via `gosu`. No manual `chown` is ever needed — pre-existing root-ow
 ### Two-axis sync model
 
 Each data category is configured independently on two axes (Settings → Weight sync /
-Material properties sync / New spools):
+Material properties sync / Archive / retire sync / New spools):
 
 - **Sync direction** — which side may write to the other:
   - `filamentdb_to_spoolman` — Filament DB is authoritative; changes flow to Spoolman only
@@ -61,10 +61,18 @@ Material properties sync / New spools):
     winner is indeterminate, the conflict falls back to `manual`.
 
 Defaults: weight syncs `spoolman_to_filamentdb`; material properties sync
-`filamentdb_to_spoolman`; new-spool creation is `two_way` (direction only — there is no
-conflict policy for creation).
+`filamentdb_to_spoolman`; archive/retire syncs `two_way`; new-spool creation is `two_way`
+(direction only — there is no conflict policy for creation).
 
 Under a one-way direction, drift on the locked side is ignored (NOOP), not reverted.
+
+The **archive / retire** category (`archive_sync_direction` / `archive_conflict_policy`)
+mirrors a *mapped* spool's lifecycle state between Spoolman (`archived`) and Filament DB
+(`retired`) — see [sync-model.md](sync-model.md) for the pass. Its state is a boolean, so
+`newest_wins` is **rejected** (422) for `archive_conflict_policy` — there is no comparable
+timestamp; use `manual` (default), `spoolman_wins`, or `filamentdb_wins`. A one-sided flip
+is a clean push; only a both-sides-diverge-to-opposite-states case consults the policy.
+This is independent of `never_import_empties` (below), which only governs *import*.
 
 ## Cross-reference fields
 
@@ -132,12 +140,14 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | Auto-sync enabled | `false` | Sync | Master switch for scheduled sync. Enabling requires a completed wizard and is gated behind the backup dialog. |
 | `sync_interval_seconds` | env (`120`) | Sync | Auto-sync interval; rescheduled immediately on save (min 30 s). |
 | `sync_log_retention_days` | `30` | Sync | Sync-log rows older than this are pruned at the start of each auto-sync tick. `0` = keep forever. |
-| Weight / material-properties / new-record direction + policy | see above | Sync → category cards | The two-axis model. |
+| Weight / material-properties / archive-retire / new-record direction + policy | see above | Sync → category cards | The two-axis model. |
+| `archive_sync_direction` | `two_way` | Sync → Archive / retire sync | Which side's archive/retire flip is mirrored: `two_way` (default), `spoolman_to_filamentdb`, or `filamentdb_to_spoolman`. Applies to mapped pairs only. |
+| `archive_conflict_policy` | `manual` | Sync → Archive / retire sync | Consulted only under `two_way` when both sides diverge to opposite states: `manual` (default — queue a `cross_system` lifecycle conflict), `spoolman_wins`, or `filamentdb_wins`. `newest_wins` is **rejected** (422) — the state is a boolean with no timestamp. |
 | `sync_weight_threshold_grams` | `2.0` | Sync → Weight sync | Weight changes smaller than this are ignored (suppresses net/gross rounding churn). |
 | `weight_precision_decimals` | `2` | Sync → Weight sync | Decimal places used when comparing/writing weights. |
 | `new_filament_policy` | `manual_review` | Sync → New records | What the engine does when it detects an unmapped filament: `manual_review` queues a `new_filament` conflict (actionable — the Conflicts page "Add" button imports it); `auto_import` creates the filament automatically and writes the cross-reference. Defaults to `manual_review` for both fresh and existing installs. When `variant_parent_mode` is `unset` and the filament looks like a variant-cluster member, auto-import falls back to `manual_review` regardless of this setting (can't group variants without a mode). |
 | `new_spool_policy` | `manual_review` | Sync → New records | What the engine does when an unmapped spool appears whose filament **is already mapped**: `manual_review` queues a `new_spool` conflict; `auto_import` creates the spool immediately. A spool is always held when its filament is unmapped, regardless of this setting — the filament tier must resolve first. |
-| `never_import_empties` | `false` | Sync → New records | Controls both empty and archived spools. When `false` (default): all spools import, including depleted (`remaining ≤ 0`) and archived ones. Archived spools import as **retired** FDB spools (spool only — the filament stays live). When `true`: spools with `remaining ≤ 0` are skipped (whether active or archived); archived spools with positive remaining weight still import as retired. The filament definition always imports regardless. |
+| `never_import_empties` | `false` | Sync → New records | **Import-time only** (UI label: "Skip empty & archived spools on import") — governs which spools the wizard and ongoing new-spool import create; it does **not** affect archive/retire mirroring for already-paired spools (that runs regardless — see `archive_sync_direction` above). When `false` (default): all spools import, including depleted (`remaining ≤ 0`) and archived ones. Archived spools import as **retired** FDB spools (spool only — the filament stays live). When `true`: spools with `remaining ≤ 0` are skipped (whether active or archived); archived spools with positive remaining weight still import as retired. The filament definition always imports regardless. |
 | `variant_parent_mode` | `unset` | Import & matching | **Required before the wizard runs** (Spoolman→FDB direction): `promote_color` or `generic_container`. See [variant-parent-mode.md](variant-parent-mode.md). |
 | `container_parent_marker` | env (`(Master)`) | Import & matching | Marker on generic-container names; checkbox + text field, visible in `generic_container` mode. |
 | `variant_line_keywords` | env seed | Import & matching | See `VARIANT_LINE_KEYWORDS`. |

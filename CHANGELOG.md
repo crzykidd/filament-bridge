@@ -9,6 +9,23 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Bidirectional archive/retire lifecycle sync (FR-21)** — a mapped spool's lifecycle
+  state now mirrors between Spoolman (`archived`) and Filament DB (`retired`) in both
+  directions: archiving/retiring one side flips the other, and un-archiving/un-retiring
+  mirrors back too (re-enabling weight sync). A new `archive_sync` policy category
+  (`archive_sync_direction`, default `two_way`; `archive_conflict_policy`, default `manual`)
+  governs it from Settings → Archive / retire sync; `newest_wins` is rejected (422) since
+  the state is a boolean with no timestamp. The wizard import gate is preserved — *unmapped*
+  archived spools are still never auto-imported; only *mapped-pair* diffing includes archived
+  spools. The lifecycle pass runs **after** the weight pass, so a depleted-and-archived spool
+  settles its final decrement and FDB usage-log entry (and refreshes both snapshots) before
+  the archive bit mirrors. A one-sided flip is a clean push; only a both-sides-diverge-to-
+  opposite-states case queues a `cross_system` lifecycle conflict, whose human resolution
+  writes the chosen state to both systems. The "Never import empties" setting was relabeled
+  "Skip empty & archived spools on import" to clarify it is import-only (config key unchanged).
+
 ## [0.2.0] — 2026-06-15
 
 ### Added

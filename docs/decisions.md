@@ -1,6 +1,65 @@
 # Decision record
 
-## 2026-06-17 — FDB spool `instanceId` is NOT used for cross-reference; keep `label`
+## 2026-06-17 — Archive/retire to sync bidirectionally for already-synced spools (FR-21 symmetric, design agreed)
+
+**Context.** Archive/retire lifecycle state is import-only and one-directional today
+(FR-21 "Partial"). A mapped spool archived in Spoolman drops out of the active set
+(`engine.py:2505` filters `if not s.archived`) and silently stops syncing while staying
+live in FDB; a spool retired in FDB never propagates to Spoolman (the differ never reads
+`retired`). Users archive/retire depleted spools routinely, so paired spools drift out of
+sync. Design agreed with the user; implementation tracked in
+`prompts/2026-06-17-archive-retire-bidirectional-sync.md`.
+
+**Decisions.**
+- **Keep the bulk-import gate, add post-sync mirroring** — intentionally asymmetric. The
+  wizard's `never_import_empties` gate (which also skips archived spools at import) stays:
+  unmapped archived spools are NOT auto-imported during ongoing sync. But a spool that
+  flips archived/retired *after* it's mapped IS mirrored to the other side. Import is about
+  not cluttering FDB with already-dead inventory; mirroring is about keeping already-paired
+  spools honest.
+- **Split the archived-spool filter by purpose.** New-spool detection keeps the active-only
+  set (preserves the import gate); mapped-pair diffing uses active + archived so the
+  archive transition reaches the differ. The data is already fetched (the Spoolman client
+  returns active + archived).
+- **Mirror both directions of the boolean flip** — archive→retire and un-archive→un-retire.
+  Same mechanism; un-archiving re-enables weight sync for the pair.
+- **New independent policy category `archive_sync`** (two axes: `archive_sync_direction`
+  default `two_way`, `archive_conflict_policy` default `manual`), resolved by the existing
+  `resolve_sync_action`. No timestamps → `newest_wins` is not applicable to this category.
+- **No new conflict type.** Reuse `cross_system`. The common one-sided flip is a clean push,
+  not a conflict; only genuine divergence (both sides flipped to opposite states since the
+  last snapshot) queues a conflict — consistent with the "never auto-resolve conflicts" rule.
+- **Weight settles before the archive bit — ordering is a correctness requirement.** The
+  lifecycle pass runs AFTER the weight pass, not before. A spool is usually archived/retired
+  right as it hits ~0 g; the final weight decrement and its FDB usage-log audit entry
+  (`POST …/usage`, `source:"spoolman"`) must be propagated and both snapshots refreshed
+  *before* the archive/retire bit is mirrored. Mirror first and the far side would land
+  retired/archived carrying a stale (too-high) weight with its final usage entry lost. Do not
+  skip the weight pass for an about-to-be-archived spool; a spool already dead on both sides
+  from a prior cycle NOOPs the weight pass naturally (snapshots converged).
+- **Anti-ping-pong is mandatory.** After any lifecycle push, refresh BOTH snapshots to the
+  converged value (same rule as the 2026-06-10 weight fix below).
+- **Reword, don't rename.** The `never_import_empties` config key stays; only its
+  human-facing label/help text is reworded to make clear it skips empty AND archived spools
+  at import and that ongoing sync mirrors lifecycle state regardless of the setting.
+
+**As built.** Implemented as designed above, with two deviations the implementer flagged:
+
+- **Lifecycle conflict resolution writes upstream** via a scoped
+  `core/conflict_apply.py:apply_lifecycle_conflict` rather than the generic record-only
+  `cross_system` resolve path. A normal `cross_system` resolution only records the chosen
+  value (no upstream write), but a lifecycle conflict's choice is a concrete boolean state,
+  so resolving it (`spoolman`/`filamentdb`/`manual`) writes that boolean to BOTH systems
+  (`spoolman.update_spool({"archived": …})` + `filamentdb.update_spool({"retired": …})`),
+  refreshes both snapshots, and logs under a `conflict_apply` cycle id. The conflicts API
+  routes `field_name == "lifecycle"` to this helper before the generic record-only branch;
+  an upstream failure leaves the conflict open (`502 upstream_write_failed`).
+- **Both-changed-to-same-state collapses to a converge before the resolver is called.** The
+  engine detects `both_changed_converged` (both sides flipped this cycle AND landed on the
+  same state, e.g. both archived) up front and treats it as a NOOP-with-snapshot-refresh,
+  so `resolve_sync_action` / `QUEUE_CONFLICT` is only ever reached for a genuine
+  opposite-state divergence. This keeps the common "user archived in both systems"
+  case from spuriously queuing a conflict.
 
 **Context.** Filament DB 1.48.0 moved the 5-byte hex roll ID (`instanceId`) from the
 filament onto each **spool**, and 1.49.0 made it **user-editable**. Format (verified in

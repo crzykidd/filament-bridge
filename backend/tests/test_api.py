@@ -161,7 +161,8 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
     # Pair 2: no snapshots (first baseline) → skip entry
     db.add(SpoolMapping(spoolman_spool_id=2, filamentdb_filament_id="fil-2", filamentdb_spool_id="spool-2"))
 
-    # Pair 3: SM spool not in active set (archived) → skip entry
+    # Pair 3: archived SM spool whose mapped FDB spool no longer exists and whose
+    # cross-ref is cleared → stale-connection skip entry (no live link to protect).
     db.add(SpoolMapping(spoolman_spool_id=99, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-99"))
 
     # Pair 4: both weights changed → conflict entry
@@ -185,7 +186,7 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
         _sm_spool(1, 795.0),
         _sm_spool(2, 500.0),
         _sm_spool(3, 850.0),   # changed from 900 snapshot → weight conflict
-        archived,              # sm_id=99 archived (in sm_all_ids but not active) → skip
+        archived,              # sm_id=99 archived; mapped FDB spool gone, cross-ref empty → stale skip
     ])
     filamentdb = _fake_filamentdb(filaments=[
         _fdb_filament("fil-1", "spool-1", 1000.0),
@@ -199,7 +200,7 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
     body = resp.json()
     assert body["dry_run"] is True
     assert body["updated"] == 1
-    assert body["skipped"] == 2    # archived (pair 3) + first-baseline (pair 2)
+    assert body["skipped"] == 2    # stale-connection (pair 3) + first-baseline (pair 2)
     assert body["conflicts"] == 1  # weight conflict (pair 4)
     assert len(body["preview"]) >= 4
 
@@ -209,10 +210,10 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
         assert entry["action"] in valid_actions, f"unexpected action: {entry}"
         assert entry.get("label"), f"missing label in {entry}"
 
-    # Skip entry for archived spool (sm_id=99 not in active set).
+    # Skip entry for the archived spool whose FDB counterpart is gone (stale connection).
     archived_skips = [p for p in body["preview"] if p["action"] == "skip" and p.get("spoolman_id") == 99]
     assert len(archived_skips) == 1
-    assert "archived" in archived_skips[0]["reason"].lower()
+    assert "stale" in archived_skips[0]["reason"].lower()
 
     # Skip entry for first-baseline pair (sm_id=2, no prior snapshot).
     baseline_skips = [p for p in body["preview"] if p["action"] == "skip" and p.get("spoolman_id") == 2]

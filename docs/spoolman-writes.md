@@ -53,6 +53,7 @@ lone change, one-way FDB→SM, or an FDB-winning conflict policy). See
 | Filament | `weight` | Native-scalar sync resolves FDB→SM (from FDB `netFilamentWeight`) |
 | Filament | `extra.filamentdb_material_tags` | Finish-tag sync resolves FDB→SM (Filament DB ≥ 1.33.0); CSV of OpenPrintTag IDs from FDB `optTags` |
 | Spool | `extra.{mapped field}` | Generic field-mapping sync (FR-11) resolves FDB→SM; arbitrary mapped FDB fields stored as spool extras |
+| Spool | `archived` (bool) | Lifecycle sync resolves FDB→SM — a *mapped* spool retired in Filament DB (`retired`) flips Spoolman `archived` to match; un-retire mirrors back (`archived: false`). Runs **after** the weight pass so a depleted spool's final decrement settles first. Governed by `archive_sync_direction` / `archive_conflict_policy`, not by `never_import_empties`. See [sync-model.md](sync-model.md). |
 
 New-spool creation during a cycle (gated by `new_spool_sync_direction`):
 
@@ -82,20 +83,34 @@ New-spool creation during a cycle (gated by `new_spool_sync_direction`):
 For FDB spool creates: when the source SM spool is **archived**, the bridge sets `retired: true`
 on the FDB spool payload so the archived state is preserved at import. Only the spool is
 marked retired — the filament record is always created as a normal, non-retired filament.
-`archived`/`retired` is set once at import and is NOT a synced field in ongoing auto-sync.
+Beyond this import-time stamp, `archived`/`retired` IS a synced field in ongoing auto-sync
+for already-mapped pairs (lifecycle sync, see the auto-sync table above and
+[sync-model.md](sync-model.md)).
 
 ## Conflict-resolution writes (on-demand, human-approved)
 
-Resolving a **master_divergence** conflict (`POST /api/conflicts/{id}/resolve` with an
-`action`) is the one conflict type that writes upstream — the chosen action is the
-authorisation (see `docs/conflicts.md`):
+Two conflict types write upstream on resolution (`POST /api/conflicts/{id}/resolve`) — the
+chosen action/resolution is the authorisation (see `docs/conflicts.md`):
+
+**`master_divergence`** (resolved with an `action`):
 
 | Action | Entity | Op | Field(s) |
 |---|---|---|---|
 | `apply_all` | Filament | update | The diverged native field (`material`, `density`, `diameter`, `spool_weight`, `weight`, `settings_bed_temp`, `settings_extruder_temp`) on **every mapped Spoolman filament in the variant line** |
 | `variant_override` / `ignore` | — | — | No Spoolman writes (FDB-only / no-op respectively) |
 
-All other conflict types are record-only — resolving them performs no Spoolman writes.
+**Lifecycle** — a `cross_system` conflict with `field_name="lifecycle"` (resolved with
+`resolution` = `spoolman`/`filamentdb`/`manual`). Unlike all other `cross_system` conflicts
+(which are record-only), this one converges by writing the chosen boolean to **both**
+systems and refreshing both snapshots (via the scoped `apply_lifecycle_conflict` path, not
+the generic record-only resolver):
+
+| Entity | Op | Field(s) |
+|---|---|---|
+| Spool | update | `archived` (chosen boolean) |
+| Spool (FDB) | update | `retired` (same chosen boolean) |
+
+All other conflict types are record-only — resolving them performs no upstream writes.
 
 ## OpenTag cleanup tool writes (on-demand, on Apply)
 
@@ -116,8 +131,10 @@ bag (scoped exception — see `docs/decisions.md`).
 
 ## What the bridge never writes to Spoolman
 
-`location`, `lot_nr`, `archived`, `comment`, and **per-spool `price`** (cost write-back
-targets the filament price only). The bridge never deletes Spoolman records.
+`location`, `lot_nr`, `comment`, and **per-spool `price`** (cost write-back targets the
+filament price only). The bridge never deletes Spoolman records. (`archived` *is* written —
+by the lifecycle sync pass for mapped pairs and by lifecycle conflict resolution — see
+above.)
 
 **The bridge never sets both `color_hex` and `multi_color_hexes` on the same Spoolman
 filament in a single PATCH.** Spoolman returns 422 if both are present simultaneously.

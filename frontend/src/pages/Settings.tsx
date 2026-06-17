@@ -193,6 +193,8 @@ export default function Settings() {
   const [weightPolicy, setWeightPolicy] = useState<ConflictPolicy | null>(null)
   const [matDir, setMatDir] = useState<SyncDirection2 | null>(null)
   const [matPolicy, setMatPolicy] = useState<MatConflictPolicy | null>(null)
+  const [archiveDir, setArchiveDir] = useState<SyncDirection2 | null>(null)
+  const [archivePolicy, setArchivePolicy] = useState<MatConflictPolicy | null>(null)
   const [newSpoolDir, setNewSpoolDir] = useState<SyncDirection2 | null>(null)
 
   // New-record handling policies
@@ -258,6 +260,8 @@ export default function Settings() {
     (weightPolicy != null && weightPolicy !== data.weight_conflict_policy) ||
     (matDir != null && matDir !== data.material_properties_sync_direction) ||
     (matPolicy != null && matPolicy !== data.material_properties_conflict_policy) ||
+    (archiveDir != null && archiveDir !== data.archive_sync_direction) ||
+    (archivePolicy != null && archivePolicy !== data.archive_conflict_policy) ||
     (newSpoolDir != null && newSpoolDir !== data.new_spool_sync_direction) ||
     (newFilamentPolicy != null && newFilamentPolicy !== data.new_filament_policy) ||
     (newSpoolPolicy != null && newSpoolPolicy !== data.new_spool_policy) ||
@@ -310,6 +314,8 @@ export default function Settings() {
   const wPol = weightPolicy ?? data.weight_conflict_policy
   const mDir = matDir ?? data.material_properties_sync_direction
   const mPol = (matPolicy ?? data.material_properties_conflict_policy) as MatConflictPolicy
+  const aDir = archiveDir ?? data.archive_sync_direction
+  const aPol = (archivePolicy ?? data.archive_conflict_policy) as MatConflictPolicy
   const nsDir = newSpoolDir ?? data.new_spool_sync_direction
   const nfPol = newFilamentPolicy ?? data.new_filament_policy
   const nsPol = newSpoolPolicy ?? data.new_spool_policy
@@ -514,6 +520,8 @@ export default function Settings() {
         weight_conflict_policy: wPol,
         material_properties_sync_direction: mDir,
         material_properties_conflict_policy: mPol,
+        archive_sync_direction: aDir,
+        archive_conflict_policy: aPol,
         new_spool_sync_direction: nsDir,
         new_filament_policy: newFilamentPolicy ?? undefined,
         new_spool_policy: newSpoolPolicy ?? undefined,
@@ -817,6 +825,31 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Archive / retire sync card — full width */}
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-1">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Archive / retire sync</h3>
+          <p className={`${subTextCls} mb-2`}>
+            Keeps a spool&apos;s archived (Spoolman) / retired (Filament DB) state in sync for
+            already-paired spools. Archiving or retiring one side mirrors to the other; un-archiving
+            mirrors back too. Unmapped archived spools are still never imported during sync.
+          </p>
+          <DirectionSelect
+            label="Direction"
+            value={aDir}
+            onChange={v => {
+              setArchiveDir(v)
+              if (v !== 'two_way') setArchivePolicy('manual')
+            }}
+            tip="Which side's archive/retire flips get mirrored to the other. Two-way mirrors both directions and queues a conflict only when both sides diverge to opposite states."
+            tipHref="/docs/sync-model"
+          />
+          <MatPropConflictSelect
+            value={aPol}
+            direction={aDir}
+            onChange={v => setArchivePolicy(v)}
+          />
+        </div>
+
         {/* New records card — full width under the 2-column pair */}
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-2">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">New records</h3>
@@ -880,11 +913,12 @@ export default function Settings() {
           <div className={`flex items-start justify-between py-3 mt-1 ${dividerCls}`}>
             <div>
               <span className="flex items-center">
-                <span className={labelCls}>Never import empties</span>
-                <HelpTip text="Applies to wizard imports only — the ongoing engine doesn't create records for depleted spools either way." />
+                <span className={labelCls}>Skip empty &amp; archived spools on import</span>
+                <HelpTip text="Import-time only: the wizard and ongoing new-spool import skip spools that are empty/depleted or archived. The filament definition is still imported. This does NOT affect archive/retire sync for already-paired spools — that mirrors regardless of this setting (see Archive / retire sync above)." />
               </span>
               <p className={`${subTextCls} mt-0.5`}>
-                Empty/depleted spools are skipped on import; the filament definition is still imported.
+                Empty/depleted and archived spools are skipped on import; the filament definition is
+                still imported. Already-synced spools keep mirroring their archive/retire state.
               </p>
             </div>
             <button
