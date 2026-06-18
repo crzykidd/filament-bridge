@@ -306,7 +306,12 @@ function FilamentCard({
     ? activeCandidate.multicolor_mismatch
     : (match.multicolor_mismatch ?? false)
 
-  const hasCandidates = match.candidates && match.candidates.length > 1
+  // Show the candidate dropdown whenever there's at least one match — a single-candidate
+  // brand (only one OpenTag entry, e.g. TTYT3D) still gets the picker for consistency.
+  const hasCandidates = !!match.candidates && match.candidates.length >= 1
+  // The matcher returns best + up to 10 alternates (max 11). Below that the dropdown holds
+  // every available match for the brand, so reassure the user nothing is truncated.
+  const allCandidatesListed = !!match.candidates && match.candidates.length <= 10
 
   // Badge state — recomputed when activeCandidate changes (candidate switch updates dataDiffers).
   const { existingUuid, dataDiffers } = computeBadgeState(match, activeCandidate)
@@ -356,6 +361,11 @@ function FilamentCard({
                 </option>
               ))}
             </select>
+          )}
+          {expanded && hasCandidates && allCandidatesListed && (
+            <span className="text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
+              all filaments listed
+            </span>
           )}
           {!hasCandidates && activeCandidate && (
             <span className="text-xs text-indigo-600 dark:text-indigo-400">
@@ -408,50 +418,17 @@ function FilamentCard({
         </div>
       </div>
 
-      {expanded && !ignored && displayFields.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-700">
-            <thead>
-              <tr className="bg-gray-50 dark:bg-gray-900/40 text-xs text-gray-500 dark:text-gray-400 uppercase">
-                <th className="px-3 py-1 text-left">Field</th>
-                <th className="px-3 py-1 text-left">Spoolman</th>
-                <th className="px-3 py-1 text-left">OpenTag</th>
-                <th className="px-3 py-1 text-left">Use value</th>
-                <th className="px-3 py-1 text-left" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {displayFields.map(row => (
-                <FieldReviewRow
-                  key={row.field}
-                  row={row}
-                  decision={decisions[row.field] ?? { field: row.field, value: row.opentag_value, keep_mine: false }}
-                  onChange={updated => onFieldChange(row.field, updated)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {expanded && !ignored && displayFields.length === 0 && (
-        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 italic">
-          {displayConfidence < 0.30
-            ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
-            : 'No field differences detected.'}
-        </p>
-      )}
-
-      {/* Manual search — available whenever the card is expanded and not ignored */}
+      {/* Manual re-match — surfaced above the field list so it's easy to find when the
+          auto-match is wrong or there's only one candidate to pick from. */}
       {expanded && !ignored && (
-        <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-700">
+        <div className="px-4 py-2 border-b border-gray-100 dark:border-gray-700">
           {!showSearch ? (
             <button
               type="button"
-              className="text-xs text-indigo-500 dark:text-indigo-400 hover:underline"
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
               onClick={() => setShowSearch(true)}
             >
-              Search OpenTag manually…
+              🔍 Wrong match? Search OpenTag manually…
             </button>
           ) : (
             <div className="space-y-2">
@@ -514,6 +491,41 @@ function FilamentCard({
           )}
         </div>
       )}
+
+      {expanded && !ignored && displayFields.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-700">
+            <thead>
+              <tr className="bg-gray-50 dark:bg-gray-900/40 text-xs text-gray-500 dark:text-gray-400 uppercase">
+                <th className="px-3 py-1 text-left">Field</th>
+                <th className="px-3 py-1 text-left">Spoolman</th>
+                <th className="px-3 py-1 text-left">OpenTag</th>
+                <th className="px-3 py-1 text-left">Use value</th>
+                <th className="px-3 py-1 text-left" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {displayFields.map(row => (
+                <FieldReviewRow
+                  key={row.field}
+                  row={row}
+                  decision={decisions[row.field] ?? { field: row.field, value: row.opentag_value, keep_mine: false }}
+                  onChange={updated => onFieldChange(row.field, updated)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {expanded && !ignored && displayFields.length === 0 && (
+        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 italic">
+          {displayConfidence < 0.30
+            ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
+            : 'No field differences detected.'}
+        </p>
+      )}
+
     </div>
   )
 }

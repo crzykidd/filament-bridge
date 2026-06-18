@@ -9,6 +9,15 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **OpenTag Cleanup: candidate dropdown now shows for single-candidate brands** — a brand with
+  only one OpenPrintTag dataset entry (e.g. TTYT3D) previously rendered a dead-end static label
+  instead of the picker, so there was no obvious way to confirm or change the match. The
+  dropdown now appears whenever there's at least one candidate, with an "all filaments listed"
+  hint when the list isn't truncated. The "Search OpenTag manually…" affordance was moved above
+  the field table and made a prominent button so re-matching is easy to find.
+
 ## [0.2.1] — 2026-06-17
 
 ### Added
