@@ -11,6 +11,21 @@ GitHub release.
 
 ### Added
 
+- **OpenTag Cleanup: smart dataset refresh (commit-SHA gate)** — the OpenPrintTag dataset is
+  a large GitHub tarball, so the bridge no longer re-downloads it on every refresh or stale
+  reload. The cache now stores the upstream `main` HEAD **commit SHA** (`commit_sha`)
+  alongside the materials. Both the stale auto-reload and the manual **Refresh dataset**
+  button first do a cheap `GET …/commits/main` (using `application/vnd.github.sha` to get
+  just the SHA): a matching SHA simply bumps the cache age and returns `unchanged=true` with
+  no tarball download; a differing/unknown SHA downloads and records the new SHA. The default
+  `POST /api/openprinttag/refresh` is the SHA-checked path (returns
+  `{ unchanged, count, fetched_at, commit_sha }`); `?pull=true` ("**Pull contents anyway**")
+  forces a full download regardless. The SHA check is best-effort — any failure
+  (timeout/connectivity/GitHub rate-limit) falls back to downloading and never errors a
+  refresh. The UI shows *"Dataset already up to date (commit · N records)"* + a **Pull
+  contents anyway** button when unchanged, and freshens the banner age. The match-result
+  cache fingerprint now keys its dataset identity off `commit_sha` (falling back to
+  `count:fetched_at`), so a hash-only refresh doesn't spuriously invalidate the cached match.
 - **OpenTag Cleanup: non-blocking matching + cached match result** — the CPU-bound match,
   completeness, and manual-search work now runs in a worker thread
   (`starlette.concurrency.run_in_threadpool`) instead of on the FastAPI event loop, so a

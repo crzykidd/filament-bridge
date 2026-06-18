@@ -705,6 +705,10 @@ export interface OpenTagDatasetMeta {
   fetched_at: string | null
   count: number
   stale: boolean
+  /** Upstream OpenPrintTag main HEAD commit SHA at fetch time (null if unknown). */
+  commit_sha?: string | null
+  /** True when a refresh found the upstream commit unchanged and only bumped the age. */
+  unchanged?: boolean
 }
 
 export interface OpenTagCacheStatus {
@@ -715,6 +719,8 @@ export interface OpenTagCacheStatus {
   max_age_hours: number
   /** Largest record count seen on any prior successful grab (0 if never fetched). */
   last_count: number
+  /** Upstream commit SHA of the cached dataset (null if unknown / pre-SHA cache). */
+  commit_sha?: string | null
 }
 
 export interface OpenTagFieldRow {

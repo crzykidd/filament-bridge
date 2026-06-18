@@ -1530,6 +1530,12 @@ export default function OpenTagCleanup() {
   // Loading / work state
   const [working, setWorking] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  // After a hash-checked Refresh found the dataset unchanged, offer a one-click
+  // "Pull contents anyway" (force download). Cleared whenever a load starts or a
+  // changed-content refresh succeeds.
+  const [offerForcePull, setOfferForcePull] = useState(false)
+  // "Dataset already up to date" note shown after a hash-checked Refresh found no change.
+  const [upToDateMsg, setUpToDateMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [response, setResponse] = useState<OpenTagMatchesResponse | null>(null)
   const [step, setStep] = useState<Step>('review')
@@ -1590,11 +1596,17 @@ export default function OpenTagCleanup() {
     setSelectedCandidates({})
   }, [])
 
-  // Run the full load: optionally re-download the dataset first, then fetch matches.
-  // - skipDatasetRefresh=true skips the (slow) tarball re-download (warm dataset).
-  // - recomputeMatches=true forces the server to re-score (bypassing the match cache);
-  //   when false the server serves the cached match result instantly when present.
-  const runLoad = useCallback(async (skipDatasetRefresh: boolean, recomputeMatches = false) => {
+  // Run the full load. `datasetMode` controls the dataset step:
+  // - 'skip'  — don't touch the dataset (warm cache); serve/recompute matches only.
+  // - 'check' — cheap upstream commit-SHA check; downloads only if the commit changed.
+  //             When the commit is UNCHANGED the heavy match recompute is skipped too
+  //             (the dataset is identical), and we offer "Pull contents anyway".
+  // - 'pull'  — force a full tarball download regardless of the commit, then recompute.
+  // recomputeMatches=true forces the server to re-score even on a warm dataset.
+  const runLoad = useCallback(async (
+    datasetMode: 'skip' | 'check' | 'pull',
+    recomputeMatches = false,
+  ) => {
     // Abort any prior in-flight match fetch before starting a new one.
     matchAbortRef.current?.abort()
     const controller = new AbortController()
@@ -1603,20 +1615,37 @@ export default function OpenTagCleanup() {
     setWorking(true)
     setError(null)
     setStatusMsg(null)
+    setOfferForcePull(false)
     try {
-      if (!skipDatasetRefresh) {
+      let datasetChanged = false
+      if (datasetMode !== 'skip') {
         const known = cacheStatus?.last_count || cacheStatus?.count || 0
         const recordHint = known > 0 ? `${known.toLocaleString()}+ records` : 'thousands of records'
         setStatusMsg(
-          'Fetching the OpenTag dataset from OpenPrintTag… ' +
-          `(first load downloads ${recordHint} — up to a minute)`,
+          datasetMode === 'pull'
+            ? `Downloading the OpenTag dataset from OpenPrintTag… (${recordHint} — up to a minute)`
+            : 'Checking OpenPrintTag for updates…',
         )
-        await postOpenTagRefresh()
-        // Refresh status banner after fetch
+        const meta = await postOpenTagRefresh(datasetMode === 'pull')
+        // Refresh status banner after the check/download.
         getOpenTagStatus().then(s => setCacheStatus(s)).catch(() => {})
+        if (datasetMode === 'check' && meta.unchanged) {
+          // No content change — tell the user, bump the banner age, offer force pull.
+          // Skip the heavy recompute: the dataset is byte-for-byte identical.
+          const n = meta.count.toLocaleString()
+          const sha = meta.commit_sha ? meta.commit_sha.slice(0, 7) : 'same commit'
+          setStatusMsg(null)
+          setOfferForcePull(true)
+          setError(null)
+          // Surface the "already up to date" note via statusMsg-style banner below.
+          setUpToDateMsg(`Dataset already up to date (${sha} · ${n} records).`)
+          return
+        }
+        datasetChanged = true
       }
-      // A dataset re-download always means a fresh recompute (cache no longer valid).
-      const recompute = recomputeMatches || !skipDatasetRefresh
+      setUpToDateMsg(null)
+      // A dataset re-download/change always means a fresh recompute (cache invalid).
+      const recompute = recomputeMatches || datasetChanged
       setStatusMsg(
         recompute ? 'Matching your Spoolman filaments…' : 'Loading your last match…',
       )
@@ -1635,18 +1664,26 @@ export default function OpenTagCleanup() {
     }
   }, [_applyMatchesData, cacheStatus])
 
-  // "Refresh dataset" (toolbar): re-download the OpenTag dataset, then recompute + re-enter.
+  // "Refresh dataset" (toolbar): cheap SHA check first — download+recompute only if
+  // the upstream commit actually changed; otherwise just bump the age and offer pull.
   const handleRefresh = useCallback(async () => {
     setToolbarView('match')
     setViewMode('all')
-    runLoad(false)
+    runLoad('check')
+  }, [runLoad])
+
+  // "Pull contents anyway": force the full tarball download even when the SHA matched.
+  const handleForcePull = useCallback(async () => {
+    setToolbarView('match')
+    setViewMode('all')
+    runLoad('pull')
   }, [runLoad])
 
   // "Refresh match" (match view): keep the cached dataset, force a fresh server recompute.
   const handleRecompute = useCallback(() => {
     setToolbarView('match')
     setViewMode('all')
-    runLoad(true, true)
+    runLoad('skip', true)
   }, [runLoad])
 
   // "Match to DB" toolbar button: switch to match view and load the cached result (fast).
@@ -1654,8 +1691,10 @@ export default function OpenTagCleanup() {
     setToolbarView('match')
     setViewMode('all')
     if (!response) {
-      // First time: load the cached match instantly (server computes once if no cache).
-      runLoad(cacheStatus !== null && cacheStatus.exists && !cacheStatus.stale)
+      // First time: serve the cached match instantly when the dataset is warm; when
+      // the cache is missing/stale, do a cheap SHA check (downloads only if changed).
+      const warm = cacheStatus !== null && cacheStatus.exists && !cacheStatus.stale
+      runLoad(warm ? 'skip' : 'check')
     }
     // If already loaded, just re-enter the view — don't re-fetch
   }, [response, cacheStatus, runLoad])
@@ -1928,6 +1967,22 @@ export default function OpenTagCleanup() {
             </span>
             {cacheStatus.stale && (
               <span className="px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 text-xs">stale</span>
+            )}
+            {upToDateMsg && (
+              <span className="text-sm text-green-700 dark:text-green-400">
+                {upToDateMsg}
+              </span>
+            )}
+            {offerForcePull && (
+              <button
+                type="button"
+                className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                onClick={() => void handleForcePull()}
+                disabled={working}
+                title="Force a full re-download of the OpenTag dataset even though the upstream commit is unchanged"
+              >
+                Pull contents anyway
+              </button>
             )}
           </>
         ) : (

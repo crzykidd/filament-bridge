@@ -63,6 +63,12 @@ class OpenTagDatasetMeta(BaseModel):
     fetched_at: str | None
     count: int
     stale: bool
+    # Upstream OpenPrintTag main HEAD commit SHA captured at fetch time (None if
+    # unknown — e.g. a pre-SHA cache or a failed SHA check on the last download).
+    commit_sha: str | None = None
+    # True when a refresh found the upstream commit unchanged and only bumped the
+    # cache age (no tarball download). Always False on a normal compute.
+    unchanged: bool = False
 
 
 class OpenTagCacheStatus(BaseModel):
@@ -72,6 +78,8 @@ class OpenTagCacheStatus(BaseModel):
     count: int
     stale: bool
     max_age_hours: int
+    # Upstream commit SHA of the cached dataset (None if unknown / pre-SHA cache).
+    commit_sha: str | None = None
     # Largest record count seen on any prior successful grab, persisted in
     # BridgeConfig so the "first load downloads ~N records" hint stays accurate
     # (and survives cache-file deletion) as the upstream dataset grows.
@@ -546,17 +554,28 @@ async def opentag_status() -> OpenTagCacheStatus:
         stale=meta["stale"],
         max_age_hours=_settings.opentag_cache_max_age_hours,
         last_count=max(meta["count"], _read_last_count()),
+        commit_sha=meta.get("commit_sha"),
     )
 
 
 @router.post("/openprinttag/refresh", response_model=OpenTagDatasetMeta)
-async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
-    """Force a fresh download of the OpenTag dataset from OpenPrintTag."""
+async def opentag_refresh(request: Request, pull: bool = False) -> OpenTagDatasetMeta:
+    """Refresh the OpenTag dataset, gated by a cheap upstream commit-SHA check.
+
+    Default (``pull=false``): run the SHA check. If the upstream commit is
+    unchanged, only the cache age is bumped (no heavy tarball download) and the
+    response carries ``unchanged=True``; if it changed (or the SHA can't be read)
+    the tarball is re-downloaded.
+
+    ``pull=true`` ("Pull contents anyway"): skip the SHA check and force a full
+    download+parse regardless of the upstream commit.
+    """
     try:
         result = await load_opentag_dataset(
             _settings.data_dir,
             _settings.opentag_cache_max_age_hours,
-            force=True,
+            force_pull=pull,
+            force_check=not pull,
         )
     except httpx.TimeoutException as exc:
         logger.error("opentag refresh: timed out downloading dataset from OpenPrintTag: %s", exc)
@@ -590,6 +609,8 @@ async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
         fetched_at=result["fetched_at"],
         count=result["count"],
         stale=result["stale"],
+        commit_sha=result.get("commit_sha"),
+        unchanged=result.get("unchanged", False),
     )
 
 
@@ -900,6 +921,7 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
             current_fp = build_fingerprint(
                 dataset_count=meta.get("count", 0),
                 dataset_fetched_at=meta.get("fetched_at"),
+                dataset_commit_sha=meta.get("commit_sha"),
                 sm_count=await _safe_sm_count(sm),
                 aliases_raw=aliases_raw,
                 tag_map=tag_map,
@@ -969,6 +991,7 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
         fetched_at=dataset["fetched_at"],
         count=dataset["count"],
         stale=dataset["stale"],
+        commit_sha=dataset.get("commit_sha"),
     )
     computed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
     response = OpenTagMatchesResponse(
@@ -983,6 +1006,7 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
     fingerprint = build_fingerprint(
         dataset_count=dataset["count"],
         dataset_fetched_at=dataset["fetched_at"],
+        dataset_commit_sha=dataset.get("commit_sha"),
         sm_count=len(sm_filaments),
         aliases_raw=aliases_raw,
         tag_map=tag_map,
@@ -1554,6 +1578,7 @@ async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
         fetched_at=meta.get("fetched_at"),
         count=meta.get("count", 0),
         stale=meta.get("stale", True),
+        commit_sha=meta.get("commit_sha"),
     )
     if cache is None or not cache.get("materials"):
         return OpenTagCompletenessResponse(dataset=dataset_meta, items=[], stale_count=0)

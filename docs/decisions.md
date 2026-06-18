@@ -1,5 +1,46 @@
 # Decision record
 
+## 2026-06-18 — OpenTag dataset: gate the heavy tarball download behind a commit-SHA check
+
+**Context.** The OpenPrintTag dataset is a large GitHub tarball. Every manual **Refresh
+dataset** and every stale auto-reload (`OPENTAG_CACHE_MAX_AGE_HOURS`, default 24 h)
+re-downloaded and re-parsed the whole thing, even when upstream hadn't changed. The total
+record count isn't knowable without downloading+parsing, so it can't gate the download — but
+the upstream `main` HEAD commit SHA is a cheap, exact "did anything change?" signal.
+
+**Decision.**
+- Store the upstream `commit_sha` in `opentag_cache.json` next to `count`/`fetched_at`/
+  `materials`/`lexicon` (extended `_save_cache`, the cache-shape doc comment, and
+  `get_cache_metadata`). A fresh download captures the SHA via `get_upstream_commit_sha()`.
+- `get_upstream_commit_sha()` does `GET …/commits/main` with `Accept:
+  application/vnd.github.sha` (plain-text 40-char SHA, no JSON parse), short 15 s timeout. It
+  is **best-effort and never raises**: timeout / connectivity / non-2xx (GitHub
+  unauthenticated rate-limit = 60/hr/IP) / unexpected body all return `None`, and the caller
+  falls back to downloading. A failed check must never 500 a refresh.
+- `load_opentag_dataset` fetch gate reworked into explicit intents (`force_pull`,
+  `force_check`; legacy `force=True` aliases to `force_pull`):
+  - **stale or `force_check`** with a stored SHA → fetch upstream SHA; if it matches, rewrite
+    **only** `fetched_at` (keep materials/count/SHA/lexicon), return `unchanged=True`, **no
+    download**; if it differs / the check failed / no SHA was stored → download.
+  - **`force_pull`** → skip the SHA check, always download.
+  - **missing/invalid cache** → always download.
+- `POST /api/openprinttag/refresh` defaults to the SHA-checked path (returns
+  `{ unchanged, count, fetched_at, commit_sha }`); `?pull=true` forces the download. The
+  existing timeout/HTTP-error envelopes (504/502) are unchanged.
+- UI: a hash-checked Refresh that finds no change shows *"Dataset already up to date (commit ·
+  N records)"*, bumps the banner age, and reveals a **Pull contents anyway** button (the
+  `?pull=true` variant); when the dataset is unchanged the heavy match recompute is also
+  skipped. Count is display-only info; the decision keys off the SHA.
+- The match-result cache `dataset` fingerprint now prefers `commit_sha` (`sha:<sha>`), falling
+  back to `count:fetched_at` when the SHA is unknown — so a hash-only refresh that doesn't
+  change the data doesn't spuriously flag the cached match `stale_inputs`.
+
+**Why not gate on count.** The count requires a full download+parse, so it can't be the cheap
+signal. The commit SHA is one tiny request and is exact.
+
+**Why tolerant of SHA-check failure.** GitHub's unauthenticated limit is low (60/hr/IP); a
+rate-limited or flaky check must degrade to "download as before," never break refresh.
+
 ## 2026-06-18 — OpenTag matching: offload CPU off the event loop + cache the last result
 
 **Context.** `GET /api/openprinttag/matches` ran the dataset load + scoring synchronously on

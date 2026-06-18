@@ -13,7 +13,7 @@ Cache file shape (``opentag_matches_cache.json``)::
     {
         "computed_at": "2026-06-18T12:00:00+00:00",
         "fingerprint": {
-            "dataset": "1234:2026-06-18T11:00:00+00:00",  # count:fetched_at
+            "dataset": "abc123…",  # upstream commit SHA (falls back to count:fetched_at)
             "sm_count": 87,
             "config_hash": "<sha1 hex>"
         },
@@ -22,9 +22,10 @@ Cache file shape (``opentag_matches_cache.json``)::
 
 Fingerprint notes
 -----------------
-* ``dataset`` is ``count:fetched_at`` — a content proxy.  When the sibling
-  smart-dataset-refresh work lands a stable commit-SHA identity, swap that in;
-  until then count+timestamp is the documented fallback.
+* ``dataset`` is the upstream OpenPrintTag commit SHA — a stable content identity
+  that changes only when the dataset actually changes.  When the SHA is unknown
+  (pre-SHA cache, or a download whose SHA check failed) it falls back to the
+  ``count:fetched_at`` proxy so the fingerprint is always populated.
 * ``config_hash`` covers the vendor-alias CSV, the material-tag map, and the
   openprinttag extra-field names — anything that changes how a match is computed
   or where its identity is written.
@@ -49,12 +50,17 @@ logger = logging.getLogger(__name__)
 _CACHE_FILENAME = "opentag_matches_cache.json"
 
 
-def dataset_fingerprint(count: int, fetched_at: str | None) -> str:
-    """Return a content proxy for the dataset identity (``count:fetched_at``).
+def dataset_fingerprint(
+    count: int, fetched_at: str | None, commit_sha: str | None = None
+) -> str:
+    """Return a stable identity for the dataset.
 
-    Documented fallback until a stable dataset commit-SHA is available from the
-    smart-dataset-refresh work.
+    Prefers the upstream commit SHA (changes only on a real dataset change); falls
+    back to the ``count:fetched_at`` proxy when the SHA is unknown (pre-SHA cache or
+    a download whose SHA check failed).
     """
+    if commit_sha:
+        return f"sha:{commit_sha}"
     return f"{count}:{fetched_at or ''}"
 
 
@@ -88,10 +94,13 @@ def build_fingerprint(
     aliases_raw: str,
     tag_map: dict[str, int],
     field_names: dict[str, str],
+    dataset_commit_sha: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the full fingerprint dict for the current inputs."""
     return {
-        "dataset": dataset_fingerprint(dataset_count, dataset_fetched_at),
+        "dataset": dataset_fingerprint(
+            dataset_count, dataset_fetched_at, dataset_commit_sha
+        ),
         "sm_count": sm_count,
         "config_hash": config_fingerprint(aliases_raw, tag_map, field_names),
     }

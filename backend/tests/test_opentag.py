@@ -19,6 +19,7 @@ from app.core.opentag_cache import (
     _rgba_to_hex,
     _save_cache,
     get_cache_metadata,
+    get_upstream_commit_sha,
     load_opentag_dataset,
 )
 from app.core.opentag_match import (
@@ -221,6 +222,197 @@ async def test_load_opentag_dataset_github_error_propagates(tmp_path):
     ):
         with pytest.raises(httpx.HTTPStatusError):
             await load_opentag_dataset(str(tmp_path), 24, force=True)
+
+
+# ---------------------------------------------------------------------------
+# Smart dataset refresh: commit-SHA gate
+# ---------------------------------------------------------------------------
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _save_with_sha(tmp_path, materials, ts, sha):
+    """Save a cache then patch its commit_sha in (mimics a SHA-aware fetch)."""
+    _save_cache(str(tmp_path), materials, ts, commit_sha=sha)
+
+
+@pytest.mark.asyncio
+async def test_sha_unchanged_bumps_age_no_download(tmp_path):
+    """Stale cache + matching upstream SHA → no download, age bumped, unchanged=True."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], old_ts, _SHA_A)
+
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value=_SHA_A),
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_not_called()
+    assert result["unchanged"] is True
+    assert result["commit_sha"] == _SHA_A
+    assert result["count"] == 1  # materials untouched
+    assert result["materials"][0]["slug"] == "buddy3d-pla-silk-bronze"
+    # Age bumped → no longer stale
+    assert result["stale"] is False
+
+
+@pytest.mark.asyncio
+async def test_sha_changed_downloads(tmp_path):
+    """Stale cache + differing upstream SHA → downloads, new SHA stored, unchanged=False."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], old_ts, _SHA_A)
+
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value=_SHA_B),
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_called_once()
+    assert result["unchanged"] is False
+    assert result["commit_sha"] == _SHA_B
+    assert result["count"] == 2
+    loaded = _load_cache(str(tmp_path))
+    assert loaded["commit_sha"] == _SHA_B
+
+
+@pytest.mark.asyncio
+async def test_force_pull_downloads_even_when_sha_matches(tmp_path):
+    """force_pull skips the SHA check and downloads even when the commit is unchanged."""
+    from unittest.mock import patch as _patch
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], fresh_ts, _SHA_A)
+
+    sha_mock = AsyncMock(return_value=_SHA_A)
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_pull=True)
+        fetch_mock.assert_called_once()
+    assert result["unchanged"] is False
+    assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_stored_sha_downloads(tmp_path):
+    """A stale cache with no stored commit_sha downloads (no false 'unchanged')."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_cache(str(tmp_path), [_OPT_PLA_SILK], old_ts)  # no commit_sha
+
+    sha_mock = AsyncMock(return_value=_SHA_A)
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_called_once()
+    # With no stored SHA there's nothing to compare, so the load downloads and
+    # records the freshly-learned SHA.
+    assert result["unchanged"] is False
+    assert result["commit_sha"] == _SHA_A
+
+
+@pytest.mark.asyncio
+async def test_sha_check_failure_falls_back_to_download(tmp_path):
+    """When the SHA check returns None (timeout/rate-limit) the load downloads anyway."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], old_ts, _SHA_A)
+
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value=None),
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_called_once()
+    assert result["unchanged"] is False
+
+
+@pytest.mark.asyncio
+async def test_fresh_cache_no_check_serves_without_sha_call(tmp_path):
+    """A fresh cache without force_check serves as-is — no SHA call, no download."""
+    from unittest.mock import patch as _patch
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], fresh_ts, _SHA_A)
+
+    sha_mock = AsyncMock(return_value=_SHA_A)
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=[_OPT_PETG]),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24)
+        sha_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+    assert result["unchanged"] is False
+    assert result["commit_sha"] == _SHA_A
+
+
+@pytest.mark.asyncio
+async def test_get_upstream_commit_sha_returns_sha_on_200():
+    """A 200 with a 40-char hex body returns the SHA."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.headers["Accept"] == "application/vnd.github.sha"
+        return httpx.Response(200, text=_SHA_A)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sha = await get_upstream_commit_sha(client)
+    assert sha == _SHA_A
+
+
+@pytest.mark.asyncio
+async def test_get_upstream_commit_sha_none_on_error():
+    """A non-2xx (e.g. 403 rate-limit) yields None, not an exception."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="rate limited")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sha = await get_upstream_commit_sha(client)
+    assert sha is None
+
+
+@pytest.mark.asyncio
+async def test_get_upstream_commit_sha_none_on_junk_body():
+    """A 200 with a non-SHA body (HTML error page) yields None."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>nope</html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sha = await get_upstream_commit_sha(client)
+    assert sha is None
+
+
+def test_get_cache_metadata_includes_commit_sha(tmp_path):
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], fresh_ts, _SHA_A)
+    meta = get_cache_metadata(str(tmp_path), 24)
+    assert meta["commit_sha"] == _SHA_A
 
 
 # ---------------------------------------------------------------------------
@@ -6467,3 +6659,21 @@ def test_match_cache_helpers_fingerprint_and_stale():
     ds = dict(base, dataset="11:2026-06-18T00:00:00+00:00")
     assert inputs_stale(base, ds) is True
     assert inputs_stale(None, base) is True
+
+
+def test_dataset_fingerprint_prefers_commit_sha():
+    """When a commit SHA is present the fingerprint keys off it; else count:fetched_at."""
+    from app.core.opentag_match_cache import build_fingerprint, dataset_fingerprint
+
+    assert dataset_fingerprint(10, "ts", "deadbeef") == "sha:deadbeef"
+    assert dataset_fingerprint(10, "ts", None) == "10:ts"
+    # Same SHA but different count/fetched_at → still identical fingerprint (SHA wins).
+    a = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="t1", dataset_commit_sha="sha1",
+        sm_count=5, aliases_raw="", tag_map={}, field_names={},
+    )
+    b = build_fingerprint(
+        dataset_count=99, dataset_fetched_at="t2", dataset_commit_sha="sha1",
+        sm_count=5, aliases_raw="", tag_map={}, field_names={},
+    )
+    assert a["dataset"] == b["dataset"] == "sha:sha1"

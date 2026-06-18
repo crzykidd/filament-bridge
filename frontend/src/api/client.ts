@@ -256,8 +256,17 @@ export const getOpenTagMatches = (recompute = false, signal?: AbortSignal) =>
     `/openprinttag/matches${recompute ? '?recompute=true' : ''}`,
     signal ? { signal } : undefined,
   )
-export const postOpenTagRefresh = () =>
-  request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
+/**
+ * Refresh the OpenTag dataset. Default (`pull=false`) runs a cheap upstream
+ * commit-SHA check: an unchanged commit only bumps the cache age (`unchanged=true`,
+ * no heavy download); a changed/unknown SHA re-downloads. Pass `pull=true` to skip
+ * the check and force a full download ("Pull contents anyway").
+ */
+export const postOpenTagRefresh = (pull = false) =>
+  request<OpenTagDatasetMeta>(
+    `/openprinttag/refresh${pull ? '?pull=true' : ''}`,
+    { method: 'POST' },
+  )
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>
   json<OpenTagApplyResponse>('/openprinttag/apply', 'POST', body)
 /** Clear (unmatch) a filament's OpenTag identity directly — standalone counterpart

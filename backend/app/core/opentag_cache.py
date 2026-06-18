@@ -6,18 +6,27 @@ Design
 * A single download fetches the complete dataset: brand names, material properties,
   primary and secondary colors all come from the same tarball.  No FDB dependency.
 * The cache is a single JSON file in DATA_DIR (``opentag_cache.json``).
-* Re-fetch happens only when the file is missing, when ``fetched_at`` is older
-  than ``OPENTAG_CACHE_MAX_AGE_HOURS``, or when the caller passes ``force=True``.
+* Re-fetch is gated by a cheap upstream **commit-SHA check** (see
+  ``get_upstream_commit_sha``): when the cache is stale (or the caller forces a
+  check) the SHA is compared against the cached one — a match bumps the cache age
+  WITHOUT re-downloading the heavy tarball; only a differing/absent SHA triggers a
+  download.  ``force_pull=True`` skips the SHA check and always downloads.
 * Fetch is on-demand (no background job).
 * If the network call fails the error propagates to the caller (502/504 in the API layer).
 * If the cache file is corrupt/missing and the network call fails the error propagates.
+* The SHA check itself is best-effort: any failure (timeout / rate-limit / non-2xx)
+  returns ``None`` and the caller falls back to downloading — a failed check never
+  hard-fails a refresh.
 
 The top-level cache file shape::
 
     {
         "fetched_at": "2026-06-06T12:00:00+00:00",
         "count": 1234,
-        "materials": [ ...OPTMaterial dicts... ]
+        "commit_sha": "abc123…",          # upstream main HEAD SHA at fetch time (None if unknown)
+        "materials": [ ...OPTMaterial dicts... ],
+        "lexicon": { ... },               # mined modifier/color lexicon
+        "lexicon_version": 3
     }
 
 OPTMaterial dict shape (identical to the old FDB feed shape — consumers are unchanged):
@@ -98,7 +107,13 @@ _CACHE_FILENAME = "opentag_cache.json"
 _TARBALL_URL = (
     "https://api.github.com/repos/OpenPrintTag/openprinttag-database/tarball/main"
 )
+_COMMITS_URL = (
+    "https://api.github.com/repos/OpenPrintTag/openprinttag-database/commits/main"
+)
 _FETCH_TIMEOUT = httpx.Timeout(120.0)
+# The SHA check is a cheap single-line GET — keep its timeout short so a slow/
+# unreachable GitHub falls back to a normal download quickly instead of stalling.
+_SHA_TIMEOUT = httpx.Timeout(15.0)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +311,60 @@ async def _fetch_from_tarball(
         ) from exc
 
 
+async def get_upstream_commit_sha(
+    http: httpx.AsyncClient | None = None,
+) -> str | None:
+    """Return the current upstream ``main`` HEAD commit SHA, or ``None`` on failure.
+
+    Cheap single-request signal used to decide whether the heavy tarball needs a
+    re-download.  Uses the ``application/vnd.github.sha`` media type so GitHub
+    returns just the 40-char SHA as plain text (no JSON body to parse).
+
+    Best-effort by contract: any failure — timeout, connectivity, rate-limit
+    (GitHub unauth = 60 req/hr/IP → HTTP 403/429), or an unexpected body — is
+    swallowed and ``None`` is returned so the caller can fall back to a download.
+    NEVER raises.  Log lines are scrubbed (CWE-117).
+    """
+    from app.core.log_safe import scrub as _scrub
+
+    own_client = http is None
+    client: httpx.AsyncClient = http if http is not None else httpx.AsyncClient()
+    try:
+        resp = await client.get(
+            _COMMITS_URL,
+            timeout=_SHA_TIMEOUT,
+            follow_redirects=True,
+            headers={"Accept": "application/vnd.github.sha"},
+        )
+        resp.raise_for_status()
+        sha = resp.text.strip()
+        # A valid SHA is 40 hex chars; anything else (HTML error page, JSON) is junk.
+        if len(sha) == 40 and all(c in "0123456789abcdefABCDEF" for c in sha):
+            return sha
+        logger.warning(
+            "opentag_cache: upstream SHA check returned an unexpected body: %s",
+            _scrub(sha[:80]),
+        )
+        return None
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "opentag_cache: upstream SHA check got HTTP %d (rate-limit/unavailable?) — "
+            "falling back to download: %s",
+            exc.response.status_code, _scrub(exc),
+        )
+        return None
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        logger.warning(
+            "opentag_cache: upstream SHA check failed (network) — falling back to "
+            "download: %s",
+            _scrub(exc),
+        )
+        return None
+    finally:
+        if own_client:
+            await client.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Cache helpers
 # ---------------------------------------------------------------------------
@@ -334,6 +403,7 @@ def _save_cache(
     fetched_at: str,
     lexicon: dict | None = None,
     lexicon_version: int = 0,
+    commit_sha: str | None = None,
 ) -> None:
     from app.core.opentag_lexicon import LEXICON_VERSION as _CURRENT_LEXICON_VERSION
     path = Path(data_dir) / _CACHE_FILENAME
@@ -341,6 +411,7 @@ def _save_cache(
     data: dict = {
         "fetched_at": fetched_at,
         "count": len(materials),
+        "commit_sha": commit_sha,
         "materials": materials,
         "lexicon_version": lexicon_version or _CURRENT_LEXICON_VERSION,
     }
@@ -348,8 +419,8 @@ def _save_cache(
         data["lexicon"] = lexicon
     with path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
-    logger.info("opentag_cache: saved %d materials to %s (lexicon_version=%d)",
-                len(materials), path, data["lexicon_version"])
+    logger.info("opentag_cache: saved %d materials to %s (lexicon_version=%d, sha=%s)",
+                len(materials), path, data["lexicon_version"], (commit_sha or "")[:12])
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +459,7 @@ def _mine_and_attach_lexicon(
             cache.get("fetched_at", ""),
             lexicon=lexicon,
             lexicon_version=LEXICON_VERSION,
+            commit_sha=cache.get("commit_sha"),
         )
     return cache
 
@@ -397,17 +469,33 @@ async def load_opentag_dataset(
     max_age_hours: int,
     *,
     force: bool = False,
+    force_pull: bool = False,
+    force_check: bool = False,
     http: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
-    """Return the cached OpenTag dataset, re-fetching from OpenPrintTag when stale or forced.
+    """Return the cached OpenTag dataset, gating the heavy tarball download behind a
+    cheap upstream commit-SHA check.
 
     Fetches directly from the OpenPrintTag GitHub tarball — no Filament DB dependency.
+
+    Intents (keyword-only flags):
+
+    * **normal** (no flags): serve the cache when fresh; when stale, run the SHA
+      check — a matching SHA bumps the cache age WITHOUT a download; a differing or
+      unknown SHA (or a failed check) downloads.
+    * ``force_check=True``: run the SHA check even when the cache is fresh (manual
+      Refresh).  Same SHA-vs-download outcome as the stale path.
+    * ``force_pull=True`` (or the legacy ``force=True``): skip the SHA check and
+      always download+parse (the "Pull contents anyway" path).
+    * missing/invalid cache: always download.
 
     Returns::
 
         {
             "fetched_at": "<iso>",
             "count": N,
+            "commit_sha": "<sha|None>",
+            "unchanged": bool,        # True iff the SHA matched and NO download happened
             "stale": False,
             "materials": [...OPTMaterial dicts...],
             "lexicon": {"modifiers": [...], "colors": [...]},
@@ -418,14 +506,20 @@ async def load_opentag_dataset(
     doesn't match ``LEXICON_VERSION`` the lexicon is re-mined in-place WITHOUT a
     network re-fetch (version-bump self-heal).
 
-    ``http`` is an optional ``httpx.AsyncClient`` for the tarball download (useful
-    in tests to inject a fake client).  When ``None``, a fresh client is created.
+    ``http`` is an optional ``httpx.AsyncClient`` for the tarball download and SHA
+    check (useful in tests to inject a fake client).  When ``None``, a fresh client
+    is created.
 
+    The SHA check is best-effort and never raises; on failure it falls back to a
+    download.  The tarball download itself still propagates:
     Raises ``httpx.TimeoutException`` on download timeout.
     Raises ``httpx.HTTPStatusError`` for non-2xx from GitHub.
     Raises ``httpx.RequestError`` for connectivity failures.
     """
     from app.core.opentag_lexicon import LEXICON_VERSION
+
+    # Legacy alias: ``force=True`` (old call sites/tests) == "Pull contents anyway".
+    force_pull = force_pull or force
 
     cache = _load_cache(data_dir)
 
@@ -441,40 +535,86 @@ async def load_opentag_dataset(
             and all(isinstance(m, dict) for m in mats)
         )
 
-    needs_fetch = force or (cache is None) or _is_stale(
-        (cache or {}).get("fetched_at"), max_age_hours
-    ) or (cache is not None and not _materials_valid(cache))
+    cache_missing = cache is None or not _materials_valid(cache)
+    cache_stale = _is_stale((cache or {}).get("fetched_at"), max_age_hours)
 
-    if needs_fetch:
+    async def _download_and_save(reason: str) -> dict[str, Any]:
         logger.info(
-            "opentag_cache: fetching fresh dataset from OpenPrintTag GitHub tarball"
-            " (force=%s)",
-            force,
+            "opentag_cache: downloading fresh dataset from OpenPrintTag GitHub "
+            "tarball (%s)",
+            reason,
         )
+        # Capture the upstream SHA alongside the materials so the next check can
+        # short-circuit.  Best-effort — never block a download on the SHA call.
+        new_sha = await get_upstream_commit_sha(http)
         materials = await _fetch_from_tarball(http)
         fetched_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        # Mine lexicon from freshly-fetched data then save everything together
-        cache = {
+        fresh = {
             "fetched_at": fetched_at,
             "count": len(materials),
+            "commit_sha": new_sha,
             "materials": materials,
         }
+        _mine_and_attach_lexicon(fresh, data_dir, save=True)
+        return fresh
+
+    unchanged = False
+
+    if force_pull:
+        # "Pull contents anyway" — no SHA check, always download.
+        cache = await _download_and_save("force_pull")
+    elif cache_missing:
+        cache = await _download_and_save("cache missing/invalid")
+    elif cache_stale or force_check:
+        cached_sha = cache.get("commit_sha")
+        if not cached_sha:
+            # No stored SHA → can't prove "unchanged"; download to learn it.
+            cache = await _download_and_save("no stored commit_sha")
+        else:
+            upstream_sha = await get_upstream_commit_sha(http)
+            if upstream_sha is None:
+                # Check failed (timeout/rate-limit) → safe fallback: download.
+                cache = await _download_and_save("SHA check failed")
+            elif upstream_sha == cached_sha:
+                # Content unchanged — bump age only, NO tarball download.
+                logger.info(
+                    "opentag_cache: upstream commit unchanged (%s) — bumping cache "
+                    "age, skipping download",
+                    cached_sha[:12],
+                )
+                cache["fetched_at"] = datetime.datetime.now(
+                    datetime.timezone.utc
+                ).isoformat()
+                _save_cache(
+                    data_dir,
+                    cache.get("materials", []),
+                    cache["fetched_at"],
+                    lexicon=cache.get("lexicon"),
+                    lexicon_version=cache.get("lexicon_version", 0),
+                    commit_sha=cached_sha,
+                )
+                unchanged = True
+            else:
+                cache = await _download_and_save("upstream commit changed")
+    # else: fresh cache, no forced check → serve as-is below.
+
+    # Check whether the cached lexicon needs to be re-mined (version bump / missing).
+    # Skip when we just downloaded (mining already happened in _download_and_save).
+    cached_version = (cache or {}).get("lexicon_version", 0)
+    cached_lexicon = (cache or {}).get("lexicon")
+    if cached_version != LEXICON_VERSION or not cached_lexicon:
+        logger.info(
+            "opentag_cache: lexicon version mismatch (cached=%d, want=%d) — "
+            "re-mining in-place without network fetch",
+            cached_version, LEXICON_VERSION,
+        )
         _mine_and_attach_lexicon(cache, data_dir, save=True)
-    else:
-        # Check whether the cached lexicon needs to be re-mined (version bump / missing)
-        cached_version = (cache or {}).get("lexicon_version", 0)
-        cached_lexicon = (cache or {}).get("lexicon")
-        if cached_version != LEXICON_VERSION or not cached_lexicon:
-            logger.info(
-                "opentag_cache: lexicon version mismatch (cached=%d, want=%d) — "
-                "re-mining in-place without network fetch",
-                cached_version, LEXICON_VERSION,
-            )
-            _mine_and_attach_lexicon(cache, data_dir, save=True)
 
     return {
         "fetched_at": cache["fetched_at"],
         "count": cache.get("count", len(cache.get("materials", []))),
+        "commit_sha": cache.get("commit_sha"),
+        "unchanged": unchanged,
         "stale": _is_stale(cache.get("fetched_at"), max_age_hours),
         "materials": cache.get("materials", []),
         "lexicon": cache.get("lexicon"),
@@ -485,9 +625,10 @@ def get_cache_metadata(data_dir: str, max_age_hours: int) -> dict[str, Any]:
     """Return metadata about the local cache without triggering a network fetch."""
     cache = _load_cache(data_dir)
     if cache is None:
-        return {"fetched_at": None, "count": 0, "stale": True}
+        return {"fetched_at": None, "count": 0, "stale": True, "commit_sha": None}
     return {
         "fetched_at": cache.get("fetched_at"),
         "count": cache.get("count", len(cache.get("materials", []))),
         "stale": _is_stale(cache.get("fetched_at"), max_age_hours),
+        "commit_sha": cache.get("commit_sha"),
     }
