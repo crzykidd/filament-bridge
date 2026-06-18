@@ -129,6 +129,12 @@ class SpoolmanClient:
         rows = await self._paginate("/api/v1/filament")
         return [SpoolmanFilament.model_validate(f) for f in rows]
 
+    async def get_filament(self, filament_id: int) -> SpoolmanFilament:
+        """GET /api/v1/filament/{id} — single filament with nested vendor."""
+        resp = await self._http.get(f"/api/v1/filament/{filament_id}")
+        resp.raise_for_status()
+        return SpoolmanFilament.model_validate(resp.json())
+
     async def get_vendors(self) -> list[SpoolmanVendor]:
         rows = await self._paginate("/api/v1/vendor")
         return [SpoolmanVendor.model_validate(v) for v in rows]

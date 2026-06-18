@@ -11,6 +11,18 @@ GitHub release.
 
 ### Added
 
+- **OpenTag Cleanup: inline unmatch + change-match from the candidate dropdown** — already-tagged
+  rows now list scored alternates beside the pinned exact match (the exact-UUID short-circuit no
+  longer suppresses fuzzy scoring), so you can re-point a wrong tag in one click. A new blank
+  **"— unmatch (clear OpenTag identity) —"** option (shown only for tagged rows) stages an
+  unmatch that the normal **Apply** step carries out: it blanks `openprinttag_slug` /
+  `openprinttag_uuid` on the Spoolman filament and removes only those two keys from the linked
+  Filament DB filament's `settings{}` bag (an approved scoped *removal* exception mirroring the
+  existing identity merge — every other settings key is preserved; idempotent; best-effort on the
+  FDB side). `openprinttag_ignore` is left untouched. Also adds a standalone
+  `POST /api/openprinttag/clear/{id}` endpoint for an immediate clear outside the Apply flow.
+  Closes the "no in-app way to clear/untag" gap (previously required editing Spoolman extras by
+  hand or the debug bulk-clear).
 - **OpenTag Cleanup: completeness report ("Show missing values")** — the toolbar action now
   opens a real report (`GET /api/openprinttag/completeness`) listing each tagged Spoolman
   filament and which attributes its OpenPrintTag record leaves empty, so users can find the

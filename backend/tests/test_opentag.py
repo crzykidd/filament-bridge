@@ -6049,3 +6049,280 @@ def test_completeness_excludes_untagged(tmp_path):
         assert {i["spoolman_filament_id"] for i in data["items"]} == {1}
     finally:
         _ot_mod._settings.data_dir = orig
+
+
+# ---------------------------------------------------------------------------
+# Inline unmatch + re-match: tagged-row alternates, clear endpoint, apply clear
+# ---------------------------------------------------------------------------
+
+# A second ELEGOO PETG so a tagged ELEGOO PETG row has an alternate to re-point to.
+_OPT_PETG_BLUE = {
+    "uuid": "aaaabbbb-0000-0000-0000-000000000099",
+    "slug": "elegoo-petg-blue",
+    "brandName": "ELEGOO",
+    "name": "PETG Blue",
+    "type": "PETG",
+    "abbreviation": "PETG",
+    "tags": [],
+    "color": "#0044CC",
+    "secondaryColors": [],
+    "density": 1.27,
+    "nozzleTempMin": 230,
+    "nozzleTempMax": 250,
+    "bedTempMin": 60,
+    "bedTempMax": 80,
+}
+
+
+def _matches_client(tmp_path, materials, sm_fils, fdb=None):
+    """Build a TestClient wired with a fresh cache + the given SM filaments."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=sm_fils)
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = fdb or AsyncMock()
+    return TestClient(test_app), fake_sm
+
+
+def test_tagged_row_returns_current_plus_alternates(tmp_path):
+    """A tagged ELEGOO PETG row returns [current exact match] + alternates from the same brand."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(
+            sm_id=5, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000",
+            extra={"openprinttag_uuid": json.dumps(_OPT_PETG["uuid"])},
+        )
+        client, _ = _matches_client(tmp_path, [_OPT_PETG, _OPT_PETG_BLUE], [sm])
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        match = resp.json()["matches"][0]
+        # Exact match pinned at confidence 1.0, index 0
+        assert match["confidence"] == 1.0
+        assert match["opt_uuid"] == _OPT_PETG["uuid"]
+        cands = match["candidates"]
+        assert cands[0]["opt_uuid"] == _OPT_PETG["uuid"]
+        # The other ELEGOO PETG must surface as an alternate (un-bypass works)
+        assert any(c["opt_uuid"] == _OPT_PETG_BLUE["uuid"] for c in cands)
+        # The pinned exact match must not be duplicated among alternates
+        assert sum(1 for c in cands if c["opt_uuid"] == _OPT_PETG["uuid"]) == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_tagged_row_single_brand_entry_has_no_alternates(tmp_path):
+    """A tagged row whose brand has only one dataset entry → [current] only."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(
+            sm_id=6, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000",
+            extra={"openprinttag_uuid": json.dumps(_OPT_PETG["uuid"])},
+        )
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+        match = client.get("/api/openprinttag/matches").json()["matches"][0]
+        assert len(match["candidates"]) == 1
+        assert match["candidates"][0]["opt_uuid"] == _OPT_PETG["uuid"]
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+@pytest.mark.asyncio
+async def test_remove_filament_settings_keys_only_removes_opentag_keys():
+    """remove_filament_settings_keys deletes ONLY the named keys, preserving the rest."""
+    from app.services.filamentdb import FilamentDBClient
+
+    fake_raw = {
+        "_id": "fil-rm-1",
+        "name": "Test PLA",
+        "settings": {
+            "slicer_key": "keepme",
+            "another": 7,
+            "openprinttag_slug": "old-slug",
+            "openprinttag_uuid": "old-uuid",
+        },
+    }
+    put_payloads: list[dict] = []
+
+    async def _fake_get(url):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=fake_raw)
+        return resp
+
+    async def _fake_put(url, json=None):
+        put_payloads.append(json)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+    client._http.put = AsyncMock(side_effect=_fake_put)
+
+    changed = await client.remove_filament_settings_keys(
+        "fil-rm-1", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+    assert changed is True
+    assert len(put_payloads) == 1
+    s = put_payloads[0]["settings"]
+    assert s == {"slicer_key": "keepme", "another": 7}  # only OPT keys removed
+
+
+@pytest.mark.asyncio
+async def test_remove_filament_settings_keys_idempotent_no_put():
+    """When neither key is present, no PUT is issued (idempotent)."""
+    from app.services.filamentdb import FilamentDBClient
+
+    fake_raw = {"_id": "fil-rm-2", "name": "X", "settings": {"slicer_key": "v"}}
+    put_calls: list = []
+
+    async def _fake_get(url):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=fake_raw)
+        return resp
+
+    async def _fake_put(url, json=None):
+        put_calls.append(json)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+    client._http.put = AsyncMock(side_effect=_fake_put)
+
+    changed = await client.remove_filament_settings_keys(
+        "fil-rm-2", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+    assert changed is False
+    assert put_calls == []
+
+
+def _clear_app(fake_sm, fake_fdb):
+    from fastapi import FastAPI
+    from app.api.opentag import router
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+    return app
+
+
+def test_clear_endpoint_blanks_sm_and_removes_fdb_keys():
+    """POST /api/openprinttag/clear/{id} blanks SM slug/uuid and removes only those FDB keys."""
+    from fastapi.testclient import TestClient
+
+    patched: list = []
+
+    async def _patch(fil_id, payload):
+        patched.append((fil_id, payload))
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_patch)
+    # SM filament carries a filamentdb_id cross-ref so the FDB side resolves.
+    fake_sm.get_filament = AsyncMock(return_value=_sm_fil(
+        sm_id=7, extra={"filamentdb_id": json.dumps("fdb-7")},
+    ))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.remove_filament_settings_keys = AsyncMock(return_value=True)
+
+    client = TestClient(_clear_app(fake_sm, fake_fdb))
+    resp = client.post("/api/openprinttag/clear/7")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["spoolman_cleared"] is True
+    assert body["fdb_settings_updated"] is True
+    assert body["fdb_filament_id"] == "fdb-7"
+
+    # SM patch blanked slug + uuid (and ONLY those two)
+    fil_id, payload = patched[0]
+    assert fil_id == 7
+    assert set(payload["extra"].keys()) == {"openprinttag_slug", "openprinttag_uuid"}
+    # FDB side removed exactly the two identity keys
+    fake_fdb.remove_filament_settings_keys.assert_awaited_once_with(
+        "fdb-7", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+
+
+def test_clear_endpoint_idempotent_no_fdb_mapping():
+    """Clearing an untagged filament with no FDB mapping still succeeds (no FDB write)."""
+    from fastapi.testclient import TestClient
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock()
+    fake_sm.update_filament = AsyncMock(return_value=MagicMock())
+    fake_sm.get_filament = AsyncMock(return_value=_sm_fil(sm_id=8, extra={}))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.remove_filament_settings_keys = AsyncMock(return_value=False)
+
+    client = TestClient(_clear_app(fake_sm, fake_fdb))
+    resp = client.post("/api/openprinttag/clear/8")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["spoolman_cleared"] is True
+    assert body["fdb_settings_updated"] is False
+    assert body["fdb_filament_id"] is None
+    fake_fdb.remove_filament_settings_keys.assert_not_called()
+
+
+def test_apply_clear_identity_decision_clears():
+    """An apply decision with clear_identity=True clears instead of writing."""
+    from fastapi.testclient import TestClient
+
+    patched: list = []
+
+    async def _patch(fil_id, payload):
+        patched.append((fil_id, payload))
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock()
+    fake_sm.get_vendors = AsyncMock(return_value=[])
+    fake_sm.update_filament = AsyncMock(side_effect=_patch)
+
+    fake_fdb = AsyncMock()
+    fake_fdb.remove_filament_settings_keys = AsyncMock(return_value=True)
+
+    client = TestClient(_clear_app(fake_sm, fake_fdb))
+    req = {"decisions": [{
+        "spoolman_filament_id": 9,
+        "ignored": False,
+        "clear_identity": True,
+        "fdb_filament_id": "fdb-9",
+        "fields": [],
+    }]}
+    resp = client.post("/api/openprinttag/apply", json=req)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+    assert data["errors"] == 0
+    assert data["results"][0]["status"] == "cleared"
+    assert data["results"][0]["identity_cleared"] is True
+    # SM patch blanked exactly slug + uuid
+    fil_id, payload = patched[0]
+    assert fil_id == 9
+    assert set(payload["extra"].keys()) == {"openprinttag_slug", "openprinttag_uuid"}
+    fake_fdb.remove_filament_settings_keys.assert_awaited_once_with(
+        "fdb-9", ["openprinttag_slug", "openprinttag_uuid"]
+    )

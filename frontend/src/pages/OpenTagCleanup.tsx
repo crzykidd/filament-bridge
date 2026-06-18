@@ -169,6 +169,9 @@ function normalizeFieldValue(v: unknown): string {
 
 const IDENTITY_FIELDS = new Set(['extra.openprinttag_slug', 'extra.openprinttag_uuid'])
 
+/** Sentinel selected-candidate index meaning "— unmatch —" (clear the OpenTag identity). */
+const UNMATCH_IDX = -1
+
 /**
  * Derive the badge state for a filament card.
  * - existingUuid: the current Spoolman value of extra.openprinttag_uuid (candidate-independent).
@@ -292,14 +295,17 @@ function FilamentCard({
     searchTimerRef.current = setTimeout(() => { void runSearch(value) }, 350)
   }, [runSearch])
 
+  // Unmatch sentinel: selectedCandidateIdx === UNMATCH_IDX means "— unmatch —" is staged.
+  const isUnmatchStaged = selectedCandidateIdx === UNMATCH_IDX
+
   // Active candidate: use structured candidates[selectedCandidateIdx] when available,
   // otherwise fall back to the top-level match fields (backward-compat / no-match rows).
-  const activeCandidateIdx = Math.min(
+  const activeCandidateIdx = isUnmatchStaged ? 0 : Math.min(
     selectedCandidateIdx,
     Math.max(0, (match.candidates?.length ?? 1) - 1),
   )
   const activeCandidate: OpenTagCandidate | null =
-    match.candidates && match.candidates.length > 0
+    !isUnmatchStaged && match.candidates && match.candidates.length > 0
       ? match.candidates[activeCandidateIdx]
       : null
 
@@ -350,8 +356,12 @@ function FilamentCard({
           {/* Candidate dropdown — shown when there are multiple candidates */}
           {hasCandidates && (
             <select
-              className="text-xs border border-indigo-200 dark:border-indigo-700 rounded px-1 py-0.5 bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
-              value={activeCandidateIdx}
+              className={`text-xs border rounded px-1 py-0.5 bg-white dark:bg-gray-700 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400 ${
+                isUnmatchStaged
+                  ? 'border-red-300 dark:border-red-700 text-red-600 dark:text-red-400'
+                  : 'border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+              }`}
+              value={isUnmatchStaged ? UNMATCH_IDX : activeCandidateIdx}
               onClick={e => e.stopPropagation()}
               onChange={e => {
                 e.stopPropagation()
@@ -363,6 +373,10 @@ function FilamentCard({
                   {i === 0 ? '★ ' : ''}{candidateLabel(c)}
                 </option>
               ))}
+              {/* Unmatch is only meaningful for rows that already carry an OPT identity. */}
+              {existingUuid && (
+                <option value={UNMATCH_IDX}>— unmatch (clear OpenTag identity) —</option>
+              )}
             </select>
           )}
           {expanded && hasCandidates && allCandidatesListed && (
@@ -495,7 +509,15 @@ function FilamentCard({
         </div>
       )}
 
-      {expanded && !ignored && displayFields.length > 0 && (
+      {expanded && !ignored && isUnmatchStaged && (
+        <p className="px-4 py-3 text-sm text-red-600 dark:text-red-400">
+          Will <strong>unmatch</strong> on Apply — clears this filament's OpenPrintTag
+          identity (slug + UUID) in Spoolman and removes it from Filament DB. Pick a
+          candidate above to re-match instead.
+        </p>
+      )}
+
+      {expanded && !ignored && !isUnmatchStaged && displayFields.length > 0 && (
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-700">
             <thead>
@@ -521,7 +543,7 @@ function FilamentCard({
         </div>
       )}
 
-      {expanded && !ignored && displayFields.length === 0 && (
+      {expanded && !ignored && !isUnmatchStaged && displayFields.length === 0 && (
         <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 italic">
           {displayConfidence < 0.30
             ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
@@ -566,6 +588,17 @@ function ConfirmStep({
     const result: PendingWrite[] = []
     for (const m of matches) {
       if (ignoredIds.has(m.spoolman_filament_id)) continue
+      // Unmatch staged → a single "clear identity" pending row, no field writes.
+      if (selectedCandidates[m.spoolman_filament_id] === UNMATCH_IDX) {
+        result.push({
+          smId: m.spoolman_filament_id,
+          name: m.spoolman_name,
+          field: 'unmatch',
+          oldValue: 'tagged',
+          newValue: 'clear OpenTag identity',
+        })
+        continue
+      }
       const decisions = fieldDecisions[m.spoolman_filament_id] ?? {}
       const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
       const activeFields = m.candidates?.[candidateIdx]?.fields ?? m.fields
@@ -1621,6 +1654,8 @@ export default function OpenTagCleanup() {
   const handleCandidateChange = useCallback(
     (smId: number, idx: number, match: OpenTagFilamentMatch) => {
       setSelectedCandidates(prev => ({ ...prev, [smId]: idx }))
+      // Unmatch sentinel: stage a clear; field decisions are irrelevant (none are written).
+      if (idx === UNMATCH_IDX) return
       const candidate = match.candidates?.[idx]
       if (!candidate) return
       const newDecisions: Record<string, OpenTagFieldDecision> = {}
@@ -1686,6 +1721,16 @@ export default function OpenTagCleanup() {
       const decisions: OpenTagFilamentDecision[] = response.matches.map(m => {
         if (ignoredIds.has(m.spoolman_filament_id)) {
           return { spoolman_filament_id: m.spoolman_filament_id, ignored: true, fields: [] }
+        }
+        // Unmatch staged: emit a clear_identity decision (backend resolves the FDB id
+        // from the SM cross-ref extra). No field/identity writes.
+        if (selectedCandidates[m.spoolman_filament_id] === UNMATCH_IDX) {
+          return {
+            spoolman_filament_id: m.spoolman_filament_id,
+            ignored: false,
+            clear_identity: true,
+            fields: [],
+          }
         }
         // Use selected candidate for identity (slug/uuid) and active fields
         const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0

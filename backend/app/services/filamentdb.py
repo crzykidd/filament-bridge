@@ -233,6 +233,41 @@ class FilamentDBClient:
         put_resp = await self._http.put(f"/api/filaments/{filament_id}", json=payload)
         put_resp.raise_for_status()
 
+    async def remove_filament_settings_keys(
+        self, filament_id: str, keys: list[str]
+    ) -> bool:
+        """Remove specific keys from a FDB filament's ``settings{}`` bag.
+
+        APPROVED SCOPED EXCEPTION (counterpart of ``merge_filament_settings``):
+        CLAUDE.md forbids touching the settings bag. This method is the only
+        permitted *removal* path — it ONLY deletes the two OpenTag identity keys
+        (``openprinttag_slug`` / ``openprinttag_uuid``) and preserves all other
+        settings keys unchanged. The caller (the OpenTag clear-identity endpoint)
+        is responsible for passing only those two keys.
+
+        Implementation: read-modify-write — fetch the current filament (detail
+        view) → read its ``settings`` bag (empty dict if absent) → delete each
+        requested key that is present → write back via PUT with the same
+        ``_strip_computed`` stripping ``update_filament`` uses, re-attaching the
+        pruned ``settings`` bag AFTER stripping. Idempotent: if none of the keys
+        are present, no PUT is issued.
+
+        Returns True when a write occurred, False when nothing needed removing.
+        """
+        detail_resp = await self._http.get(f"/api/filaments/{filament_id}")
+        detail_resp.raise_for_status()
+        raw = detail_resp.json()
+        current_settings: dict = raw.get("settings") or {}
+        present = [k for k in keys if k in current_settings]
+        if not present:
+            return False  # idempotent — nothing to remove
+        pruned = {k: v for k, v in current_settings.items() if k not in present}
+        payload = _strip_computed(raw)
+        payload["settings"] = pruned
+        put_resp = await self._http.put(f"/api/filaments/{filament_id}", json=payload)
+        put_resp.raise_for_status()
+        return True
+
     # ------------------------------------------------------------------
     # Backup
     # ------------------------------------------------------------------

@@ -1,5 +1,40 @@
 # Decision record
 
+## 2026-06-18 — OpenTag inline unmatch/re-match: scoped FDB settings{} *removal* exception
+
+**Context.** Users could apply an OpenTag identity but had no in-app way to clear or
+re-point one — they had to hand-edit Spoolman extras or run the debug bulk-clear. Two
+sub-decisions were needed: (1) how to surface alternates for an already-tagged row whose
+exact-UUID match bypasses fuzzy scoring, and (2) how "unmatch" removes the identity from
+Filament DB given CLAUDE.md's blanket "never touch `settings{}`" rule.
+
+**Decisions.**
+- **Un-bypass alternates for tagged rows.** The exact-UUID branch in `opentag.py` still pins
+  the matched record at confidence 1.0 / index 0, but now also runs the same gate pipeline
+  (extracted into a local `_gated_candidates_for` helper, shared with the untagged branch — no
+  logic fork) + `find_best_match(..., top_n=10)` and returns `candidates = [current] +
+  alternates` (the pinned UUID is deduped out of the alternates). **No scorer changes.** A
+  single-entry brand correctly yields `[current]` only.
+- **Unmatch integrates into the existing Apply flow, not an immediate action.** The candidate
+  dropdown gains a blank "— unmatch —" option (sentinel index `-1`), shown only for rows that
+  already carry an identity. Selecting it stages a decision with `clear_identity=true`; the
+  existing Apply step performs the clear. This keeps one apply action consistent with the rest
+  of the page (a standalone `POST /api/openprinttag/clear/{id}` exists too, for callers that
+  want an immediate clear).
+- **Clear = blank SM slug/uuid AND remove only those two keys from the FDB `settings{}` bag.**
+  The SM side reuses the debug-clear blanking convention (encode `""`). The FDB side is a new
+  **approved scoped *removal* exception**, the mirror of the existing
+  `merge_filament_settings`: `FilamentDBClient.remove_filament_settings_keys()` does a
+  read-modify-write that deletes ONLY `openprinttag_slug`/`openprinttag_uuid`, preserves every
+  other key, and is idempotent (no PUT when neither key is present). It is the only permitted
+  removal path; callers must pass only those two keys.
+- **`openprinttag_ignore` is NOT cleared by an unmatch** — it is a separate suppression concern
+  and clearing it would silently re-enable update banners.
+- **FDB removal is best-effort; the SM blank is authoritative.** A missing FDB mapping (no
+  `filamentdb_id` cross-ref) or an FDB write error is logged (scrubbed via `core/log_safe`) and
+  does not fail the unmatch — the SM identity is still cleared. The FDB filament id comes from
+  the decision or is resolved from the SM filament's `filamentdb_id` extra.
+
 ## 2026-06-18 — OpenTag completeness report: assess the raw OPT record, not the lossy field path
 
 **Context.** New "Show missing values" report tells the user which OpenPrintTag entries are

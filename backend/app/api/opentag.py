@@ -183,6 +183,10 @@ class OpenTagFilamentDecision(BaseModel):
     # Slug/uuid always carried separately for FDB settings-bag write
     openprinttag_slug: str | None = None
     openprinttag_uuid: str | None = None
+    # When True, this decision is an UNMATCH: clear the OpenTag identity instead of
+    # writing one.  Blanks the SM openprinttag_slug/uuid extras and removes those two
+    # keys from the linked FDB settings{} bag.  Takes precedence over field writes.
+    clear_identity: bool = False
 
 
 class OpenTagApplyRequest(BaseModel):
@@ -191,10 +195,12 @@ class OpenTagApplyRequest(BaseModel):
 
 class OpenTagApplyFilamentResult(BaseModel):
     spoolman_filament_id: int
-    status: str  # "ok" | "ignored" | "error"
+    status: str  # "ok" | "ignored" | "error" | "cleared"
     error: str | None = None
     fields_written: list[str] = []
     fdb_settings_updated: bool = False
+    # True when this decision cleared the OpenTag identity (unmatch).
+    identity_cleared: bool = False
 
 
 class OpenTagApplyResponse(BaseModel):
@@ -409,6 +415,71 @@ def _build_sm_patch(
     return native, fdb_keys, vendor_name
 
 
+async def _clear_opentag_identity(
+    sm: Any,
+    fdb: Any,
+    spoolman_filament_id: int,
+    fdb_filament_id: str | None,
+) -> bool:
+    """Clear the OpenTag identity for one Spoolman filament (unmatch).
+
+    Blanks the ``openprinttag_slug`` + ``openprinttag_uuid`` extras on the Spoolman
+    filament (reusing the same blanking convention as the debug bulk-clear) and, when a
+    linked FDB filament id is known, removes ONLY those two keys from the FDB filament's
+    ``settings{}`` bag via ``remove_filament_settings_keys`` (the approved scoped
+    exception).  Deliberately does NOT touch ``openprinttag_ignore`` — that is a
+    separate suppression concern.
+
+    Returns True when the FDB settings bag was modified, False otherwise.  Raises on
+    Spoolman write failure (caller maps to an error result / 502); the FDB removal is
+    best-effort and never aborts the Spoolman blank.
+    """
+    slug_field = _settings.spoolman_field_openprinttag_slug
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+    blank = encode_extra_value("")
+    await sm.update_filament(
+        spoolman_filament_id,
+        {"extra": {slug_field: blank, uuid_field: blank}},
+    )
+    logger.info(
+        "opentag clear: blanked %s/%s on SM filament %d",
+        _scrub(slug_field), _scrub(uuid_field), spoolman_filament_id,
+    )
+
+    fdb_cleared = False
+    if fdb_filament_id:
+        try:
+            fdb_cleared = await fdb.remove_filament_settings_keys(
+                fdb_filament_id, ["openprinttag_slug", "openprinttag_uuid"]
+            )
+            logger.info(
+                "opentag clear: removed OpenTag identity keys from FDB filament %s (changed=%s)",
+                _scrub(fdb_filament_id), fdb_cleared,
+            )
+        except Exception as exc:
+            logger.warning(
+                "opentag clear: could not remove identity keys from FDB filament %s: %s",
+                _scrub(fdb_filament_id), _scrub(exc),
+            )
+    return fdb_cleared
+
+
+async def _resolve_fdb_filament_id(sm: Any, spoolman_filament_id: int) -> str | None:
+    """Look up the FDB filament id from a Spoolman filament's ``filamentdb_id`` cross-ref
+    extra.  Best-effort — returns None when the filament is not found or has no cross-ref."""
+    id_field = _settings.spoolman_field_filamentdb_id
+    try:
+        fil = await sm.get_filament(spoolman_filament_id)
+    except Exception as exc:
+        logger.warning(
+            "opentag clear: could not fetch SM filament %d to resolve FDB id: %s",
+            spoolman_filament_id, _scrub(exc),
+        )
+        return None
+    raw = (fil.extra or {}).get(id_field)
+    return decode_extra_value(raw) or None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -596,6 +667,61 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
     uuid_field = _settings.spoolman_field_openprinttag_uuid
     ignore_field = _settings.spoolman_field_openprinttag_ignore
 
+    def _gated_candidates_for(sm_fil: Any) -> tuple[str, list[dict[str, Any]]]:
+        """Run the brand pre-filter + color-profile + polymer-family gates for one SM
+        filament and return ``(sm_brand_key, gated_candidate_dicts)``.
+
+        Shared by the untagged branch (full fuzzy scoring) and the tagged branch
+        (computing alternates beside the pinned exact-UUID match) so the gate logic
+        is defined exactly once.
+        """
+        # Resolve the SM vendor name through the alias map before looking up brand candidates.
+        # This allows e.g. "Prusa" to find "Prusament" entries when aliases contain that pair.
+        brand_key = resolve_opentag_brand(
+            sm_fil.vendor.name if sm_fil.vendor else None, vendor_aliases
+        )
+        candidates = materials_by_brand.get(brand_key, [])
+
+        # Color-profile gate (v2.1 — name-aware + soft):
+        # When the OPT entry has complete arrangement + hex data, apply the strict
+        # profiles_compatible check.  When data is incomplete/absent, use effective
+        # color arity (max of hex count and name-decomposed color count) so that OPT
+        # entries with descriptive multi-color names but missing hex data (e.g.
+        # "Temperature Color Change Purple to Red") are not incorrectly dropped.
+        profile = sm_color_profile(sm_fil)
+        # Compute SM arity: max of name-decomposed color count and hex field count.
+        parsed_gate = decompose_name(
+            sm_fil.name, sm_fil.vendor.name if sm_fil.vendor else None, sm_fil.material,
+            tag_map=tag_map, ngram_index=ngram_index, color_synonyms=effective_synonyms,
+        )
+        arity_gate = sum(parsed_gate.colors.values())
+        if sm_fil.multi_color_hexes:
+            hex_arity = 1 + len([h for h in sm_fil.multi_color_hexes.split(",") if h.strip()])
+            arity_gate = max(arity_gate, hex_arity)
+        candidates = [
+            c for c in candidates
+            if isinstance(c, dict) and color_profile_compatible_soft(
+                profile, arity_gate, c, tag_map, ngram_index, effective_synonyms
+            )
+        ]
+
+        # Polymer-family gate (v2.1 — widened by PLA-biopolymer bucket):
+        # PLA/PHA/LW-PLA/HTPLA/rPLA are mutually gate-compatible (ColorFabb composites
+        # are inconsistently typed in OPT as PHA even when sold as "PLA" blends).
+        # All other cross-family pairs (ASA≠PETG, PC≠PETG, etc.) remain strictly gated.
+        # Only gate when the SM filament has a non-empty / known material
+        # (unknown SM material → don't gate, score all candidates).
+        fam = material_family(sm_fil.material, tag_map)
+        if fam:
+            candidates = [
+                c for c in candidates
+                if families_gate_compatible(
+                    fam,
+                    material_family(c.get("type") or c.get("abbreviation") or "", tag_map),
+                )
+            ]
+        return brand_key, candidates
+
     matched = 0
     no_match = 0
     matches: list[OpenTagFilamentMatch] = []
@@ -605,12 +731,31 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         ignored_updates = bool(decode_extra_value(sm_fil.extra.get(ignore_field)))
 
         # Exact-UUID match: if the SM filament already carries an openprinttag_uuid that
-        # maps to a known material, return that material at confidence 1.0 — skip fuzzy.
+        # maps to a known material, pin that material at confidence 1.0 (no fuzzy scoring
+        # for the BEST slot).  But still run the gate pipeline + find_best_match to surface
+        # alternates the user can re-point to via the dropdown (e.g. to fix a wrong tag).
         if existing_uuid and existing_uuid in by_uuid:
             best = by_uuid[existing_uuid]
             confidence = 1.0
             matched += 1
             best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+
+            # Compute alternates (un-bypass): gate this filament's brand candidates and
+            # score them, excluding the already-pinned exact match.
+            _, gated = _gated_candidates_for(sm_fil)
+            alt_result = find_best_match(
+                sm_fil, gated, tag_map, vendor_aliases,
+                color_map=color_map, lexicon=dataset_lexicon, top_n=10,
+            )
+            tagged_candidates: list[OpenTagCandidate] = [best_candidate]
+            if alt_result["best"] is not None:
+                alt_pairs = [(alt_result["best"], alt_result["confidence"])]
+                alt_pairs += list(zip(alt_result["alternates"], alt_result["alternate_scores"]))
+                for alt_mat, alt_score in alt_pairs:
+                    if alt_mat.get("uuid") == existing_uuid:
+                        continue  # already pinned as best
+                    tagged_candidates.append(_build_candidate(sm_fil, alt_mat, alt_score, tag_map))
+
             differs = _data_differs(best_candidate)
             has_update = differs and not ignored_updates
             matches.append(OpenTagFilamentMatch(
@@ -626,58 +771,15 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
                 confidence=confidence,
                 fields=best_candidate.fields,
                 alternates=[],
-                candidates=[best_candidate],
+                candidates=tagged_candidates,
                 multicolor_mismatch=best_candidate.multicolor_mismatch,
                 has_update=has_update,
                 ignored_updates=ignored_updates,
             ))
             continue
 
-        # Resolve the SM vendor name through the alias map before looking up brand candidates.
-        # This allows e.g. "Prusa" to find "Prusament" entries when aliases contain that pair.
-        sm_brand_key = resolve_opentag_brand(
-            sm_fil.vendor.name if sm_fil.vendor else None, vendor_aliases
-        )
-        filtered_candidates = materials_by_brand.get(sm_brand_key, [])
-
-        # Color-profile gate (v2.1 — name-aware + soft):
-        # When the OPT entry has complete arrangement + hex data, apply the strict
-        # profiles_compatible check.  When data is incomplete/absent, use effective
-        # color arity (max of hex count and name-decomposed color count) so that OPT
-        # entries with descriptive multi-color names but missing hex data (e.g.
-        # "Temperature Color Change Purple to Red") are not incorrectly dropped.
+        sm_brand_key, filtered_candidates = _gated_candidates_for(sm_fil)
         sm_profile = sm_color_profile(sm_fil)
-        # Compute SM arity: max of name-decomposed color count and hex field count.
-        sm_parsed_gate = decompose_name(
-            sm_fil.name, sm_fil.vendor.name if sm_fil.vendor else None, sm_fil.material,
-            tag_map=tag_map, ngram_index=ngram_index, color_synonyms=effective_synonyms,
-        )
-        sm_arity_gate = sum(sm_parsed_gate.colors.values())
-        if sm_fil.multi_color_hexes:
-            hex_arity = 1 + len([h for h in sm_fil.multi_color_hexes.split(",") if h.strip()])
-            sm_arity_gate = max(sm_arity_gate, hex_arity)
-        filtered_candidates = [
-            c for c in filtered_candidates
-            if isinstance(c, dict) and color_profile_compatible_soft(
-                sm_profile, sm_arity_gate, c, tag_map, ngram_index, effective_synonyms
-            )
-        ]
-
-        # Polymer-family gate (v2.1 — widened by PLA-biopolymer bucket):
-        # PLA/PHA/LW-PLA/HTPLA/rPLA are mutually gate-compatible (ColorFabb composites
-        # are inconsistently typed in OPT as PHA even when sold as "PLA" blends).
-        # All other cross-family pairs (ASA≠PETG, PC≠PETG, etc.) remain strictly gated.
-        # Only gate when the SM filament has a non-empty / known material
-        # (unknown SM material → don't gate, score all candidates).
-        sm_fam = material_family(sm_fil.material, tag_map)
-        if sm_fam:
-            filtered_candidates = [
-                c for c in filtered_candidates
-                if families_gate_compatible(
-                    sm_fam,
-                    material_family(c.get("type") or c.get("abbreviation") or "", tag_map),
-                )
-            ]
 
         match_result = find_best_match(sm_fil, filtered_candidates, tag_map, vendor_aliases, color_map=color_map, lexicon=dataset_lexicon)
         best = match_result["best"]
@@ -856,6 +958,52 @@ async def opentag_apply(
             ))
             continue
 
+        # Unmatch: clear the OpenTag identity instead of writing one.  Resolve the FDB
+        # filament id from the decision (preferred) or by reading the SM cross-ref extra.
+        if decision.clear_identity:
+            try:
+                fdb_id = decision.fdb_filament_id or await _resolve_fdb_filament_id(
+                    sm, decision.spoolman_filament_id
+                )
+                fdb_cleared = await _clear_opentag_identity(
+                    sm, fdb, decision.spoolman_filament_id, fdb_id
+                )
+                _record_change(
+                    action="update",
+                    direction="filamentdb_to_spoolman",
+                    entity_type="filament",
+                    fdb_filament_id=fdb_id,
+                    spoolman_id=decision.spoolman_filament_id,
+                    field_name="opentag_clear",
+                    new_value=[],
+                    cycle_id="opentag-apply",
+                )
+                applied += 1
+                results.append(OpenTagApplyFilamentResult(
+                    spoolman_filament_id=decision.spoolman_filament_id,
+                    status="cleared",
+                    identity_cleared=True,
+                    fdb_settings_updated=fdb_cleared,
+                ))
+            except Exception as exc:
+                errors += 1
+                resp_body = ""
+                if hasattr(exc, "response") and exc.response is not None:
+                    try:
+                        resp_body = f" — response: {exc.response.text}"
+                    except Exception:
+                        pass
+                logger.error(
+                    "opentag apply: clear failed for SM filament %d: %s%s",
+                    decision.spoolman_filament_id, _scrub(exc), _scrub(resp_body),
+                )
+                results.append(OpenTagApplyFilamentResult(
+                    spoolman_filament_id=decision.spoolman_filament_id,
+                    status="error",
+                    error=str(exc),
+                ))
+            continue
+
         patch, fdb_keys, vendor_name = _build_sm_patch(decision)
         fields_written: list[str] = []
         fdb_settings_updated = False
@@ -949,6 +1097,64 @@ async def opentag_apply(
         ignored=ignored,
         errors=errors,
         results=results,
+    )
+
+
+class OpenTagClearResponse(BaseModel):
+    spoolman_filament_id: int
+    spoolman_cleared: bool
+    fdb_settings_updated: bool
+    fdb_filament_id: str | None = None
+
+
+@router.post("/openprinttag/clear/{filament_id}", response_model=OpenTagClearResponse)
+async def opentag_clear_identity(
+    filament_id: int,
+    request: Request,
+) -> OpenTagClearResponse:
+    """Clear the OpenTag identity on a single Spoolman filament (unmatch).
+
+    Blanks ``openprinttag_slug`` + ``openprinttag_uuid`` on the Spoolman filament and
+    removes only those two keys from the linked FDB filament's ``settings{}`` bag (the
+    approved scoped exception).  Does NOT touch ``openprinttag_ignore``.  Idempotent —
+    clearing an already-untagged filament is a no-op write.
+
+    Standalone counterpart to the Apply-flow unmatch path; usable directly if a caller
+    wants an immediate clear without staging through Apply.
+    """
+    sm: Any = request.app.state.spoolman
+    fdb: Any = request.app.state.filamentdb
+
+    try:
+        await sm.ensure_extra_fields()
+    except Exception as exc:
+        logger.warning("opentag clear: ensure_extra_fields failed: %s", _scrub(exc))
+
+    fdb_id = await _resolve_fdb_filament_id(sm, filament_id)
+    try:
+        fdb_cleared = await _clear_opentag_identity(sm, fdb, filament_id, fdb_id)
+    except Exception as exc:
+        resp_body = ""
+        if hasattr(exc, "response") and exc.response is not None:
+            try:
+                resp_body = f" — response: {exc.response.text}"
+            except Exception:
+                pass
+        logger.error(
+            "opentag clear: could not clear SM filament %d: %s%s",
+            filament_id, _scrub(exc), _scrub(resp_body),
+        )
+        raise api_error(
+            502,
+            "opentag_clear_failed",
+            f"Could not clear OpenTag identity on Spoolman filament {filament_id}: {exc}",
+        ) from exc
+
+    return OpenTagClearResponse(
+        spoolman_filament_id=filament_id,
+        spoolman_cleared=True,
+        fdb_settings_updated=fdb_cleared,
+        fdb_filament_id=fdb_id,
     )
 
 

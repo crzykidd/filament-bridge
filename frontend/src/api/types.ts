@@ -784,6 +784,9 @@ export interface OpenTagFilamentDecision {
   fdb_filament_id?: string | null
   openprinttag_slug?: string | null
   openprinttag_uuid?: string | null
+  /** When true, this is an UNMATCH: clear the OpenTag identity (blank SM slug/uuid +
+   *  remove those two keys from FDB settings{}) instead of writing one. */
+  clear_identity?: boolean
 }
 
 export interface OpenTagApplyRequest {
@@ -792,10 +795,18 @@ export interface OpenTagApplyRequest {
 
 export interface OpenTagApplyFilamentResult {
   spoolman_filament_id: number
-  status: 'ok' | 'ignored' | 'error'
+  status: 'ok' | 'ignored' | 'error' | 'cleared'
   error: string | null
   fields_written: string[]
   fdb_settings_updated: boolean
+  identity_cleared?: boolean
+}
+
+export interface OpenTagClearResponse {
+  spoolman_filament_id: number
+  spoolman_cleared: boolean
+  fdb_settings_updated: boolean
+  fdb_filament_id: string | null
 }
 
 export interface OpenTagApplyResponse {

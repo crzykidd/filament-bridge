@@ -150,11 +150,35 @@ the parser to ingest them is a possible separate follow-up.
 
 ## Review (full review view)
 
-Each filament card shows the best candidate (★) and up to five alternates in a dropdown,
+Each filament card shows the best candidate (★) and up to ten alternates in a dropdown,
 with a field-by-field table: current Spoolman value vs the OpenTag value. Per field you can
 edit the proposed value or mark it **keep mine**; per filament you can **ignore** the match
 entirely. Group by brand/material, sort, and filter (hide matched / hide already-tagged) to
 work through a large library; "Ignore all" works per group.
+
+### Change-match and unmatch (the candidate dropdown)
+
+The candidate dropdown is the single control for both **re-pointing** and **clearing** a
+match:
+
+- **Already-tagged rows now list alternates too.** A filament whose `openprinttag_uuid`
+  already maps to a record still pins that exact match at the top (★, 100%), but the bridge
+  now also runs the normal gate pipeline and scores the rest of the brand's catalogue, so the
+  dropdown offers up to ten alternates you can re-point to (e.g. to fix a tag applied to the
+  wrong colour). Picking an alternate stages a re-match — Apply writes the new slug/uuid.
+  (A brand with only one dataset entry shows just the current match plus the unmatch option.)
+- **"— unmatch (clear OpenTag identity) —"** is the last dropdown option, shown only for rows
+  that already carry an OpenTag identity. Selecting it **stages an unmatch** that is carried
+  through the normal **Apply** flow (it is not an immediate write — consistent with the rest
+  of the page). On Apply, the bridge clears the identity:
+  - blanks `openprinttag_slug` + `openprinttag_uuid` on the Spoolman filament, and
+  - removes only those two keys from the linked Filament DB filament's `settings{}` bag
+    (the approved scoped *removal* exception — every other settings key is preserved).
+
+  `openprinttag_ignore` is **not** touched by an unmatch (that is a separate suppression
+  concern). After Apply, the row reads as untagged and the next match cycle re-evaluates it
+  from scratch. There is also a standalone `POST /api/openprinttag/clear/{id}` endpoint that
+  performs the same clear immediately if a caller needs it outside the Apply flow.
 
 Badges: a grey **OPT** chip means the filament is already tagged and in sync with the
 candidate; amber means it's tagged but the data has drifted; a **multicolor mismatch** chip
@@ -191,6 +215,11 @@ anything happens; Apply is gated behind the backup dialog. Per filament, the bri
 2. writes `openprinttag_slug` / `openprinttag_uuid` extras, and
 3. merges the same two identity keys into the linked Filament DB filament's `settings{}`
    bag (the approved scoped exception — all other settings keys are preserved).
+
+For a staged **unmatch**, Apply instead clears the identity (blanks the SM slug/uuid extras
+and removes those two keys from the FDB `settings{}` bag) — the SM write is authoritative and
+the FDB removal is best-effort (a missing FDB mapping is fine). The result row reports status
+`cleared`.
 
 Errors are per-filament; one failure never aborts the batch. The ongoing sync engine keeps
 the identity keys flowing afterwards, so a filament cleaned here looks identical to one

@@ -25,6 +25,7 @@ import type {
   OpenTagApplyRequest,
   OpenTagApplyResponse,
   OpenTagCacheStatus,
+  OpenTagClearResponse,
   OpenTagCompletenessResponse,
   OpenTagDatasetMeta,
   OpenTagIgnoreResponse,
@@ -250,6 +251,11 @@ export const postOpenTagRefresh = () =>
   request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>
   json<OpenTagApplyResponse>('/openprinttag/apply', 'POST', body)
+/** Clear (unmatch) a filament's OpenTag identity directly — standalone counterpart
+ *  to the Apply-flow unmatch. Blanks SM slug/uuid + removes those FDB settings keys. */
+export const postOpenTagClear = (filamentId: number) =>
+  request<OpenTagClearResponse>(`/openprinttag/clear/${filamentId}`, { method: 'POST' })
+
 export const postOpenTagIgnore = (filamentId: number, ignored: boolean) =>
   request<OpenTagIgnoreResponse>(
     `/openprinttag/ignore/${filamentId}?ignored=${ignored}`,
