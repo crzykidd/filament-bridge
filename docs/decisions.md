@@ -1,5 +1,23 @@
 # Decision record
 
+## 2026-06-18 — Parent/variant + OpenPrintTag rework: PARKED, blocked on upstream
+
+The bridge currently writes all material props + OpenPrintTag identity on each **variant** and
+leaves the `generic_container` **master** bare — the inverse of Filament DB's design (FDB
+inheritance is value-presence/live-on-read; shared data belongs on the parent, variants override
+only color + genuine diffs; OpenPrintTag is meant to be linked at the **parent** so variants
+inherit and a single sync propagates). Aligning would mean: shared standardized specs on the
+master, variants set only color/colorName/own-OPT-id/diffs (shared fields left null to inherit).
+
+**Parked** pending the upstream author's direction — it hinges on two FDB questions hyiger is
+actively analyzing: (1) can a colorless abstract parent hold an OpenPrintTag link without being
+forced a color; (2) will the parent "act as a filament" / auto-promote (and is it configurable).
+See **hyiger/filament-db #597 and #605**. Do NOT build the rework until that resolves.
+
+Full analysis + the contingent approach + code touch-points are captured in homelab-configs
+`projects/3dprinting/docs/parent-variant-and-openprinttag.md`. The master's OpenPrintTag pick
+would hook into the wizard's existing "which filament settings to use as master" prompt.
+
 ## 2026-06-18 — OpenTag dataset: gate the heavy tarball download behind a commit-SHA check
 
 **Context.** The OpenPrintTag dataset is a large GitHub tarball. Every manual **Refresh
