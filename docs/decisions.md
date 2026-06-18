@@ -1,5 +1,36 @@
 # Decision record
 
+## 2026-06-18 — OpenTag completeness report: assess the raw OPT record, not the lossy field path
+
+**Context.** New "Show missing values" report tells the user which OpenPrintTag entries are
+worth enriching. We had two ways to read an OPT record's fields: the per-field mapping path
+(`opt_to_spoolman_fields` / `_build_candidate`) used by the match-review UI, and the raw
+OPTMaterial dict from the cache.
+
+**Decision.**
+- **Inspect the raw OPTMaterial dict directly.** The field-mapping path is built for SM↔OPT
+  drift, not OPT self-completeness — it strips finishes, remaps/drops temps, hard-codes
+  diameter, only emits non-None fields, and omits chamber/preheat/drying/hardness/transmission/
+  photo/product entirely. Routing completeness through it would under-report missing fields.
+  The endpoint reads `by_uuid[uuid]` and tests each raw key.
+- **Missing = empty VALUE, not absent key.** Every OPTMaterial carries all 25 keys, so the
+  test is `v in (None, "", [])`. An empty `tags` list counts as missing.
+- **Field set = ingested attributes only.** Core + extended FFF attributes, plus conditional
+  `secondaryColors` (multicolor only — SM `multi_color_hexes` set OR an OPT `coextruded`/
+  `gradient`/`gradual_color_change` tag). Identity and the always-null
+  `completenessScore`/`completenessTier` are excluded. The bridge does NOT ingest a few
+  upstream fields (`hardness_shore_a`, `heatbreak_temperature`, `max_chamber_temperature`,
+  typed/multiple photos); rather than extend the parser now, the report covers ingested fields
+  only and the UI/docs note the gap as a possible follow-up.
+- **"Your value" is a best-effort hint, never the count driver.** Mapped where sensible
+  (type←material, color←color_hex, density, nozzle/bed temps←settings, secondaryColors←
+  multi_color_hexes); blank otherwise. The headline is always "the OPT record lacks X."
+- **Stale tags surfaced, not dropped.** A tagged filament whose uuid isn't in the current
+  dataset is returned as a distinct `stale_match` row (sorted to the top under most-missing)
+  so the user can re-match or refresh rather than wonder why it vanished.
+- **Default sort = most-missing; complete records hidden by default** with a toggle. Single
+  endpoint pass, no pagination (dataset is local and small).
+
 ## 2026-06-18 — OpenTag Cleanup: toolbar view-switch in component state; Reprocess moves to banner
 
 **Context.** Toolbar has three actions (Refresh dataset / Match to DB / Show missing values).

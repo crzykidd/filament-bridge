@@ -131,6 +131,39 @@ class OpenTagMatchesResponse(BaseModel):
     updates_count: int = 0
 
 
+# Completeness report ---------------------------------------------------------
+
+
+class OpenTagMissingAttribute(BaseModel):
+    """One OpenPrintTag attribute that is empty on the matched record."""
+    key: str            # raw OPTMaterial key, e.g. "nozzleTempMin"
+    label: str          # human label, e.g. "Nozzle temp (min)"
+    opt_value: Any      # the (empty) OPT value — always None/""/[] for a missing attr
+    your_value: Any     # best-effort hint from the SM filament, or None
+
+
+class OpenTagCompletenessItem(BaseModel):
+    """Completeness assessment for one tagged Spoolman filament."""
+    spoolman_filament_id: int
+    brand: str | None
+    name: str | None
+    opt_slug: str | None
+    opt_uuid: str | None
+    opt_url: str | None
+    missing_count: int
+    attributes: list[OpenTagMissingAttribute]
+    # True when the SM filament carries an openprinttag_uuid that is NOT present in the
+    # current dataset (stale tag) — surfaced distinctly rather than silently dropped.
+    stale_match: bool = False
+
+
+class OpenTagCompletenessResponse(BaseModel):
+    dataset: OpenTagDatasetMeta
+    items: list[OpenTagCompletenessItem]
+    # Count of tagged filaments whose uuid is not in the dataset (stale tags).
+    stale_count: int = 0
+
+
 # Apply request ---------------------------------------------------------------
 
 
@@ -1074,3 +1107,175 @@ async def opentag_search(
         ))
 
     return OpenTagSearchResponse(results=results)
+
+
+# ---------------------------------------------------------------------------
+# Completeness report — which matched OpenPrintTag records are missing data
+# ---------------------------------------------------------------------------
+
+# (key, label) pairs counted as "missing" when the OPT record's VALUE is empty.
+# Identity (uuid/slug/brandSlug/brandName/name) is excluded — always present.
+# completenessScore/completenessTier are dead (always None) — excluded.
+# secondaryColors is handled separately (conditional on multicolor).
+_COMPLETENESS_FIELDS: list[tuple[str, str]] = [
+    # Core
+    ("type", "Material type"),
+    ("abbreviation", "Abbreviation"),
+    ("color", "Primary color"),
+    ("density", "Density"),
+    ("nozzleTempMin", "Nozzle temp (min)"),
+    ("nozzleTempMax", "Nozzle temp (max)"),
+    ("bedTempMin", "Bed temp (min)"),
+    ("bedTempMax", "Bed temp (max)"),
+    ("tags", "Tags"),
+    ("photoUrl", "Photo URL"),
+    ("productUrl", "Product URL"),
+    # Extended
+    ("chamberTemp", "Chamber temp"),
+    ("preheatTemp", "Preheat temp"),
+    ("dryingTemp", "Drying temp"),
+    ("dryingTime", "Drying time"),
+    ("hardnessShoreD", "Hardness (Shore D)"),
+    ("transmissionDistance", "Transmission distance"),
+]
+
+# Arrangement tag strings on an OPT record that imply a multicolor filament.
+_MULTICOLOR_TAG_STRINGS = {"coextruded", "gradient", "gradual_color_change"}
+
+
+def _opt_value_missing(value: Any) -> bool:
+    """A field is *missing* when its VALUE is empty — never because the key is absent
+    (all OPTMaterial keys are always present).  Empty = None, "", or []."""
+    return value in (None, "", [])
+
+
+def _is_multicolor(sm_fil: _SpoolmanFilament, opt: dict[str, Any]) -> bool:
+    """True when this filament should be treated as multicolor — so secondaryColors
+    counts toward completeness.  Driven by SM ``multi_color_hexes`` OR an OPT
+    arrangement tag (coextruded / gradient / gradual_color_change)."""
+    if sm_fil.multi_color_hexes:
+        return True
+    tags = opt.get("tags") or []
+    return any(str(t).strip().lower() in _MULTICOLOR_TAG_STRINGS for t in tags)
+
+
+def _your_value_hint(key: str, sm_fil: _SpoolmanFilament) -> Any:
+    """Best-effort "you have this to contribute" hint from the SM filament.
+    Returns None when no sensible SM source exists (blank hint is fine)."""
+    if key == "type":
+        return sm_fil.material
+    if key == "color":
+        return sm_fil.color_hex
+    if key == "density":
+        return sm_fil.density
+    if key in ("nozzleTempMin", "nozzleTempMax"):
+        return sm_fil.settings_extruder_temp
+    if key in ("bedTempMin", "bedTempMax"):
+        return sm_fil.settings_bed_temp
+    if key == "secondaryColors":
+        return sm_fil.multi_color_hexes
+    # tags ← SM finish/material tags: SM filaments carry no first-class tag list the
+    # bridge ingests, so leave blank rather than guess.
+    return None
+
+
+@router.get("/openprinttag/completeness", response_model=OpenTagCompletenessResponse)
+async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
+    """Report OpenPrintTag record completeness for every tagged Spoolman filament.
+
+    For each SM filament carrying a non-empty ``openprinttag_uuid``, resolve its raw
+    OPTMaterial via the ``by_uuid`` index and report which schema attributes that record
+    leaves EMPTY (the user can then go enrich and contribute them upstream).  This measures
+    OPT-record completeness, NOT a diff against the user's data — the SM value is only a
+    best-effort "you have this to contribute" hint.
+
+    The raw OPTMaterial dict is inspected directly (NOT through opt_to_spoolman_fields /
+    _build_candidate, which are lossy for self-completeness).
+
+    Known limitation: the bridge's dataset parser does not ingest every upstream OPT schema
+    field (e.g. hardness_shore_a, heatbreak_temperature, max_chamber_temperature, typed/
+    multiple photos).  This report covers only ingested attributes.
+    """
+    sm: Any = request.app.state.spoolman
+
+    # Load the cached dataset only (no network fetch — same as the search endpoint).
+    cache = _load_cache(_settings.data_dir)
+    meta = get_cache_metadata(_settings.data_dir, _settings.opentag_cache_max_age_hours)
+    dataset_meta = OpenTagDatasetMeta(
+        fetched_at=meta.get("fetched_at"),
+        count=meta.get("count", 0),
+        stale=meta.get("stale", True),
+    )
+    if cache is None or not cache.get("materials"):
+        return OpenTagCompletenessResponse(dataset=dataset_meta, items=[], stale_count=0)
+
+    by_uuid: dict[str, dict[str, Any]] = {}
+    for m in cache.get("materials", []):
+        if isinstance(m, dict) and m.get("uuid"):
+            by_uuid[m["uuid"]] = m
+
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+    slug_field = _settings.spoolman_field_openprinttag_slug
+
+    sm_filaments = await sm.get_filaments()
+
+    items: list[OpenTagCompletenessItem] = []
+    stale_count = 0
+    for sm_fil in sm_filaments:
+        opt_uuid = decode_extra_value(sm_fil.extra.get(uuid_field))
+        if not opt_uuid:
+            continue  # untagged — no OPT record to assess
+
+        brand = sm_fil.vendor.name if sm_fil.vendor else None
+        opt = by_uuid.get(opt_uuid)
+        if opt is None:
+            # Stale tag: uuid no longer in the dataset. Surface distinctly, don't drop.
+            stale_count += 1
+            items.append(OpenTagCompletenessItem(
+                spoolman_filament_id=sm_fil.id,
+                brand=brand,
+                name=sm_fil.name,
+                opt_slug=decode_extra_value(sm_fil.extra.get(slug_field)) or None,
+                opt_uuid=opt_uuid,
+                opt_url=None,
+                missing_count=0,
+                attributes=[],
+                stale_match=True,
+            ))
+            continue
+
+        attributes: list[OpenTagMissingAttribute] = []
+        for key, label in _COMPLETENESS_FIELDS:
+            if _opt_value_missing(opt.get(key)):
+                attributes.append(OpenTagMissingAttribute(
+                    key=key,
+                    label=label,
+                    opt_value=opt.get(key),
+                    your_value=_your_value_hint(key, sm_fil),
+                ))
+        # secondaryColors only counts for multicolor filaments.
+        if _is_multicolor(sm_fil, opt) and _opt_value_missing(opt.get("secondaryColors")):
+            attributes.append(OpenTagMissingAttribute(
+                key="secondaryColors",
+                label="Secondary colors",
+                opt_value=opt.get("secondaryColors"),
+                your_value=_your_value_hint("secondaryColors", sm_fil),
+            ))
+
+        items.append(OpenTagCompletenessItem(
+            spoolman_filament_id=sm_fil.id,
+            brand=brand,
+            name=sm_fil.name,
+            opt_slug=opt.get("slug"),
+            opt_uuid=opt.get("uuid"),
+            opt_url=opt.get("productUrl") or None,
+            missing_count=len(attributes),
+            attributes=attributes,
+            stale_match=False,
+        ))
+
+    return OpenTagCompletenessResponse(
+        dataset=dataset_meta,
+        items=items,
+        stale_count=stale_count,
+    )

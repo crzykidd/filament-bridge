@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getOpenTagMatches,
+  getOpenTagMissingValues,
   getOpenTagSearch,
   getOpenTagStatus,
   postOpenTagApply,
@@ -22,6 +23,8 @@ import type {
   OpenTagApplyRequest,
   OpenTagCacheStatus,
   OpenTagCandidate,
+  OpenTagCompletenessItem,
+  OpenTagCompletenessResponse,
   OpenTagDatasetMeta,
   OpenTagFieldDecision,
   OpenTagFieldRow,
@@ -1244,6 +1247,229 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
 }
 
 // ---------------------------------------------------------------------------
+// Missing values report — OpenPrintTag record completeness for tagged filaments
+// ---------------------------------------------------------------------------
+
+type MissingSort = 'most-missing' | 'brand'
+
+/** One expandable row in the completeness report table. */
+function MissingValuesRow({ item }: { item: OpenTagCompletenessItem }) {
+  const [open, setOpen] = useState(false)
+  const slugLink = item.opt_url ?? null
+
+  return (
+    <>
+      <tr
+        className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer"
+        onClick={() => setOpen(o => !o)}
+      >
+        <td className="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{item.brand ?? '—'}</td>
+        <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">
+          <div className="flex items-center gap-2">
+            <span>{item.name ?? '—'}</span>
+            <DeepLinks spoolmanFilamentId={item.spoolman_filament_id} />
+          </div>
+        </td>
+        <td className="px-3 py-2 text-sm text-indigo-700 dark:text-indigo-400 font-mono">
+          {slugLink ? (
+            <a
+              href={slugLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+              onClick={e => e.stopPropagation()}
+            >
+              {item.opt_slug ?? '(linked)'}
+            </a>
+          ) : (
+            item.opt_slug ?? '—'
+          )}
+        </td>
+        <td className="px-3 py-2 text-sm">
+          {item.stale_match ? (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300">
+              stale tag
+            </span>
+          ) : item.missing_count === 0 ? (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+              complete
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
+              {item.missing_count} missing
+            </span>
+          )}
+        </td>
+      </tr>
+      {open && (
+        <tr className="bg-gray-50 dark:bg-gray-800/60">
+          <td colSpan={4} className="px-3 py-3">
+            {item.stale_match ? (
+              <p className="text-sm text-orange-700 dark:text-orange-400">
+                This filament's OpenPrintTag UUID (<span className="font-mono">{item.opt_uuid}</span>)
+                is not in the current dataset — the tag may be stale. Re-match this filament or refresh
+                the dataset.
+              </p>
+            ) : item.attributes.length === 0 ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+                This OpenPrintTag record has every ingested attribute filled. Nothing to contribute.
+              </p>
+            ) : (
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                    <th className="px-3 py-1 font-medium">Attribute</th>
+                    <th className="px-3 py-1 font-medium">Your value (hint)</th>
+                    <th className="px-3 py-1 font-medium">OpenPrintTag</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {item.attributes.map(attr => (
+                    <tr key={attr.key} className="border-t border-gray-100 dark:border-gray-700">
+                      <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300">{attr.label}</td>
+                      <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300">
+                        {attr.your_value === null || attr.your_value === undefined || attr.your_value === ''
+                          ? <span className="text-gray-400 dark:text-gray-500 italic">—</span>
+                          : renderValue(attr.your_value)}
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-400 dark:text-gray-500 italic">— missing</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+/** Standalone completeness report view. Fetches its own data on first activation. */
+function MissingValuesReport() {
+  const [data, setData] = useState<OpenTagCompletenessResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [sortBy, setSortBy] = useState<MissingSort>('most-missing')
+  const [showComplete, setShowComplete] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    getOpenTagMissingValues()
+      .then(d => { if (!cancelled) setData(d) })
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const rows = useMemo(() => {
+    if (!data) return []
+    let items = data.items
+    // Hide-complete toggle: a row is "complete" only when matched (not stale) and 0 missing.
+    if (!showComplete) {
+      items = items.filter(i => i.stale_match || i.missing_count > 0)
+    }
+    const sorted = [...items]
+    if (sortBy === 'brand') {
+      sorted.sort((a, b) =>
+        (a.brand ?? '').localeCompare(b.brand ?? '') ||
+        (a.name ?? '').localeCompare(b.name ?? ''))
+    } else {
+      // most-missing desc; stale tags sort to the top (treated as needing attention)
+      sorted.sort((a, b) =>
+        Number(b.stale_match) - Number(a.stale_match) ||
+        b.missing_count - a.missing_count ||
+        (a.brand ?? '').localeCompare(b.brand ?? ''))
+    }
+    return sorted
+  }, [data, sortBy, showComplete])
+
+  if (loading) {
+    return <div className="py-12 text-center text-gray-500 dark:text-gray-400">Loading completeness report…</div>
+  }
+  if (error) {
+    return (
+      <div className="my-4 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 rounded text-sm text-red-800 dark:text-red-300">
+        {error}
+      </div>
+    )
+  }
+  if (!data) return null
+
+  const tagged = data.items.length
+  const needWork = data.items.filter(i => i.missing_count > 0).length
+
+  return (
+    <div>
+      <div className="mb-4 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg text-sm text-blue-800 dark:text-blue-300">
+        <p className="font-medium mb-1">OpenPrintTag completeness report</p>
+        <p>
+          For each tagged filament, this shows which attributes its OpenPrintTag record leaves empty —
+          so you can enrich and contribute them upstream. {tagged} tagged filament{tagged !== 1 ? 's' : ''},{' '}
+          {needWork} with missing data{data.stale_count > 0 ? `, ${data.stale_count} stale tag${data.stale_count !== 1 ? 's' : ''}` : ''}.
+        </p>
+        <p className="mt-1 text-xs text-blue-700 dark:text-blue-400">
+          Covers only attributes the bridge ingests from the dataset. Some upstream schema fields
+          (hardness Shore A, heatbreak temperature, max chamber temperature, typed/multiple photos)
+          are not yet ingested and are not assessed here.
+        </p>
+      </div>
+
+      <div className="flex items-center gap-4 mb-4">
+        <label className="text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2">
+          Sort by
+          <select
+            className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 text-sm"
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as MissingSort)}
+          >
+            <option value="most-missing">Most missing</option>
+            <option value="brand">Brand (A→Z)</option>
+          </select>
+        </label>
+        <label className="text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            className="rounded border-gray-300 dark:border-gray-600"
+            checked={showComplete}
+            onChange={e => setShowComplete(e.target.checked)}
+          />
+          Show complete records
+        </label>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+          {tagged === 0
+            ? 'No tagged filaments yet — apply OpenPrintTag identities first (Match to DB).'
+            : 'Every tagged filament has a complete OpenPrintTag record. 🎉'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <table className="min-w-full">
+            <thead className="bg-gray-50 dark:bg-gray-700/40">
+              <tr className="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                <th className="px-3 py-2 font-medium">Brand</th>
+                <th className="px-3 py-2 font-medium">Filament</th>
+                <th className="px-3 py-2 font-medium">OPT match</th>
+                <th className="px-3 py-2 font-medium"># missing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(item => (
+                <MissingValuesRow key={item.spoolman_filament_id} item={item} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1666,13 +1892,8 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {/* Missing values placeholder — built out in 2026-06-18-opentag-completeness-report */}
-      {toolbarView === 'missing-values' && (
-        <div className="py-12 text-center text-gray-500 dark:text-gray-400">
-          <p className="text-base font-medium text-gray-700 dark:text-gray-200 mb-2">Missing values report</p>
-          <p className="text-sm italic">Coming soon — the completeness report is being built.</p>
-        </div>
-      )}
+      {/* Missing values report — OpenPrintTag record completeness for tagged filaments */}
+      {toolbarView === 'missing-values' && <MissingValuesReport />}
 
       {/* Updates available banner — shown once matches are loaded (match view only) */}
       {!working && toolbarView === 'match' && response && updatesCount > 0 && step === 'review' && viewMode === 'all' && (

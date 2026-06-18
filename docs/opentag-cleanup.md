@@ -18,9 +18,9 @@ offers three actions:
   tarball (typically a few seconds).
 - **Match to DB** — scan Spoolman filaments and match against the cached dataset (no
   download if the cache is fresh). Switches to the match review view.
-- **Show missing values** — switch to the completeness report, which lists Spoolman
-  filaments with missing key data fields (built separately; a placeholder is shown until
-  the report is complete).
+- **Show missing values** — switch to the [completeness report](#completeness-report-show-missing-values),
+  which lists each tagged Spoolman filament and which attributes its OpenPrintTag record
+  still leaves empty.
 
 The **dataset-status banner** (count, age, stale flag) is always visible — it reads the
 local cache status cheaply without fetching from OpenPrintTag.
@@ -106,6 +106,47 @@ Because the flag is stored on the Spoolman filament record, it:
   `updates_count`).
 
 The flag is visible in Spoolman's extra-field UI as "OpenPrintTag Ignore Updates".
+
+## Completeness report ("Show missing values")
+
+The **Show missing values** toolbar action opens a read-only **completeness report** backed
+by `GET /api/openprinttag/completeness`. For each Spoolman filament that already carries an
+`openprinttag_uuid`, the bridge resolves its OpenPrintTag record and reports which schema
+attributes that record leaves **empty** — so you can go enrich those entries and contribute
+them back to the OpenPrintTag database.
+
+It measures **OpenPrintTag record completeness, not a diff against your data.** The missing
+count is driven purely by the OPT record's empty fields. Your own Spoolman value (where a
+sensible mapping exists) is shown beside each missing attribute only as a *"you have this to
+contribute"* hint; a blank hint is normal and never affects the count.
+
+- **Missing = empty value, not absent key.** Every OpenPrintTag record carries all of its
+  keys; a field is counted only when its value is `null`, an empty string, or an empty list
+  (an empty `tags` list counts as missing).
+- **Counted attributes** (FFF). Core: material type, abbreviation, primary color, density,
+  nozzle temp min/max, bed temp min/max, tags, photo URL, product URL. Extended: chamber
+  temp, preheat temp, drying temp, drying time, hardness (Shore D), transmission distance.
+  Conditional: **secondary colors** — counted only when the filament is multicolor (Spoolman
+  `multi_color_hexes` set, or the OPT record carries a `coextruded`/`gradient` arrangement
+  tag), since a single-color filament legitimately has none.
+- **Never counted:** identity fields (uuid/slug/brand/name — always present) and the dead
+  `completenessScore`/`completenessTier` fields (always null in the dataset).
+- **Stale tags.** A filament whose `openprinttag_uuid` is no longer present in the current
+  dataset is surfaced as a distinct **"stale tag"** row (not silently dropped) — re-match it
+  or refresh the dataset.
+
+**Controls:** the table shows Brand · Filament · OPT match (slug, linked to the record's
+product URL when present) · # missing. Expanding a row shows a per-attribute table of
+*your value (hint)* vs *OpenPrintTag (— missing)*. Sort by **Most missing** (default) or by
+**Brand (A→Z)**; complete records are hidden by default with a **Show complete records**
+toggle. The data is local and small, so the whole report is computed in a single pass with
+no pagination.
+
+**Known limitation (ingested fields only).** The report covers only the attributes the
+bridge's dataset parser ingests. A few upstream OpenPrintTag schema fields are not yet
+ingested — `hardness_shore_a`, `heatbreak_temperature`, `max_chamber_temperature`, and
+typed/multiple photos — and are therefore not assessed here. The UI notes this. Extending
+the parser to ingest them is a possible separate follow-up.
 
 ## Review (full review view)
 

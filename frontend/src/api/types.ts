@@ -809,6 +809,35 @@ export interface OpenTagSearchResponse {
   results: OpenTagCandidate[]
 }
 
+/** One OpenPrintTag attribute that is empty on a matched record. */
+export interface OpenTagMissingAttribute {
+  key: string
+  label: string
+  opt_value: unknown
+  your_value: unknown
+}
+
+/** Completeness assessment for one tagged Spoolman filament. */
+export interface OpenTagCompletenessItem {
+  spoolman_filament_id: number
+  brand: string | null
+  name: string | null
+  opt_slug: string | null
+  opt_uuid: string | null
+  opt_url: string | null
+  missing_count: number
+  attributes: OpenTagMissingAttribute[]
+  /** True when the SM filament's openprinttag_uuid is not in the current dataset. */
+  stale_match: boolean
+}
+
+export interface OpenTagCompletenessResponse {
+  dataset: OpenTagDatasetMeta
+  items: OpenTagCompletenessItem[]
+  /** Count of tagged filaments whose uuid is not in the dataset (stale tags). */
+  stale_count: number
+}
+
 // ---------------------------------------------------------------------------
 // Debug reset tools
 // ---------------------------------------------------------------------------

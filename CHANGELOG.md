@@ -9,6 +9,21 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **OpenTag Cleanup: completeness report ("Show missing values")** — the toolbar action now
+  opens a real report (`GET /api/openprinttag/completeness`) listing each tagged Spoolman
+  filament and which attributes its OpenPrintTag record leaves empty, so users can find the
+  entries worth enriching and contributing upstream. It measures OPT-record completeness (not a
+  diff against the user's data); the user's value is shown only as a best-effort "you have this
+  to contribute" hint. Missing is keyed on empty value (`null`/`""`/`[]`), not absent key, read
+  from the raw OpenPrintTag record. `secondaryColors` counts only for multicolor filaments;
+  identity and dead `completenessScore`/`completenessTier` fields are never counted. Stale tags
+  (uuid no longer in the dataset) are surfaced distinctly. Sort by most-missing (default) or
+  brand, with a hide-complete toggle. Covers only attributes the bridge ingests — a few upstream
+  fields (hardness Shore A, heatbreak temperature, max chamber temperature, typed photos) are not
+  yet ingested and are noted as out of scope.
+
 ### Changed
 
 - **OpenTag Cleanup: idle landing state + top toolbar** — the page no longer runs matching on

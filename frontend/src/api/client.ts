@@ -25,6 +25,7 @@ import type {
   OpenTagApplyRequest,
   OpenTagApplyResponse,
   OpenTagCacheStatus,
+  OpenTagCompletenessResponse,
   OpenTagDatasetMeta,
   OpenTagIgnoreResponse,
   OpenTagMatchesResponse,
@@ -268,9 +269,9 @@ export const getOpenTagSearch = (
   return request<OpenTagSearchResponse>(`/openprinttag/search?${params.toString()}`)
 }
 
-/** Stub — completeness report built in 2026-06-18-opentag-completeness-report prompt. */
+/** OpenPrintTag completeness report — which matched records are missing data. */
 export const getOpenTagMissingValues = () =>
-  request<{ items: unknown[] }>('/openprinttag/missing-values')
+  request<OpenTagCompletenessResponse>('/openprinttag/completeness')
 
 // ---------------------------------------------------------------------------
 // Reconcile
