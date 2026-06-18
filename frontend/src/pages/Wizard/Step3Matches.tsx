@@ -75,8 +75,16 @@ function sortVal(r: FlatRow, col: SortCol): string | number {
   return ''
 }
 
+// A row is user-selectable only if bulkSet can actually act on it — exclude FDB-only,
+// synthetic-master, and id-less rows. This MUST be the denominator for the select-all and
+// group tri-state checkboxes so they match what bulkSet toggles; otherwise unselectable rows
+// keep the box permanently indeterminate and "select all" can only ever select, never clear.
+function isSelectable(r: FlatRow): boolean {
+  return r.status !== 'unmatched_fdb' && r.status !== 'master_fdb' && r.smId != null
+}
+
 function isIncluded(r: FlatRow, decisions: Record<number, MatchDecision>): boolean {
-  if (r.status === 'unmatched_fdb' || r.status === 'master_fdb' || r.smId == null) return false
+  if (!isSelectable(r)) return false
   const d = decisions[r.smId]
   if (r.status === 'matched') return (d?.action ?? 'link') !== 'skip'
   if (r.status === 'unmatched_sm') return (d?.action ?? 'create') !== 'skip'
@@ -464,7 +472,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   if (error) return <p className="text-red-600 dark:text-red-400">{error}</p>
   if (!data) return null
 
-  const actionable = sorted.filter(r => r.status !== 'unmatched_fdb')
+  const actionable = sorted.filter(isSelectable)
   const tableTri = triState(actionable.map(r => isIncluded(r, decisions)))
 
   const rescanButton = (
@@ -620,7 +628,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
         {groups.map(([gKey, rows]) => {
           const isStatusGrouping = groupBy === 'status'
           const gStatus = isStatusGrouping ? gKey as RowStatus : null
-          const actionableInGroup = rows.filter(r => r.status !== 'unmatched_fdb')
+          const actionableInGroup = rows.filter(isSelectable)
           const gTri = triState(actionableInGroup.map(r => isIncluded(r, decisions)))
           const ambUnresolved = rows.filter(
             r => r.status === 'ambiguous' && decisions[r.smId!]?.action !== 'link'

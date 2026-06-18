@@ -9,6 +9,15 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wizard Match step: the top "select all" now reliably selects and clears** — unselectable
+  rows (FDB-only, synthetic-master, id-less) were counted in the select-all/group tri-state
+  denominators, so the checkbox was stuck indeterminate and could only ever select, never
+  clear — and group checkboxes broke when grouping by material/brand (masters scattered into
+  those groups). The tri-state now uses the same selectable-row predicate that bulk-toggle
+  acts on, so select-all/clear-all works consistently regardless of grouping.
+
 ### Added
 
 - **OpenTag Cleanup: smart dataset refresh (commit-SHA gate)** — the OpenPrintTag dataset is
