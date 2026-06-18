@@ -1906,8 +1906,10 @@ FDB delivers the snapshot to the caller (unlike Spoolman which writes to its own
 bridge persists it in its own data volume. The mongodump command is retained as a secondary
 "raw MongoDB" option in a small note.
 
-**Proceed gate:** the Proceed button is disabled until EITHER backup succeeded (Spoolman OR
-Filament DB; HTTP 200, `success: true`) OR the acknowledgment checkbox is checked.
+**Proceed gate (original):** the Proceed button was disabled until EITHER backup succeeded (Spoolman OR
+Filament DB; HTTP 200, `success: true`) OR the acknowledgment checkbox was checked. See
+2026-06-18 entry — the dialog was later made unconditionally friendly (no checkbox, Proceed
+always enabled) and the strict gate moved to a separate `DebugConfirmDialog`.
 `docs/spoolman-writes.md` is unchanged — this is a trigger, not a field write.
 
 ## 2026-06-08 — Filament DB backup API correction
@@ -4009,3 +4011,35 @@ drove a mapped spool to 0 g over several sync cycles, with the per-cycle decreme
 CLAUDE.md "Weight model translation" was corrected to match. Regression tests:
 `test_engine.py::test_weight_two_way_print_converges_no_loop` and `…_fdb_change_converges_no_loop`
 (multi-cycle convergence, no compounding); `test_weight.py::test_does_not_subtract_usage`.
+
+## 2026-06-18 — BackupSafetyDialog made unconditionally friendly; debug clears moved to DebugConfirmDialog
+
+**Context.** The original `BackupSafetyDialog` was styled like a warning gate — amber "Beta
+feature" subtitle, red Proceed button, acknowledgement checkbox, Proceed disabled until a backup
+succeeded or the box was checked. This was appropriate for test-only debug clears but heavy-handed
+for normal product actions (wizard execute, OpenTag apply, enable auto-sync).
+
+**Decision.**
+
+`BackupSafetyDialog` is now unconditionally friendly:
+- Title changed to "Back up first? (optional)"; subtitle drops the "Beta feature" framing.
+- Acknowledgement checkbox removed; `canProceed` is always true.
+- Proceed button recolored indigo (was red), relabeled "Continue — {actionLabel}".
+- Backup buttons (Spoolman + Filament DB + mongodump note) retained as optional convenience.
+- Call sites 1–3 (Wizard Execute, OpenTag Apply, Enable auto-sync ×2) unchanged.
+
+The two Settings **Danger-Zone** debug clears (Clear Spoolman cross-refs, Clear Spoolman OpenPrintTag
+ids) now use a new dedicated **`DebugConfirmDialog`** component
+(`frontend/src/components/DebugConfirmDialog.tsx`) which preserves the strict gate:
+- Red header ("Debug action — confirm"), irreversibility warning.
+- Same optional backup buttons (via shared `BackupButtons` sub-component).
+- Acknowledgement checkbox required before Confirm fires.
+- Confirm button red, disabled until acknowledged.
+
+**Shared sub-component.** The backup-buttons block (Spoolman + FDB backup buttons + mongodump note
+with loading/ok/error states) is extracted into an exported `BackupButtons` component in
+`BackupSafetyDialog.tsx`. `DebugConfirmDialog` imports and renders it — no UI duplication.
+
+Settings call sites #4 and #5 (`Settings.tsx:608-619` pre-change) are repointed to
+`DebugConfirmDialog`. The `window.confirm` reset-bridge path and the full-reset inline modal in
+`Settings.tsx` are untouched.

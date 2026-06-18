@@ -137,7 +137,7 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 
 | Setting | Default | Where | Description |
 |---|---|---|---|
-| Auto-sync enabled | `false` | Sync | Master switch for scheduled sync. Enabling requires a completed wizard and is gated behind the backup dialog. |
+| Auto-sync enabled | `false` | Sync | Master switch for scheduled sync. Enabling requires a completed wizard and shows a friendly backup prompt (optional — you can proceed immediately). |
 | `sync_interval_seconds` | env (`120`) | Sync | Auto-sync interval; rescheduled immediately on save (min 30 s). |
 | `sync_log_retention_days` | `30` | Sync | Sync-log rows older than this are pruned at the start of each auto-sync tick. `0` = keep forever. |
 | Weight / material-properties / archive-retire / new-record direction + policy | see above | Sync → category cards | The two-axis model. |

@@ -66,6 +66,16 @@ GitHub release.
 
 ### Changed
 
+- **Backup dialog is now a friendly optional prompt** — `BackupSafetyDialog` (shown before
+  Wizard Execute, OpenTag Apply, and enabling auto-sync) no longer blocks on an acknowledgement
+  checkbox. The "Beta feature" / risk framing is removed; the Proceed button is always enabled,
+  recolored indigo, and labeled "Continue". The one-click Spoolman and Filament DB backup
+  buttons are retained as an optional convenience. The two Settings Danger-Zone debug clears
+  (Clear Spoolman cross-refs, Clear Spoolman OpenPrintTag ids) are moved to a new
+  `DebugConfirmDialog` component that preserves the strict gate: warning header, acknowledgement
+  checkbox required, red Confirm button. The shared backup-buttons block is extracted into a
+  `BackupButtons` sub-component used by both dialogs.
+
 - **OpenTag Cleanup: idle landing state + top toolbar** — the page no longer runs matching on
   mount. A top toolbar with three buttons — **Refresh dataset**, **Match to DB**, and **Show
   missing values** — lets users pick an action before any network call is made. "Match to DB"
