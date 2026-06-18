@@ -66,6 +66,15 @@ GitHub release.
 
 ### Changed
 
+- **Consistent wizard navigation** — every wizard step and the OpenTag review/confirm flow
+  now render a **Back / Next** action bar at both the top and bottom of the page via a shared
+  `WizardActionBar` component. Previously three steps (Matches, Variances SM path, Preview)
+  already had both bars via hand-rolled `const actionBar` blocks; five locations (Step 1
+  Connectivity top, Step 2 Direction top, Step 6 Execute top, FDB-direction Variances top, and
+  OpenTag confirm top) were missing a top bar, and the OpenTag review step was missing its
+  bottom bar. All gaps are now filled. The Execute step's forward button remains red
+  (destructive action). Terminal/result views (Execute result, OpenTag done) remain nav-free.
+
 - **Backup dialog is now a friendly optional prompt** — `BackupSafetyDialog` (shown before
   Wizard Execute, OpenTag Apply, and enabling auto-sync) no longer blocks on an acknowledgement
   checkbox. The "Beta feature" / risk framing is removed; the Proceed button is always enabled,

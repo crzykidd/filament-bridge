@@ -4,6 +4,7 @@ import { getWizardMatches, postWizardMatches } from '../../api/client'
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import { HelpTip } from '../../components/HelpTip'
+import { WizardActionBar } from '../../components/WizardActionBar'
 import type { FilamentRef, MatchDecision } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -466,26 +467,13 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   const actionable = sorted.filter(r => r.status !== 'unmatched_fdb')
   const tableTri = triState(actionable.map(r => isIncluded(r, decisions)))
 
-  // Shared action bar — rendered at top and bottom
-  const actionBar = (
-    <div className="flex justify-between items-center">
-      <button onClick={prev}
-        className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
-        ← Back
-      </button>
-      <div className="flex items-center gap-3">
-        <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
-          className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2">
-          {rescanning
-            ? <><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />Rescanning…</>
-            : '↻ Rescan'}
-        </button>
-        <button onClick={handleSave} disabled={saving}
-          className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save & Next →'}
-        </button>
-      </div>
-    </div>
+  const rescanButton = (
+    <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
+      className="px-4 py-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2">
+      {rescanning
+        ? <><span className="inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />Rescanning…</>
+        : '↻ Rescan'}
+    </button>
   )
 
   return (
@@ -498,7 +486,14 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
       </div>
 
       {/* Top action bar */}
-      {actionBar}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+        extra={rescanButton}
+      />
 
       {/* Toolbar */}
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-2">
@@ -691,7 +686,14 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
       {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
       {/* Bottom action bar */}
-      {actionBar}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+        extra={rescanButton}
+      />
     </div>
   )
 }

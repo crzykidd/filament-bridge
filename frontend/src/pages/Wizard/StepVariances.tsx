@@ -10,6 +10,7 @@ import {
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import { HelpTip } from '../../components/HelpTip'
+import { WizardActionBar } from '../../components/WizardActionBar'
 import type {
   ReconciledField,
   SMVariantDecision,
@@ -464,27 +465,11 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
           <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Variances</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">No variant groups or tare adjustments needed.</p>
         </div>
-        <div className="flex justify-between">
-          <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">← Back</button>
-          <button onClick={() => { setTareOverrides([]); next() }} className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">Next →</button>
-        </div>
+        <WizardActionBar onBack={prev} onNext={() => { setTareOverrides([]); next() }} />
       </div>
     )
   }
 
-  // Shared action bar — rendered at top and bottom
-  const actionBar = (
-    <div className="flex justify-between">
-      <button onClick={prev}
-        className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
-        ← Back
-      </button>
-      <button onClick={handleSave} disabled={saving}
-        className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-        {saving ? 'Saving…' : 'Save & Next →'}
-      </button>
-    </div>
-  )
 
   return (
     <div className="space-y-5">
@@ -496,7 +481,13 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       </div>
 
       {/* Top action bar */}
-      {actionBar}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+      />
 
       {/* P2.6: Sort control */}
       {(data.groups.length > 0 || data.ungrouped.length > 0) && (
@@ -1133,7 +1124,13 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
       {/* Bottom action bar */}
-      {actionBar}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+      />
     </div>
   )
 }
@@ -1211,6 +1208,15 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
         <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">Variances</h2>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Review variant groupings and weight conversions.</p>
       </div>
+
+      {/* Top action bar */}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+      />
 
       {/* FDB variant groups */}
       {(variantsData.fdb_groups?.length ?? 0) > 0 ? (
@@ -1302,13 +1308,14 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
 
       {saveErr && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
 
-      <div className="flex justify-between">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">← Back</button>
-        <button onClick={handleSave} disabled={saving}
-          className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save & Next →'}
-        </button>
-      </div>
+      {/* Bottom action bar */}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+      />
     </div>
   )
 }

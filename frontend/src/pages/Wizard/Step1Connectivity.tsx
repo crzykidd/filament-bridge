@@ -1,5 +1,6 @@
 import { getWizardConnectivity } from '../../api/client'
 import { useApi } from '../../api/hooks'
+import { WizardActionBar } from '../../components/WizardActionBar'
 import { SystemStatusBadge } from '../../components/StatusBadge'
 import type { WizardCtx } from './index'
 
@@ -20,6 +21,9 @@ export default function Step1Connectivity({ next }: WizardCtx) {
 
       {data && (
         <>
+          {/* Top action bar */}
+          <WizardActionBar onNext={next} nextDisabled={data.blocked} />
+
           <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
             {Object.entries(data.systems).map(([name, sys]) => (
               <div key={name} className="px-5 py-4 flex items-center justify-between">
@@ -54,15 +58,8 @@ export default function Step1Connectivity({ next }: WizardCtx) {
             </div>
           )}
 
-          <div className="flex justify-end">
-            <button
-              onClick={next}
-              disabled={data.blocked}
-              className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-40"
-            >
-              Next →
-            </button>
-          </div>
+          {/* Bottom action bar */}
+          <WizardActionBar onNext={next} nextDisabled={data.blocked} />
         </>
       )}
     </div>

@@ -19,6 +19,7 @@ import {
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DeepLinks } from '../components/DeepLinks'
 import { HelpTip } from '../components/HelpTip'
+import { WizardActionBar } from '../components/WizardActionBar'
 import type {
   OpenTagApplyRequest,
   OpenTagCacheStatus,
@@ -639,6 +640,19 @@ function ConfirmStep({
         {' '}Review everything below before applying.
       </p>
 
+      {/* Top action bar */}
+      <div className="mb-4">
+        <WizardActionBar
+          onBack={onBack}
+          backLabel="Back"
+          onNext={writes.length > 0 ? onApply : undefined}
+          nextLabel={`Apply ${writes.length} writes`}
+          busy={applying}
+          busyLabel="Applying…"
+          nextDisabled={writes.length === 0}
+        />
+      </div>
+
       {writes.length === 0 ? (
         <p className="text-gray-500 dark:text-gray-400 italic text-sm">Nothing to write — all fields kept or ignored.</p>
       ) : (
@@ -673,24 +687,16 @@ function ConfirmStep({
         </div>
       )}
 
-      <div className="flex gap-3">
-        <button
-          type="button"
-          className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
-          onClick={onBack}
-          disabled={applying}
-        >
-          Back
-        </button>
-        <button
-          type="button"
-          className="px-5 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={onApply}
-          disabled={applying || writes.length === 0}
-        >
-          {applying ? 'Applying…' : `Apply ${writes.length} writes`}
-        </button>
-      </div>
+      {/* Bottom action bar */}
+      <WizardActionBar
+        onBack={onBack}
+        backLabel="Back"
+        onNext={writes.length > 0 ? onApply : undefined}
+        nextLabel={`Apply ${writes.length} writes`}
+        busy={applying}
+        busyLabel="Applying…"
+        nextDisabled={writes.length === 0}
+      />
     </div>
   )
 }
@@ -2270,6 +2276,15 @@ export default function OpenTagCleanup() {
               </div>
             </details>
           )}
+
+          {/* Bottom action bar */}
+          <div className="mt-4">
+            <WizardActionBar
+              onNext={() => setStep('confirm')}
+              nextLabel="Review & Confirm →"
+              nextDisabled={withMatch.length === 0}
+            />
+          </div>
         </div>
       )}
 

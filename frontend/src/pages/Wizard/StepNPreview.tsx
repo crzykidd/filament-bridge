@@ -3,6 +3,7 @@ import { getWizardPreview, getConfig, postWizardContainerNameOverrides } from '.
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import { HelpTip } from '../../components/HelpTip'
+import { WizardActionBar } from '../../components/WizardActionBar'
 import type { PlannedWrite, ContainerNameOverride, NameCollisionEntry } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -77,18 +78,6 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
     }
   }
 
-  // Shared action bar — rendered at top and bottom of this long step
-  const actionBar = (
-    <div className="flex justify-between">
-      <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
-        ← Back
-      </button>
-      <button onClick={next} className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700">
-        Next →
-      </button>
-    </div>
-  )
-
   return (
     <div className="space-y-5">
       <div>
@@ -99,7 +88,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
       </div>
 
       {/* Top action bar */}
-      {actionBar}
+      <WizardActionBar onBack={prev} onNext={next} />
 
       {!isSpoolmanImport && (
         <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 rounded p-4 text-sm text-gray-600 dark:text-gray-300">
@@ -295,7 +284,7 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
       )}
 
       {/* Bottom action bar */}
-      {actionBar}
+      <WizardActionBar onBack={prev} onNext={next} />
     </div>
   )
 }

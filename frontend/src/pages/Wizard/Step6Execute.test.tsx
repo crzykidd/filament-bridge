@@ -94,10 +94,11 @@ async function renderAndExecute(response: WizardExecuteResponse) {
   render(<Step6Execute {...DEFAULT_CTX} />)
 
   // Tick the confirmation checkbox and click execute.
+  // Two "Execute sync" buttons are rendered (top + bottom action bar); click the first.
   const checkbox = screen.getByRole('checkbox')
   fireEvent.click(checkbox)
-  const execBtn = screen.getByRole('button', { name: /execute sync/i })
-  fireEvent.click(execBtn)
+  const execBtns = screen.getAllByRole('button', { name: /execute sync/i })
+  fireEvent.click(execBtns[0])
 
   // BackupSafetyDialog mock auto-calls onProceed (via useEffect), which triggers
   // runExecute(). Wait for the postWizardExecute mock to be called.

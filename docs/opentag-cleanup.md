@@ -259,6 +259,10 @@ automatic best match is clearly wrong.
 
 ## Apply
 
+The **Review & Confirm →** button appears at both the top and bottom of the review view,
+and the Confirm step's **Back / Apply N writes** bar likewise appears at both top and bottom.
+Both placements are identical in behavior — scroll position doesn't matter.
+
 The Confirm step lists every pending write (old → new, grouped per filament) before
 anything happens; Apply is gated behind the backup dialog. Per filament, the bridge then:
 

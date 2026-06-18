@@ -3,6 +3,7 @@ import { postWizardDirection } from '../../api/client'
 import type { SourceOfTruth } from '../../api/types'
 import type { WizardCtx } from './index'
 import { HelpTip } from '../../components/HelpTip'
+import { WizardActionBar } from '../../components/WizardActionBar'
 
 type SOT = SourceOfTruth
 
@@ -34,6 +35,15 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
           Choose which system's data is imported into the other during this run.
         </p>
       </div>
+
+      {/* Top action bar */}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+      />
 
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-5 space-y-2">
         <p className="flex items-center text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
@@ -70,18 +80,14 @@ export default function Step2Direction({ next, prev }: WizardCtx) {
 
       {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
 
-      <div className="flex justify-between">
-        <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
-          ← Back
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="px-5 py-2 bg-indigo-600 text-white rounded text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : 'Save & Next →'}
-        </button>
-      </div>
+      {/* Bottom action bar */}
+      <WizardActionBar
+        onBack={prev}
+        onNext={handleSave}
+        nextLabel="Save & Next →"
+        busy={saving}
+        busyLabel="Saving…"
+      />
     </div>
   )
 }
