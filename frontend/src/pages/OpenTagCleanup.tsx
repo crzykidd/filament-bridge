@@ -1249,9 +1249,15 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
 
 type Step = 'review' | 'confirm' | 'done'
 
+/** Top-level toolbar action / active view. */
+type ToolbarView = 'idle' | 'match' | 'missing-values'
+
 export default function OpenTagCleanup() {
   // Cache status — loaded instantly on mount, no fetch
   const [cacheStatus, setCacheStatus] = useState<OpenTagCacheStatus | null>(null)
+
+  /** Which toolbar action is active. Starts at 'idle' — nothing loads on mount. */
+  const [toolbarView, setToolbarView] = useState<ToolbarView>('idle')
 
   // View mode: 'all' = main review flow, 'updates-review' = focused updates view
   const [viewMode, setViewMode] = useState<'all' | 'updates-review'>('all')
@@ -1347,19 +1353,23 @@ export default function OpenTagCleanup() {
     }
   }, [_applyMatchesData, cacheStatus])
 
-  // On mount: once status is known, kick off the appropriate load
-  const [autoLoadDone, setAutoLoadDone] = useState(false)
-  useEffect(() => {
-    if (cacheStatus === null) return   // still waiting for status
-    if (autoLoadDone) return           // already started
-    setAutoLoadDone(true)
-    runLoad(cacheStatus.exists && !cacheStatus.stale)
-  }, [cacheStatus, autoLoadDone, runLoad])
-
-  // Refresh button: always force a fresh fetch
+  // Refresh button (toolbar + banner): always force a fresh fetch + re-enter match view
   const handleRefresh = useCallback(async () => {
+    setToolbarView('match')
+    setViewMode('all')
     runLoad(false)
   }, [runLoad])
+
+  // "Match to DB" toolbar button: switch to match view and trigger load (warm cache = skip refresh)
+  const handleMatchToDb = useCallback(() => {
+    setToolbarView('match')
+    setViewMode('all')
+    if (!response) {
+      // First time: load using whatever cache state we have
+      runLoad(cacheStatus !== null && cacheStatus.exists && !cacheStatus.stale)
+    }
+    // If already loaded, just re-enter the view — don't re-fetch
+  }, [response, cacheStatus, runLoad])
 
   const handleFieldChange = useCallback(
     (smId: number, field: string, updated: OpenTagFieldDecision) => {
@@ -1557,11 +1567,53 @@ export default function OpenTagCleanup() {
     />
     <div className="p-6 max-w-5xl mx-auto">
       <h1 className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">OpenTag Cleanup</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Match your Spoolman filaments against the OpenPrintTag database, review field
         differences, and apply canonical data — including pushing OpenTag identity into
         Filament DB.
       </p>
+
+      {/* Top toolbar — pick an action first; nothing loads on mount */}
+      <div className="flex items-center gap-2 mb-6 p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            working && toolbarView !== 'missing-values'
+              ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 opacity-70 cursor-not-allowed'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={() => void handleRefresh()}
+          disabled={working}
+          title="Re-download the OpenTag dataset from OpenPrintTag, then reprocess"
+        >
+          Refresh dataset
+        </button>
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            toolbarView === 'match'
+              ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={handleMatchToDb}
+          disabled={working}
+          title="Scan Spoolman filaments and match against the OpenTag dataset"
+        >
+          Match to DB
+        </button>
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            toolbarView === 'missing-values'
+              ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={() => setToolbarView('missing-values')}
+          title="Show Spoolman filaments missing key data fields"
+        >
+          Show missing values
+        </button>
+      </div>
 
       {/* Dataset status banner — populated instantly from cache, no FDB fetch */}
       <div className="flex items-center gap-4 mb-6 p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
@@ -1582,30 +1634,48 @@ export default function OpenTagCleanup() {
             {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
           </span>
         )}
-        <div className="ml-auto flex gap-2">
-          <button
-            type="button"
-            className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-            onClick={() => runLoad(true)}
-            disabled={working}
-            title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
-          >
-            {working ? 'Working…' : 'Reprocess records'}
-          </button>
-          <button
-            type="button"
-            className="px-3 py-1 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-50"
-            onClick={handleRefresh}
-            disabled={working}
-            title="Re-download the OpenTag dataset from OpenPrintTag, then reprocess"
-          >
-            {working ? 'Working…' : 'Refresh dataset'}
-          </button>
-        </div>
+        {/* Reprocess is only shown after a match has been loaded */}
+        {response && (
+          <div className="ml-auto flex gap-2">
+            <button
+              type="button"
+              className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              onClick={() => { setToolbarView('match'); setViewMode('all'); runLoad(true) }}
+              disabled={working}
+              title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
+            >
+              {working ? 'Working…' : 'Reprocess records'}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Updates available banner — shown once matches are loaded */}
-      {!working && response && updatesCount > 0 && step === 'review' && viewMode === 'all' && (
+      {/* Idle landing state — shown when no action has been picked yet */}
+      {toolbarView === 'idle' && (
+        <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+          <p className="text-base mb-2 font-medium text-gray-700 dark:text-gray-200">Pick an action above to get started.</p>
+          <p className="text-sm">
+            <strong>Match to DB</strong> — scan Spoolman filaments and match against the OpenPrintTag dataset.
+          </p>
+          <p className="text-sm mt-1">
+            <strong>Show missing values</strong> — report Spoolman filaments missing key data fields.
+          </p>
+          <p className="text-sm mt-1">
+            <strong>Refresh dataset</strong> — re-download the OpenPrintTag dataset and reprocess matches.
+          </p>
+        </div>
+      )}
+
+      {/* Missing values placeholder — built out in 2026-06-18-opentag-completeness-report */}
+      {toolbarView === 'missing-values' && (
+        <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+          <p className="text-base font-medium text-gray-700 dark:text-gray-200 mb-2">Missing values report</p>
+          <p className="text-sm italic">Coming soon — the completeness report is being built.</p>
+        </div>
+      )}
+
+      {/* Updates available banner — shown once matches are loaded (match view only) */}
+      {!working && toolbarView === 'match' && response && updatesCount > 0 && step === 'review' && viewMode === 'all' && (
         <div className="mb-4 flex items-center gap-4 px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0">
             <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
@@ -1626,13 +1696,14 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {error && (
+      {/* Error and progress — only shown when the match view is active */}
+      {toolbarView === 'match' && error && (
         <div className="mb-4 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-400">
           <strong>Error:</strong> {error}
         </div>
       )}
 
-      {working && statusMsg && (
+      {toolbarView === 'match' && working && statusMsg && (
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-700 dark:text-blue-300">
           <svg className="animate-spin h-4 w-4 shrink-0 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -1643,7 +1714,7 @@ export default function OpenTagCleanup() {
       )}
 
       {/* Updates Review focused view */}
-      {!working && viewMode === 'updates-review' && response && (
+      {toolbarView === 'match' && !working && viewMode === 'updates-review' && response && (
         <UpdatesReviewSection
           matches={updateMatches}
           onBack={() => setViewMode('all')}
@@ -1651,7 +1722,7 @@ export default function OpenTagCleanup() {
         />
       )}
 
-      {!working && viewMode === 'all' && step === 'review' && response && (
+      {toolbarView === 'match' && !working && viewMode === 'all' && step === 'review' && response && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-600 dark:text-gray-300">
@@ -1841,7 +1912,7 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {!working && viewMode === 'all' && step === 'confirm' && response && (
+      {toolbarView === 'match' && !working && viewMode === 'all' && step === 'confirm' && response && (
         <ConfirmStep
           matches={matches}
           fieldDecisions={fieldDecisions}
@@ -1853,7 +1924,7 @@ export default function OpenTagCleanup() {
         />
       )}
 
-      {viewMode === 'all' && step === 'done' && applyResult && (
+      {toolbarView === 'match' && viewMode === 'all' && step === 'done' && applyResult && (
         <div className="px-6 py-8 text-center">
           <div className="text-4xl mb-4">{applyResult.errors === 0 ? '✓' : '⚠'}</div>
           <h2 className="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">

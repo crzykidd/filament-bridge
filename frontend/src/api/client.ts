@@ -268,6 +268,10 @@ export const getOpenTagSearch = (
   return request<OpenTagSearchResponse>(`/openprinttag/search?${params.toString()}`)
 }
 
+/** Stub — completeness report built in 2026-06-18-opentag-completeness-report prompt. */
+export const getOpenTagMissingValues = () =>
+  request<{ items: unknown[] }>('/openprinttag/missing-values')
+
 // ---------------------------------------------------------------------------
 // Reconcile
 // ---------------------------------------------------------------------------

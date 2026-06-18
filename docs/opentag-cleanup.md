@@ -8,6 +8,27 @@ OpenPrintTag identity into Filament DB.
 API routes live at `/api/openprinttag/*` (the bare word "opentag" is on ad-blocker filter
 lists, so the routes avoid it).
 
+## Landing state and toolbar
+
+The page opens in an **idle landing state** — nothing is fetched on mount. A top toolbar
+offers three actions:
+
+- **Refresh dataset** — re-download the OpenPrintTag dataset from OpenPrintTag, then run
+  matching and enter the Match-to-DB view. The first load downloads and parses a multi-MB
+  tarball (typically a few seconds).
+- **Match to DB** — scan Spoolman filaments and match against the cached dataset (no
+  download if the cache is fresh). Switches to the match review view.
+- **Show missing values** — switch to the completeness report, which lists Spoolman
+  filaments with missing key data fields (built separately; a placeholder is shown until
+  the report is complete).
+
+The **dataset-status banner** (count, age, stale flag) is always visible — it reads the
+local cache status cheaply without fetching from OpenPrintTag.
+
+Once a match has been loaded, a **Reprocess records** button appears in the banner to
+re-scan Spoolman and recompute matches against the current dataset without downloading
+again.
+
 ## The dataset
 
 The OpenPrintTag dataset is fetched directly from the
@@ -16,13 +37,6 @@ cached locally (`DATA_DIR/opentag_cache.json`, TTL `OPENTAG_CACHE_MAX_AGE_HOURS`
 24 h). Brand names, material properties, and secondary colors are all parsed in a single
 tarball download — no Filament DB involvement. Only `class: FFF` materials are included
 (SLA and others are skipped).
-
-Two buttons on the page:
-
-- **Reprocess records** — re-scan Spoolman and re-score against the cached dataset
-  (no download).
-- **Refresh dataset** — force a re-download from OpenPrintTag, then reprocess. The first
-  load downloads and parses a multi-MB tarball (typically a few seconds).
 
 ## How matching works
 

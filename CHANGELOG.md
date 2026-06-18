@@ -9,6 +9,17 @@ GitHub release.
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenTag Cleanup: idle landing state + top toolbar** — the page no longer runs matching on
+  mount. A top toolbar with three buttons — **Refresh dataset**, **Match to DB**, and **Show
+  missing values** — lets users pick an action before any network call is made. "Match to DB"
+  triggers the existing match/reprocess flow; "Refresh dataset" forces a dataset re-download then
+  re-enters the match view; "Show missing values" switches to a completeness-report placeholder
+  (report built separately). The dataset-status banner still renders immediately (cheap
+  status-only call). All existing match-view behavior (filters, groups, ignore, apply, candidate
+  dropdown, manual search) is preserved unchanged inside the match view.
+
 ### Fixed
 
 - **OpenTag Cleanup: candidate dropdown now shows for single-candidate brands** — a brand with

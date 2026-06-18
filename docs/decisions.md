@@ -1,5 +1,26 @@
 # Decision record
 
+## 2026-06-18 — OpenTag Cleanup: toolbar view-switch in component state; Reprocess moves to banner
+
+**Context.** Toolbar has three actions (Refresh dataset / Match to DB / Show missing values).
+The view-switch needs to be tracked somewhere so the toolbar highlights the active action and
+gates what renders below.
+
+**Decision.** `toolbarView: 'idle' | 'match' | 'missing-values'` lives in component state on
+`OpenTagCleanup`. This is purely presentational routing — no URL change — because the tool is
+already a single full-page component with its own internal state machine (`Step`, `viewMode`).
+Adding a URL param for three states on an already-stateful page adds nav complexity with no
+real benefit (no shareability needed; the match results aren't bookmarkable anyway).
+
+The previous "Reprocess records" and "Refresh dataset" buttons were both in the dataset-status
+banner. After the toolbar restructure, **Refresh dataset** became a toolbar action (primary
+action, always visible). **Reprocess records** moved to the banner but is now shown only after
+a match has been loaded (it's meaningless until then). The banner remains always-visible so
+the dataset age/stale state is always readable regardless of which toolbar action is active.
+
+The `getOpenTagMissingValues` stub was added to `client.ts` (endpoint not yet on the backend)
+so the completeness-report prompt can import and call it without touching `client.ts` again.
+
 ## 2026-06-17 — Dashboard counts: spools vs filaments are independent; break out master filaments (GitHub #3)
 
 **Context.** A user read the Dashboard's "In Sync = 49" next to "Filament DB = 38" as a sync
