@@ -260,7 +260,9 @@ function FilamentCard({
   onCandidateChange,
   onSearchSelect,
 }: FilamentCardProps) {
-  const [expanded, setExpanded] = useState(true)
+  // Default collapsed: expanding a group shows just the filament rows; the user expands a
+  // row to see its field details (avoids opening every row's settings at once).
+  const [expanded, setExpanded] = useState(false)
 
   // Manual search state — lets the user find a better OpenTag match by keyword
   const [showSearch, setShowSearch] = useState(false)
