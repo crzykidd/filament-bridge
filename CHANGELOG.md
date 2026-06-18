@@ -11,6 +11,19 @@ GitHub release.
 
 ### Added
 
+- **OpenTag Cleanup: non-blocking matching + cached match result** — the CPU-bound match,
+  completeness, and manual-search work now runs in a worker thread
+  (`starlette.concurrency.run_in_threadpool`) instead of on the FastAPI event loop, so a
+  match in flight no longer freezes every other bridge request (all upstream I/O is awaited
+  first; only plain data crosses into the thread). The last match result is cached to
+  `DATA_DIR/opentag_matches_cache.json` with `computed_at` + input fingerprints (dataset
+  `count`+`fetched_at`, Spoolman filament count, alias/tag/field config hash), so
+  `GET /api/openprinttag/matches` returns instantly on revisit; recompute happens only on
+  the first match or with `?recompute=true`. When the inputs changed since the cached match,
+  the cache is still served but flagged `stale_inputs`. The UI loads the cached result on
+  **Match to DB**, shows **last matched &lt;time&gt;** with a "data changed — Refresh" hint,
+  renames "Reprocess records" to **Refresh match** (forces recompute), and aborts the
+  in-flight match fetch on unmount.
 - **OpenTag Cleanup: inline unmatch + change-match from the candidate dropdown** — already-tagged
   rows now list scored alternates beside the pinned exact match (the exact-UUID short-circuit no
   longer suppresses fuzzy scoring), so you can re-point a wrong tag in one click. A new blank

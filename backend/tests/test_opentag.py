@@ -4621,12 +4621,14 @@ async def test_matches_endpoint_prusa_alias_finds_prusament_candidates(tmp_path)
         )
 
         # --- Without alias: 'Prusa' stays 'prusa', no Prusament brand bucket found ---
+        # recompute=true bypasses the match cache so the changed alias config takes
+        # effect (a plain GET would serve the cached result with stale_inputs=True).
         with (
             _patch("app.api.opentag.SessionLocal", mock_session_factory),
             _patch("app.api.config.get_config_value", return_value=""),
         ):
             client2 = TestClient(test_app, raise_server_exceptions=True)
-            resp2 = client2.get("/api/openprinttag/matches")
+            resp2 = client2.get("/api/openprinttag/matches?recompute=true")
         assert resp2.status_code == 200, resp2.text
         data2 = resp2.json()
         match2 = next(m for m in data2["matches"] if m["spoolman_filament_id"] == 55)
@@ -6326,3 +6328,142 @@ def test_apply_clear_identity_decision_clears():
     fake_fdb.remove_filament_settings_keys.assert_awaited_once_with(
         "fdb-9", ["openprinttag_slug", "openprinttag_uuid"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Perf offload + match-result cache (perf: 2026-06-18)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_matches_is_pure_on_plain_inputs():
+    """_compute_matches runs purely on plain data — no DB/httpx/request needed."""
+    from app.api.opentag import _compute_matches
+
+    sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+    matches = _compute_matches(
+        [sm],
+        [_OPT_PETG],
+        None,            # dataset_lexicon
+        {},              # tag_map
+        {},              # vendor_aliases
+        "openprinttag_uuid",
+        "openprinttag_ignore",
+    )
+    assert len(matches) == 1
+    assert matches[0].opt_slug == "elegoo-petg-red"
+
+
+def test_matches_offloaded_via_run_in_threadpool(tmp_path):
+    """The matches route dispatches the scoring through run_in_threadpool (non-blocking)."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+        with patch("app.api.opentag.run_in_threadpool", wraps=_ot_mod.run_in_threadpool) as spy:
+            resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        # The compute helper must be the offloaded callable.
+        assert spy.await_count >= 1
+        assert spy.await_args.args[0] is _ot_mod._compute_matches
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_matches_cache_served_without_recompute(tmp_path):
+    """First GET computes + caches; a second GET serves the cache without re-scoring."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+
+        # First call: compute + cache, computed_at set, not stale.
+        first = client.get("/api/openprinttag/matches").json()
+        assert first["computed_at"] is not None
+        assert first["stale_inputs"] is False
+
+        # Second call: served from cache — _compute_matches must NOT run again.
+        with patch("app.api.opentag._compute_matches") as compute_spy:
+            second = client.get("/api/openprinttag/matches").json()
+        compute_spy.assert_not_called()
+        assert second["computed_at"] == first["computed_at"]
+        assert second["stale_inputs"] is False
+        assert second["matches"][0]["opt_slug"] == "elegoo-petg-red"
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_matches_recompute_refreshes_and_recaches(tmp_path):
+    """?recompute=true re-runs the offloaded match and updates the cached computed_at."""
+    import time
+
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+
+        first = client.get("/api/openprinttag/matches").json()
+        time.sleep(0.01)
+        with patch("app.api.opentag._compute_matches", wraps=_ot_mod._compute_matches) as compute_spy:
+            second = client.get("/api/openprinttag/matches?recompute=true").json()
+        compute_spy.assert_called_once()
+        assert second["computed_at"] != first["computed_at"]
+        assert second["stale_inputs"] is False
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_matches_stale_inputs_flips_when_sm_count_changes(tmp_path):
+    """stale_inputs flips true when the live Spoolman filament count diverges from the cache."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm1 = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, fake_sm = _matches_client(tmp_path, [_OPT_PETG], [sm1])
+
+        # Compute + cache with one filament.
+        assert client.get("/api/openprinttag/matches").json()["stale_inputs"] is False
+
+        # Now Spoolman reports two filaments → cached result is stale.
+        sm2 = _sm_fil(sm_id=2, name="PETG Blue", vendor="ELEGOO", material="PETG", color_hex="0000CC")
+        fake_sm.get_filaments = AsyncMock(return_value=[sm1, sm2])
+        body = client.get("/api/openprinttag/matches").json()
+        assert body["stale_inputs"] is True
+        # Still served from cache (single original match), not recomputed.
+        assert len(body["matches"]) == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_match_cache_helpers_fingerprint_and_stale():
+    """build_fingerprint + inputs_stale: config/sm/dataset deltas each flip stale."""
+    from app.core.opentag_match_cache import build_fingerprint, inputs_stale
+
+    base = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
+        sm_count=5, aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
+    )
+    # Same inputs → not stale.
+    same = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
+        sm_count=5, aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
+    )
+    assert inputs_stale(base, same) is False
+    # Config change → stale.
+    cfg = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
+        sm_count=5, aliases_raw="", tag_map={"silk": 16}, field_names={"uuid": "u"},
+    )
+    assert inputs_stale(base, cfg) is True
+    # SM count change → stale; dataset change → stale; no cache → stale.
+    smc = dict(base, sm_count=6)
+    assert inputs_stale(base, smc) is True
+    ds = dict(base, dataset="11:2026-06-18T00:00:00+00:00")
+    assert inputs_stale(base, ds) is True
+    assert inputs_stale(None, base) is True

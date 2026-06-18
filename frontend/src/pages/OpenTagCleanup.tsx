@@ -1550,11 +1550,16 @@ export default function OpenTagCleanup() {
   const [hideMatched, setHideMatched] = useState(false)
   const [hideAlreadyTagged, setHideAlreadyTagged] = useState(false)
 
+  // AbortController for the in-flight match/recompute fetch — aborted on unmount so
+  // navigating away cancels the client wait and clears the loading state immediately.
+  const matchAbortRef = useRef<AbortController | null>(null)
+
   // Load cache status on mount (instant — no network fetch to FDB)
   useEffect(() => {
     getOpenTagStatus()
       .then(s => setCacheStatus(s))
       .catch(() => { /* status unavailable — banner stays absent */ })
+    return () => { matchAbortRef.current?.abort() }
   }, [])
 
   const _applyMatchesData = useCallback((data: OpenTagMatchesResponse) => {
@@ -1585,14 +1590,21 @@ export default function OpenTagCleanup() {
     setSelectedCandidates({})
   }, [])
 
-  // Run the full load: optionally refresh dataset first, then fetch matches.
-  // skipRefresh=true when the cache is already fresh (warm run).
-  const runLoad = useCallback(async (skipRefresh: boolean) => {
+  // Run the full load: optionally re-download the dataset first, then fetch matches.
+  // - skipDatasetRefresh=true skips the (slow) tarball re-download (warm dataset).
+  // - recomputeMatches=true forces the server to re-score (bypassing the match cache);
+  //   when false the server serves the cached match result instantly when present.
+  const runLoad = useCallback(async (skipDatasetRefresh: boolean, recomputeMatches = false) => {
+    // Abort any prior in-flight match fetch before starting a new one.
+    matchAbortRef.current?.abort()
+    const controller = new AbortController()
+    matchAbortRef.current = controller
+
     setWorking(true)
     setError(null)
     setStatusMsg(null)
     try {
-      if (!skipRefresh) {
+      if (!skipDatasetRefresh) {
         const known = cacheStatus?.last_count || cacheStatus?.count || 0
         const recordHint = known > 0 ? `${known.toLocaleString()}+ records` : 'thousands of records'
         setStatusMsg(
@@ -1603,30 +1615,46 @@ export default function OpenTagCleanup() {
         // Refresh status banner after fetch
         getOpenTagStatus().then(s => setCacheStatus(s)).catch(() => {})
       }
-      setStatusMsg('Matching your Spoolman filaments…')
-      const data = await getOpenTagMatches()
+      // A dataset re-download always means a fresh recompute (cache no longer valid).
+      const recompute = recomputeMatches || !skipDatasetRefresh
+      setStatusMsg(
+        recompute ? 'Matching your Spoolman filaments…' : 'Loading your last match…',
+      )
+      const data = await getOpenTagMatches(recompute, controller.signal)
       _applyMatchesData(data)
     } catch (e: unknown) {
+      // Swallow abort errors — the user navigated away or kicked off a newer fetch.
+      if (e instanceof DOMException && e.name === 'AbortError') return
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setWorking(false)
-      setStatusMsg(null)
+      if (matchAbortRef.current === controller) {
+        setWorking(false)
+        setStatusMsg(null)
+        matchAbortRef.current = null
+      }
     }
   }, [_applyMatchesData, cacheStatus])
 
-  // Refresh button (toolbar + banner): always force a fresh fetch + re-enter match view
+  // "Refresh dataset" (toolbar): re-download the OpenTag dataset, then recompute + re-enter.
   const handleRefresh = useCallback(async () => {
     setToolbarView('match')
     setViewMode('all')
     runLoad(false)
   }, [runLoad])
 
-  // "Match to DB" toolbar button: switch to match view and trigger load (warm cache = skip refresh)
+  // "Refresh match" (match view): keep the cached dataset, force a fresh server recompute.
+  const handleRecompute = useCallback(() => {
+    setToolbarView('match')
+    setViewMode('all')
+    runLoad(true, true)
+  }, [runLoad])
+
+  // "Match to DB" toolbar button: switch to match view and load the cached result (fast).
   const handleMatchToDb = useCallback(() => {
     setToolbarView('match')
     setViewMode('all')
     if (!response) {
-      // First time: load using whatever cache state we have
+      // First time: load the cached match instantly (server computes once if no cache).
       runLoad(cacheStatus !== null && cacheStatus.exists && !cacheStatus.stale)
     }
     // If already loaded, just re-enter the view — don't re-fetch
@@ -1907,17 +1935,27 @@ export default function OpenTagCleanup() {
             {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
           </span>
         )}
-        {/* Reprocess is only shown after a match has been loaded */}
+        {/* Match freshness + recompute — only shown after a match has been loaded */}
         {response && (
-          <div className="ml-auto flex gap-2">
+          <div className="ml-auto flex items-center gap-3">
+            {response.computed_at && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                last matched {formatAge(response.computed_at)}
+              </span>
+            )}
+            {response.stale_inputs && (
+              <span className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-1.5 py-0.5">
+                data changed since last match — Refresh
+              </span>
+            )}
             <button
               type="button"
               className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-              onClick={() => { setToolbarView('match'); setViewMode('all'); runLoad(true) }}
+              onClick={handleRecompute}
               disabled={working}
               title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
             >
-              {working ? 'Working…' : 'Reprocess records'}
+              {working ? 'Working…' : 'Refresh match'}
             </button>
           </div>
         )}
@@ -1986,7 +2024,7 @@ export default function OpenTagCleanup() {
         <UpdatesReviewSection
           matches={updateMatches}
           onBack={() => setViewMode('all')}
-          onApplied={() => { setViewMode('all'); void runLoad(true) }}
+          onApplied={() => { setViewMode('all'); void runLoad(true, true) }}
         />
       )}
 
@@ -2205,7 +2243,7 @@ export default function OpenTagCleanup() {
           <button
             type="button"
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
-            onClick={() => { setStep('review'); runLoad(true) }}
+            onClick={() => { setStep('review'); runLoad(true, true) }}
           >
             Start over
           </button>

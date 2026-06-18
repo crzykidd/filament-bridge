@@ -1,5 +1,46 @@
 # Decision record
 
+## 2026-06-18 — OpenTag matching: offload CPU off the event loop + cache the last result
+
+**Context.** `GET /api/openprinttag/matches` ran the dataset load + scoring synchronously on
+the FastAPI event loop. Because the matcher scores every Spoolman filament against the
+brand-gated slice of the ~11k-entry dataset, a single match blocked *all* other API requests
+until it finished (the "everything is busy" symptom). It also recomputed from scratch on
+every page visit.
+
+**Decisions.**
+- **Offload the pure-CPU work to a worker thread.** All async I/O — the dataset load
+  (`load_opentag_dataset`), the BridgeConfig alias read, and `sm.get_filaments()` — is awaited
+  on the event loop first, then the scoring runs via `starlette.concurrency.run_in_threadpool`.
+  The CPU part was extracted into module-level pure helpers (`_compute_matches`,
+  `_compute_completeness`, `_compute_search`) that take plain data and return plain data — **no
+  httpx, no SQLAlchemy session, no `request` access inside the thread**. The matcher
+  (`core/opentag_match.py`) was verified pure (only dict `.get` / Pydantic reads), so it was
+  safe to call from the thread unchanged. Same offload applied to completeness and search.
+- **Cache the last match result to a DATA_DIR file** (`opentag_matches_cache.json`), mirroring
+  the `core/opentag_cache.py` pattern in a new `core/opentag_match_cache.py`. Stores the
+  `OpenTagMatchesResponse` payload + `computed_at` + a fingerprint. `GET …/matches` serves the
+  cache instantly when present; it recomputes only on the first match or with `?recompute=true`.
+- **Fingerprint on count + fetched_at (documented fallback).** The sibling
+  `…-opentag-smart-dataset-refresh` work (stable dataset commit-SHA identity) is **not landed**,
+  so the dataset fingerprint is `count:fetched_at`. The fingerprint also covers the Spoolman
+  filament count and a sha1 of the alias CSV + material-tag map + openprinttag field names.
+  When any component differs from the cached inputs the cache is still served (never silently
+  stale) but flagged `stale_inputs` so the UI prompts for a refresh. Swap in the commit-SHA
+  when that work lands.
+- **Recompute trigger = `?recompute=true` query param** (not a separate endpoint) — it reuses
+  the same route, runs the offloaded match, and re-caches. The frontend's Refresh-match /
+  Refresh-dataset buttons and post-Apply reloads pass it; ordinary revisits don't.
+- **Frontend:** load the cached result on "Match to DB", show "last matched &lt;time&gt;" + a
+  stale-inputs hint + a Refresh affordance, and abort the in-flight match fetch on unmount via
+  an `AbortController` (the abort alone doesn't fix the server-side freeze — the offload does —
+  but it clears the client loading state immediately on navigation).
+
+**Test contract note.** Because a config change between two plain `GET …/matches` calls now
+serves the cached result (with `stale_inputs`), the existing alias test was updated to pass
+`?recompute=true` on its second call — the documented way to force a re-score under changed
+config.
+
 ## 2026-06-18 — OpenTag inline unmatch/re-match: scoped FDB settings{} *removal* exception
 
 **Context.** Users could apply an OpenTag identity but had no in-app way to clear or

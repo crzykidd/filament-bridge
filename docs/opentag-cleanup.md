@@ -16,8 +16,9 @@ offers three actions:
 - **Refresh dataset** — re-download the OpenPrintTag dataset from OpenPrintTag, then run
   matching and enter the Match-to-DB view. The first load downloads and parses a multi-MB
   tarball (typically a few seconds).
-- **Match to DB** — scan Spoolman filaments and match against the cached dataset (no
-  download if the cache is fresh). Switches to the match review view.
+- **Match to DB** — load the match review view. The **last match result is cached**, so
+  this returns instantly when a prior match exists (no re-scoring). Only the first match
+  (or an explicit refresh) actually computes. Switches to the match review view.
 - **Show missing values** — switch to the [completeness report](#completeness-report-show-missing-values),
   which lists each tagged Spoolman filament and which attributes its OpenPrintTag record
   still leaves empty.
@@ -25,9 +26,32 @@ offers three actions:
 The **dataset-status banner** (count, age, stale flag) is always visible — it reads the
 local cache status cheaply without fetching from OpenPrintTag.
 
-Once a match has been loaded, a **Reprocess records** button appears in the banner to
-re-scan Spoolman and recompute matches against the current dataset without downloading
-again.
+Once a match has been loaded, the banner shows **last matched &lt;time&gt;** and a
+**Refresh match** button that re-scores against the current dataset without re-downloading.
+If the underlying inputs changed since the cached match was computed — the dataset was
+refreshed, the Spoolman filament count changed, or a relevant setting (manufacturer
+mappings, finish-tag map, extra-field names) was edited — a **"data changed since last
+match — Refresh"** hint appears next to it. Applying writes (main Apply or the updates
+review) automatically forces a recompute so the view reflects what was just written.
+
+### Performance: non-blocking scoring + result cache
+
+Matching is CPU-bound (scoring every Spoolman filament against the brand-gated slice of the
+~11k-entry dataset). Two measures keep it from freezing the bridge:
+
+- **Offloaded off the event loop.** The pure-CPU scoring runs in a worker thread
+  (`starlette.concurrency.run_in_threadpool`). All I/O — the dataset load, the BridgeConfig
+  read, and the Spoolman filament fetch — is awaited on the event loop *first*; only plain
+  data is passed into the thread. So a match in flight no longer blocks other API requests.
+  The completeness report and manual search are offloaded the same way.
+- **Result cache.** `GET /api/openprinttag/matches` persists the computed result to
+  `DATA_DIR/opentag_matches_cache.json` (alongside `computed_at` and input fingerprints) and
+  serves it instantly on the next visit. The fingerprint covers the dataset identity
+  (`count`+`fetched_at`), the Spoolman filament count, and a hash of the alias/tag/field
+  config; when any differs from the cached inputs the cache is still served but flagged with
+  `stale_inputs` so the UI can prompt for a refresh. Recompute only happens on the first
+  match or when called with `?recompute=true` (the **Refresh match** / **Refresh dataset**
+  buttons).
 
 ## The dataset
 
@@ -59,7 +83,7 @@ Per Spoolman filament:
 
 Matches below 30% land in the **unmatched** list with a reason (unknown manufacturer, no
 material for that brand, multicolor with no multicolor candidates, or simply no confident
-match). Fix unknown manufacturers by adding a mapping in Settings, then Reprocess.
+match). Fix unknown manufacturers by adding a mapping in Settings, then **Refresh match**.
 
 For a detailed breakdown of how scoring works — including the mined lexicons, n-gram
 separator rule, color multiset formula, and a worked AMOLEN example — see

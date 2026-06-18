@@ -13,12 +13,14 @@ blocked by ad blockers.  The routes use "openprinttag" instead, which is safe.
 
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from app.api.errors import api_error
 from app.config import settings as _settings
@@ -26,6 +28,12 @@ from app.core.change_log import record_change as _record_change
 from app.core.log_safe import scrub as _scrub
 from app.core.matcher import normalize_vendor
 from app.core.opentag_cache import _load_cache, get_cache_metadata, load_opentag_dataset
+from app.core.opentag_match_cache import (
+    build_fingerprint,
+    inputs_stale,
+    load_match_cache,
+    save_match_cache,
+)
 from app.core.opentag_match import (
     build_ngram_index,
     color_profile_compatible_soft,
@@ -129,6 +137,13 @@ class OpenTagMatchesResponse(BaseModel):
     matches: list[OpenTagFilamentMatch]
     # Count of already-tagged filaments with data drift (excluding ignored ones)
     updates_count: int = 0
+    # ISO timestamp the match was computed. None for a freshly-computed response
+    # that has not yet been read back from cache; set on cached/served results.
+    computed_at: str | None = None
+    # True when the live inputs (dataset identity / SM filament count / config)
+    # differ from the cached result's inputs — the UI should prompt for a Refresh.
+    # Always False on a freshly-recomputed result.
+    stale_inputs: bool = False
 
 
 # Completeness report ---------------------------------------------------------
@@ -578,61 +593,50 @@ async def opentag_refresh(request: Request) -> OpenTagDatasetMeta:
     )
 
 
-@router.get("/openprinttag/matches", response_model=OpenTagMatchesResponse)
-async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
-    """Return per-Spoolman-filament OpenTag matches with per-field comparison."""
-    sm: Any = request.app.state.spoolman
+def _resolve_match_config() -> tuple[str, dict[str, int], dict[str, str], dict[str, str]]:
+    """Resolve the match-affecting config off the event loop's data sources.
 
-    try:
-        dataset = await load_opentag_dataset(
-            _settings.data_dir,
-            _settings.opentag_cache_max_age_hours,
-            force=False,
-        )
-    except httpx.TimeoutException as exc:
-        logger.error("opentag matches: timed out downloading dataset from OpenPrintTag: %s", exc)
-        raise api_error(
-            504,
-            "opentag_fetch_timeout",
-            "Timed out downloading the OpenTag dataset from OpenPrintTag — "
-            "it downloads a large tarball; try again.",
-        ) from exc
-    except httpx.HTTPStatusError as exc:
-        logger.error(
-            "opentag matches: OpenPrintTag/GitHub returned HTTP %d: %s",
-            exc.response.status_code, exc,
-        )
-        raise api_error(
-            502,
-            "opentag_fetch_failed",
-            f"Failed to download the OpenTag dataset from OpenPrintTag "
-            f"(HTTP {exc.response.status_code} — GitHub may be rate-limiting or unavailable).",
-        ) from exc
-    except httpx.RequestError as exc:
-        logger.error("opentag matches: connection error downloading dataset from OpenPrintTag: %s", exc)
-        raise api_error(
-            502,
-            "opentag_fetch_failed",
-            "Could not reach api.github.com to download the OpenTag dataset — "
-            "check that the bridge container has outbound HTTPS access.",
-        ) from exc
-    materials: list[dict[str, Any]] = dataset["materials"]
-    dataset_lexicon: dict[str, list[str]] | None = dataset.get("lexicon")
-    _record_last_count(dataset["count"])
-    tag_map = _settings.parsed_material_tag_ids
-    # Load vendor alias map once — BridgeConfig value overrides the env default.
-    # Wrapped in try/except so tests without a real DB fall back to the env default.
+    Returns ``(aliases_raw, tag_map, vendor_aliases, field_names)``.  The
+    BridgeConfig read is wrapped so tests without a real DB fall back to the env
+    default.  ``field_names`` carries the openprinttag extra-field names used for
+    the cache fingerprint.
+    """
     from app.api.config import get_config_value
-    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
+    tag_map = _settings.parsed_material_tag_ids
     try:
         with SessionLocal() as _db:
-            aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
+            aliases_raw: str = get_config_value(
+                _db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases
+            ) or ""
     except Exception:
         aliases_raw = _settings.opentag_vendor_aliases
-    vendor_aliases: dict[str, str] = _parse_vendor_aliases(aliases_raw)
-    color_map: dict[str, str] = dict(DEFAULT_COLOR_KEYWORDS)
+    vendor_aliases = _parse_vendor_aliases(aliases_raw)
+    field_names = {
+        "uuid": _settings.spoolman_field_openprinttag_uuid,
+        "ignore": _settings.spoolman_field_openprinttag_ignore,
+        "slug": _settings.spoolman_field_openprinttag_slug,
+    }
+    return aliases_raw, tag_map, vendor_aliases, field_names
 
-    sm_filaments = await sm.get_filaments()
+
+def _compute_matches(
+    sm_filaments: list[Any],
+    materials: list[dict[str, Any]],
+    dataset_lexicon: dict[str, list[str]] | None,
+    tag_map: dict[str, int],
+    vendor_aliases: dict[str, str],
+    uuid_field: str,
+    ignore_field: str,
+) -> list[OpenTagFilamentMatch]:
+    """Pure-CPU OpenTag match computation — safe to run in a worker thread.
+
+    Takes already-fetched plain data (SM filaments, OPT materials, resolved config)
+    and returns the per-filament match list.  Performs NO I/O — no httpx, no
+    SQLAlchemy session, no ``request`` access — so it can be offloaded off the
+    FastAPI event loop via ``run_in_threadpool`` without blocking other requests.
+    """
+    from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
+    color_map: dict[str, str] = dict(DEFAULT_COLOR_KEYWORDS)
 
     # Build ngram_index and effective_synonyms ONCE — used by both the color-profile
     # gate (color_profile_compatible_soft → opt_color_arity → decompose_name) and
@@ -663,9 +667,6 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         "opentag matches: scoring %d filaments against %d materials across %d brands",
         n_filaments, n_materials, n_brands,
     )
-
-    uuid_field = _settings.spoolman_field_openprinttag_uuid
-    ignore_field = _settings.spoolman_field_openprinttag_ignore
 
     def _gated_candidates_for(sm_fil: Any) -> tuple[str, list[dict[str, Any]]]:
         """Run the brand pre-filter + color-profile + polymer-family gates for one SM
@@ -869,6 +870,99 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         ))
 
     logger.info("opentag matches: %d matched, %d no-match", matched, no_match)
+    return matches
+
+
+@router.get("/openprinttag/matches", response_model=OpenTagMatchesResponse)
+async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagMatchesResponse:
+    """Return per-Spoolman-filament OpenTag matches with per-field comparison.
+
+    Serves the last cached match result instantly when present (no compute), with
+    ``computed_at`` and a ``stale_inputs`` flag set when the live dataset / Spoolman
+    filament count / config differ from the cached inputs.  Pass ``recompute=true``
+    to force a fresh (offloaded) match and re-cache.
+
+    The heavy scoring runs in a worker thread (``run_in_threadpool``) so a match in
+    flight never blocks other API requests on the event loop.
+    """
+    sm: Any = request.app.state.spoolman
+
+    # Resolve config off the data sources (sync, but cheap) before any compute.
+    aliases_raw, tag_map, vendor_aliases, field_names = _resolve_match_config()
+
+    # Fast path: serve the cached result when present and recompute was NOT requested.
+    if not recompute:
+        cached = load_match_cache(_settings.data_dir)
+        if cached is not None:
+            meta = get_cache_metadata(
+                _settings.data_dir, _settings.opentag_cache_max_age_hours
+            )
+            current_fp = build_fingerprint(
+                dataset_count=meta.get("count", 0),
+                dataset_fetched_at=meta.get("fetched_at"),
+                sm_count=await _safe_sm_count(sm),
+                aliases_raw=aliases_raw,
+                tag_map=tag_map,
+                field_names=field_names,
+            )
+            resp = OpenTagMatchesResponse.model_validate(cached["response"])
+            resp.computed_at = cached.get("computed_at")
+            resp.stale_inputs = inputs_stale(cached.get("fingerprint"), current_fp)
+            return resp
+
+    # Compute path: load the dataset (network if stale), fetch SM filaments, then
+    # offload the pure scoring to a worker thread.
+    try:
+        dataset = await load_opentag_dataset(
+            _settings.data_dir,
+            _settings.opentag_cache_max_age_hours,
+            force=False,
+        )
+    except httpx.TimeoutException as exc:
+        logger.error("opentag matches: timed out downloading dataset from OpenPrintTag: %s", exc)
+        raise api_error(
+            504,
+            "opentag_fetch_timeout",
+            "Timed out downloading the OpenTag dataset from OpenPrintTag — "
+            "it downloads a large tarball; try again.",
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "opentag matches: OpenPrintTag/GitHub returned HTTP %d: %s",
+            exc.response.status_code, exc,
+        )
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            f"Failed to download the OpenTag dataset from OpenPrintTag "
+            f"(HTTP {exc.response.status_code} — GitHub may be rate-limiting or unavailable).",
+        ) from exc
+    except httpx.RequestError as exc:
+        logger.error("opentag matches: connection error downloading dataset from OpenPrintTag: %s", exc)
+        raise api_error(
+            502,
+            "opentag_fetch_failed",
+            "Could not reach api.github.com to download the OpenTag dataset — "
+            "check that the bridge container has outbound HTTPS access.",
+        ) from exc
+
+    materials: list[dict[str, Any]] = dataset["materials"]
+    dataset_lexicon: dict[str, list[str]] | None = dataset.get("lexicon")
+    _record_last_count(dataset["count"])
+
+    sm_filaments = await sm.get_filaments()
+
+    # Offload the pure-CPU scoring to a worker thread — no I/O happens inside.
+    matches = await run_in_threadpool(
+        _compute_matches,
+        sm_filaments,
+        materials,
+        dataset_lexicon,
+        tag_map,
+        vendor_aliases,
+        field_names["uuid"],
+        field_names["ignore"],
+    )
 
     updates_count = sum(1 for m in matches if m.has_update)
     dataset_meta = OpenTagDatasetMeta(
@@ -876,7 +970,44 @@ async def opentag_matches(request: Request) -> OpenTagMatchesResponse:
         count=dataset["count"],
         stale=dataset["stale"],
     )
-    return OpenTagMatchesResponse(dataset=dataset_meta, matches=matches, updates_count=updates_count)
+    computed_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    response = OpenTagMatchesResponse(
+        dataset=dataset_meta,
+        matches=matches,
+        updates_count=updates_count,
+        computed_at=computed_at,
+        stale_inputs=False,
+    )
+
+    # Persist for the instant fast-path on the next visit.
+    fingerprint = build_fingerprint(
+        dataset_count=dataset["count"],
+        dataset_fetched_at=dataset["fetched_at"],
+        sm_count=len(sm_filaments),
+        aliases_raw=aliases_raw,
+        tag_map=tag_map,
+        field_names=field_names,
+    )
+    save_match_cache(
+        _settings.data_dir,
+        response.model_dump(mode="json"),
+        computed_at,
+        fingerprint,
+    )
+    return response
+
+
+async def _safe_sm_count(sm: Any) -> int:
+    """Best-effort Spoolman filament count for stale-input detection.
+
+    Used only by the cached fast path to decide ``stale_inputs``; a failure here
+    must never block serving the cache, so it returns -1 (which simply forces
+    ``stale_inputs`` true) on error.
+    """
+    try:
+        return len(await sm.get_filaments())
+    except Exception:
+        return -1
 
 
 @router.post("/openprinttag/apply", response_model=OpenTagApplyResponse)
@@ -1236,17 +1367,29 @@ async def opentag_search(
 
     materials: list[dict[str, Any]] = [m for m in cache.get("materials", []) if isinstance(m, dict)]
     dataset_lexicon: dict[str, list[str]] | None = cache.get("lexicon")
-    tag_map = _settings.parsed_material_tag_ids
 
-    # Load vendor aliases — BridgeConfig value overrides the env default.
-    from app.api.config import get_config_value
+    # Resolve config off the data sources, then offload the pure scoring loop.
+    _aliases_raw, tag_map, vendor_aliases, _field_names = _resolve_match_config()
+
+    results = await run_in_threadpool(
+        _compute_search,
+        materials, dataset_lexicon, tag_map, vendor_aliases, brand, material, q, limit,
+    )
+    return OpenTagSearchResponse(results=results)
+
+
+def _compute_search(
+    materials: list[dict[str, Any]],
+    dataset_lexicon: dict[str, list[str]] | None,
+    tag_map: dict[str, int],
+    vendor_aliases: dict[str, str],
+    brand: str,
+    material: str,
+    q: str,
+    limit: int,
+) -> list[OpenTagCandidate]:
+    """Pure-CPU manual-search scoring — safe to run in a worker thread (no I/O)."""
     from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
-    try:
-        with SessionLocal() as _db:
-            aliases_raw: str = get_config_value(_db, "opentag_vendor_aliases", _settings.opentag_vendor_aliases) or ""
-    except Exception:
-        aliases_raw = _settings.opentag_vendor_aliases
-    vendor_aliases = _parse_vendor_aliases(aliases_raw)
     color_map = dict(DEFAULT_COLOR_KEYWORDS)
 
     limit = min(limit, 50)
@@ -1270,7 +1413,7 @@ async def opentag_search(
             ]
 
     if not materials:
-        return OpenTagSearchResponse(results=[])
+        return []
 
     # Build a synthetic SM filament from the query params so we can reuse score_candidate
     # unchanged (no duplicate scorer — as per plan).
@@ -1312,7 +1455,7 @@ async def opentag_search(
             fields=field_rows,
         ))
 
-    return OpenTagSearchResponse(results=results)
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -1415,15 +1558,35 @@ async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
     if cache is None or not cache.get("materials"):
         return OpenTagCompletenessResponse(dataset=dataset_meta, items=[], stale_count=0)
 
-    by_uuid: dict[str, dict[str, Any]] = {}
-    for m in cache.get("materials", []):
-        if isinstance(m, dict) and m.get("uuid"):
-            by_uuid[m["uuid"]] = m
-
     uuid_field = _settings.spoolman_field_openprinttag_uuid
     slug_field = _settings.spoolman_field_openprinttag_slug
 
     sm_filaments = await sm.get_filaments()
+    materials = cache.get("materials", [])
+
+    # Offload the pure-CPU per-filament completeness scan to a worker thread.
+    items, stale_count = await run_in_threadpool(
+        _compute_completeness, sm_filaments, materials, uuid_field, slug_field
+    )
+
+    return OpenTagCompletenessResponse(
+        dataset=dataset_meta,
+        items=items,
+        stale_count=stale_count,
+    )
+
+
+def _compute_completeness(
+    sm_filaments: list[Any],
+    materials: list[dict[str, Any]],
+    uuid_field: str,
+    slug_field: str,
+) -> tuple[list[OpenTagCompletenessItem], int]:
+    """Pure-CPU completeness scan — safe to run in a worker thread (no I/O)."""
+    by_uuid: dict[str, dict[str, Any]] = {}
+    for m in materials:
+        if isinstance(m, dict) and m.get("uuid"):
+            by_uuid[m["uuid"]] = m
 
     items: list[OpenTagCompletenessItem] = []
     stale_count = 0
@@ -1480,8 +1643,4 @@ async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
             stale_match=False,
         ))
 
-    return OpenTagCompletenessResponse(
-        dataset=dataset_meta,
-        items=items,
-        stale_count=stale_count,
-    )
+    return items, stale_count

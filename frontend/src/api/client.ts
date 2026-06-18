@@ -246,7 +246,16 @@ export const postWizardExecute = (body: WizardExecuteRequest) =>
 // ---------------------------------------------------------------------------
 
 export const getOpenTagStatus = () => request<OpenTagCacheStatus>('/openprinttag/status')
-export const getOpenTagMatches = () => request<OpenTagMatchesResponse>('/openprinttag/matches')
+/**
+ * Fetch OpenTag matches. Returns the cached result instantly when present; pass
+ * `recompute` to force a fresh (server-offloaded) match and re-cache. The optional
+ * `signal` lets callers abort the request (e.g. on component unmount).
+ */
+export const getOpenTagMatches = (recompute = false, signal?: AbortSignal) =>
+  request<OpenTagMatchesResponse>(
+    `/openprinttag/matches${recompute ? '?recompute=true' : ''}`,
+    signal ? { signal } : undefined,
+  )
 export const postOpenTagRefresh = () =>
   request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>

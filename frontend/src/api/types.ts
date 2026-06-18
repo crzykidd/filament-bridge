@@ -764,6 +764,11 @@ export interface OpenTagMatchesResponse {
   matches: OpenTagFilamentMatch[]
   /** Count of already-tagged filaments with data drift (excluding ignored ones). */
   updates_count: number
+  /** ISO timestamp the match was computed (set on cached/served results). */
+  computed_at?: string | null
+  /** True when the live dataset / Spoolman count / config differ from the cached
+   *  result's inputs — the UI should prompt for a Refresh. */
+  stale_inputs?: boolean
 }
 
 export interface OpenTagIgnoreResponse {
