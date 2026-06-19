@@ -3,6 +3,7 @@ import { useBlocker, Link } from 'react-router-dom'
 import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
+import { DebugConfirmDialog } from '../components/DebugConfirmDialog'
 import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy } from '../api/types'
 import { useTheme } from '../context/ThemeContext'
 import type { ThemeMode } from '../context/ThemeContext'
@@ -605,17 +606,19 @@ export default function Settings() {
       onCancel={() => setShowAutoSyncBackupDialog(false)}
       onProceed={() => { setShowAutoSyncBackupDialog(false); void doEnableAutoSync() }}
     />
-    <BackupSafetyDialog
+    <DebugConfirmDialog
       open={showClearRefsDialog}
       actionLabel="Clear Filament DB references from Spoolman"
+      warningBody="Blanks filamentdb_id, filamentdb_spool_id, and filamentdb_parent_id on every Spoolman spool that has any set. Writes to Spoolman only — does NOT touch the bridge DB."
       onCancel={() => setShowClearRefsDialog(false)}
-      onProceed={() => { setShowClearRefsDialog(false); void doClearRefs() }}
+      onConfirm={() => { setShowClearRefsDialog(false); void doClearRefs() }}
     />
-    <BackupSafetyDialog
+    <DebugConfirmDialog
       open={showClearOpentagDialog}
       actionLabel="Clear Spoolman OpenPrintTag ids"
+      warningBody="Blanks openprinttag_slug, openprinttag_uuid, and openprinttag_ignore on every Spoolman filament that has any set. Writes to Spoolman only — does NOT touch the bridge DB or Filament DB."
       onCancel={() => setShowClearOpentagDialog(false)}
-      onProceed={() => { setShowClearOpentagDialog(false); void doClearOpentagIds() }}
+      onConfirm={() => { setShowClearOpentagDialog(false); void doClearOpentagIds() }}
     />
     {showFullResetDialog && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/70">

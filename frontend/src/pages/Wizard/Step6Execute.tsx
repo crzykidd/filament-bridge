@@ -3,6 +3,7 @@ import { postWizardExecute } from '../../api/client'
 import { DeepLinks } from '../../components/DeepLinks'
 import { BackupSafetyDialog } from '../../components/BackupSafetyDialog'
 import { HelpTip } from '../../components/HelpTip'
+import { WizardActionBar } from '../../components/WizardActionBar'
 import type { WizardExecuteResponse, WizardExecuteRecord } from '../../api/types'
 import type { WizardCtx } from './index'
 
@@ -230,6 +231,20 @@ export default function Step6Execute({ prev, tareOverrides }: WizardCtx) {
           )}
         </div>
 
+        {/* Top action bar — Execute button is red (destructive); passed via extra slot */}
+        <WizardActionBar
+          onBack={prev}
+          extra={
+            <button
+              onClick={handleExecute}
+              disabled={!confirmed || executing}
+              className="px-6 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-40"
+            >
+              {executing ? 'Executing…' : 'Execute sync'}
+            </button>
+          }
+        />
+
         <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-4">
           <p className="text-amber-800 dark:text-amber-300 text-sm font-medium">This action writes to both upstream systems and cannot be undone automatically.</p>
           <label className="flex items-center gap-2 mt-3 cursor-pointer">
@@ -245,18 +260,19 @@ export default function Step6Execute({ prev, tareOverrides }: WizardCtx) {
 
         {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
 
-        <div className="flex justify-between">
-          <button onClick={prev} className="px-5 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-600">
-            ← Back
-          </button>
-          <button
-            onClick={handleExecute}
-            disabled={!confirmed || executing}
-            className="px-6 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-40"
-          >
-            {executing ? 'Executing…' : 'Execute sync'}
-          </button>
-        </div>
+        {/* Bottom action bar */}
+        <WizardActionBar
+          onBack={prev}
+          extra={
+            <button
+              onClick={handleExecute}
+              disabled={!confirmed || executing}
+              className="px-6 py-2 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700 disabled:opacity-40"
+            >
+              {executing ? 'Executing…' : 'Execute sync'}
+            </button>
+          }
+        />
       </div>
     </>
   )

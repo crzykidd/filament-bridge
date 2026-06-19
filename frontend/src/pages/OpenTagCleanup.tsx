@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getOpenTagMatches,
+  getOpenTagMissingValues,
   getOpenTagSearch,
   getOpenTagStatus,
   postOpenTagApply,
@@ -18,10 +19,15 @@ import {
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DeepLinks } from '../components/DeepLinks'
 import { HelpTip } from '../components/HelpTip'
+import { WizardActionBar } from '../components/WizardActionBar'
 import type {
+  AuditedField,
+  AuditedFieldGroup,
   OpenTagApplyRequest,
   OpenTagCacheStatus,
   OpenTagCandidate,
+  OpenTagCompletenessItem,
+  OpenTagCompletenessResponse,
   OpenTagDatasetMeta,
   OpenTagFieldDecision,
   OpenTagFieldRow,
@@ -166,6 +172,9 @@ function normalizeFieldValue(v: unknown): string {
 
 const IDENTITY_FIELDS = new Set(['extra.openprinttag_slug', 'extra.openprinttag_uuid'])
 
+/** Sentinel selected-candidate index meaning "— unmatch —" (clear the OpenTag identity). */
+const UNMATCH_IDX = -1
+
 /**
  * Derive the badge state for a filament card.
  * - existingUuid: the current Spoolman value of extra.openprinttag_uuid (candidate-independent).
@@ -207,7 +216,7 @@ function OpenTagStampedBadge({ existingUuid, dataDiffers }: { existingUuid: stri
     return (
       <span
         className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
-        title="Tagged in OpenPrintTag — Spoolman data differs from OpenTag"
+        title="Tagged in OpenPrintTag — Spoolman data differs from OpenPrintTag"
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
           <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
@@ -254,7 +263,9 @@ function FilamentCard({
   onCandidateChange,
   onSearchSelect,
 }: FilamentCardProps) {
-  const [expanded, setExpanded] = useState(true)
+  // Default collapsed: expanding a group shows just the filament rows; the user expands a
+  // row to see its field details (avoids opening every row's settings at once).
+  const [expanded, setExpanded] = useState(false)
 
   // Manual search state — lets the user find a better OpenTag match by keyword
   const [showSearch, setShowSearch] = useState(false)
@@ -289,14 +300,17 @@ function FilamentCard({
     searchTimerRef.current = setTimeout(() => { void runSearch(value) }, 350)
   }, [runSearch])
 
+  // Unmatch sentinel: selectedCandidateIdx === UNMATCH_IDX means "— unmatch —" is staged.
+  const isUnmatchStaged = selectedCandidateIdx === UNMATCH_IDX
+
   // Active candidate: use structured candidates[selectedCandidateIdx] when available,
   // otherwise fall back to the top-level match fields (backward-compat / no-match rows).
-  const activeCandidateIdx = Math.min(
+  const activeCandidateIdx = isUnmatchStaged ? 0 : Math.min(
     selectedCandidateIdx,
     Math.max(0, (match.candidates?.length ?? 1) - 1),
   )
   const activeCandidate: OpenTagCandidate | null =
-    match.candidates && match.candidates.length > 0
+    !isUnmatchStaged && match.candidates && match.candidates.length > 0
       ? match.candidates[activeCandidateIdx]
       : null
 
@@ -306,7 +320,12 @@ function FilamentCard({
     ? activeCandidate.multicolor_mismatch
     : (match.multicolor_mismatch ?? false)
 
-  const hasCandidates = match.candidates && match.candidates.length > 1
+  // Show the candidate dropdown whenever there's at least one match — a single-candidate
+  // brand (only one OpenTag entry, e.g. TTYT3D) still gets the picker for consistency.
+  const hasCandidates = !!match.candidates && match.candidates.length >= 1
+  // The matcher returns best + up to 10 alternates (max 11). Below that the dropdown holds
+  // every available match for the brand, so reassure the user nothing is truncated.
+  const allCandidatesListed = !!match.candidates && match.candidates.length <= 10
 
   // Badge state — recomputed when activeCandidate changes (candidate switch updates dataDiffers).
   const { existingUuid, dataDiffers } = computeBadgeState(match, activeCandidate)
@@ -332,7 +351,7 @@ function FilamentCard({
           {displayMulticolorMismatch && (
             <span
               className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-xs font-medium"
-              title="Spoolman has multicolor data but the matched OpenTag entry is single-color"
+              title="Spoolman has multicolor data but the matched OpenPrintTag entry is single-color"
             >
               multicolor mismatch
             </span>
@@ -342,8 +361,12 @@ function FilamentCard({
           {/* Candidate dropdown — shown when there are multiple candidates */}
           {hasCandidates && (
             <select
-              className="text-xs border border-indigo-200 dark:border-indigo-700 rounded px-1 py-0.5 bg-white dark:bg-gray-700 text-indigo-700 dark:text-indigo-300 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400"
-              value={activeCandidateIdx}
+              className={`text-xs border rounded px-1 py-0.5 bg-white dark:bg-gray-700 max-w-xs focus:outline-none focus:ring-1 focus:ring-indigo-400 ${
+                isUnmatchStaged
+                  ? 'border-red-300 dark:border-red-700 text-red-600 dark:text-red-400'
+                  : 'border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+              }`}
+              value={isUnmatchStaged ? UNMATCH_IDX : activeCandidateIdx}
               onClick={e => e.stopPropagation()}
               onChange={e => {
                 e.stopPropagation()
@@ -355,7 +378,16 @@ function FilamentCard({
                   {i === 0 ? '★ ' : ''}{candidateLabel(c)}
                 </option>
               ))}
+              {/* Unmatch is only meaningful for rows that already carry an OPT identity. */}
+              {existingUuid && (
+                <option value={UNMATCH_IDX}>— unmatch (clear OpenPrintTag identity) —</option>
+              )}
             </select>
+          )}
+          {expanded && hasCandidates && allCandidatesListed && (
+            <span className="text-[10px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
+              all filaments listed
+            </span>
           )}
           {!hasCandidates && activeCandidate && (
             <span className="text-xs text-indigo-600 dark:text-indigo-400">
@@ -371,7 +403,7 @@ function FilamentCard({
           <span className="inline-flex items-center">
             {confidenceBadge(displayConfidence)}
             <HelpTip
-              text="Match score vs the OpenTag entry: material, brand, color name, color hex, and finish all contribute. Below 30% = unmatched."
+              text="Match score vs the OpenPrintTag entry: material, brand, color name, color hex, and finish all contribute. Below 30% = unmatched."
               learnMoreHref="/docs/opentag-cleanup"
             />
           </span>
@@ -408,55 +440,22 @@ function FilamentCard({
         </div>
       </div>
 
-      {expanded && !ignored && displayFields.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-700">
-            <thead>
-              <tr className="bg-gray-50 dark:bg-gray-900/40 text-xs text-gray-500 dark:text-gray-400 uppercase">
-                <th className="px-3 py-1 text-left">Field</th>
-                <th className="px-3 py-1 text-left">Spoolman</th>
-                <th className="px-3 py-1 text-left">OpenTag</th>
-                <th className="px-3 py-1 text-left">Use value</th>
-                <th className="px-3 py-1 text-left" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-              {displayFields.map(row => (
-                <FieldReviewRow
-                  key={row.field}
-                  row={row}
-                  decision={decisions[row.field] ?? { field: row.field, value: row.opentag_value, keep_mine: false }}
-                  onChange={updated => onFieldChange(row.field, updated)}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {expanded && !ignored && displayFields.length === 0 && (
-        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 italic">
-          {displayConfidence < 0.30
-            ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
-            : 'No field differences detected.'}
-        </p>
-      )}
-
-      {/* Manual search — available whenever the card is expanded and not ignored */}
+      {/* Manual re-match — surfaced above the field list so it's easy to find when the
+          auto-match is wrong or there's only one candidate to pick from. */}
       {expanded && !ignored && (
-        <div className="px-4 py-2 border-t border-gray-100 dark:border-gray-700">
+        <div className="px-4 py-2 border-b border-gray-100 dark:border-gray-700">
           {!showSearch ? (
             <button
               type="button"
-              className="text-xs text-indigo-500 dark:text-indigo-400 hover:underline"
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
               onClick={() => setShowSearch(true)}
             >
-              Search OpenTag manually…
+              🔍 Wrong match? Search OpenPrintTag manually…
             </button>
           ) : (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Search OpenTag</span>
+                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Search OpenPrintTag</span>
                 <button
                   type="button"
                   className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
@@ -514,6 +513,49 @@ function FilamentCard({
           )}
         </div>
       )}
+
+      {expanded && !ignored && isUnmatchStaged && (
+        <p className="px-4 py-3 text-sm text-red-600 dark:text-red-400">
+          Will <strong>unmatch</strong> on Apply — clears this filament's OpenPrintTag
+          identity (slug + UUID) in Spoolman and removes it from Filament DB. Pick a
+          candidate above to re-match instead.
+        </p>
+      )}
+
+      {expanded && !ignored && !isUnmatchStaged && displayFields.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm divide-y divide-gray-200 dark:divide-gray-700">
+            <thead>
+              <tr className="bg-gray-50 dark:bg-gray-900/40 text-xs text-gray-500 dark:text-gray-400 uppercase">
+                <th className="px-3 py-1 text-left">Field</th>
+                <th className="px-3 py-1 text-left">Spoolman</th>
+                <th className="px-3 py-1 text-left">OpenPrintTag</th>
+                <th className="px-3 py-1 text-left">Use value</th>
+                <th className="px-3 py-1 text-left" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+              {displayFields.map(row => (
+                <FieldReviewRow
+                  key={row.field}
+                  row={row}
+                  decision={decisions[row.field] ?? { field: row.field, value: row.opentag_value, keep_mine: false }}
+                  onChange={updated => onFieldChange(row.field, updated)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {expanded && !ignored && !isUnmatchStaged && displayFields.length === 0 && (
+        <p className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 italic">
+          {displayConfidence < 0.30
+            ? (match.no_match_reason ?? 'No confident match found — ignore or select an alternate below.')
+            : 'No field differences detected.'}
+        </p>
+      )}
+
     </div>
   )
 }
@@ -551,6 +593,17 @@ function ConfirmStep({
     const result: PendingWrite[] = []
     for (const m of matches) {
       if (ignoredIds.has(m.spoolman_filament_id)) continue
+      // Unmatch staged → a single "clear identity" pending row, no field writes.
+      if (selectedCandidates[m.spoolman_filament_id] === UNMATCH_IDX) {
+        result.push({
+          smId: m.spoolman_filament_id,
+          name: m.spoolman_name,
+          field: 'unmatch',
+          oldValue: 'tagged',
+          newValue: 'clear OpenPrintTag identity',
+        })
+        continue
+      }
       const decisions = fieldDecisions[m.spoolman_filament_id] ?? {}
       const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
       const activeFields = m.candidates?.[candidateIdx]?.fields ?? m.fields
@@ -589,6 +642,19 @@ function ConfirmStep({
         {' '}Review everything below before applying.
       </p>
 
+      {/* Top action bar */}
+      <div className="mb-4">
+        <WizardActionBar
+          onBack={onBack}
+          backLabel="Back"
+          onNext={writes.length > 0 ? onApply : undefined}
+          nextLabel={`Apply ${writes.length} writes`}
+          busy={applying}
+          busyLabel="Applying…"
+          nextDisabled={writes.length === 0}
+        />
+      </div>
+
       {writes.length === 0 ? (
         <p className="text-gray-500 dark:text-gray-400 italic text-sm">Nothing to write — all fields kept or ignored.</p>
       ) : (
@@ -623,24 +689,16 @@ function ConfirmStep({
         </div>
       )}
 
-      <div className="flex gap-3">
-        <button
-          type="button"
-          className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
-          onClick={onBack}
-          disabled={applying}
-        >
-          Back
-        </button>
-        <button
-          type="button"
-          className="px-5 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={onApply}
-          disabled={applying || writes.length === 0}
-        >
-          {applying ? 'Applying…' : `Apply ${writes.length} writes`}
-        </button>
-      </div>
+      {/* Bottom action bar */}
+      <WizardActionBar
+        onBack={onBack}
+        backLabel="Back"
+        onNext={writes.length > 0 ? onApply : undefined}
+        nextLabel={`Apply ${writes.length} writes`}
+        busy={applying}
+        busyLabel="Applying…"
+        nextDisabled={writes.length === 0}
+      />
     </div>
   )
 }
@@ -882,7 +940,7 @@ function UpdatesReviewRow({
               <tr className="bg-gray-50 dark:bg-gray-900/40 text-gray-500 dark:text-gray-400 uppercase">
                 <th className="px-3 py-1 text-left">Field</th>
                 <th className="px-3 py-1 text-left">Current (Spoolman)</th>
-                <th className="px-3 py-1 text-left">Updated (OpenTag)</th>
+                <th className="px-3 py-1 text-left">Updated (OpenPrintTag)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
@@ -1086,7 +1144,7 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
           ← Back
         </button>
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Review OpenTag updates
+          Review OpenPrintTag updates
         </h2>
         <span className="text-sm text-gray-500 dark:text-gray-400">
           {displayMatches.length} filament{displayMatches.length !== 1 ? 's' : ''} with updated values
@@ -1094,7 +1152,7 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
       </div>
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
         These filaments are already tagged with an OpenPrintTag UUID but their Spoolman
-        data differs from the latest OpenTag dataset. Select the ones you want to update
+        data differs from the latest OpenPrintTag dataset. Select the ones you want to update
         and click <strong>Apply selected</strong>.
       </p>
 
@@ -1232,14 +1290,415 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
 }
 
 // ---------------------------------------------------------------------------
+// Missing values report — OpenPrintTag record completeness for tagged filaments
+// ---------------------------------------------------------------------------
+
+type MissingSort = 'most-missing' | 'brand'
+
+/** Human heading for a section scope ("material" | "package:<slug>" | "container:<slug>"). */
+function sectionHeading(scope: string): string {
+  if (scope === 'material') return 'Material'
+  if (scope === 'package:none') return 'Package'
+  if (scope.startsWith('package:')) return `Package — ${scope.slice('package:'.length)}`
+  if (scope.startsWith('container:')) return `Container — ${scope.slice('container:'.length)}`
+  return scope
+}
+
+/** One expandable row in the completeness report table. */
+function MissingValuesRow({ item }: { item: OpenTagCompletenessItem }) {
+  const [open, setOpen] = useState(false)
+  const slugLink = item.opt_url ?? null
+
+  return (
+    <>
+      <tr
+        className="border-t border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/40 cursor-pointer"
+        onClick={() => setOpen(o => !o)}
+      >
+        <td className="px-3 py-2 text-sm text-gray-700 dark:text-gray-300">{item.brand ?? '—'}</td>
+        <td className="px-3 py-2 text-sm text-gray-900 dark:text-gray-100">
+          <div className="flex items-center gap-2">
+            <span>{item.name ?? '—'}</span>
+            <DeepLinks spoolmanFilamentId={item.spoolman_filament_id} />
+          </div>
+        </td>
+        <td className="px-3 py-2 text-sm text-indigo-700 dark:text-indigo-400 font-mono">
+          {slugLink ? (
+            <a
+              href={slugLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:underline"
+              onClick={e => e.stopPropagation()}
+            >
+              {item.opt_slug ?? '(linked)'}
+            </a>
+          ) : (
+            item.opt_slug ?? '—'
+          )}
+        </td>
+        <td className="px-3 py-2 text-sm">
+          {item.stale_match ? (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-300">
+              stale tag
+            </span>
+          ) : item.missing_count === 0 ? (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300">
+              complete
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300">
+              {item.missing_count} missing
+            </span>
+          )}
+        </td>
+      </tr>
+      {open && (
+        <tr className="bg-gray-50 dark:bg-gray-800/60">
+          <td colSpan={4} className="px-3 py-3">
+            {item.stale_match ? (
+              <p className="text-sm text-orange-700 dark:text-orange-400">
+                This filament's OpenPrintTag UUID (<span className="font-mono">{item.opt_uuid}</span>)
+                is not in the current dataset — the tag may be stale. Re-match this filament or refresh
+                the dataset.
+              </p>
+            ) : item.sections.length === 0 ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+                This OpenPrintTag record has every supported field filled. Nothing to contribute.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {item.sections.map(section => (
+                  <div key={section.scope}>
+                    <p className="text-xs uppercase tracking-wide font-medium text-gray-500 dark:text-gray-400 mb-1">
+                      {sectionHeading(section.scope)}
+                    </p>
+                    <ul className="flex flex-wrap gap-x-3 gap-y-1">
+                      {section.fields.map(label => (
+                        <li
+                          key={label}
+                          className="px-2 py-0.5 rounded text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300"
+                        >
+                          {label}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+// localStorage key for persisted excluded-field set.
+const _LS_EXCLUDED_KEY = 'fb_opt_missing_excluded_fields'
+
+function _readExcludedKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(_LS_EXCLUDED_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) return new Set(parsed as string[])
+  } catch {
+    // corrupt entry → default all-included
+  }
+  return new Set()
+}
+
+function _writeExcludedKeys(keys: Set<string>): void {
+  try {
+    localStorage.setItem(_LS_EXCLUDED_KEY, JSON.stringify([...keys]))
+  } catch {
+    // best-effort
+  }
+}
+
+/** Per-scope label used in the chip group headers. */
+function _scopeLabel(scope: string): string {
+  if (scope === 'material') return 'Material'
+  if (scope === 'package') return 'Package'
+  if (scope === 'container') return 'Container'
+  return scope
+}
+
+/** Apply excluded-field filter to a single item's sections, recomputing missing_count. */
+function _applyExcludedToItem(
+  item: OpenTagCompletenessItem,
+  excludedLabels: Set<string>,
+): OpenTagCompletenessItem {
+  if (item.stale_match) return item  // stale tags are not field-filtered
+  if (excludedLabels.size === 0) return item
+  const filteredSections = item.sections.map(section => ({
+    ...section,
+    fields: section.fields.filter(label => !excludedLabels.has(label)),
+  })).filter(section => section.fields.length > 0)
+  const missing_count = filteredSections.reduce((sum, s) => sum + s.fields.length, 0)
+  return { ...item, sections: filteredSections, missing_count }
+}
+
+/** Field toggle chips — one chip per audited field, grouped by scope. */
+function FieldToggleChips({
+  auditedFields,
+  excludedKeys,
+  excludedLabels,
+  onToggle,
+  onReset,
+}: {
+  auditedFields: AuditedFieldGroup[]
+  excludedKeys: Set<string>
+  excludedLabels: Set<string>
+  onToggle: (field: AuditedField) => void
+  onReset: () => void
+}) {
+  const excludedCount = excludedKeys.size
+  return (
+    <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+          Fields to count
+        </span>
+        {excludedCount > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-amber-700 dark:text-amber-400">
+              {excludedCount} field{excludedCount !== 1 ? 's' : ''} excluded
+            </span>
+            <button
+              type="button"
+              onClick={onReset}
+              className="text-xs px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              Reset
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="space-y-2">
+        {auditedFields.map(group => (
+          <div key={group.scope}>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">{_scopeLabel(group.scope)}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {group.fields.map(field => {
+                const excluded = excludedLabels.has(field.label)
+                return (
+                  <button
+                    key={field.key}
+                    type="button"
+                    onClick={() => onToggle(field)}
+                    title={field.conditional ? `${field.label} (multicolor only)` : field.label}
+                    className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                      excluded
+                        ? 'border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-900 line-through'
+                        : 'border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
+                    }`}
+                  >
+                    {field.label}{field.conditional ? ' *' : ''}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      {auditedFields.some(g => g.fields.some(f => f.conditional)) && (
+        <p className="mt-1.5 text-xs text-gray-400 dark:text-gray-500">* counted only for multicolor records</p>
+      )}
+    </div>
+  )
+}
+
+/** Standalone completeness report view. Fetches its own data on first activation. */
+function MissingValuesReport() {
+  const [data, setData] = useState<OpenTagCompletenessResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [sortBy, setSortBy] = useState<MissingSort>('most-missing')
+  const [showComplete, setShowComplete] = useState(false)
+  // Excluded field keys (cache_key) — derived from localStorage on first render.
+  const [excludedKeys, setExcludedKeys] = useState<Set<string>>(() => _readExcludedKeys())
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    getOpenTagMissingValues()
+      .then(d => { if (!cancelled) setData(d) })
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  // Build a set of excluded LABELS (used by _applyExcludedToItem which matches on labels).
+  // Also build a map from key→label for toggling.
+  const { excludedLabels, keyToLabel } = useMemo(() => {
+    const kToL = new Map<string, string>()
+    if (data?.audited_fields) {
+      for (const group of data.audited_fields) {
+        for (const f of group.fields) kToL.set(f.key, f.label)
+      }
+    }
+    const labels = new Set<string>()
+    for (const key of excludedKeys) {
+      const label = kToL.get(key)
+      if (label) labels.add(label)
+    }
+    return { excludedLabels: labels, keyToLabel: kToL }
+  }, [excludedKeys, data])
+
+  const handleToggleField = (field: AuditedField) => {
+    setExcludedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(field.key)) next.delete(field.key)
+      else next.add(field.key)
+      _writeExcludedKeys(next)
+      return next
+    })
+  }
+
+  const handleResetExclusions = () => {
+    setExcludedKeys(new Set())
+    _writeExcludedKeys(new Set())
+  }
+
+  const rows = useMemo(() => {
+    if (!data) return []
+    // Apply per-field exclusion filter and recompute missing_count per item.
+    let items = data.items.map(i => _applyExcludedToItem(i, excludedLabels))
+    // Hide-complete toggle: a row is "complete" only when matched (not stale) and 0 missing.
+    if (!showComplete) {
+      items = items.filter(i => i.stale_match || i.missing_count > 0)
+    }
+    const sorted = [...items]
+    if (sortBy === 'brand') {
+      sorted.sort((a, b) =>
+        (a.brand ?? '').localeCompare(b.brand ?? '') ||
+        (a.name ?? '').localeCompare(b.name ?? ''))
+    } else {
+      // most-missing desc; stale tags sort to the top (treated as needing attention)
+      sorted.sort((a, b) =>
+        Number(b.stale_match) - Number(a.stale_match) ||
+        b.missing_count - a.missing_count ||
+        (a.brand ?? '').localeCompare(b.brand ?? ''))
+    }
+    return sorted
+  }, [data, sortBy, showComplete, excludedLabels])
+
+  if (loading) {
+    return <div className="py-12 text-center text-gray-500 dark:text-gray-400">Loading completeness report…</div>
+  }
+  if (error) {
+    return (
+      <div className="my-4 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 rounded text-sm text-red-800 dark:text-red-300">
+        {error}
+      </div>
+    )
+  }
+  if (!data) return null
+
+  const tagged = data.items.length
+  const needWork = data.items.filter(i => i.missing_count > 0).length
+
+  return (
+    <div>
+      <div className="mb-4 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg text-sm text-blue-800 dark:text-blue-300">
+        <p className="font-medium mb-1">Which of your filaments most need OpenPrintTag data contributed?</p>
+        <p>
+          This optional tool audits the <strong>OpenPrintTag records</strong> for each of your tagged
+          filaments — not your own spool data. For each tagged filament it lists every
+          OpenPrintTag-supported field that the community database leaves empty, so you can decide
+          which fields are worth contributing upstream.{' '}
+          {tagged} tagged filament{tagged !== 1 ? 's' : ''},{' '}
+          {needWork} with gaps{data.stale_count > 0 ? `, ${data.stale_count} stale tag${data.stale_count !== 1 ? 's' : ''}` : ''}.
+        </p>
+        <p className="mt-1 text-xs text-blue-700 dark:text-blue-400">
+          Use the field toggles below to choose which fields count toward the gap tally — exclude
+          any that are not relevant to you (e.g. chamber temp for PLA). The report never pre-judges
+          applicability; you decide what is worth submitting. Heatbreak temperature is excluded
+          globally: it has no upstream data yet.
+        </p>
+      </div>
+
+      {/* Per-field toggle chips — derived from audited_fields in the API response. */}
+      {data.audited_fields && data.audited_fields.length > 0 && (
+        <FieldToggleChips
+          auditedFields={data.audited_fields}
+          excludedKeys={excludedKeys}
+          excludedLabels={excludedLabels}
+          onToggle={handleToggleField}
+          onReset={handleResetExclusions}
+        />
+      )}
+
+      <div className="flex items-center gap-4 mb-4">
+        <label className="text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2">
+          Sort by
+          <select
+            className="border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 text-sm"
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as MissingSort)}
+          >
+            <option value="most-missing">Most missing</option>
+            <option value="brand">Brand (A→Z)</option>
+          </select>
+        </label>
+        <label className="text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            className="rounded border-gray-300 dark:border-gray-600"
+            checked={showComplete}
+            onChange={e => setShowComplete(e.target.checked)}
+          />
+          Show complete records
+        </label>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+          {tagged === 0
+            ? 'No tagged filaments yet — apply OpenPrintTag identities first (Match to DB).'
+            : 'Every tagged filament has a complete OpenPrintTag record (for the selected fields).'}
+        </div>
+      ) : (
+        <div className="overflow-x-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+          <table className="min-w-full">
+            <thead className="bg-gray-50 dark:bg-gray-700/40">
+              <tr className="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                <th className="px-3 py-2 font-medium">Brand</th>
+                <th className="px-3 py-2 font-medium">Filament</th>
+                <th className="px-3 py-2 font-medium">OPT match</th>
+                <th className="px-3 py-2 font-medium"># missing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(item => (
+                <MissingValuesRow key={item.spoolman_filament_id} item={item} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 type Step = 'review' | 'confirm' | 'done'
 
+/** Top-level toolbar action / active view. */
+type ToolbarView = 'idle' | 'match' | 'missing-values'
+
 export default function OpenTagCleanup() {
   // Cache status — loaded instantly on mount, no fetch
   const [cacheStatus, setCacheStatus] = useState<OpenTagCacheStatus | null>(null)
+
+  /** Which toolbar action is active. Starts at 'idle' — nothing loads on mount. */
+  const [toolbarView, setToolbarView] = useState<ToolbarView>('idle')
 
   // View mode: 'all' = main review flow, 'updates-review' = focused updates view
   const [viewMode, setViewMode] = useState<'all' | 'updates-review'>('all')
@@ -1251,6 +1710,12 @@ export default function OpenTagCleanup() {
   // Loading / work state
   const [working, setWorking] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  // After a hash-checked Refresh found the dataset unchanged, offer a one-click
+  // "Pull contents anyway" (force download). Cleared whenever a load starts or a
+  // changed-content refresh succeeds.
+  const [offerForcePull, setOfferForcePull] = useState(false)
+  // "Dataset already up to date" note shown after a hash-checked Refresh found no change.
+  const [upToDateMsg, setUpToDateMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [response, setResponse] = useState<OpenTagMatchesResponse | null>(null)
   const [step, setStep] = useState<Step>('review')
@@ -1271,11 +1736,16 @@ export default function OpenTagCleanup() {
   const [hideMatched, setHideMatched] = useState(false)
   const [hideAlreadyTagged, setHideAlreadyTagged] = useState(false)
 
+  // AbortController for the in-flight match/recompute fetch — aborted on unmount so
+  // navigating away cancels the client wait and clears the loading state immediately.
+  const matchAbortRef = useRef<AbortController | null>(null)
+
   // Load cache status on mount (instant — no network fetch to FDB)
   useEffect(() => {
     getOpenTagStatus()
       .then(s => setCacheStatus(s))
       .catch(() => { /* status unavailable — banner stays absent */ })
+    return () => { matchAbortRef.current?.abort() }
   }, [])
 
   const _applyMatchesData = useCallback((data: OpenTagMatchesResponse) => {
@@ -1306,48 +1776,108 @@ export default function OpenTagCleanup() {
     setSelectedCandidates({})
   }, [])
 
-  // Run the full load: optionally refresh dataset first, then fetch matches.
-  // skipRefresh=true when the cache is already fresh (warm run).
-  const runLoad = useCallback(async (skipRefresh: boolean) => {
+  // Run the full load. `datasetMode` controls the dataset step:
+  // - 'skip'  — don't touch the dataset (warm cache); serve/recompute matches only.
+  // - 'check' — cheap upstream commit-SHA check; downloads only if the commit changed.
+  //             When the commit is UNCHANGED the heavy match recompute is skipped too
+  //             (the dataset is identical), and we offer "Pull contents anyway".
+  // - 'pull'  — force a full tarball download regardless of the commit, then recompute.
+  // recomputeMatches=true forces the server to re-score even on a warm dataset.
+  const runLoad = useCallback(async (
+    datasetMode: 'skip' | 'check' | 'pull',
+    recomputeMatches = false,
+  ) => {
+    // Abort any prior in-flight match fetch before starting a new one.
+    matchAbortRef.current?.abort()
+    const controller = new AbortController()
+    matchAbortRef.current = controller
+
     setWorking(true)
     setError(null)
     setStatusMsg(null)
+    setOfferForcePull(false)
     try {
-      if (!skipRefresh) {
+      let datasetChanged = false
+      if (datasetMode !== 'skip') {
         const known = cacheStatus?.last_count || cacheStatus?.count || 0
         const recordHint = known > 0 ? `${known.toLocaleString()}+ records` : 'thousands of records'
         setStatusMsg(
-          'Fetching the OpenTag dataset from OpenPrintTag… ' +
-          `(first load downloads ${recordHint} — up to a minute)`,
+          datasetMode === 'pull'
+            ? `Downloading the OpenPrintTag dataset from OpenPrintTag… (${recordHint} — up to a minute)`
+            : 'Checking OpenPrintTag for updates…',
         )
-        await postOpenTagRefresh()
-        // Refresh status banner after fetch
+        const meta = await postOpenTagRefresh(datasetMode === 'pull')
+        // Refresh status banner after the check/download.
         getOpenTagStatus().then(s => setCacheStatus(s)).catch(() => {})
+        if (datasetMode === 'check' && meta.unchanged) {
+          // No content change — tell the user, bump the banner age, offer force pull.
+          // Skip the heavy recompute: the dataset is byte-for-byte identical.
+          const n = meta.count.toLocaleString()
+          const sha = meta.commit_sha ? meta.commit_sha.slice(0, 7) : 'same commit'
+          setStatusMsg(null)
+          setOfferForcePull(true)
+          setError(null)
+          // Surface the "already up to date" note via statusMsg-style banner below.
+          setUpToDateMsg(`Dataset already up to date (${sha} · ${n} records).`)
+          return
+        }
+        datasetChanged = true
       }
-      setStatusMsg('Matching your Spoolman filaments…')
-      const data = await getOpenTagMatches()
+      setUpToDateMsg(null)
+      // A dataset re-download/change always means a fresh recompute (cache invalid).
+      const recompute = recomputeMatches || datasetChanged
+      setStatusMsg(
+        recompute ? 'Matching your Spoolman filaments…' : 'Loading your last match…',
+      )
+      const data = await getOpenTagMatches(recompute, controller.signal)
       _applyMatchesData(data)
     } catch (e: unknown) {
+      // Swallow abort errors — the user navigated away or kicked off a newer fetch.
+      if (e instanceof DOMException && e.name === 'AbortError') return
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setWorking(false)
-      setStatusMsg(null)
+      if (matchAbortRef.current === controller) {
+        setWorking(false)
+        setStatusMsg(null)
+        matchAbortRef.current = null
+      }
     }
   }, [_applyMatchesData, cacheStatus])
 
-  // On mount: once status is known, kick off the appropriate load
-  const [autoLoadDone, setAutoLoadDone] = useState(false)
-  useEffect(() => {
-    if (cacheStatus === null) return   // still waiting for status
-    if (autoLoadDone) return           // already started
-    setAutoLoadDone(true)
-    runLoad(cacheStatus.exists && !cacheStatus.stale)
-  }, [cacheStatus, autoLoadDone, runLoad])
-
-  // Refresh button: always force a fresh fetch
+  // "Refresh dataset" (toolbar): cheap SHA check first — download+recompute only if
+  // the upstream commit actually changed; otherwise just bump the age and offer pull.
   const handleRefresh = useCallback(async () => {
-    runLoad(false)
+    setToolbarView('match')
+    setViewMode('all')
+    runLoad('check')
   }, [runLoad])
+
+  // "Pull contents anyway": force the full tarball download even when the SHA matched.
+  const handleForcePull = useCallback(async () => {
+    setToolbarView('match')
+    setViewMode('all')
+    runLoad('pull')
+  }, [runLoad])
+
+  // "Refresh match" (match view): keep the cached dataset, force a fresh server recompute.
+  const handleRecompute = useCallback(() => {
+    setToolbarView('match')
+    setViewMode('all')
+    runLoad('skip', true)
+  }, [runLoad])
+
+  // "Match to DB" toolbar button: switch to match view and load the cached result (fast).
+  const handleMatchToDb = useCallback(() => {
+    setToolbarView('match')
+    setViewMode('all')
+    if (!response) {
+      // First time: serve the cached match instantly when the dataset is warm; when
+      // the cache is missing/stale, do a cheap SHA check (downloads only if changed).
+      const warm = cacheStatus !== null && cacheStatus.exists && !cacheStatus.stale
+      runLoad(warm ? 'skip' : 'check')
+    }
+    // If already loaded, just re-enter the view — don't re-fetch
+  }, [response, cacheStatus, runLoad])
 
   const handleFieldChange = useCallback(
     (smId: number, field: string, updated: OpenTagFieldDecision) => {
@@ -1373,6 +1903,8 @@ export default function OpenTagCleanup() {
   const handleCandidateChange = useCallback(
     (smId: number, idx: number, match: OpenTagFilamentMatch) => {
       setSelectedCandidates(prev => ({ ...prev, [smId]: idx }))
+      // Unmatch sentinel: stage a clear; field decisions are irrelevant (none are written).
+      if (idx === UNMATCH_IDX) return
       const candidate = match.candidates?.[idx]
       if (!candidate) return
       const newDecisions: Record<string, OpenTagFieldDecision> = {}
@@ -1438,6 +1970,16 @@ export default function OpenTagCleanup() {
       const decisions: OpenTagFilamentDecision[] = response.matches.map(m => {
         if (ignoredIds.has(m.spoolman_filament_id)) {
           return { spoolman_filament_id: m.spoolman_filament_id, ignored: true, fields: [] }
+        }
+        // Unmatch staged: emit a clear_identity decision (backend resolves the FDB id
+        // from the SM cross-ref extra). No field/identity writes.
+        if (selectedCandidates[m.spoolman_filament_id] === UNMATCH_IDX) {
+          return {
+            spoolman_filament_id: m.spoolman_filament_id,
+            ignored: false,
+            clear_identity: true,
+            fields: [],
+          }
         }
         // Use selected candidate for identity (slug/uuid) and active fields
         const candidateIdx = selectedCandidates[m.spoolman_filament_id] ?? 0
@@ -1539,24 +2081,66 @@ export default function OpenTagCleanup() {
     <>
     <BackupSafetyDialog
       open={showBackupDialog}
-      actionLabel="Apply OpenTag writes"
+      actionLabel="Apply OpenPrintTag writes"
       onCancel={() => setShowBackupDialog(false)}
       onProceed={() => { setShowBackupDialog(false); void runApply() }}
     />
     <div className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">OpenTag Cleanup</h1>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+      <h1 className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">OpenPrintTag Cleanup</h1>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Match your Spoolman filaments against the OpenPrintTag database, review field
-        differences, and apply canonical data — including pushing OpenTag identity into
+        differences, and apply canonical data — including pushing OpenPrintTag identity into
         Filament DB.
       </p>
+
+      {/* Top toolbar — pick an action first; nothing loads on mount */}
+      <div className="flex items-center gap-2 mb-6 p-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            working && toolbarView !== 'missing-values'
+              ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 opacity-70 cursor-not-allowed'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={() => void handleRefresh()}
+          disabled={working}
+          title="Re-download the OpenPrintTag dataset from OpenPrintTag, then reprocess"
+        >
+          Refresh dataset
+        </button>
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            toolbarView === 'match'
+              ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={handleMatchToDb}
+          disabled={working}
+          title="Scan Spoolman filaments and match against the OpenPrintTag dataset"
+        >
+          Match to DB
+        </button>
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            toolbarView === 'missing-values'
+              ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={() => setToolbarView('missing-values')}
+          title="Find which of your tagged filaments most need data contributed to OpenPrintTag (audits the OpenPrintTag database, not your spools)"
+        >
+          Show missing values
+        </button>
+      </div>
 
       {/* Dataset status banner — populated instantly from cache, no FDB fetch */}
       <div className="flex items-center gap-4 mb-6 p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
         {cacheStatus?.exists ? (
           <>
             <span className="text-sm text-gray-600 dark:text-gray-300">
-              OpenTag dataset: <strong>{cacheStatus.count}</strong> materials
+              OpenPrintTag dataset: <strong>{cacheStatus.count}</strong> materials
             </span>
             <span className="text-sm text-gray-500 dark:text-gray-400">
               fetched {formatAge(cacheStatus.fetched_at)}
@@ -1564,36 +2148,75 @@ export default function OpenTagCleanup() {
             {cacheStatus.stale && (
               <span className="px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 text-xs">stale</span>
             )}
+            {upToDateMsg && (
+              <span className="text-sm text-green-700 dark:text-green-400">
+                {upToDateMsg}
+              </span>
+            )}
+            {offerForcePull && (
+              <button
+                type="button"
+                className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                onClick={() => void handleForcePull()}
+                disabled={working}
+                title="Force a full re-download of the OpenPrintTag dataset even though the upstream commit is unchanged"
+              >
+                Pull contents anyway
+              </button>
+            )}
           </>
         ) : (
           <span className="text-sm text-gray-500 dark:text-gray-400">
             {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
           </span>
         )}
-        <div className="ml-auto flex gap-2">
-          <button
-            type="button"
-            className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-            onClick={() => runLoad(true)}
-            disabled={working}
-            title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
-          >
-            {working ? 'Working…' : 'Reprocess records'}
-          </button>
-          <button
-            type="button"
-            className="px-3 py-1 text-sm border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-400 rounded hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-50"
-            onClick={handleRefresh}
-            disabled={working}
-            title="Re-download the OpenTag dataset from OpenPrintTag, then reprocess"
-          >
-            {working ? 'Working…' : 'Refresh dataset'}
-          </button>
-        </div>
+        {/* Match freshness + recompute — only shown after a match has been loaded */}
+        {response && (
+          <div className="ml-auto flex items-center gap-3">
+            {response.computed_at && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                last matched {formatAge(response.computed_at)}
+              </span>
+            )}
+            {response.stale_inputs && (
+              <span className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-1.5 py-0.5">
+                data changed since last match — Refresh
+              </span>
+            )}
+            <button
+              type="button"
+              className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+              onClick={handleRecompute}
+              disabled={working}
+              title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
+            >
+              {working ? 'Working…' : 'Refresh match'}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Updates available banner — shown once matches are loaded */}
-      {!working && response && updatesCount > 0 && step === 'review' && viewMode === 'all' && (
+      {/* Idle landing state — shown when no action has been picked yet */}
+      {toolbarView === 'idle' && (
+        <div className="py-12 text-center text-gray-500 dark:text-gray-400">
+          <p className="text-base mb-2 font-medium text-gray-700 dark:text-gray-200">Pick an action above to get started.</p>
+          <p className="text-sm">
+            <strong>Match to DB</strong> — scan Spoolman filaments and match against the OpenPrintTag dataset.
+          </p>
+          <p className="text-sm mt-1">
+            <strong>Show missing values</strong> — find which of your tagged filaments most need data contributed to OpenPrintTag (audits the OpenPrintTag database, not your spools).
+          </p>
+          <p className="text-sm mt-1">
+            <strong>Refresh dataset</strong> — re-download the OpenPrintTag dataset and reprocess matches.
+          </p>
+        </div>
+      )}
+
+      {/* Missing values report — OpenPrintTag record completeness for tagged filaments */}
+      {toolbarView === 'missing-values' && <MissingValuesReport />}
+
+      {/* Updates available banner — shown once matches are loaded (match view only) */}
+      {!working && toolbarView === 'match' && response && updatesCount > 0 && step === 'review' && viewMode === 'all' && (
         <div className="mb-4 flex items-center gap-4 px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0">
             <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
@@ -1614,13 +2237,14 @@ export default function OpenTagCleanup() {
         </div>
       )}
 
-      {error && (
+      {/* Error and progress — only shown when the match view is active */}
+      {toolbarView === 'match' && error && (
         <div className="mb-4 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-400">
           <strong>Error:</strong> {error}
         </div>
       )}
 
-      {working && statusMsg && (
+      {toolbarView === 'match' && working && statusMsg && (
         <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-700 dark:text-blue-300">
           <svg className="animate-spin h-4 w-4 shrink-0 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -1631,15 +2255,15 @@ export default function OpenTagCleanup() {
       )}
 
       {/* Updates Review focused view */}
-      {!working && viewMode === 'updates-review' && response && (
+      {toolbarView === 'match' && !working && viewMode === 'updates-review' && response && (
         <UpdatesReviewSection
           matches={updateMatches}
           onBack={() => setViewMode('all')}
-          onApplied={() => { setViewMode('all'); void runLoad(true) }}
+          onApplied={() => { setViewMode('all'); void runLoad(true, true) }}
         />
       )}
 
-      {!working && viewMode === 'all' && step === 'review' && response && (
+      {toolbarView === 'match' && !working && viewMode === 'all' && step === 'review' && response && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-sm text-gray-600 dark:text-gray-300">
@@ -1826,10 +2450,19 @@ export default function OpenTagCleanup() {
               </div>
             </details>
           )}
+
+          {/* Bottom action bar */}
+          <div className="mt-4">
+            <WizardActionBar
+              onNext={() => setStep('confirm')}
+              nextLabel="Review & Confirm →"
+              nextDisabled={withMatch.length === 0}
+            />
+          </div>
         </div>
       )}
 
-      {!working && viewMode === 'all' && step === 'confirm' && response && (
+      {toolbarView === 'match' && !working && viewMode === 'all' && step === 'confirm' && response && (
         <ConfirmStep
           matches={matches}
           fieldDecisions={fieldDecisions}
@@ -1841,7 +2474,7 @@ export default function OpenTagCleanup() {
         />
       )}
 
-      {viewMode === 'all' && step === 'done' && applyResult && (
+      {toolbarView === 'match' && viewMode === 'all' && step === 'done' && applyResult && (
         <div className="px-6 py-8 text-center">
           <div className="text-4xl mb-4">{applyResult.errors === 0 ? '✓' : '⚠'}</div>
           <h2 className="text-xl font-semibold mb-2 text-gray-900 dark:text-gray-100">
@@ -1854,7 +2487,7 @@ export default function OpenTagCleanup() {
           <button
             type="button"
             className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded text-sm hover:bg-gray-50 dark:hover:bg-gray-700"
-            onClick={() => { setStep('review'); runLoad(true) }}
+            onClick={() => { setStep('review'); runLoad(true, true) }}
           >
             Start over
           </button>

@@ -52,6 +52,25 @@ vi.mock('../components/BackupSafetyDialog', () => ({
   },
 }))
 
+vi.mock('../components/DebugConfirmDialog', () => ({
+  DebugConfirmDialog: ({
+    open,
+    onConfirm,
+  }: {
+    open: boolean
+    onConfirm: () => void
+    onCancel: () => void
+    actionLabel?: string
+    warningBody?: string
+  }) => {
+    // Auto-confirm so tests that click debug buttons don't need to interact with the dialog
+    React.useEffect(() => {
+      if (open) onConfirm()
+    }, [open])
+    return null
+  },
+}))
+
 vi.mock('../context/ThemeContext', () => ({
   useTheme: () => ({ mode: 'system', setMode: vi.fn() }),
   ThemeProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,

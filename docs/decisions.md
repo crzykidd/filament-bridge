@@ -1,5 +1,275 @@
 # Decision record
 
+## 2026-06-19 — Defer the per-minor CHANGELOG archive (deviation from release-prep-and-cut)
+
+The adopted `release-prep-and-cut` standard archives the previous minor series into
+`docs/CHANGELOG-<minor>.x.md` on every new-minor release. For v0.3.0 we **deliberately skipped**
+that step: `CHANGELOG.md` keeps the full history (`0.2.0` + `0.2.1` + `0.3.0`) in one file. We'll
+archive at some later point, not per-minor. So a future release session should NOT "fix" the
+missing archive — the single-file changelog is intentional until we decide to split it.
+
+## 2026-06-19 — "Missing values" report audits OpenPrintTag, not the user's spools
+
+**Context.** The completeness report had drifted into a *diff against the user's data*: each
+missing OPT field carried a "Your value (hint)" pulled from Spoolman, and the audit was
+material-only. That conflated two questions and produced false signals — e.g. RED
+(`elegoo-pla-red`) showed "Product URL missing" even though its **package** URL is set, because
+the report only knew the material-level `productUrl` and had no package/container layer.
+
+**Decision.** The tool audits **OpenPrintTag's master DB**, full stop. The user's inventory only
+**scopes which records to audit** (filaments with `openprinttag_uuid`).
+- **List every OpenPrintTag-supported empty field** (`v in (None, "", [])`) across **material +
+  each package + that package's container**, using the `SUPPORTED_*_FIELDS` constants as the
+  single source of truth. No second field list in `api/opentag.py`.
+- **Removed the "Your value (hint)" column and all Spoolman-value comparison.** The payload
+  dropped `attributes:[{…, your_value, opt_value}]` for `sections:[{scope, fields:[labels]}]`
+  (scope = `"material"` | `"package:<slug>"` | `"package:none"` | `"container:<slug>"`).
+  `_your_value_hint` and `OpenTagMissingAttribute` were deleted.
+- **No applicability / N-A pre-judging.** Every supported empty field is listed regardless of
+  material type — the user decides what's worth submitting. (secondaryColors stays conditional
+  on multicolor, the one legitimate "doesn't apply" case, preserved from before.)
+- **Material `url` vs package `url` are distinct line items**, reported at their own levels, so a
+  set package URL no longer masks a real material-URL gap (and vice-versa). Verified live on
+  `elegoo-pla-red`: package `url` is set (not flagged), package `gtin` is the real gap (flagged),
+  material `productUrl` is genuinely empty upstream and correctly listed under Material.
+- **Packages are 1→N**: each package is its own section; a material with **no package** is a gap
+  ("No package data").
+- **`heatbreakTemperature` is excluded** from the audit (`_REPORT_EXCLUDED_MATERIAL_KEYS`): the
+  ingest confirmed 0 upstream occurrences, so it would falsely show "missing" on every record.
+
+**Notes / deviations.**
+- "No false material-url gap" from the prompt means the **package** URL (which is set) is no
+  longer mis-reported. The material `productUrl` being listed on RED is *correct* — it is truly
+  empty upstream; the fix is that the two URLs are now separate signals.
+- The compute stays offloaded to `run_in_threadpool`; stale-tag rows are preserved unchanged.
+
+## 2026-06-19 — OpenPrintTag dataset: ingest the full supported schema (material + packages + containers)
+
+**Context.** The completeness report must show *every* OpenPrintTag-supported field that's
+empty for a matched record, and the per-record contribution UI needs the real source-of-truth
+fields. The parser kept only a material subset and dropped the **package** and **container**
+layers entirely. That both omitted real gaps and *mis-reported* — e.g. flagging "Product URL
+missing" when the URL actually lives at the package level, and collapsing chamber temp to a
+single value.
+
+**Decision.**
+- **Material parse keeps the full upstream `properties` set.** Added `hardnessShoreA`,
+  `heatbreakTemperature`, and **distinct** `chamberTempMin`/`chamberTempMax` (kept the
+  collapsed `chamberTemp` for back-compat so the matcher and existing consumers are
+  untouched). The material-level `url` already maps to `productUrl`. ADD-only — no existing
+  key renamed.
+- **Two new tarball passes over the same single download** build `packages_by_material`
+  (`{material_slug: [package…]}`, 1→N per material: `slug`, `uuid`, `gtin`, `brandSpecificId`
+  (SKU), package `url`, `nominalNettoFullWeight`, `filamentDiameter`,
+  `filamentDiameterTolerance`, `containerSlug`) and `containers_by_slug` (`uuid`, `name`,
+  `class`, `brand`, `emptyWeight`, `outerDiameter`, `innerDiameter`, `holeDiameter`, `width`).
+  No second fetch.
+- **Canonical supported-field schema** lives as module constants in `opentag_cache.py`
+  (`SUPPORTED_MATERIAL_FIELDS` / `SUPPORTED_PACKAGE_FIELDS` / `SUPPORTED_CONTAINER_FIELDS`) —
+  the single source of truth the completeness report (next task) checks emptiness against.
+- **Cache shape is versioned** via `CACHE_SCHEMA_VERSION` (currently 2). An older-shaped
+  cache (no `schema_version`, no packages) is treated like a missing cache → forced re-parse
+  from the tarball, mirroring the `lexicon_version` self-heal. `_save_cache`/`_load_cache`/
+  `get_cache_metadata` carry the new keys; `materials`/`commit_sha`/`fetched_at` untouched.
+
+**Notes / deviations.**
+- `heatbreak_temperature` was named in the source prompt's verified facts but does **not**
+  exist anywhere in the current upstream dataset (confirmed: zero occurrences across 13k+
+  materials; `preheat_temperature` is the only heat-related key). The key is still mapped for
+  forward-compatibility but is always `None` today.
+- Container `emptyWeight` is the **spool tare** — a strong candidate input for a future
+  weight-model improvement (today the bridge defaults missing tare to ~200 g). Ingested now,
+  **out of scope** for any weight-model change here.
+- FFF-only filter unchanged: ~12.9k of 13.1k materials kept; ~2.8k materials carry packages;
+  78 containers.
+
+## 2026-06-18 — Parent/variant + OpenPrintTag rework: PARKED, blocked on upstream
+
+The bridge currently writes all material props + OpenPrintTag identity on each **variant** and
+leaves the `generic_container` **master** bare — the inverse of Filament DB's design (FDB
+inheritance is value-presence/live-on-read; shared data belongs on the parent, variants override
+only color + genuine diffs; OpenPrintTag is meant to be linked at the **parent** so variants
+inherit and a single sync propagates). Aligning would mean: shared standardized specs on the
+master, variants set only color/colorName/own-OPT-id/diffs (shared fields left null to inherit).
+
+**Parked** pending the upstream author's direction — it hinges on two FDB questions hyiger is
+actively analyzing: (1) can a colorless abstract parent hold an OpenPrintTag link without being
+forced a color; (2) will the parent "act as a filament" / auto-promote (and is it configurable).
+See **hyiger/filament-db #597 and #605**. Do NOT build the rework until that resolves.
+
+Full analysis + the contingent approach + code touch-points are captured in homelab-configs
+`projects/3dprinting/docs/parent-variant-and-openprinttag.md`. The master's OpenPrintTag pick
+would hook into the wizard's existing "which filament settings to use as master" prompt.
+
+## 2026-06-18 — OpenTag dataset: gate the heavy tarball download behind a commit-SHA check
+
+**Context.** The OpenPrintTag dataset is a large GitHub tarball. Every manual **Refresh
+dataset** and every stale auto-reload (`OPENTAG_CACHE_MAX_AGE_HOURS`, default 24 h)
+re-downloaded and re-parsed the whole thing, even when upstream hadn't changed. The total
+record count isn't knowable without downloading+parsing, so it can't gate the download — but
+the upstream `main` HEAD commit SHA is a cheap, exact "did anything change?" signal.
+
+**Decision.**
+- Store the upstream `commit_sha` in `opentag_cache.json` next to `count`/`fetched_at`/
+  `materials`/`lexicon` (extended `_save_cache`, the cache-shape doc comment, and
+  `get_cache_metadata`). A fresh download captures the SHA via `get_upstream_commit_sha()`.
+- `get_upstream_commit_sha()` does `GET …/commits/main` with `Accept:
+  application/vnd.github.sha` (plain-text 40-char SHA, no JSON parse), short 15 s timeout. It
+  is **best-effort and never raises**: timeout / connectivity / non-2xx (GitHub
+  unauthenticated rate-limit = 60/hr/IP) / unexpected body all return `None`, and the caller
+  falls back to downloading. A failed check must never 500 a refresh.
+- `load_opentag_dataset` fetch gate reworked into explicit intents (`force_pull`,
+  `force_check`; legacy `force=True` aliases to `force_pull`):
+  - **stale or `force_check`** with a stored SHA → fetch upstream SHA; if it matches, rewrite
+    **only** `fetched_at` (keep materials/count/SHA/lexicon), return `unchanged=True`, **no
+    download**; if it differs / the check failed / no SHA was stored → download.
+  - **`force_pull`** → skip the SHA check, always download.
+  - **missing/invalid cache** → always download.
+- `POST /api/openprinttag/refresh` defaults to the SHA-checked path (returns
+  `{ unchanged, count, fetched_at, commit_sha }`); `?pull=true` forces the download. The
+  existing timeout/HTTP-error envelopes (504/502) are unchanged.
+- UI: a hash-checked Refresh that finds no change shows *"Dataset already up to date (commit ·
+  N records)"*, bumps the banner age, and reveals a **Pull contents anyway** button (the
+  `?pull=true` variant); when the dataset is unchanged the heavy match recompute is also
+  skipped. Count is display-only info; the decision keys off the SHA.
+- The match-result cache `dataset` fingerprint now prefers `commit_sha` (`sha:<sha>`), falling
+  back to `count:fetched_at` when the SHA is unknown — so a hash-only refresh that doesn't
+  change the data doesn't spuriously flag the cached match `stale_inputs`.
+
+**Why not gate on count.** The count requires a full download+parse, so it can't be the cheap
+signal. The commit SHA is one tiny request and is exact.
+
+**Why tolerant of SHA-check failure.** GitHub's unauthenticated limit is low (60/hr/IP); a
+rate-limited or flaky check must degrade to "download as before," never break refresh.
+
+## 2026-06-18 — OpenTag matching: offload CPU off the event loop + cache the last result
+
+**Context.** `GET /api/openprinttag/matches` ran the dataset load + scoring synchronously on
+the FastAPI event loop. Because the matcher scores every Spoolman filament against the
+brand-gated slice of the ~11k-entry dataset, a single match blocked *all* other API requests
+until it finished (the "everything is busy" symptom). It also recomputed from scratch on
+every page visit.
+
+**Decisions.**
+- **Offload the pure-CPU work to a worker thread.** All async I/O — the dataset load
+  (`load_opentag_dataset`), the BridgeConfig alias read, and `sm.get_filaments()` — is awaited
+  on the event loop first, then the scoring runs via `starlette.concurrency.run_in_threadpool`.
+  The CPU part was extracted into module-level pure helpers (`_compute_matches`,
+  `_compute_completeness`, `_compute_search`) that take plain data and return plain data — **no
+  httpx, no SQLAlchemy session, no `request` access inside the thread**. The matcher
+  (`core/opentag_match.py`) was verified pure (only dict `.get` / Pydantic reads), so it was
+  safe to call from the thread unchanged. Same offload applied to completeness and search.
+- **Cache the last match result to a DATA_DIR file** (`opentag_matches_cache.json`), mirroring
+  the `core/opentag_cache.py` pattern in a new `core/opentag_match_cache.py`. Stores the
+  `OpenTagMatchesResponse` payload + `computed_at` + a fingerprint. `GET …/matches` serves the
+  cache instantly when present; it recomputes only on the first match or with `?recompute=true`.
+- **Fingerprint on count + fetched_at (documented fallback).** The sibling
+  `…-opentag-smart-dataset-refresh` work (stable dataset commit-SHA identity) is **not landed**,
+  so the dataset fingerprint is `count:fetched_at`. The fingerprint also covers the Spoolman
+  filament count and a sha1 of the alias CSV + material-tag map + openprinttag field names.
+  When any component differs from the cached inputs the cache is still served (never silently
+  stale) but flagged `stale_inputs` so the UI prompts for a refresh. Swap in the commit-SHA
+  when that work lands.
+- **Recompute trigger = `?recompute=true` query param** (not a separate endpoint) — it reuses
+  the same route, runs the offloaded match, and re-caches. The frontend's Refresh-match /
+  Refresh-dataset buttons and post-Apply reloads pass it; ordinary revisits don't.
+- **Frontend:** load the cached result on "Match to DB", show "last matched &lt;time&gt;" + a
+  stale-inputs hint + a Refresh affordance, and abort the in-flight match fetch on unmount via
+  an `AbortController` (the abort alone doesn't fix the server-side freeze — the offload does —
+  but it clears the client loading state immediately on navigation).
+
+**Test contract note.** Because a config change between two plain `GET …/matches` calls now
+serves the cached result (with `stale_inputs`), the existing alias test was updated to pass
+`?recompute=true` on its second call — the documented way to force a re-score under changed
+config.
+
+## 2026-06-18 — OpenTag inline unmatch/re-match: scoped FDB settings{} *removal* exception
+
+**Context.** Users could apply an OpenTag identity but had no in-app way to clear or
+re-point one — they had to hand-edit Spoolman extras or run the debug bulk-clear. Two
+sub-decisions were needed: (1) how to surface alternates for an already-tagged row whose
+exact-UUID match bypasses fuzzy scoring, and (2) how "unmatch" removes the identity from
+Filament DB given CLAUDE.md's blanket "never touch `settings{}`" rule.
+
+**Decisions.**
+- **Un-bypass alternates for tagged rows.** The exact-UUID branch in `opentag.py` still pins
+  the matched record at confidence 1.0 / index 0, but now also runs the same gate pipeline
+  (extracted into a local `_gated_candidates_for` helper, shared with the untagged branch — no
+  logic fork) + `find_best_match(..., top_n=10)` and returns `candidates = [current] +
+  alternates` (the pinned UUID is deduped out of the alternates). **No scorer changes.** A
+  single-entry brand correctly yields `[current]` only.
+- **Unmatch integrates into the existing Apply flow, not an immediate action.** The candidate
+  dropdown gains a blank "— unmatch —" option (sentinel index `-1`), shown only for rows that
+  already carry an identity. Selecting it stages a decision with `clear_identity=true`; the
+  existing Apply step performs the clear. This keeps one apply action consistent with the rest
+  of the page (a standalone `POST /api/openprinttag/clear/{id}` exists too, for callers that
+  want an immediate clear).
+- **Clear = blank SM slug/uuid AND remove only those two keys from the FDB `settings{}` bag.**
+  The SM side reuses the debug-clear blanking convention (encode `""`). The FDB side is a new
+  **approved scoped *removal* exception**, the mirror of the existing
+  `merge_filament_settings`: `FilamentDBClient.remove_filament_settings_keys()` does a
+  read-modify-write that deletes ONLY `openprinttag_slug`/`openprinttag_uuid`, preserves every
+  other key, and is idempotent (no PUT when neither key is present). It is the only permitted
+  removal path; callers must pass only those two keys.
+- **`openprinttag_ignore` is NOT cleared by an unmatch** — it is a separate suppression concern
+  and clearing it would silently re-enable update banners.
+- **FDB removal is best-effort; the SM blank is authoritative.** A missing FDB mapping (no
+  `filamentdb_id` cross-ref) or an FDB write error is logged (scrubbed via `core/log_safe`) and
+  does not fail the unmatch — the SM identity is still cleared. The FDB filament id comes from
+  the decision or is resolved from the SM filament's `filamentdb_id` extra.
+
+## 2026-06-18 — OpenTag completeness report: assess the raw OPT record, not the lossy field path
+
+**Context.** New "Show missing values" report tells the user which OpenPrintTag entries are
+worth enriching. We had two ways to read an OPT record's fields: the per-field mapping path
+(`opt_to_spoolman_fields` / `_build_candidate`) used by the match-review UI, and the raw
+OPTMaterial dict from the cache.
+
+**Decision.**
+- **Inspect the raw OPTMaterial dict directly.** The field-mapping path is built for SM↔OPT
+  drift, not OPT self-completeness — it strips finishes, remaps/drops temps, hard-codes
+  diameter, only emits non-None fields, and omits chamber/preheat/drying/hardness/transmission/
+  photo/product entirely. Routing completeness through it would under-report missing fields.
+  The endpoint reads `by_uuid[uuid]` and tests each raw key.
+- **Missing = empty VALUE, not absent key.** Every OPTMaterial carries all 25 keys, so the
+  test is `v in (None, "", [])`. An empty `tags` list counts as missing.
+- **Field set = ingested attributes only.** Core + extended FFF attributes, plus conditional
+  `secondaryColors` (multicolor only — SM `multi_color_hexes` set OR an OPT `coextruded`/
+  `gradient`/`gradual_color_change` tag). Identity and the always-null
+  `completenessScore`/`completenessTier` are excluded. The bridge does NOT ingest a few
+  upstream fields (`hardness_shore_a`, `heatbreak_temperature`, `max_chamber_temperature`,
+  typed/multiple photos); rather than extend the parser now, the report covers ingested fields
+  only and the UI/docs note the gap as a possible follow-up.
+- **"Your value" is a best-effort hint, never the count driver.** Mapped where sensible
+  (type←material, color←color_hex, density, nozzle/bed temps←settings, secondaryColors←
+  multi_color_hexes); blank otherwise. The headline is always "the OPT record lacks X."
+- **Stale tags surfaced, not dropped.** A tagged filament whose uuid isn't in the current
+  dataset is returned as a distinct `stale_match` row (sorted to the top under most-missing)
+  so the user can re-match or refresh rather than wonder why it vanished.
+- **Default sort = most-missing; complete records hidden by default** with a toggle. Single
+  endpoint pass, no pagination (dataset is local and small).
+
+## 2026-06-18 — OpenTag Cleanup: toolbar view-switch in component state; Reprocess moves to banner
+
+**Context.** Toolbar has three actions (Refresh dataset / Match to DB / Show missing values).
+The view-switch needs to be tracked somewhere so the toolbar highlights the active action and
+gates what renders below.
+
+**Decision.** `toolbarView: 'idle' | 'match' | 'missing-values'` lives in component state on
+`OpenTagCleanup`. This is purely presentational routing — no URL change — because the tool is
+already a single full-page component with its own internal state machine (`Step`, `viewMode`).
+Adding a URL param for three states on an already-stateful page adds nav complexity with no
+real benefit (no shareability needed; the match results aren't bookmarkable anyway).
+
+The previous "Reprocess records" and "Refresh dataset" buttons were both in the dataset-status
+banner. After the toolbar restructure, **Refresh dataset** became a toolbar action (primary
+action, always visible). **Reprocess records** moved to the banner but is now shown only after
+a match has been loaded (it's meaningless until then). The banner remains always-visible so
+the dataset age/stale state is always readable regardless of which toolbar action is active.
+
+The `getOpenTagMissingValues` stub was added to `client.ts` (endpoint not yet on the backend)
+so the completeness-report prompt can import and call it without touching `client.ts` again.
+
 ## 2026-06-17 — Dashboard counts: spools vs filaments are independent; break out master filaments (GitHub #3)
 
 **Context.** A user read the Dashboard's "In Sync = 49" next to "Filament DB = 38" as a sync
@@ -1737,8 +2007,10 @@ FDB delivers the snapshot to the caller (unlike Spoolman which writes to its own
 bridge persists it in its own data volume. The mongodump command is retained as a secondary
 "raw MongoDB" option in a small note.
 
-**Proceed gate:** the Proceed button is disabled until EITHER backup succeeded (Spoolman OR
-Filament DB; HTTP 200, `success: true`) OR the acknowledgment checkbox is checked.
+**Proceed gate (original):** the Proceed button was disabled until EITHER backup succeeded (Spoolman OR
+Filament DB; HTTP 200, `success: true`) OR the acknowledgment checkbox was checked. See
+2026-06-18 entry — the dialog was later made unconditionally friendly (no checkbox, Proceed
+always enabled) and the strict gate moved to a separate `DebugConfirmDialog`.
 `docs/spoolman-writes.md` is unchanged — this is a trigger, not a field write.
 
 ## 2026-06-08 — Filament DB backup API correction
@@ -3840,3 +4112,35 @@ drove a mapped spool to 0 g over several sync cycles, with the per-cycle decreme
 CLAUDE.md "Weight model translation" was corrected to match. Regression tests:
 `test_engine.py::test_weight_two_way_print_converges_no_loop` and `…_fdb_change_converges_no_loop`
 (multi-cycle convergence, no compounding); `test_weight.py::test_does_not_subtract_usage`.
+
+## 2026-06-18 — BackupSafetyDialog made unconditionally friendly; debug clears moved to DebugConfirmDialog
+
+**Context.** The original `BackupSafetyDialog` was styled like a warning gate — amber "Beta
+feature" subtitle, red Proceed button, acknowledgement checkbox, Proceed disabled until a backup
+succeeded or the box was checked. This was appropriate for test-only debug clears but heavy-handed
+for normal product actions (wizard execute, OpenTag apply, enable auto-sync).
+
+**Decision.**
+
+`BackupSafetyDialog` is now unconditionally friendly:
+- Title changed to "Back up first? (optional)"; subtitle drops the "Beta feature" framing.
+- Acknowledgement checkbox removed; `canProceed` is always true.
+- Proceed button recolored indigo (was red), relabeled "Continue — {actionLabel}".
+- Backup buttons (Spoolman + Filament DB + mongodump note) retained as optional convenience.
+- Call sites 1–3 (Wizard Execute, OpenTag Apply, Enable auto-sync ×2) unchanged.
+
+The two Settings **Danger-Zone** debug clears (Clear Spoolman cross-refs, Clear Spoolman OpenPrintTag
+ids) now use a new dedicated **`DebugConfirmDialog`** component
+(`frontend/src/components/DebugConfirmDialog.tsx`) which preserves the strict gate:
+- Red header ("Debug action — confirm"), irreversibility warning.
+- Same optional backup buttons (via shared `BackupButtons` sub-component).
+- Acknowledgement checkbox required before Confirm fires.
+- Confirm button red, disabled until acknowledged.
+
+**Shared sub-component.** The backup-buttons block (Spoolman + FDB backup buttons + mongodump note
+with loading/ok/error states) is extracted into an exported `BackupButtons` component in
+`BackupSafetyDialog.tsx`. `DebugConfirmDialog` imports and renders it — no UI duplication.
+
+Settings call sites #4 and #5 (`Settings.tsx:608-619` pre-change) are repointed to
+`DebugConfirmDialog`. The `window.confirm` reset-bridge path and the full-reset inline modal in
+`Settings.tsx` are untouched.

@@ -20,7 +20,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.core.opentag_cache import _load_cache, _save_cache, load_opentag_dataset
+from app.core.opentag_cache import (
+    CACHE_SCHEMA_VERSION,
+    _load_cache,
+    _save_cache,
+    load_opentag_dataset,
+)
 from app.core.opentag_lexicon import (
     BASE_COLORS,
     LEXICON_VERSION,
@@ -355,7 +360,11 @@ async def test_load_dataset_writes_lexicon_on_fresh_fetch(tmp_path):
 
     with patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=materials),
+        AsyncMock(return_value={
+            "materials": materials,
+            "packages_by_material": {},
+            "containers_by_slug": {},
+        }),
     ):
         result = await load_opentag_dataset(str(tmp_path), 24, force=True)
 
@@ -424,9 +433,16 @@ async def test_load_dataset_recomputes_lexicon_when_missing(tmp_path):
     materials = [_make_opt_material()]
     fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    # Save WITHOUT lexicon (simulates a cache from before v2)
+    # Save WITHOUT lexicon (simulates a cache missing only the lexicon key).
+    # Keep schema_version current so the schema self-heal doesn't force a
+    # download — this test isolates the lexicon-missing re-mine path.
     path = Path(tmp_path) / "opentag_cache.json"
-    data = {"fetched_at": fresh_ts, "count": len(materials), "materials": materials}
+    data = {
+        "fetched_at": fresh_ts,
+        "count": len(materials),
+        "schema_version": CACHE_SCHEMA_VERSION,
+        "materials": materials,
+    }
     with path.open("w") as fh:
         json.dump(data, fh)
 

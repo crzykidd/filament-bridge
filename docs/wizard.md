@@ -13,6 +13,13 @@ is gated behind the backup dialog.
 > [variant parent mode](variant-parent-mode.md) in Settings. The wizard refuses to preview
 > or execute in this direction until you do.
 
+## Navigation
+
+Every wizard step renders a **Back / Next** action bar at both the **top and bottom** of the
+page. This means you never have to scroll to find the nav buttons on long steps. The Execute
+step's forward button is red (destructive action); the Step 3 Matches bar also includes a
+**↻ Rescan** button. Terminal/result views (Execute result, OpenTag done) show no nav bar.
+
 ## Step 1 — Connectivity
 
 Verifies both APIs are reachable and shows versions and record counts. Below-minimum

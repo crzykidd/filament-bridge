@@ -705,6 +705,10 @@ export interface OpenTagDatasetMeta {
   fetched_at: string | null
   count: number
   stale: boolean
+  /** Upstream OpenPrintTag main HEAD commit SHA at fetch time (null if unknown). */
+  commit_sha?: string | null
+  /** True when a refresh found the upstream commit unchanged and only bumped the age. */
+  unchanged?: boolean
 }
 
 export interface OpenTagCacheStatus {
@@ -715,6 +719,8 @@ export interface OpenTagCacheStatus {
   max_age_hours: number
   /** Largest record count seen on any prior successful grab (0 if never fetched). */
   last_count: number
+  /** Upstream commit SHA of the cached dataset (null if unknown / pre-SHA cache). */
+  commit_sha?: string | null
 }
 
 export interface OpenTagFieldRow {
@@ -764,6 +770,11 @@ export interface OpenTagMatchesResponse {
   matches: OpenTagFilamentMatch[]
   /** Count of already-tagged filaments with data drift (excluding ignored ones). */
   updates_count: number
+  /** ISO timestamp the match was computed (set on cached/served results). */
+  computed_at?: string | null
+  /** True when the live dataset / Spoolman count / config differ from the cached
+   *  result's inputs — the UI should prompt for a Refresh. */
+  stale_inputs?: boolean
 }
 
 export interface OpenTagIgnoreResponse {
@@ -784,6 +795,9 @@ export interface OpenTagFilamentDecision {
   fdb_filament_id?: string | null
   openprinttag_slug?: string | null
   openprinttag_uuid?: string | null
+  /** When true, this is an UNMATCH: clear the OpenTag identity (blank SM slug/uuid +
+   *  remove those two keys from FDB settings{}) instead of writing one. */
+  clear_identity?: boolean
 }
 
 export interface OpenTagApplyRequest {
@@ -792,10 +806,18 @@ export interface OpenTagApplyRequest {
 
 export interface OpenTagApplyFilamentResult {
   spoolman_filament_id: number
-  status: 'ok' | 'ignored' | 'error'
+  status: 'ok' | 'ignored' | 'error' | 'cleared'
   error: string | null
   fields_written: string[]
   fdb_settings_updated: boolean
+  identity_cleared?: boolean
+}
+
+export interface OpenTagClearResponse {
+  spoolman_filament_id: number
+  spoolman_cleared: boolean
+  fdb_settings_updated: boolean
+  fdb_filament_id: string | null
 }
 
 export interface OpenTagApplyResponse {
@@ -807,6 +829,55 @@ export interface OpenTagApplyResponse {
 
 export interface OpenTagSearchResponse {
   results: OpenTagCandidate[]
+}
+
+/** One scope (material / a package / a container) and the OpenPrintTag-supported
+ * fields it leaves empty. Audits OpenPrintTag, not the user's spools — no spool data. */
+export interface OpenTagSection {
+  /** "material" | "package:<slug>" | "package:none" | "container:<slug>" */
+  scope: string
+  /** Human labels of the empty supported fields, e.g. "GTIN / barcode". */
+  fields: string[]
+}
+
+/** Completeness assessment for one tagged Spoolman filament. */
+export interface OpenTagCompletenessItem {
+  spoolman_filament_id: number
+  brand: string | null
+  name: string | null
+  opt_slug: string | null
+  opt_uuid: string | null
+  opt_url: string | null
+  missing_count: number
+  sections: OpenTagSection[]
+  /** True when the SM filament's openprinttag_uuid is not in the current dataset. */
+  stale_match: boolean
+}
+
+/** One audited field entry from the completeness response's audited_fields block. */
+export interface AuditedField {
+  key: string
+  label: string
+  /** True when this field is only counted for multicolor records (secondaryColors). */
+  conditional: boolean
+}
+
+/** All audited fields for one scope level (material / package / container). */
+export interface AuditedFieldGroup {
+  scope: 'material' | 'package' | 'container'
+  fields: AuditedField[]
+}
+
+export interface OpenTagCompletenessResponse {
+  dataset: OpenTagDatasetMeta
+  items: OpenTagCompletenessItem[]
+  /** Count of tagged filaments whose uuid is not in the dataset (stale tags). */
+  stale_count: number
+  /**
+   * The full set of audited fields grouped by scope. Used to render per-field
+   * toggle chips for ALL audited fields, not just those currently missing.
+   */
+  audited_fields: AuditedFieldGroup[]
 }
 
 // ---------------------------------------------------------------------------
@@ -853,6 +924,9 @@ export interface VersionInfo {
   release_url: string | null
   release_name: string | null
   release_notes: string | null
+  current_release_url: string | null
+  current_release_name: string | null
+  current_release_notes: string | null
   channel: string
   commit: string | null
   build: string

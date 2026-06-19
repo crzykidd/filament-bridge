@@ -11,6 +11,7 @@ import type { ThemeMode } from '../context/ThemeContext'
 // ---------------------------------------------------------------------------
 
 const LS_KEY = 'fb_last_seen_version'
+const LS_RUNNING_KEY = 'fb_last_running_version'
 
 function getLastSeenVersion(): string | null {
   try {
@@ -28,16 +29,35 @@ function setLastSeenVersion(version: string): void {
   }
 }
 
+function getLastRunningVersion(): string | null {
+  try {
+    return localStorage.getItem(LS_RUNNING_KEY)
+  } catch {
+    return null
+  }
+}
+
+function setLastRunningVersion(version: string): void {
+  try {
+    localStorage.setItem(LS_RUNNING_KEY, version)
+  } catch {
+    // ignore storage errors
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Release-notes modal
+// Release-notes modal (generic — used for both "update available" and "post-upgrade")
 // ---------------------------------------------------------------------------
 
 interface ReleaseNotesModalProps {
-  info: VersionInfo
+  releaseName: string | null
+  releaseNotes: string | null
+  releaseUrl: string | null
+  subtitle: string
   onDismiss: () => void
 }
 
-function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
+function ReleaseNotesModal({ releaseName, releaseNotes, releaseUrl, subtitle, onDismiss }: ReleaseNotesModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null)
 
   // Dismiss on Esc
@@ -64,9 +84,9 @@ function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
           <div>
             <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-              {info.release_name ?? `v${info.latest}`}
+              {releaseName ?? 'Release notes'}
             </h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">filament-bridge update</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{subtitle}</p>
           </div>
           <button
             type="button"
@@ -79,9 +99,9 @@ function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
         </div>
         {/* Body — release notes rendered as plain text (untrusted markdown from GitHub) */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {info.release_notes ? (
+          {releaseNotes ? (
             <pre className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300 font-sans leading-relaxed">
-              {info.release_notes}
+              {releaseNotes}
             </pre>
           ) : (
             <p className="text-sm text-gray-500 dark:text-gray-400">No release notes available.</p>
@@ -89,9 +109,9 @@ function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
         </div>
         {/* Footer */}
         <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
-          {info.release_url && (
+          {releaseUrl && (
             <a
-              href={info.release_url}
+              href={releaseUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
@@ -116,21 +136,37 @@ function ReleaseNotesModal({ info, onDismiss }: ReleaseNotesModalProps) {
 // Version badge component
 // ---------------------------------------------------------------------------
 
+// Which modal is currently showing: none, the "update available" modal, or the "post-upgrade" modal
+type ModalKind = 'none' | 'update' | 'postupgrade'
+
 function VersionBadge() {
   const [info, setInfo] = useState<VersionInfo | null>(null)
-  const [showModal, setShowModal] = useState(false)
+  const [activeModal, setActiveModal] = useState<ModalKind>('none')
 
   useEffect(() => {
     getVersionInfo()
       .then(v => {
         setInfo(v)
-        // Show release-notes popup once per new version:
-        // only when update_available, a stored last-seen value existed (not first run),
+
+        // --- Post-upgrade flow (takes precedence over "update available") ---
+        // Uses a separate localStorage key from the "update available" flow.
+        const lastRunning = getLastRunningVersion()
+        if (lastRunning === null) {
+          // First ever run — record current version silently, no modal.
+          setLastRunningVersion(v.current)
+        } else if (lastRunning !== v.current && v.current_release_notes) {
+          // Version changed since last run and we have release notes → show post-upgrade modal.
+          setActiveModal('postupgrade')
+          return
+        }
+
+        // --- "Update available" flow (only when post-upgrade modal isn't shown) ---
+        // Only when update_available, a stored last-seen value existed (not first run),
         // and the new version was not already dismissed.
         if (v.update_available && v.latest) {
           const lastSeen = getLastSeenVersion()
           if (lastSeen !== null && lastSeen !== v.latest) {
-            setShowModal(true)
+            setActiveModal('update')
           }
         }
       })
@@ -139,11 +175,18 @@ function VersionBadge() {
       })
   }, [])
 
-  function dismissModal() {
+  function dismissUpdateModal() {
     if (info?.latest) {
       setLastSeenVersion(info.latest)
     }
-    setShowModal(false)
+    setActiveModal('none')
+  }
+
+  function dismissPostUpgradeModal() {
+    if (info?.current) {
+      setLastRunningVersion(info.current)
+    }
+    setActiveModal('none')
   }
 
   if (!info) return null
@@ -172,11 +215,28 @@ function VersionBadge() {
             className="text-xs bg-indigo-500 text-white px-1.5 py-0.5 rounded hover:bg-indigo-400 transition-colors leading-tight"
             title={`Update available: v${info.latest}`}
           >
-            ↑ v{info.latest}
+            Update Available
           </a>
         )}
       </div>
-      {showModal && <ReleaseNotesModal info={info} onDismiss={dismissModal} />}
+      {activeModal === 'update' && (
+        <ReleaseNotesModal
+          releaseName={info.release_name}
+          releaseNotes={info.release_notes}
+          releaseUrl={info.release_url}
+          subtitle="filament-bridge update"
+          onDismiss={dismissUpdateModal}
+        />
+      )}
+      {activeModal === 'postupgrade' && (
+        <ReleaseNotesModal
+          releaseName={info.current_release_name}
+          releaseNotes={info.current_release_notes}
+          releaseUrl={info.current_release_url}
+          subtitle={`You're now running filament-bridge v${info.current}`}
+          onDismiss={dismissPostUpgradeModal}
+        />
+      )}
     </>
   )
 }
@@ -221,7 +281,7 @@ const NAV_ITEMS = [
   { to: '/conflicts', label: 'Conflicts', exact: false },
   { to: '/sync-log', label: 'Sync Log', exact: false },
   { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
-  { to: '/opentag-cleanup', label: 'OpenTag Cleanup', exact: false },
+  { to: '/opentag-cleanup', label: 'OpenPrintTag Cleanup', exact: false },
 ]
 
 function navClass({ isActive }: { isActive: boolean }) {

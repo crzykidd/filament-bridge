@@ -12,13 +12,16 @@ import httpx
 import pytest
 
 from app.core.opentag_cache import (
+    CACHE_SCHEMA_VERSION,
     _fetch_from_tarball as _real_fetch_from_tarball,
     _is_stale,
     _load_cache,
     _parse_tarball,
+    _parse_tarball_full,
     _rgba_to_hex,
     _save_cache,
     get_cache_metadata,
+    get_upstream_commit_sha,
     load_opentag_dataset,
 )
 from app.core.opentag_match import (
@@ -88,6 +91,20 @@ _OPT_PLA_MATTE = {
     "bedTempMax": 60,
     "completenessScore": 80,
 }
+
+
+def _fetch_result(*materials: dict, packages=None, containers=None) -> dict:
+    """Wrap materials into the full ``_fetch_from_tarball`` / ``_parse_tarball_full``
+    return shape (``{materials, packages_by_material, containers_by_slug}``).
+
+    Used to mock ``_fetch_from_tarball`` now that it returns the full schema dict
+    instead of a bare materials list.
+    """
+    return {
+        "materials": list(materials),
+        "packages_by_material": packages or {},
+        "containers_by_slug": containers or {},
+    }
 
 
 def _sm_fil(
@@ -165,7 +182,7 @@ async def test_load_opentag_dataset_uses_cache_when_fresh(tmp_path):
 
     with _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
         fetch_mock.assert_not_called()
@@ -184,7 +201,7 @@ async def test_load_opentag_dataset_fetches_when_stale(tmp_path):
 
     with _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG, _OPT_PLA_MATTE)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
         fetch_mock.assert_called_once()
@@ -200,7 +217,7 @@ async def test_load_opentag_dataset_force_refresh(tmp_path):
 
     with _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=True)
         fetch_mock.assert_called_once()
@@ -221,6 +238,197 @@ async def test_load_opentag_dataset_github_error_propagates(tmp_path):
     ):
         with pytest.raises(httpx.HTTPStatusError):
             await load_opentag_dataset(str(tmp_path), 24, force=True)
+
+
+# ---------------------------------------------------------------------------
+# Smart dataset refresh: commit-SHA gate
+# ---------------------------------------------------------------------------
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def _save_with_sha(tmp_path, materials, ts, sha):
+    """Save a cache then patch its commit_sha in (mimics a SHA-aware fetch)."""
+    _save_cache(str(tmp_path), materials, ts, commit_sha=sha)
+
+
+@pytest.mark.asyncio
+async def test_sha_unchanged_bumps_age_no_download(tmp_path):
+    """Stale cache + matching upstream SHA → no download, age bumped, unchanged=True."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], old_ts, _SHA_A)
+
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value=_SHA_A),
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=_fetch_result(_OPT_PETG, _OPT_PLA_MATTE)),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_not_called()
+    assert result["unchanged"] is True
+    assert result["commit_sha"] == _SHA_A
+    assert result["count"] == 1  # materials untouched
+    assert result["materials"][0]["slug"] == "buddy3d-pla-silk-bronze"
+    # Age bumped → no longer stale
+    assert result["stale"] is False
+
+
+@pytest.mark.asyncio
+async def test_sha_changed_downloads(tmp_path):
+    """Stale cache + differing upstream SHA → downloads, new SHA stored, unchanged=False."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], old_ts, _SHA_A)
+
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value=_SHA_B),
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=_fetch_result(_OPT_PETG, _OPT_PLA_MATTE)),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_called_once()
+    assert result["unchanged"] is False
+    assert result["commit_sha"] == _SHA_B
+    assert result["count"] == 2
+    loaded = _load_cache(str(tmp_path))
+    assert loaded["commit_sha"] == _SHA_B
+
+
+@pytest.mark.asyncio
+async def test_force_pull_downloads_even_when_sha_matches(tmp_path):
+    """force_pull skips the SHA check and downloads even when the commit is unchanged."""
+    from unittest.mock import patch as _patch
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], fresh_ts, _SHA_A)
+
+    sha_mock = AsyncMock(return_value=_SHA_A)
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_pull=True)
+        fetch_mock.assert_called_once()
+    assert result["unchanged"] is False
+    assert result["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_missing_stored_sha_downloads(tmp_path):
+    """A stale cache with no stored commit_sha downloads (no false 'unchanged')."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_cache(str(tmp_path), [_OPT_PLA_SILK], old_ts)  # no commit_sha
+
+    sha_mock = AsyncMock(return_value=_SHA_A)
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_called_once()
+    # With no stored SHA there's nothing to compare, so the load downloads and
+    # records the freshly-learned SHA.
+    assert result["unchanged"] is False
+    assert result["commit_sha"] == _SHA_A
+
+
+@pytest.mark.asyncio
+async def test_sha_check_failure_falls_back_to_download(tmp_path):
+    """When the SHA check returns None (timeout/rate-limit) the load downloads anyway."""
+    from unittest.mock import patch as _patch
+    old_ts = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=25)
+    ).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], old_ts, _SHA_A)
+
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value=None),
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
+        fetch_mock.assert_called_once()
+    assert result["unchanged"] is False
+
+
+@pytest.mark.asyncio
+async def test_fresh_cache_no_check_serves_without_sha_call(tmp_path):
+    """A fresh cache without force_check serves as-is — no SHA call, no download."""
+    from unittest.mock import patch as _patch
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], fresh_ts, _SHA_A)
+
+    sha_mock = AsyncMock(return_value=_SHA_A)
+    with _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
+    ), _patch(
+        "app.core.opentag_cache._fetch_from_tarball",
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
+    ) as fetch_mock:
+        result = await load_opentag_dataset(str(tmp_path), 24)
+        sha_mock.assert_not_called()
+        fetch_mock.assert_not_called()
+    assert result["unchanged"] is False
+    assert result["commit_sha"] == _SHA_A
+
+
+@pytest.mark.asyncio
+async def test_get_upstream_commit_sha_returns_sha_on_200():
+    """A 200 with a 40-char hex body returns the SHA."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.headers["Accept"] == "application/vnd.github.sha"
+        return httpx.Response(200, text=_SHA_A)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sha = await get_upstream_commit_sha(client)
+    assert sha == _SHA_A
+
+
+@pytest.mark.asyncio
+async def test_get_upstream_commit_sha_none_on_error():
+    """A non-2xx (e.g. 403 rate-limit) yields None, not an exception."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="rate limited")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sha = await get_upstream_commit_sha(client)
+    assert sha is None
+
+
+@pytest.mark.asyncio
+async def test_get_upstream_commit_sha_none_on_junk_body():
+    """A 200 with a non-SHA body (HTML error page) yields None."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>nope</html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sha = await get_upstream_commit_sha(client)
+    assert sha is None
+
+
+def test_get_cache_metadata_includes_commit_sha(tmp_path):
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_with_sha(tmp_path, [_OPT_PLA_SILK], fresh_ts, _SHA_A)
+    meta = get_cache_metadata(str(tmp_path), 24)
+    assert meta["commit_sha"] == _SHA_A
 
 
 # ---------------------------------------------------------------------------
@@ -1229,7 +1437,7 @@ async def test_openprinttag_refresh_route_responds(tmp_path):
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK))):
             client = TestClient(test_app)
             resp = client.post("/api/openprinttag/refresh")
             assert resp.status_code == 200
@@ -1271,7 +1479,7 @@ async def test_openprinttag_status_reports_persisted_last_count(tmp_path, monkey
     test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
-    with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])):
+    with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK, _OPT_PETG))):
         client = TestClient(test_app)
 
         # Fresh: no cache, nothing persisted yet.
@@ -1571,7 +1779,7 @@ async def test_cache_self_heals_when_materials_are_strings(tmp_path):
 
     with patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK, _OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
@@ -1594,7 +1802,7 @@ async def test_cache_self_heals_when_materials_is_empty_list(tmp_path):
 
     with patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PLA_SILK]),
+        AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
@@ -1717,7 +1925,7 @@ async def test_matches_returns_200_when_cache_has_malformed_data(tmp_path):
     try:
         with patch(
             "app.core.opentag_cache._fetch_from_tarball",
-            AsyncMock(return_value=[_OPT_PLA_SILK]),
+            AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK)),
         ) as fetch_mock:
             client = TestClient(test_app, raise_server_exceptions=True)
             resp = client.get("/api/openprinttag/matches")
@@ -3756,11 +3964,15 @@ def test_rgba_to_hex_none_returns_none():
 def _build_test_tar(
     materials: list[dict],
     brands: list[dict] | None = None,
+    packages: list[dict] | None = None,
+    containers: list[dict] | None = None,
 ) -> bytes:
     """Build an in-memory gzipped tarball with OPT-shaped ``data/`` entries.
 
-    ``materials`` → ``data/materials/brand/material_N.yaml``
-    ``brands``    → ``data/brands/brand_N.yaml`` (optional)
+    ``materials``  → ``data/materials/brand/material_N.yaml``
+    ``brands``     → ``data/brands/brand_N.yaml`` (optional)
+    ``packages``   → ``data/material-packages/brand/package_N.yaml`` (optional)
+    ``containers`` → ``data/material-containers/container_N.yaml`` (optional)
     """
     import io as _io
     import tarfile as _tarfile
@@ -3768,20 +3980,26 @@ def _build_test_tar(
 
     buf = _io.BytesIO()
     with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        def _add(name: str, doc: dict) -> None:
+            content = _yaml.dump(doc).encode()
+            info = _tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tf.addfile(info, _io.BytesIO(content))
+
         for i, mat in enumerate(materials):
-            content = _yaml.dump(mat).encode()
-            info = _tarfile.TarInfo(
-                name=f"openprinttag-database-main/data/materials/brand/material_{i}.yaml"
-            )
-            info.size = len(content)
-            tf.addfile(info, _io.BytesIO(content))
+            _add(f"openprinttag-database-main/data/materials/brand/material_{i}.yaml", mat)
         for i, brand in enumerate(brands or []):
-            content = _yaml.dump(brand).encode()
-            info = _tarfile.TarInfo(
-                name=f"openprinttag-database-main/data/brands/brand_{i}.yaml"
+            _add(f"openprinttag-database-main/data/brands/brand_{i}.yaml", brand)
+        for i, pkg in enumerate(packages or []):
+            _add(
+                f"openprinttag-database-main/data/material-packages/brand/package_{i}.yaml",
+                pkg,
             )
-            info.size = len(content)
-            tf.addfile(info, _io.BytesIO(content))
+        for i, cont in enumerate(containers or []):
+            _add(
+                f"openprinttag-database-main/data/material-containers/container_{i}.yaml",
+                cont,
+            )
     return buf.getvalue()
 
 
@@ -3928,6 +4146,173 @@ def test_parse_tarball_transmission_distance_top_level():
 
 
 # ---------------------------------------------------------------------------
+# Full schema: extended material properties + packages + containers
+# ---------------------------------------------------------------------------
+
+
+def test_parse_full_extended_material_properties():
+    """Material parse keeps the full upstream property set: distinct chamber
+    min/max, hardness Shore A, and the material-level url → productUrl."""
+    materials = [
+        {
+            "uuid": "ext-uuid",
+            "slug": "brand-tpu-a95",
+            "class": "FFF",
+            "brand": {"slug": "brand"},
+            "name": "TPU A95",
+            "type": "TPU",
+            "url": "https://example.com/tpu",
+            "properties": {
+                "hardness_shore_a": 95,
+                "hardness_shore_d": 50,
+                "min_chamber_temperature": 25,
+                "max_chamber_temperature": 45,
+            },
+        }
+    ]
+    mat = _parse_tarball(_build_test_tar(materials))[0]
+    assert mat["hardnessShoreA"] == 95
+    assert mat["hardnessShoreD"] == 50
+    # Chamber min/max distinct, plus back-compat collapsed value (= min).
+    assert mat["chamberTempMin"] == 25
+    assert mat["chamberTempMax"] == 45
+    assert mat["chamberTemp"] == 25
+    assert mat["productUrl"] == "https://example.com/tpu"
+    # heatbreak_temperature is not in the dataset → forward-compat None.
+    assert mat["heatbreakTemperature"] is None
+
+
+def test_parse_full_packages_and_containers():
+    """packages_by_material keyed by material.slug, containers_by_slug by container slug.
+
+    Mirrors the live ELEGOO PLA Red 1kg package + cardboard spool container.
+    """
+    materials = [
+        {
+            "uuid": "m-uuid",
+            "slug": "elegoo-pla-red",
+            "class": "FFF",
+            "brand": {"slug": "elegoo"},
+            "name": "PLA Red",
+            "type": "PLA",
+        }
+    ]
+    packages = [
+        {
+            "slug": "elegoo-pla-red-1kg",
+            "class": "FFF",
+            "brand_specific_id": "SPUS-EL-3D-P06",
+            "url": "https://us.elegoo.com/products/pla?variant=43734133833909",
+            "material": {"slug": "elegoo-pla-red"},
+            "nominal_netto_full_weight": 1000,
+            "container": {"slug": "elegoo-cardboard-spool-1kg"},
+            "filament_diameter": 1750,
+            # NOTE: no gtin, no filament_diameter_tolerance (ELEGOO gap).
+        }
+    ]
+    containers = [
+        {
+            "uuid": "53bc78b9-d70f-45cd-a4ec-6db1035100e8",
+            "slug": "elegoo-cardboard-spool-1kg",
+            "name": "ELEGOO Cardboard Spool 1kg",
+            "class": "FFF",
+            "brand": {"slug": "elegoo"},
+            "hole_diameter": 54,
+            "outer_diameter": 200,
+            "width": 65,
+            "empty_weight": 154,
+        }
+    ]
+    parsed = _parse_tarball_full(
+        _build_test_tar(materials, packages=packages, containers=containers)
+    )
+
+    pkgs = parsed["packages_by_material"]["elegoo-pla-red"]
+    assert len(pkgs) == 1
+    pkg = pkgs[0]
+    assert pkg["slug"] == "elegoo-pla-red-1kg"
+    assert pkg["brandSpecificId"] == "SPUS-EL-3D-P06"
+    assert pkg["url"] is not None
+    assert pkg["gtin"] is None  # ELEGOO has no GTIN — a real contributable gap
+    assert pkg["filamentDiameterTolerance"] is None
+    assert pkg["nominalNettoFullWeight"] == 1000
+    assert pkg["filamentDiameter"] == 1750
+    assert pkg["containerSlug"] == "elegoo-cardboard-spool-1kg"
+
+    cont = parsed["containers_by_slug"]["elegoo-cardboard-spool-1kg"]
+    assert cont["emptyWeight"] == 154  # spool tare
+    assert cont["outerDiameter"] == 200
+    assert cont["holeDiameter"] == 54
+    assert cont["width"] == 65
+    assert cont["brand"] == "elegoo"
+    assert cont["innerDiameter"] is None  # absent in this container
+
+
+@pytest.mark.asyncio
+async def test_cache_self_heals_from_old_schema(tmp_path):
+    """An old-shape cache (no schema_version / no packages) re-parses from the
+    tarball when CACHE_SCHEMA_VERSION bumps — even though it is still fresh."""
+    import json as _json
+    from pathlib import Path as _Path
+    from unittest.mock import patch as _patch
+
+    # Write a v1-shaped cache by hand: fresh timestamp, valid materials, but no
+    # schema_version and no packages/containers keys.
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    legacy = {
+        "fetched_at": fresh_ts,
+        "count": 1,
+        "commit_sha": "c" * 40,
+        "materials": [_OPT_PLA_SILK],
+        "lexicon_version": 0,
+    }
+    cache_path = _Path(tmp_path) / "opentag_cache.json"
+    cache_path.write_text(_json.dumps(legacy))
+
+    fetch_mock = AsyncMock(
+        return_value=_fetch_result(
+            _OPT_PETG,
+            packages={"elegoo-petg-red": [{"slug": "p1"}]},
+            containers={"c1": {"slug": "c1", "emptyWeight": 200}},
+        )
+    )
+    with _patch("app.core.opentag_cache._fetch_from_tarball", fetch_mock), _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value="d" * 40),
+    ):
+        result = await load_opentag_dataset(str(tmp_path), 24)
+        # Schema outdated → forced download despite being fresh.
+        fetch_mock.assert_called_once()
+
+    assert result["schema_version"] == CACHE_SCHEMA_VERSION
+    assert result["packages_by_material"] == {"elegoo-petg-red": [{"slug": "p1"}]}
+    assert result["containers_by_slug"]["c1"]["emptyWeight"] == 200
+    loaded = _load_cache(str(tmp_path))
+    assert loaded["schema_version"] == CACHE_SCHEMA_VERSION
+
+
+def test_save_load_round_trips_packages_and_containers(tmp_path):
+    """_save_cache / _load_cache / get_cache_metadata carry the new keys."""
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(
+        str(tmp_path),
+        [_OPT_PLA_SILK],
+        fresh_ts,
+        packages_by_material={"slug-a": [{"slug": "pkg-a"}]},
+        containers_by_slug={"cont-a": {"slug": "cont-a", "emptyWeight": 154}},
+    )
+    loaded = _load_cache(str(tmp_path))
+    assert loaded["schema_version"] == CACHE_SCHEMA_VERSION
+    assert loaded["packages_by_material"] == {"slug-a": [{"slug": "pkg-a"}]}
+    assert loaded["containers_by_slug"]["cont-a"]["emptyWeight"] == 154
+
+    meta = get_cache_metadata(str(tmp_path), 24)
+    assert meta["schema_version"] == CACHE_SCHEMA_VERSION
+    assert meta["package_material_count"] == 1
+    assert meta["container_count"] == 1
+
+
+# ---------------------------------------------------------------------------
 # _fetch_from_tarball — injectable HTTP client tests
 # ---------------------------------------------------------------------------
 
@@ -3959,8 +4344,10 @@ async def test_fetch_from_tarball_calls_github_and_parses():
     result = await _real_fetch_from_tarball(http=fake_http)
 
     fake_http.get.assert_called_once()
-    assert len(result) == 1
-    assert result[0]["uuid"] == "fetch-uuid"
+    # _fetch_from_tarball now returns the full schema dict, not a bare list.
+    assert set(result) == {"materials", "packages_by_material", "containers_by_slug"}
+    assert len(result["materials"]) == 1
+    assert result["materials"][0]["uuid"] == "fetch-uuid"
 
 
 @pytest.mark.asyncio
@@ -4621,12 +5008,14 @@ async def test_matches_endpoint_prusa_alias_finds_prusament_candidates(tmp_path)
         )
 
         # --- Without alias: 'Prusa' stays 'prusa', no Prusament brand bucket found ---
+        # recompute=true bypasses the match cache so the changed alias config takes
+        # effect (a plain GET would serve the cached result with stale_inputs=True).
         with (
             _patch("app.api.opentag.SessionLocal", mock_session_factory),
             _patch("app.api.config.get_config_value", return_value=""),
         ):
             client2 = TestClient(test_app, raise_server_exceptions=True)
-            resp2 = client2.get("/api/openprinttag/matches")
+            resp2 = client2.get("/api/openprinttag/matches?recompute=true")
         assert resp2.status_code == 200, resp2.text
         data2 = resp2.json()
         match2 = next(m for m in data2["matches"] if m["spoolman_filament_id"] == 55)
@@ -5671,7 +6060,7 @@ async def test_matches_sets_has_update_for_drifted_tagged_filament(tmp_path):
     test_app.state.filamentdb = AsyncMock()
 
     try:
-        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK))):
             client = TestClient(test_app)
             resp = client.get("/api/openprinttag/matches")
             assert resp.status_code == 200, resp.text
@@ -5721,7 +6110,7 @@ async def test_matches_excludes_ignored_filament_from_updates_count(tmp_path):
     test_app.state.filamentdb = AsyncMock()
 
     try:
-        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK))):
             client = TestClient(test_app)
             resp = client.get("/api/openprinttag/matches")
             assert resp.status_code == 200, resp.text
@@ -5809,3 +6198,874 @@ async def test_ignore_endpoint_clears_flag():
     _, payload = patched[0]
     ignore_key = _ot_mod._settings.spoolman_field_openprinttag_ignore
     assert decode_extra_value(payload["extra"][ignore_key]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Completeness report — GET /api/openprinttag/completeness (FR: contribution report)
+# ---------------------------------------------------------------------------
+
+# NOTE: this report audits OpenPrintTag, NOT the user's spools. There is no "your value"
+# hint anywhere in the payload — only the supported-but-empty OpenPrintTag field labels.
+
+
+def _full_material(uuid, slug, **overrides):
+    """A full-schema OPTMaterial with every supported field present (filled) by default.
+
+    Pass overrides to blank specific fields and exercise the empty-field audit. Mirrors
+    the cache parser's full key set so SUPPORTED_MATERIAL_FIELDS lookups are accurate.
+    """
+    base = {
+        "uuid": uuid,
+        "slug": slug,
+        "brandSlug": "acme",
+        "brandName": "Acme",
+        "name": slug,
+        "type": "PLA",
+        "abbreviation": "PLA",
+        "color": "#112233",
+        "secondaryColors": [],
+        "density": 1.24,
+        "nozzleTempMin": 200,
+        "nozzleTempMax": 220,
+        "bedTempMin": 50,
+        "bedTempMax": 60,
+        "chamberTemp": 30,
+        "chamberTempMin": 25,
+        "chamberTempMax": 35,
+        "preheatTemp": 40,
+        "dryingTemp": 45,
+        "dryingTime": 360,
+        "hardnessShoreA": 95.0,   # supported field — filled so default record is gap-free
+        "hardnessShoreD": 80.0,
+        # forward-compat placeholder — 0 upstream occurrences, EXCLUDED from the report.
+        "heatbreakTemperature": None,
+        "transmissionDistance": 1.2,
+        "tags": ["matte"],
+        "photoUrl": "https://example.test/photo.png",
+        "productUrl": "https://example.test/product",
+        "completenessScore": None,
+        "completenessTier": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _full_package(slug, container_slug, **overrides):
+    """A full OPTPackage with every supported field filled by default."""
+    base = {
+        "slug": slug,
+        "uuid": f"{slug}-uuid",
+        "gtin": "0123456789012",
+        "brandSpecificId": "SKU-123",
+        "url": "https://example.test/package",
+        "nominalNettoFullWeight": 1000,
+        "filamentDiameter": 1750,
+        "filamentDiameterTolerance": 20,
+        "containerSlug": container_slug,
+    }
+    base.update(overrides)
+    return base
+
+
+def _full_container(slug, **overrides):
+    """A full OPTContainer with every supported field filled by default."""
+    base = {
+        "uuid": f"{slug}-uuid",
+        "slug": slug,
+        "name": "Standard spool",
+        "class": "spool",
+        "brand": "acme",
+        "emptyWeight": 200,
+        "outerDiameter": 200,
+        "innerDiameter": 55,
+        "holeDiameter": 55,
+        "width": 70,
+    }
+    base.update(overrides)
+    return base
+
+
+def _tagged_sm_filament(fil_id, uuid, *, multi=False, material=None, color_hex=None):
+    """Build an SM filament tagged with an openprinttag_uuid extra field."""
+    import app.api.opentag as _ot_mod
+    from app.schemas.spoolman import encode_extra_value
+    uuid_key = _ot_mod._settings.spoolman_field_openprinttag_uuid
+    extra = {uuid_key: encode_extra_value(uuid)} if uuid else {}
+    return SpoolmanFilament(
+        id=fil_id,
+        name=f"Filament {fil_id}",
+        vendor=SpoolmanVendor(id=1, name="Acme"),
+        material=material,
+        color_hex=color_hex,
+        multi_color_hexes="#FF0000,#00FF00" if multi else None,
+        extra=extra,
+    )
+
+
+def _completeness_client(
+    tmp_path, materials, sm_filaments, *, packages=None, containers=None
+):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+    import datetime as _dt
+
+    _save_cache(
+        str(tmp_path),
+        materials,
+        _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        packages_by_material=packages or {},
+        containers_by_slug=containers or {},
+    )
+
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=sm_filaments)
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = AsyncMock()
+    return TestClient(app)
+
+
+def _sections_by_scope(item):
+    return {s["scope"]: s["fields"] for s in item["sections"]}
+
+
+def test_completeness_audits_material_package_and_container(tmp_path):
+    """A tagged record reports empty supported fields across material + package + container;
+    NO your_value / spool data in the payload."""
+    import app.api.opentag as _ot_mod
+    # Material: blank type + tags. Package: blank gtin. Container: blank emptyWeight.
+    mat = _full_material(
+        "u1-0000-0000-0000-000000000001", "acme-pla",
+        type=None, tags=[],
+    )
+    pkg = _full_package("acme-pla-1kg", "spool-std", gtin=None)
+    cont = _full_container("spool-std", emptyWeight=None)
+    sm_fils = [_tagged_sm_filament(1, mat["uuid"], material="PLA")]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla": [pkg]}, containers={"spool-std": cont},
+        )
+        resp = client.get("/api/openprinttag/completeness")
+        assert resp.status_code == 200, resp.text
+        item = resp.json()["items"][0]
+
+        # No spool-data hint anywhere in the payload.
+        assert "attributes" not in item
+        assert "your_value" not in resp.text and "opt_value" not in resp.text
+
+        by_scope = _sections_by_scope(item)
+        assert by_scope["material"] == ["Material type", "Tags"]
+        assert by_scope["package:acme-pla-1kg"] == ["GTIN / barcode"]
+        assert by_scope["container:spool-std"] == ["Empty weight (tare)"]
+        assert item["missing_count"] == 4
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_rich_record_has_no_gaps(tmp_path):
+    """A fully-filled material + package + container reports zero gaps."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u2-0000-0000-0000-000000000002", "acme-pla-rich")
+    pkg = _full_package("acme-pla-rich-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(2, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-rich": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        assert item["missing_count"] == 0
+        assert item["sections"] == []
+        assert item["opt_url"] == "https://example.test/product"
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_heatbreak_excluded(tmp_path):
+    """heatbreakTemperature is empty on every record but must NEVER appear as a gap."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u3-0000-0000-0000-000000000003", "acme-pla-hb")
+    pkg = _full_package("acme-pla-hb-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(3, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-hb": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        all_fields = [f for s in item["sections"] for f in s["fields"]]
+        assert "Heatbreak temp" not in all_fields
+        assert item["missing_count"] == 0
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_material_url_distinct_from_package_url(tmp_path):
+    """The RED bug: material url is set but package url is blank → only the package-level
+    "Product URL (package)" is a gap; material "Product URL" is NOT falsely flagged."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u4-0000-0000-0000-000000000004", "acme-pla-red")  # productUrl set
+    pkg = _full_package("acme-pla-red-1kg", "spool-std", url=None, gtin=None)
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(4, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-red": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        by_scope = _sections_by_scope(item)
+        # Material has no gaps (its Product URL is set) → no material section at all.
+        assert "material" not in by_scope
+        # Package surfaces the real gaps: blank package URL + GTIN.
+        assert set(by_scope["package:acme-pla-red-1kg"]) == {
+            "Product URL (package)", "GTIN / barcode"
+        }
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_missing_is_empty_value_not_absent_key(tmp_path):
+    """Missing is driven by empty VALUE (None/''/[]); an empty tags list counts as a gap."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material(
+        "u5-0000-0000-0000-000000000005", "acme-pla-sparse",
+        tags=[], density=None,
+    )
+    pkg = _full_package("acme-pla-sparse-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(5, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-sparse": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        material_fields = _sections_by_scope(item)["material"]
+        assert "Tags" in material_fields          # empty list → gap
+        assert "Density" in material_fields        # None → gap
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_secondary_colors_only_for_multicolor(tmp_path):
+    """secondaryColors counts as a material gap only when the filament is multicolor."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material(
+        "u6-0000-0000-0000-000000000006", "acme-pla-dual",
+        secondaryColors=[], tags=["coextruded"],
+    )
+    pkg = _full_package("acme-pla-dual-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(6, mat["uuid"], multi=True)]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-dual": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        # Multicolor + everything else filled → only Secondary colors flagged.
+        assert _sections_by_scope(item)["material"] == ["Secondary colors"]
+        assert item["missing_count"] == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_multi_package_lists_each(tmp_path):
+    """A material with 1kg + 5kg packages lists each package's own gaps separately."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u7-0000-0000-0000-000000000007", "acme-pla-multi")
+    pkg1 = _full_package("acme-pla-1kg", "spool-std", gtin=None)
+    pkg5 = _full_package("acme-pla-5kg", "spool-std", brandSpecificId=None)
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(7, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-multi": [pkg1, pkg5]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        by_scope = _sections_by_scope(item)
+        assert by_scope["package:acme-pla-1kg"] == ["GTIN / barcode"]
+        assert by_scope["package:acme-pla-5kg"] == ["SKU (brand-specific ID)"]
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_no_package_flagged(tmp_path):
+    """A material with NO package data surfaces that as its own gap."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u8-0000-0000-0000-000000000008", "acme-pla-nopkg")
+    sm_fils = [_tagged_sm_filament(8, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(tmp_path, [mat], sm_fils)  # no packages/containers
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        by_scope = _sections_by_scope(item)
+        assert by_scope["package:none"] == ["No package data"]
+        assert item["missing_count"] == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_stale_tag_surfaced(tmp_path):
+    """A tagged filament whose uuid isn't in the dataset is surfaced as a stale match."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u9-0000-0000-0000-000000000009", "acme-pla-rich")
+    sm_fils = [_tagged_sm_filament(9, "no-such-uuid-0000-0000-000000000099")]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(tmp_path, [mat], sm_fils)
+        data = client.get("/api/openprinttag/completeness").json()
+        assert data["stale_count"] == 1
+        item = data["items"][0]
+        assert item["stale_match"] is True
+        assert item["missing_count"] == 0
+        assert item["sections"] == []
+        assert item["opt_uuid"] == "no-such-uuid-0000-0000-000000000099"
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_excludes_untagged(tmp_path):
+    """Untagged filaments are excluded entirely."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u10-0000-0000-0000-000000000010", "acme-pla-rich")
+    sm_fils = [
+        _tagged_sm_filament(1, mat["uuid"]),
+        _tagged_sm_filament(2, None),  # untagged
+    ]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(tmp_path, [mat], sm_fils)
+        data = client.get("/api/openprinttag/completeness").json()
+        assert {i["spoolman_filament_id"] for i in data["items"]} == {1}
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_audited_fields_in_response(tmp_path):
+    """The completeness response carries audited_fields grouped by scope.
+
+    Checks:
+    - Three groups are present: material, package, container.
+    - Every SUPPORTED_*_FIELDS entry (minus heatbreakTemperature) appears in the
+      corresponding group.
+    - heatbreakTemperature is NOT present in any group (it is excluded from the report).
+    - secondaryColors IS present and flagged conditional=True.
+    - Existing item shape is unchanged (items, missing_count, stale_count all valid).
+    """
+    import app.api.opentag as _ot_mod
+    from app.core.opentag_cache import (
+        SUPPORTED_CONTAINER_FIELDS,
+        SUPPORTED_MATERIAL_FIELDS,
+        SUPPORTED_PACKAGE_FIELDS,
+    )
+    mat = _full_material("ua-0000-0000-0000-00000000000a", "acme-pla-audit")
+    pkg = _full_package("acme-pla-audit-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(10, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-audit": [pkg]}, containers={"spool-std": cont},
+        )
+        data = client.get("/api/openprinttag/completeness").json()
+        assert data["stale_count"] == 0
+        assert data["items"][0]["missing_count"] == 0  # fully-filled record
+
+        # audited_fields must be present and non-empty
+        af = data["audited_fields"]
+        assert isinstance(af, list) and len(af) == 3
+
+        by_scope = {g["scope"]: g["fields"] for g in af}
+        assert set(by_scope) == {"material", "package", "container"}
+
+        # --- material group ---
+        mat_keys = {f["key"] for f in by_scope["material"]}
+        mat_labels = {f["label"] for f in by_scope["material"]}
+        # Every SUPPORTED_MATERIAL_FIELDS entry minus heatbreakTemperature
+        expected_mat_keys = {
+            key for key, _ in SUPPORTED_MATERIAL_FIELDS
+            if key != "heatbreakTemperature"
+        }
+        assert mat_keys == expected_mat_keys
+        # heatbreakTemperature must NOT appear
+        assert "heatbreakTemperature" not in mat_keys
+        assert "Heatbreak temp" not in mat_labels
+        # secondaryColors must be present and conditional
+        sec = next((f for f in by_scope["material"] if f["key"] == "secondaryColors"), None)
+        assert sec is not None, "secondaryColors must appear in audited_fields"
+        assert sec["conditional"] is True
+
+        # --- package group ---
+        pkg_keys = {f["key"] for f in by_scope["package"]}
+        assert pkg_keys == {key for key, _ in SUPPORTED_PACKAGE_FIELDS}
+        assert all(not f["conditional"] for f in by_scope["package"])
+
+        # --- container group ---
+        cont_keys = {f["key"] for f in by_scope["container"]}
+        assert cont_keys == {key for key, _ in SUPPORTED_CONTAINER_FIELDS}
+        assert all(not f["conditional"] for f in by_scope["container"])
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+# ---------------------------------------------------------------------------
+# Inline unmatch + re-match: tagged-row alternates, clear endpoint, apply clear
+# ---------------------------------------------------------------------------
+
+# A second ELEGOO PETG so a tagged ELEGOO PETG row has an alternate to re-point to.
+_OPT_PETG_BLUE = {
+    "uuid": "aaaabbbb-0000-0000-0000-000000000099",
+    "slug": "elegoo-petg-blue",
+    "brandName": "ELEGOO",
+    "name": "PETG Blue",
+    "type": "PETG",
+    "abbreviation": "PETG",
+    "tags": [],
+    "color": "#0044CC",
+    "secondaryColors": [],
+    "density": 1.27,
+    "nozzleTempMin": 230,
+    "nozzleTempMax": 250,
+    "bedTempMin": 60,
+    "bedTempMax": 80,
+}
+
+
+def _matches_client(tmp_path, materials, sm_fils, fdb=None):
+    """Build a TestClient wired with a fresh cache + the given SM filaments."""
+    import datetime as _dt
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.core.opentag_cache import _save_cache
+
+    fresh_ts = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    _save_cache(str(tmp_path), materials, fresh_ts)
+
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=sm_fils)
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = fdb or AsyncMock()
+    return TestClient(test_app), fake_sm
+
+
+def test_tagged_row_returns_current_plus_alternates(tmp_path):
+    """A tagged ELEGOO PETG row returns [current exact match] + alternates from the same brand."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(
+            sm_id=5, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000",
+            extra={"openprinttag_uuid": json.dumps(_OPT_PETG["uuid"])},
+        )
+        client, _ = _matches_client(tmp_path, [_OPT_PETG, _OPT_PETG_BLUE], [sm])
+        resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        match = resp.json()["matches"][0]
+        # Exact match pinned at confidence 1.0, index 0
+        assert match["confidence"] == 1.0
+        assert match["opt_uuid"] == _OPT_PETG["uuid"]
+        cands = match["candidates"]
+        assert cands[0]["opt_uuid"] == _OPT_PETG["uuid"]
+        # The other ELEGOO PETG must surface as an alternate (un-bypass works)
+        assert any(c["opt_uuid"] == _OPT_PETG_BLUE["uuid"] for c in cands)
+        # The pinned exact match must not be duplicated among alternates
+        assert sum(1 for c in cands if c["opt_uuid"] == _OPT_PETG["uuid"]) == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_tagged_row_single_brand_entry_has_no_alternates(tmp_path):
+    """A tagged row whose brand has only one dataset entry → [current] only."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(
+            sm_id=6, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000",
+            extra={"openprinttag_uuid": json.dumps(_OPT_PETG["uuid"])},
+        )
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+        match = client.get("/api/openprinttag/matches").json()["matches"][0]
+        assert len(match["candidates"]) == 1
+        assert match["candidates"][0]["opt_uuid"] == _OPT_PETG["uuid"]
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+@pytest.mark.asyncio
+async def test_remove_filament_settings_keys_only_removes_opentag_keys():
+    """remove_filament_settings_keys deletes ONLY the named keys, preserving the rest."""
+    from app.services.filamentdb import FilamentDBClient
+
+    fake_raw = {
+        "_id": "fil-rm-1",
+        "name": "Test PLA",
+        "settings": {
+            "slicer_key": "keepme",
+            "another": 7,
+            "openprinttag_slug": "old-slug",
+            "openprinttag_uuid": "old-uuid",
+        },
+    }
+    put_payloads: list[dict] = []
+
+    async def _fake_get(url):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=fake_raw)
+        return resp
+
+    async def _fake_put(url, json=None):
+        put_payloads.append(json)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+    client._http.put = AsyncMock(side_effect=_fake_put)
+
+    changed = await client.remove_filament_settings_keys(
+        "fil-rm-1", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+    assert changed is True
+    assert len(put_payloads) == 1
+    s = put_payloads[0]["settings"]
+    assert s == {"slicer_key": "keepme", "another": 7}  # only OPT keys removed
+
+
+@pytest.mark.asyncio
+async def test_remove_filament_settings_keys_idempotent_no_put():
+    """When neither key is present, no PUT is issued (idempotent)."""
+    from app.services.filamentdb import FilamentDBClient
+
+    fake_raw = {"_id": "fil-rm-2", "name": "X", "settings": {"slicer_key": "v"}}
+    put_calls: list = []
+
+    async def _fake_get(url):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=fake_raw)
+        return resp
+
+    async def _fake_put(url, json=None):
+        put_calls.append(json)
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = FilamentDBClient("http://fdb.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get)
+    client._http.put = AsyncMock(side_effect=_fake_put)
+
+    changed = await client.remove_filament_settings_keys(
+        "fil-rm-2", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+    assert changed is False
+    assert put_calls == []
+
+
+def _clear_app(fake_sm, fake_fdb):
+    from fastapi import FastAPI
+    from app.api.opentag import router
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    app.state.spoolman = fake_sm
+    app.state.filamentdb = fake_fdb
+    return app
+
+
+def test_clear_endpoint_blanks_sm_and_removes_fdb_keys():
+    """POST /api/openprinttag/clear/{id} blanks SM slug/uuid and removes only those FDB keys."""
+    from fastapi.testclient import TestClient
+
+    patched: list = []
+
+    async def _patch(fil_id, payload):
+        patched.append((fil_id, payload))
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock()
+    fake_sm.update_filament = AsyncMock(side_effect=_patch)
+    # SM filament carries a filamentdb_id cross-ref so the FDB side resolves.
+    fake_sm.get_filament = AsyncMock(return_value=_sm_fil(
+        sm_id=7, extra={"filamentdb_id": json.dumps("fdb-7")},
+    ))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.remove_filament_settings_keys = AsyncMock(return_value=True)
+
+    client = TestClient(_clear_app(fake_sm, fake_fdb))
+    resp = client.post("/api/openprinttag/clear/7")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["spoolman_cleared"] is True
+    assert body["fdb_settings_updated"] is True
+    assert body["fdb_filament_id"] == "fdb-7"
+
+    # SM patch blanked slug + uuid (and ONLY those two)
+    fil_id, payload = patched[0]
+    assert fil_id == 7
+    assert set(payload["extra"].keys()) == {"openprinttag_slug", "openprinttag_uuid"}
+    # FDB side removed exactly the two identity keys
+    fake_fdb.remove_filament_settings_keys.assert_awaited_once_with(
+        "fdb-7", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+
+
+def test_clear_endpoint_idempotent_no_fdb_mapping():
+    """Clearing an untagged filament with no FDB mapping still succeeds (no FDB write)."""
+    from fastapi.testclient import TestClient
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock()
+    fake_sm.update_filament = AsyncMock(return_value=MagicMock())
+    fake_sm.get_filament = AsyncMock(return_value=_sm_fil(sm_id=8, extra={}))
+
+    fake_fdb = AsyncMock()
+    fake_fdb.remove_filament_settings_keys = AsyncMock(return_value=False)
+
+    client = TestClient(_clear_app(fake_sm, fake_fdb))
+    resp = client.post("/api/openprinttag/clear/8")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["spoolman_cleared"] is True
+    assert body["fdb_settings_updated"] is False
+    assert body["fdb_filament_id"] is None
+    fake_fdb.remove_filament_settings_keys.assert_not_called()
+
+
+def test_apply_clear_identity_decision_clears():
+    """An apply decision with clear_identity=True clears instead of writing."""
+    from fastapi.testclient import TestClient
+
+    patched: list = []
+
+    async def _patch(fil_id, payload):
+        patched.append((fil_id, payload))
+        return MagicMock()
+
+    fake_sm = AsyncMock()
+    fake_sm.ensure_extra_fields = AsyncMock()
+    fake_sm.get_vendors = AsyncMock(return_value=[])
+    fake_sm.update_filament = AsyncMock(side_effect=_patch)
+
+    fake_fdb = AsyncMock()
+    fake_fdb.remove_filament_settings_keys = AsyncMock(return_value=True)
+
+    client = TestClient(_clear_app(fake_sm, fake_fdb))
+    req = {"decisions": [{
+        "spoolman_filament_id": 9,
+        "ignored": False,
+        "clear_identity": True,
+        "fdb_filament_id": "fdb-9",
+        "fields": [],
+    }]}
+    resp = client.post("/api/openprinttag/apply", json=req)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["applied"] == 1
+    assert data["errors"] == 0
+    assert data["results"][0]["status"] == "cleared"
+    assert data["results"][0]["identity_cleared"] is True
+    # SM patch blanked exactly slug + uuid
+    fil_id, payload = patched[0]
+    assert fil_id == 9
+    assert set(payload["extra"].keys()) == {"openprinttag_slug", "openprinttag_uuid"}
+    fake_fdb.remove_filament_settings_keys.assert_awaited_once_with(
+        "fdb-9", ["openprinttag_slug", "openprinttag_uuid"]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Perf offload + match-result cache (perf: 2026-06-18)
+# ---------------------------------------------------------------------------
+
+
+def test_compute_matches_is_pure_on_plain_inputs():
+    """_compute_matches runs purely on plain data — no DB/httpx/request needed."""
+    from app.api.opentag import _compute_matches
+
+    sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+    matches = _compute_matches(
+        [sm],
+        [_OPT_PETG],
+        None,            # dataset_lexicon
+        {},              # tag_map
+        {},              # vendor_aliases
+        "openprinttag_uuid",
+        "openprinttag_ignore",
+    )
+    assert len(matches) == 1
+    assert matches[0].opt_slug == "elegoo-petg-red"
+
+
+def test_matches_offloaded_via_run_in_threadpool(tmp_path):
+    """The matches route dispatches the scoring through run_in_threadpool (non-blocking)."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+        with patch("app.api.opentag.run_in_threadpool", wraps=_ot_mod.run_in_threadpool) as spy:
+            resp = client.get("/api/openprinttag/matches")
+        assert resp.status_code == 200, resp.text
+        # The compute helper must be the offloaded callable.
+        assert spy.await_count >= 1
+        assert spy.await_args.args[0] is _ot_mod._compute_matches
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_matches_cache_served_without_recompute(tmp_path):
+    """First GET computes + caches; a second GET serves the cache without re-scoring."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+
+        # First call: compute + cache, computed_at set, not stale.
+        first = client.get("/api/openprinttag/matches").json()
+        assert first["computed_at"] is not None
+        assert first["stale_inputs"] is False
+
+        # Second call: served from cache — _compute_matches must NOT run again.
+        with patch("app.api.opentag._compute_matches") as compute_spy:
+            second = client.get("/api/openprinttag/matches").json()
+        compute_spy.assert_not_called()
+        assert second["computed_at"] == first["computed_at"]
+        assert second["stale_inputs"] is False
+        assert second["matches"][0]["opt_slug"] == "elegoo-petg-red"
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_matches_recompute_refreshes_and_recaches(tmp_path):
+    """?recompute=true re-runs the offloaded match and updates the cached computed_at."""
+    import time
+
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, _ = _matches_client(tmp_path, [_OPT_PETG], [sm])
+
+        first = client.get("/api/openprinttag/matches").json()
+        time.sleep(0.01)
+        with patch("app.api.opentag._compute_matches", wraps=_ot_mod._compute_matches) as compute_spy:
+            second = client.get("/api/openprinttag/matches?recompute=true").json()
+        compute_spy.assert_called_once()
+        assert second["computed_at"] != first["computed_at"]
+        assert second["stale_inputs"] is False
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_matches_stale_inputs_flips_when_sm_count_changes(tmp_path):
+    """stale_inputs flips true when the live Spoolman filament count diverges from the cache."""
+    import app.api.opentag as _ot_mod
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        sm1 = _sm_fil(sm_id=1, name="PETG Red", vendor="ELEGOO", material="PETG", color_hex="CC0000")
+        client, fake_sm = _matches_client(tmp_path, [_OPT_PETG], [sm1])
+
+        # Compute + cache with one filament.
+        assert client.get("/api/openprinttag/matches").json()["stale_inputs"] is False
+
+        # Now Spoolman reports two filaments → cached result is stale.
+        sm2 = _sm_fil(sm_id=2, name="PETG Blue", vendor="ELEGOO", material="PETG", color_hex="0000CC")
+        fake_sm.get_filaments = AsyncMock(return_value=[sm1, sm2])
+        body = client.get("/api/openprinttag/matches").json()
+        assert body["stale_inputs"] is True
+        # Still served from cache (single original match), not recomputed.
+        assert len(body["matches"]) == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_match_cache_helpers_fingerprint_and_stale():
+    """build_fingerprint + inputs_stale: config/sm/dataset deltas each flip stale."""
+    from app.core.opentag_match_cache import build_fingerprint, inputs_stale
+
+    base = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
+        sm_count=5, aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
+    )
+    # Same inputs → not stale.
+    same = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
+        sm_count=5, aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
+    )
+    assert inputs_stale(base, same) is False
+    # Config change → stale.
+    cfg = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
+        sm_count=5, aliases_raw="", tag_map={"silk": 16}, field_names={"uuid": "u"},
+    )
+    assert inputs_stale(base, cfg) is True
+    # SM count change → stale; dataset change → stale; no cache → stale.
+    smc = dict(base, sm_count=6)
+    assert inputs_stale(base, smc) is True
+    ds = dict(base, dataset="11:2026-06-18T00:00:00+00:00")
+    assert inputs_stale(base, ds) is True
+    assert inputs_stale(None, base) is True
+
+
+def test_dataset_fingerprint_prefers_commit_sha():
+    """When a commit SHA is present the fingerprint keys off it; else count:fetched_at."""
+    from app.core.opentag_match_cache import build_fingerprint, dataset_fingerprint
+
+    assert dataset_fingerprint(10, "ts", "deadbeef") == "sha:deadbeef"
+    assert dataset_fingerprint(10, "ts", None) == "10:ts"
+    # Same SHA but different count/fetched_at → still identical fingerprint (SHA wins).
+    a = build_fingerprint(
+        dataset_count=10, dataset_fetched_at="t1", dataset_commit_sha="sha1",
+        sm_count=5, aliases_raw="", tag_map={}, field_names={},
+    )
+    b = build_fingerprint(
+        dataset_count=99, dataset_fetched_at="t2", dataset_commit_sha="sha1",
+        sm_count=5, aliases_raw="", tag_map={}, field_names={},
+    )
+    assert a["dataset"] == b["dataset"] == "sha:sha1"

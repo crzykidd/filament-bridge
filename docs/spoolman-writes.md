@@ -124,10 +124,17 @@ Only the fields the user confirmed (not marked "keep mine") are written.
 | Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes`, `multi_color_direction` (any subset) | User confirmed in the review/confirm UI |
 | Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
 | Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |
+| Filament | update | `extra.openprinttag_slug` = `""`, `extra.openprinttag_uuid` = `""` | **Unmatch** — when the user stages "— unmatch —" in the candidate dropdown (decision `clear_identity=true`) or calls `POST /api/openprinttag/clear/{id}`. Blanks both identity extras; does NOT touch `openprinttag_ignore`. |
 
 After each SM write the apply endpoint also calls `FilamentDBClient.merge_filament_settings()`
 to push `openprinttag_slug`/`openprinttag_uuid` into the linked FDB filament's `settings{}`
 bag (scoped exception — see `docs/decisions.md`).
+
+For an **unmatch** the apply/clear path instead calls
+`FilamentDBClient.remove_filament_settings_keys()` to delete only those two identity keys from
+the linked FDB filament's `settings{}` bag (the approved scoped *removal* exception — every
+other settings key is preserved; idempotent; best-effort). The FDB filament id is taken from
+the decision or resolved from the Spoolman filament's `filamentdb_id` cross-ref extra.
 
 ## What the bridge never writes to Spoolman
 

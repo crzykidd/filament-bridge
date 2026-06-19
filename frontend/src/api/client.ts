@@ -25,6 +25,8 @@ import type {
   OpenTagApplyRequest,
   OpenTagApplyResponse,
   OpenTagCacheStatus,
+  OpenTagClearResponse,
+  OpenTagCompletenessResponse,
   OpenTagDatasetMeta,
   OpenTagIgnoreResponse,
   OpenTagMatchesResponse,
@@ -244,11 +246,34 @@ export const postWizardExecute = (body: WizardExecuteRequest) =>
 // ---------------------------------------------------------------------------
 
 export const getOpenTagStatus = () => request<OpenTagCacheStatus>('/openprinttag/status')
-export const getOpenTagMatches = () => request<OpenTagMatchesResponse>('/openprinttag/matches')
-export const postOpenTagRefresh = () =>
-  request<OpenTagDatasetMeta>('/openprinttag/refresh', { method: 'POST' })
+/**
+ * Fetch OpenTag matches. Returns the cached result instantly when present; pass
+ * `recompute` to force a fresh (server-offloaded) match and re-cache. The optional
+ * `signal` lets callers abort the request (e.g. on component unmount).
+ */
+export const getOpenTagMatches = (recompute = false, signal?: AbortSignal) =>
+  request<OpenTagMatchesResponse>(
+    `/openprinttag/matches${recompute ? '?recompute=true' : ''}`,
+    signal ? { signal } : undefined,
+  )
+/**
+ * Refresh the OpenTag dataset. Default (`pull=false`) runs a cheap upstream
+ * commit-SHA check: an unchanged commit only bumps the cache age (`unchanged=true`,
+ * no heavy download); a changed/unknown SHA re-downloads. Pass `pull=true` to skip
+ * the check and force a full download ("Pull contents anyway").
+ */
+export const postOpenTagRefresh = (pull = false) =>
+  request<OpenTagDatasetMeta>(
+    `/openprinttag/refresh${pull ? '?pull=true' : ''}`,
+    { method: 'POST' },
+  )
 export const postOpenTagApply = (body: OpenTagApplyRequest) =>
   json<OpenTagApplyResponse>('/openprinttag/apply', 'POST', body)
+/** Clear (unmatch) a filament's OpenTag identity directly — standalone counterpart
+ *  to the Apply-flow unmatch. Blanks SM slug/uuid + removes those FDB settings keys. */
+export const postOpenTagClear = (filamentId: number) =>
+  request<OpenTagClearResponse>(`/openprinttag/clear/${filamentId}`, { method: 'POST' })
+
 export const postOpenTagIgnore = (filamentId: number, ignored: boolean) =>
   request<OpenTagIgnoreResponse>(
     `/openprinttag/ignore/${filamentId}?ignored=${ignored}`,
@@ -267,6 +292,10 @@ export const getOpenTagSearch = (
   params.set('limit', String(limit))
   return request<OpenTagSearchResponse>(`/openprinttag/search?${params.toString()}`)
 }
+
+/** OpenPrintTag completeness report — which matched records are missing data. */
+export const getOpenTagMissingValues = () =>
+  request<OpenTagCompletenessResponse>('/openprinttag/completeness')
 
 // ---------------------------------------------------------------------------
 // Reconcile
