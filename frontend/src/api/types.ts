@@ -854,11 +854,30 @@ export interface OpenTagCompletenessItem {
   stale_match: boolean
 }
 
+/** One audited field entry from the completeness response's audited_fields block. */
+export interface AuditedField {
+  key: string
+  label: string
+  /** True when this field is only counted for multicolor records (secondaryColors). */
+  conditional: boolean
+}
+
+/** All audited fields for one scope level (material / package / container). */
+export interface AuditedFieldGroup {
+  scope: 'material' | 'package' | 'container'
+  fields: AuditedField[]
+}
+
 export interface OpenTagCompletenessResponse {
   dataset: OpenTagDatasetMeta
   items: OpenTagCompletenessItem[]
   /** Count of tagged filaments whose uuid is not in the dataset (stale tags). */
   stale_count: number
+  /**
+   * The full set of audited fields grouped by scope. Used to render per-field
+   * toggle chips for ALL audited fields, not just those currently missing.
+   */
+  audited_fields: AuditedFieldGroup[]
 }
 
 // ---------------------------------------------------------------------------

@@ -6568,6 +6568,75 @@ def test_completeness_excludes_untagged(tmp_path):
         _ot_mod._settings.data_dir = orig
 
 
+def test_completeness_audited_fields_in_response(tmp_path):
+    """The completeness response carries audited_fields grouped by scope.
+
+    Checks:
+    - Three groups are present: material, package, container.
+    - Every SUPPORTED_*_FIELDS entry (minus heatbreakTemperature) appears in the
+      corresponding group.
+    - heatbreakTemperature is NOT present in any group (it is excluded from the report).
+    - secondaryColors IS present and flagged conditional=True.
+    - Existing item shape is unchanged (items, missing_count, stale_count all valid).
+    """
+    import app.api.opentag as _ot_mod
+    from app.core.opentag_cache import (
+        SUPPORTED_CONTAINER_FIELDS,
+        SUPPORTED_MATERIAL_FIELDS,
+        SUPPORTED_PACKAGE_FIELDS,
+    )
+    mat = _full_material("ua-0000-0000-0000-00000000000a", "acme-pla-audit")
+    pkg = _full_package("acme-pla-audit-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(10, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-audit": [pkg]}, containers={"spool-std": cont},
+        )
+        data = client.get("/api/openprinttag/completeness").json()
+        assert data["stale_count"] == 0
+        assert data["items"][0]["missing_count"] == 0  # fully-filled record
+
+        # audited_fields must be present and non-empty
+        af = data["audited_fields"]
+        assert isinstance(af, list) and len(af) == 3
+
+        by_scope = {g["scope"]: g["fields"] for g in af}
+        assert set(by_scope) == {"material", "package", "container"}
+
+        # --- material group ---
+        mat_keys = {f["key"] for f in by_scope["material"]}
+        mat_labels = {f["label"] for f in by_scope["material"]}
+        # Every SUPPORTED_MATERIAL_FIELDS entry minus heatbreakTemperature
+        expected_mat_keys = {
+            key for key, _ in SUPPORTED_MATERIAL_FIELDS
+            if key != "heatbreakTemperature"
+        }
+        assert mat_keys == expected_mat_keys
+        # heatbreakTemperature must NOT appear
+        assert "heatbreakTemperature" not in mat_keys
+        assert "Heatbreak temp" not in mat_labels
+        # secondaryColors must be present and conditional
+        sec = next((f for f in by_scope["material"] if f["key"] == "secondaryColors"), None)
+        assert sec is not None, "secondaryColors must appear in audited_fields"
+        assert sec["conditional"] is True
+
+        # --- package group ---
+        pkg_keys = {f["key"] for f in by_scope["package"]}
+        assert pkg_keys == {key for key, _ in SUPPORTED_PACKAGE_FIELDS}
+        assert all(not f["conditional"] for f in by_scope["package"])
+
+        # --- container group ---
+        cont_keys = {f["key"] for f in by_scope["container"]}
+        assert cont_keys == {key for key, _ in SUPPORTED_CONTAINER_FIELDS}
+        assert all(not f["conditional"] for f in by_scope["container"])
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
 # ---------------------------------------------------------------------------
 # Inline unmatch + re-match: tagged-row alternates, clear endpoint, apply clear
 # ---------------------------------------------------------------------------

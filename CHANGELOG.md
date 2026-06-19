@@ -39,6 +39,22 @@ GitHub release.
 
 ### Added
 
+- **"Show missing values" completeness report: per-field toggle chips + clearer purpose copy** —
+  the `GET /api/openprinttag/completeness` response now carries an `audited_fields` block
+  (`[{ scope, fields: [{key, label, conditional}] }]` grouped by `"material"`, `"package"`,
+  `"container"`) listing the full audited-field set, derived from `SUPPORTED_*_FIELDS` minus
+  `heatbreakTemperature` (`secondaryColors` included but flagged `conditional: true`). The UI
+  renders a chip for every audited field (grouped Material / Package / Container) above the
+  report table — all included by default; click to exclude (struck through, muted), click again
+  to restore. Excluded fields are dropped from each record's sections and `missing_count` is
+  recomputed client-side; a record whose recomputed count reaches 0 is treated as "complete"
+  and obeys the hide-complete toggle. Sort (most-missing) uses the recomputed count. Exclusions
+  persist per-browser in `localStorage` (`fb_opt_missing_excluded_fields`); a **Reset**
+  affordance and an excluded-count indicator are provided. `localStorage` absent/corrupt →
+  all-included. The report intro, toolbar tooltip, and idle-state help copy are reworded to
+  frame the tool as an optional contribution helper — auditing OpenPrintTag, not your spools —
+  matching `docs/opentag-cleanup.md`.
+
 - **Version badge: "Update Available" pill + daily check + post-upgrade release notes modal** —
   the update-available pill label changed from "↑ vX.Y.Z" to **"Update Available"** (version
   stays in the hover title); the GitHub check TTL increased from 6 h to **24 h** (lazy-on-load,

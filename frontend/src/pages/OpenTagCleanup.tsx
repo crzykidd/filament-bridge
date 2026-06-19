@@ -21,6 +21,8 @@ import { DeepLinks } from '../components/DeepLinks'
 import { HelpTip } from '../components/HelpTip'
 import { WizardActionBar } from '../components/WizardActionBar'
 import type {
+  AuditedField,
+  AuditedFieldGroup,
   OpenTagApplyRequest,
   OpenTagCacheStatus,
   OpenTagCandidate,
@@ -1392,6 +1394,122 @@ function MissingValuesRow({ item }: { item: OpenTagCompletenessItem }) {
   )
 }
 
+// localStorage key for persisted excluded-field set.
+const _LS_EXCLUDED_KEY = 'fb_opt_missing_excluded_fields'
+
+function _readExcludedKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(_LS_EXCLUDED_KEY)
+    if (!raw) return new Set()
+    const parsed: unknown = JSON.parse(raw)
+    if (Array.isArray(parsed)) return new Set(parsed as string[])
+  } catch {
+    // corrupt entry → default all-included
+  }
+  return new Set()
+}
+
+function _writeExcludedKeys(keys: Set<string>): void {
+  try {
+    localStorage.setItem(_LS_EXCLUDED_KEY, JSON.stringify([...keys]))
+  } catch {
+    // best-effort
+  }
+}
+
+/** Per-scope label used in the chip group headers. */
+function _scopeLabel(scope: string): string {
+  if (scope === 'material') return 'Material'
+  if (scope === 'package') return 'Package'
+  if (scope === 'container') return 'Container'
+  return scope
+}
+
+/** Apply excluded-field filter to a single item's sections, recomputing missing_count. */
+function _applyExcludedToItem(
+  item: OpenTagCompletenessItem,
+  excludedLabels: Set<string>,
+): OpenTagCompletenessItem {
+  if (item.stale_match) return item  // stale tags are not field-filtered
+  if (excludedLabels.size === 0) return item
+  const filteredSections = item.sections.map(section => ({
+    ...section,
+    fields: section.fields.filter(label => !excludedLabels.has(label)),
+  })).filter(section => section.fields.length > 0)
+  const missing_count = filteredSections.reduce((sum, s) => sum + s.fields.length, 0)
+  return { ...item, sections: filteredSections, missing_count }
+}
+
+/** Field toggle chips — one chip per audited field, grouped by scope. */
+function FieldToggleChips({
+  auditedFields,
+  excludedKeys,
+  excludedLabels,
+  onToggle,
+  onReset,
+}: {
+  auditedFields: AuditedFieldGroup[]
+  excludedKeys: Set<string>
+  excludedLabels: Set<string>
+  onToggle: (field: AuditedField) => void
+  onReset: () => void
+}) {
+  const excludedCount = excludedKeys.size
+  return (
+    <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wide">
+          Fields to count
+        </span>
+        {excludedCount > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-amber-700 dark:text-amber-400">
+              {excludedCount} field{excludedCount !== 1 ? 's' : ''} excluded
+            </span>
+            <button
+              type="button"
+              onClick={onReset}
+              className="text-xs px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              Reset
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="space-y-2">
+        {auditedFields.map(group => (
+          <div key={group.scope}>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">{_scopeLabel(group.scope)}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {group.fields.map(field => {
+                const excluded = excludedLabels.has(field.label)
+                return (
+                  <button
+                    key={field.key}
+                    type="button"
+                    onClick={() => onToggle(field)}
+                    title={field.conditional ? `${field.label} (multicolor only)` : field.label}
+                    className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                      excluded
+                        ? 'border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 bg-white dark:bg-gray-900 line-through'
+                        : 'border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
+                    }`}
+                  >
+                    {field.label}{field.conditional ? ' *' : ''}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      {auditedFields.some(g => g.fields.some(f => f.conditional)) && (
+        <p className="mt-1.5 text-xs text-gray-400 dark:text-gray-500">* counted only for multicolor records</p>
+      )}
+    </div>
+  )
+}
+
 /** Standalone completeness report view. Fetches its own data on first activation. */
 function MissingValuesReport() {
   const [data, setData] = useState<OpenTagCompletenessResponse | null>(null)
@@ -1399,6 +1517,8 @@ function MissingValuesReport() {
   const [error, setError] = useState<string | null>(null)
   const [sortBy, setSortBy] = useState<MissingSort>('most-missing')
   const [showComplete, setShowComplete] = useState(false)
+  // Excluded field keys (cache_key) — derived from localStorage on first render.
+  const [excludedKeys, setExcludedKeys] = useState<Set<string>>(() => _readExcludedKeys())
 
   useEffect(() => {
     let cancelled = false
@@ -1411,9 +1531,42 @@ function MissingValuesReport() {
     return () => { cancelled = true }
   }, [])
 
+  // Build a set of excluded LABELS (used by _applyExcludedToItem which matches on labels).
+  // Also build a map from key→label for toggling.
+  const { excludedLabels, keyToLabel } = useMemo(() => {
+    const kToL = new Map<string, string>()
+    if (data?.audited_fields) {
+      for (const group of data.audited_fields) {
+        for (const f of group.fields) kToL.set(f.key, f.label)
+      }
+    }
+    const labels = new Set<string>()
+    for (const key of excludedKeys) {
+      const label = kToL.get(key)
+      if (label) labels.add(label)
+    }
+    return { excludedLabels: labels, keyToLabel: kToL }
+  }, [excludedKeys, data])
+
+  const handleToggleField = (field: AuditedField) => {
+    setExcludedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(field.key)) next.delete(field.key)
+      else next.add(field.key)
+      _writeExcludedKeys(next)
+      return next
+    })
+  }
+
+  const handleResetExclusions = () => {
+    setExcludedKeys(new Set())
+    _writeExcludedKeys(new Set())
+  }
+
   const rows = useMemo(() => {
     if (!data) return []
-    let items = data.items
+    // Apply per-field exclusion filter and recompute missing_count per item.
+    let items = data.items.map(i => _applyExcludedToItem(i, excludedLabels))
     // Hide-complete toggle: a row is "complete" only when matched (not stale) and 0 missing.
     if (!showComplete) {
       items = items.filter(i => i.stale_match || i.missing_count > 0)
@@ -1431,7 +1584,7 @@ function MissingValuesReport() {
         (a.brand ?? '').localeCompare(b.brand ?? ''))
     }
     return sorted
-  }, [data, sortBy, showComplete])
+  }, [data, sortBy, showComplete, excludedLabels])
 
   if (loading) {
     return <div className="py-12 text-center text-gray-500 dark:text-gray-400">Loading completeness report…</div>
@@ -1451,20 +1604,33 @@ function MissingValuesReport() {
   return (
     <div>
       <div className="mb-4 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg text-sm text-blue-800 dark:text-blue-300">
-        <p className="font-medium mb-1">OpenPrintTag completeness report</p>
+        <p className="font-medium mb-1">Which of your filaments most need OpenPrintTag data contributed?</p>
         <p>
-          For each tagged filament, this lists every OpenPrintTag-supported field its OpenPrintTag
-          record leaves empty — across the material, each package, and each package's container — so
-          you can decide what to contribute upstream. This audits OpenPrintTag, not your spools.{' '}
+          This optional tool audits the <strong>OpenPrintTag records</strong> for each of your tagged
+          filaments — not your own spool data. For each tagged filament it lists every
+          OpenPrintTag-supported field that the community database leaves empty, so you can decide
+          which fields are worth contributing upstream.{' '}
           {tagged} tagged filament{tagged !== 1 ? 's' : ''},{' '}
           {needWork} with gaps{data.stale_count > 0 ? `, ${data.stale_count} stale tag${data.stale_count !== 1 ? 's' : ''}` : ''}.
         </p>
         <p className="mt-1 text-xs text-blue-700 dark:text-blue-400">
-          Every supported field is listed regardless of whether it applies to this material — you
-          decide what is worth submitting. (Heatbreak temperature is excluded: it has no upstream
-          data yet.)
+          Use the field toggles below to choose which fields count toward the gap tally — exclude
+          any that are not relevant to you (e.g. chamber temp for PLA). The report never pre-judges
+          applicability; you decide what is worth submitting. Heatbreak temperature is excluded
+          globally: it has no upstream data yet.
         </p>
       </div>
+
+      {/* Per-field toggle chips — derived from audited_fields in the API response. */}
+      {data.audited_fields && data.audited_fields.length > 0 && (
+        <FieldToggleChips
+          auditedFields={data.audited_fields}
+          excludedKeys={excludedKeys}
+          excludedLabels={excludedLabels}
+          onToggle={handleToggleField}
+          onReset={handleResetExclusions}
+        />
+      )}
 
       <div className="flex items-center gap-4 mb-4">
         <label className="text-sm text-gray-600 dark:text-gray-300 flex items-center gap-2">
@@ -1493,7 +1659,7 @@ function MissingValuesReport() {
         <div className="py-12 text-center text-gray-500 dark:text-gray-400">
           {tagged === 0
             ? 'No tagged filaments yet — apply OpenPrintTag identities first (Match to DB).'
-            : 'Every tagged filament has a complete OpenPrintTag record. 🎉'}
+            : 'Every tagged filament has a complete OpenPrintTag record (for the selected fields).'}
         </div>
       ) : (
         <div className="overflow-x-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg">
@@ -1963,7 +2129,7 @@ export default function OpenTagCleanup() {
               : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
           }`}
           onClick={() => setToolbarView('missing-values')}
-          title="Show Spoolman filaments missing key data fields"
+          title="Find which of your tagged filaments most need data contributed to OpenPrintTag (audits the OpenPrintTag database, not your spools)"
         >
           Show missing values
         </button>
@@ -2038,7 +2204,7 @@ export default function OpenTagCleanup() {
             <strong>Match to DB</strong> — scan Spoolman filaments and match against the OpenPrintTag dataset.
           </p>
           <p className="text-sm mt-1">
-            <strong>Show missing values</strong> — report Spoolman filaments missing key data fields.
+            <strong>Show missing values</strong> — find which of your tagged filaments most need data contributed to OpenPrintTag (audits the OpenPrintTag database, not your spools).
           </p>
           <p className="text-sm mt-1">
             <strong>Refresh dataset</strong> — re-download the OpenPrintTag dataset and reprocess matches.

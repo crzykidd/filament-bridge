@@ -193,11 +193,32 @@ class OpenTagCompletenessItem(BaseModel):
     stale_match: bool = False
 
 
+class AuditedField(BaseModel):
+    """A single audited field entry as returned by the completeness response's
+    ``audited_fields`` block — the FULL set the report checks, not just gaps found."""
+    key: str    # cache_key (e.g. "gtin", "nozzleTempMin")
+    label: str  # human label (e.g. "GTIN / barcode", "Nozzle temp (min)")
+    # True when this field is only counted toward the gap tally for multicolor records.
+    # Currently only "secondaryColors" qualifies.
+    conditional: bool = False
+
+
+class AuditedFieldGroup(BaseModel):
+    """All audited fields for one scope level, grouped for the frontend chip render."""
+    # "material" | "package" | "container"
+    scope: str
+    fields: list[AuditedField]
+
+
 class OpenTagCompletenessResponse(BaseModel):
     dataset: OpenTagDatasetMeta
     items: list[OpenTagCompletenessItem]
     # Count of tagged filaments whose uuid is not in the dataset (stale tags).
     stale_count: int = 0
+    # The full set of audited fields, grouped by scope, derived from SUPPORTED_*_FIELDS.
+    # Used by the frontend to render per-field toggle chips for ALL audited fields,
+    # including those not currently missing in any record.
+    audited_fields: list[AuditedFieldGroup] = []
 
 
 # Apply request ---------------------------------------------------------------
@@ -1592,10 +1613,39 @@ async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
         slug_field,
     )
 
+    # Build audited_fields: the canonical SUPPORTED_*_FIELDS lists, minus the report
+    # exclusions, grouped by scope. secondaryColors is included but flagged conditional
+    # so the UI can label it accordingly. Reuses the existing module-level constants —
+    # no second hardcoded list.
+    _secondary_key = "secondaryColors"
+    material_audited = [
+        AuditedField(
+            key=key,
+            label=label,
+            conditional=(key == _secondary_key),
+        )
+        for key, label in SUPPORTED_MATERIAL_FIELDS
+        if key != "heatbreakTemperature"  # excluded: 0 upstream occurrences
+    ]
+    package_audited = [
+        AuditedField(key=key, label=label)
+        for key, label in SUPPORTED_PACKAGE_FIELDS
+    ]
+    container_audited = [
+        AuditedField(key=key, label=label)
+        for key, label in SUPPORTED_CONTAINER_FIELDS
+    ]
+    audited_fields = [
+        AuditedFieldGroup(scope="material", fields=material_audited),
+        AuditedFieldGroup(scope="package", fields=package_audited),
+        AuditedFieldGroup(scope="container", fields=container_audited),
+    ]
+
     return OpenTagCompletenessResponse(
         dataset=dataset_meta,
         items=items,
         stale_count=stale_count,
+        audited_fields=audited_fields,
     )
 
 

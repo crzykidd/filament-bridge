@@ -23,9 +23,10 @@ offers three actions:
 - **Match to DB** — load the match review view. The **last match result is cached**, so
   this returns instantly when a prior match exists (no re-scoring). Only the first match
   (or an explicit refresh) actually computes. Switches to the match review view.
-- **Show missing values** — switch to the [completeness report](#completeness-report-show-missing-values),
-  which audits each tagged record's OpenPrintTag entry and lists every supported field it
-  leaves empty across material, packages, and container (so you know what to contribute).
+- **Show missing values** — an optional tool to find which of your tagged filaments most need
+  data contributed to OpenPrintTag. Audits the OpenPrintTag database (not your spools): for
+  each tagged filament it lists every supported field the community database leaves empty, so
+  you can decide what to go submit. See [completeness report](#completeness-report-show-missing-values).
 
 The **dataset-status banner** (count, age, stale flag) is always visible — it reads the
 local cache status cheaply without fetching from OpenPrintTag.
@@ -192,15 +193,15 @@ The flag is visible in Spoolman's extra-field UI as "OpenPrintTag Ignore Updates
 
 ## Completeness report ("Show missing values")
 
-The **Show missing values** toolbar action opens a read-only **completeness report** backed
-by `GET /api/openprinttag/completeness`.
+The **Show missing values** toolbar action opens an optional, read-only **completeness report**
+backed by `GET /api/openprinttag/completeness`.
 
 **This tool audits OpenPrintTag, not your spools.** It answers one question: *for the records
-I own, which OpenPrintTag-supported fields does the master database leave empty, so I can
-decide what to go contribute?* Your own Spoolman data is **never read or compared** — your
-inventory only **scopes which OpenPrintTag records to audit**. For each Spoolman filament with
-a non-empty `openprinttag_uuid`, the bridge resolves its OpenPrintTag record and lists every
-supported-but-empty field across the **material, each of its packages, and each package's
+in my library, which OpenPrintTag-supported fields does the community database leave empty, so
+I can decide what to go contribute?* Your own Spoolman data is **never read or compared** —
+your inventory only **scopes which OpenPrintTag records to audit**. For each Spoolman filament
+with a non-empty `openprinttag_uuid`, the bridge resolves its OpenPrintTag record and lists
+every supported-but-empty field across the **material, each of its packages, and each package's
 container**.
 
 - **No spool-data comparison.** There is no "your value" column and no read of Spoolman field
@@ -237,15 +238,31 @@ container**.
 **Response shape.** Each item is
 `{ spoolman_filament_id, brand, name, opt_slug, opt_uuid, opt_url, missing_count,
 sections: [ { scope, fields: [<labels>] } ], stale_match }`, where `scope` is `"material"`,
-`"package:<slug>"`, `"package:none"`, or `"container:<slug>"`.
+`"package:<slug>"`, `"package:none"`, or `"container:<slug>"`. The top-level response also
+carries an `audited_fields` block — `[{ scope, fields: [{key, label, conditional}] }]` grouped
+by `"material"`, `"package"`, and `"container"` — listing every field the report can check,
+derived from `SUPPORTED_*_FIELDS` minus `heatbreakTemperature`. The UI renders per-field
+toggle chips from this list so chips appear for ALL audited fields, not just currently missing
+ones.
 
 **Controls:** the table shows Brand · Filament · OpenPrintTag match (slug, linked to the
 record's product URL when present) · # missing. Expanding a row shows the missing supported
-fields grouped by section (Material / Package <size> / Container). Sort by **Most missing**
-(default) or **Brand (A→Z)**; records with zero gaps (nothing to contribute) are hidden by
-default with a **Show complete records** toggle — gapped records always show. The data is
-local and small, so the whole report is computed in a single pass (offloaded to a worker
-thread) with no pagination.
+fields grouped by section (Material / Package <size> / Container).
+
+**Per-field toggle chips** (above the table, grouped Material / Package / Container) let you
+include or exclude individual audited fields from the gap tally. All fields are included by
+default; click a chip to exclude it (struck through, muted), click again to restore. Excluded
+fields drop out of each record's sections and the `missing_count` is recomputed client-side —
+a record whose recomputed count reaches 0 is treated as "complete" and hidden by the
+hide-complete toggle. Exclusions persist in `localStorage`
+(`fb_opt_missing_excluded_fields`) across page reloads, per browser. A **Reset** affordance
+clears all exclusions, and an excluded-count indicator shows how many are currently excluded.
+Excluding all fields → empty report (fine; user did that).
+
+Sort by **Most missing** (default) or **Brand (A→Z)**; records with zero gaps (for the selected
+fields) are hidden by default with a **Show complete records** toggle — gapped records always
+show. The data is local and small, so the whole report is computed in a single pass (offloaded
+to a worker thread) with no pagination.
 
 ## Review (full review view)
 
