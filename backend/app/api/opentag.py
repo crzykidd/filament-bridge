@@ -499,8 +499,8 @@ async def _clear_opentag_identity(
         {"extra": {slug_field: blank, uuid_field: blank}},
     )
     logger.info(
-        "opentag clear: blanked %s/%s on SM filament %d",
-        _scrub(slug_field), _scrub(uuid_field), spoolman_filament_id,
+        "opentag clear: blanked %s/%s on SM filament %s",
+        _scrub(slug_field), _scrub(uuid_field), _scrub(spoolman_filament_id),
     )
 
     fdb_cleared = False
@@ -529,8 +529,8 @@ async def _resolve_fdb_filament_id(sm: Any, spoolman_filament_id: int) -> str | 
         fil = await sm.get_filament(spoolman_filament_id)
     except Exception as exc:
         logger.warning(
-            "opentag clear: could not fetch SM filament %d to resolve FDB id: %s",
-            spoolman_filament_id, _scrub(exc),
+            "opentag clear: could not fetch SM filament %s to resolve FDB id: %s",
+            _scrub(spoolman_filament_id), _scrub(exc),
         )
         return None
     raw = (fil.extra or {}).get(id_field)
@@ -1330,8 +1330,8 @@ async def opentag_clear_identity(
             except Exception:
                 pass
         logger.error(
-            "opentag clear: could not clear SM filament %d: %s%s",
-            filament_id, _scrub(exc), _scrub(resp_body),
+            "opentag clear: could not clear SM filament %s: %s%s",
+            _scrub(filament_id), _scrub(exc), _scrub(resp_body),
         )
         raise api_error(
             502,
@@ -1375,8 +1375,8 @@ async def opentag_set_ignore(
     try:
         await sm.update_filament(filament_id, {"extra": {ignore_field: value}})
         logger.info(
-            "opentag ignore: set %s=%s on SM filament %d",
-            _scrub(ignore_field), _scrub(ignored), filament_id,
+            "opentag ignore: set %s=%s on SM filament %s",
+            _scrub(ignore_field), _scrub(ignored), _scrub(filament_id),
         )
     except Exception as exc:
         resp_body = ""
@@ -1386,8 +1386,8 @@ async def opentag_set_ignore(
             except Exception:
                 pass
         logger.error(
-            "opentag ignore: could not update SM filament %d: %s%s",
-            filament_id, _scrub(exc), _scrub(resp_body),
+            "opentag ignore: could not update SM filament %s: %s%s",
+            _scrub(filament_id), _scrub(exc), _scrub(resp_body),
         )
         raise api_error(
             502,

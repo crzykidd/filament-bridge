@@ -1,5 +1,40 @@
 # Decision record
 
+## 2026-06-19 — CodeQL log-injection FPs are int path params, not `scrub`; no model pack
+
+**Context.** A recurring set of `py/log-injection` (CWE-117) alerts kept needing manual
+"false positive" dismissals on every PR. The working assumption (mine and the maintainer's)
+was that they were `core/log_safe.scrub()`-sanitized values that CodeQL couldn't recognize
+across the helper-call boundary, and the planned fix was a models-as-data `barrierModel` pack
+declaring `scrub()`'s return a `log-injection` barrier, published to GHCR.
+
+**Investigation.** Built a local CodeQL 2.25.6 database and decoded the taint paths for all 8
+alerts. Two findings overturned the premise:
+1. **None of the 8 flow through `scrub`.** Every one traces to an **integer FastAPI path
+   parameter** (`conflict_id: int`, `filament_id: int`) logged via `%d`. CodeQL flags them as
+   active-threat sources because it doesn't model FastAPI/Pydantic int coercion — but an `int`
+   can't carry a newline, so they are genuine false positives of a *different* kind.
+2. **`scrub` already sanitizes — with no pack.** CodeQL ships a built-in
+   `ReplaceLineBreaksSanitizer` (in `LogInjectionCustomizations.qll`) that recognizes a
+   `.replace("\n", " ")` / `.replace("\r\n", …)` call. `scrub`'s final `.replace("\n", " ")`
+   matches it, which is why the *exception* / `resp_body` values we already wrap in `_scrub`
+   were never flagged. The GHCR pack loaded correctly but changed the alert count by **zero**.
+
+**Decision.**
+- **No CodeQL model pack.** The `barrierModel`/GHCR approach was abandoned and fully reverted
+  (publish workflow, `.github/codeql/`, `config-file` wiring, `packages: read`). It fixed
+  nothing the built-in sanitizer didn't already cover and added permanent maintenance
+  (version-bump + republish on every model change). A future session should NOT re-attempt it.
+  (An orphaned private package `ghcr.io/crzykidd/log-safe-models@1.0.0` was published during the
+  experiment; delete it in the GHCR UI when convenient — harmless if left.)
+- **Real fix: route the int path params through `_scrub()`** at the 8 log sites
+  (`api/conflicts.py` ×3, `api/opentag.py` ×5), switching their `%d` to `%s`. This sends them
+  through the built-in line-break sanitizer; verified locally that `py/log-injection` drops
+  **8 → 0**. It's consistent with the same lines that already `_scrub(exc)`.
+- **Why bother, since they were dismissed?** Dismissals are per-alert manual toil that recurs
+  for every new int-param log line. The code fix turns them from "dismissed" to "fixed" and
+  prevents recurrence. Marginal but cheap and proven.
+
 ## 2026-06-19 — Defer the per-minor CHANGELOG archive (deviation from release-prep-and-cut)
 
 The adopted `release-prep-and-cut` standard archives the previous minor series into
