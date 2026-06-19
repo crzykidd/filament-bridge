@@ -134,7 +134,7 @@ Per Spoolman filament:
 3. **Color-profile gate.** Single-color filaments only match single-color materials;
    coextruded/gradient only match compatible multicolor profiles.
 4. **Polymer-family gate.** A PC filament can never match ASA, etc. (PLA and PLA+ are the
-   same family by design — grades live in the name, per the OpenTag spec.)
+   same family by design — grades live in the name, per the OpenPrintTag spec.)
 5. **Structured scoring** (sums to 1.0): material 0.15, brand 0.15, color-*multiset*
    0.40 (order-independent, count-aware — a name with "Silver & Blue" scores both colors
    separately), modifier Jaccard 0.15 (silk/matte/gradient words), finish-tag agreement
@@ -152,7 +152,7 @@ separator rule, color multiset formula, and a worked AMOLEN example — see
 
 When the matches are loaded, a banner appears at the top if any already-tagged filaments
 (those carrying an `openprinttag_uuid` extra) have values that differ from the latest
-OpenTag dataset. The count excludes filaments the user has suppressed via **Ignore future
+OpenPrintTag dataset. The count excludes filaments the user has suppressed via **Ignore future
 updates** (see below).
 
 Click **Review updates** to switch to the focused updates view.
@@ -161,7 +161,7 @@ Click **Review updates** to switch to the focused updates view.
 
 The **Review updates** view shows only the filaments with drifted data. For each:
 
-- A collapsible **field table** showing current Spoolman value → updated OpenTag value per
+- A collapsible **field table** showing current Spoolman value → updated OpenPrintTag value per
   changed field (identity fields slug/uuid are not shown here — they never trigger the banner).
 - A **per-row checkbox** and a **Select all / Deselect all** toolbar button.
 - **Search** by name or vendor, **group by** brand/material, and **sort** by brand or name.
@@ -178,7 +178,7 @@ The **Review updates** view shows only the filaments with drifted data. For each
 Each filament in the Updates Review view has an **Ignore future updates** button. Clicking
 it writes `openprinttag_ignore = "1"` to the Spoolman filament's extra fields via
 `POST /api/openprinttag/ignore/{id}?ignored=true`. Clicking **Un-ignore** clears the flag
-(`ignored=false`). The field is registered at startup alongside the other OpenTag extra
+(`ignored=false`). The field is registered at startup alongside the other OpenPrintTag extra
 fields; it must exist before any write can succeed.
 
 Because the flag is stored on the Spoolman filament record, it:
@@ -250,7 +250,7 @@ thread) with no pagination.
 ## Review (full review view)
 
 Each filament card shows the best candidate (★) and up to ten alternates in a dropdown,
-with a field-by-field table: current Spoolman value vs the OpenTag value. Per field you can
+with a field-by-field table: current Spoolman value vs the OpenPrintTag value. Per field you can
 edit the proposed value or mark it **keep mine**; per filament you can **ignore** the match
 entirely. Group by brand/material, sort, and filter (hide matched / hide already-tagged) to
 work through a large library; "Ignore all" works per group.
@@ -266,8 +266,8 @@ match:
   dropdown offers up to ten alternates you can re-point to (e.g. to fix a tag applied to the
   wrong colour). Picking an alternate stages a re-match — Apply writes the new slug/uuid.
   (A brand with only one dataset entry shows just the current match plus the unmatch option.)
-- **"— unmatch (clear OpenTag identity) —"** is the last dropdown option, shown only for rows
-  that already carry an OpenTag identity. Selecting it **stages an unmatch** that is carried
+- **"— unmatch (clear OpenPrintTag identity) —"** is the last dropdown option, shown only for rows
+  that already carry an OpenPrintTag identity. Selecting it **stages an unmatch** that is carried
   through the normal **Apply** flow (it is not an immediate write — consistent with the rest
   of the page). On Apply, the bridge clears the identity:
   - blanks `openprinttag_slug` + `openprinttag_uuid` on the Spoolman filament, and
@@ -283,9 +283,9 @@ Badges: a grey **OPT** chip means the filament is already tagged and in sync wit
 candidate; amber means it's tagged but the data has drifted; a **multicolor mismatch** chip
 warns when Spoolman has multicolor data but the candidate is single-color.
 
-The **Manufacturer** row appears whenever the Spoolman vendor name and the OpenTag brand
+The **Manufacturer** row appears whenever the Spoolman vendor name and the OpenPrintTag brand
 name differ in any visible way, including case-only differences (e.g. "Elegoo" vs
-"ELEGOO").  Accepting it re-points **only this filament** to a vendor with OpenTag's
+"ELEGOO").  Accepting it re-points **only this filament** to a vendor with OpenPrintTag's
 exact canonical spelling (created in Spoolman if no vendor with that exact name exists;
 this is the only path in the tool that can create a vendor).  The existing vendor is
 never renamed; other filaments under the old vendor are never touched.  A case-only
@@ -293,7 +293,7 @@ diff intentionally creates a near-duplicate vendor — that trade-off is accepte
 
 ### Manual search
 
-Each card has a **Search OpenTag manually…** link (below the field table, always
+Each card has a **Search OpenPrintTag manually…** link (below the field table, always
 visible when the card is expanded and not ignored). Click it to open a per-card search
 box. Type a keyword (e.g. "Silk Gold", "Matte Dark Blue"); results are scored against
 the same brand+material context as the automatic match and rendered with confidence
@@ -311,7 +311,9 @@ and the Confirm step's **Back / Apply N writes** bar likewise appears at both to
 Both placements are identical in behavior — scroll position doesn't matter.
 
 The Confirm step lists every pending write (old → new, grouped per filament) before
-anything happens; Apply is gated behind the backup dialog. Per filament, the bridge then:
+anything happens; Apply first shows the friendly backup dialog (an **optional** one-click
+Spoolman/Filament DB backup — it no longer blocks on an acknowledgement). Per filament, the
+bridge then:
 
 1. PATCHes the confirmed fields to Spoolman (multicolor writes always pair
    `multi_color_hexes` with a direction; `color_hex` is never sent alongside them),

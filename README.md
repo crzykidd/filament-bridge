@@ -7,7 +7,7 @@ Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) 
 > ## ⚠️ BETA — back up your databases before any writes
 >
 > filament-bridge is **beta** software that writes to both **Spoolman** and **Filament DB**.
-> **Before** running the Bulk Import Wizard, applying an OpenTag cleanup, or enabling
+> **Before** running the Bulk Import Wizard, applying an OpenPrintTag cleanup, or enabling
 > auto-sync, **back up all three databases** (Spoolman, Filament DB, and the bridge). See
 > [Backups](#backups). Test against non-critical data first.
 
@@ -42,11 +42,11 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 - **Usage-logged weight sync** — Spoolman weight decrements become Filament DB usage entries (preserving the audit trail), never raw weight overwrites; net↔gross weight-model translation is automatic
 - **Conflict queue** — when both sides change the same field between cycles, the change is queued for human decision; conflicts are never silently auto-resolved. Master-divergence conflicts (a Spoolman value that would override an inherited Filament DB variant setting) get a dedicated resolve workflow: apply to the whole line, make it the variant's own setting, or ignore
 - **Variant model translation** — understands Filament DB's parent/variant hierarchy and builds it from flat Spoolman filaments, either by promoting one color to parent or by creating a colorless container parent per line (your choice — see [variant parent mode](docs/variant-parent-mode.md))
-- **OpenTag (OpenPrintTag) cleanup tool** — matches your Spoolman filaments against the OpenPrintTag community database, lets you review every field, applies canonical data to Spoolman, and stamps the OpenPrintTag slug/UUID into Filament DB
+- **OpenPrintTag cleanup tool** — matches your Spoolman filaments against the OpenPrintTag community database, lets you review every field, applies canonical data to Spoolman, and stamps the OpenPrintTag slug/UUID into Filament DB
 - **Upstream-deletion handling** — a deletion on one side queues a conflict when a live, linked counterpart needs protecting; stale links with nothing to protect are purged from the bridge automatically
 - **Web UI** — Dashboard, Synced Records (expandable per-field side-by-side detail, conflict deep-links), Conflicts, Sync Log (per-cycle windows), Settings; every record links straight to its page in Filament DB and Spoolman; light/dark/system theme
 - **Authentication** — single-account password login (on by default) with an optional API token for machine access; see [Security](#security)
-- **Pre-write backup safeguard** — a backup dialog gates the three write actions (wizard Execute, OpenTag Apply, enabling auto-sync) with one-click Spoolman and Filament DB backups
+- **Optional pre-write backup** — a friendly (non-blocking) backup prompt before the three write actions (wizard Execute, OpenPrintTag Apply, enabling auto-sync) offers one-click Spoolman and Filament DB backups; the Settings Danger-Zone debug actions keep a stricter confirm
 - **Backup & restore** — export/import the bridge's own state (mappings, config, open conflicts) as JSON
 - **Version badge + update check** — the sidebar shows the running version and surfaces new GitHub releases (checked server-side, cached 6 h)
 - **Debug reset tools** — a gated Danger Zone (off by default) with three reset tools for clean re-testing: clear Spoolman cross-refs, reset the bridge DB, or both at once
@@ -71,7 +71,7 @@ First public release. The bridge is feature-complete for two-way sync between Fi
 - **Bulk Import Wizard** — re-runnable six-step wizard with fuzzy matching, variant grouping, dry-run preview, and per-record execute reporting
 - **Continuous sync engine** — snapshot/diff/apply loop with per-category sync direction + conflict policy (two-axis model) for weight, material properties, and new-spool creation
 - **Conflict queue** — conflicts are always queued for human decision, never silently resolved; includes the master-divergence resolve workflow for variant inheritance
-- **OpenTag (OpenPrintTag) cleanup tool** — match Spoolman filaments against the community dataset, review per field, and stamp canonical slug/UUID into both systems
+- **OpenPrintTag cleanup tool** — match Spoolman filaments against the community dataset, review per field, and stamp canonical slug/UUID into both systems
 - **Variant parent modes** — `promote_color` or `generic_container`, building Filament DB's parent/variant hierarchy from Spoolman's flat list
 - **Weight-model translation** — net↔gross conversion with Spoolman decrements logged as Filament DB usage entries (audit trail preserved)
 - **Structured multicolor/gradient, finish-tag, and bed/nozzle temperature sync**
@@ -176,7 +176,7 @@ Every field the bridge writes to Spoolman, and when, is enumerated in
 
 ## Backups
 
-**Before running the Bulk Import Wizard, applying an OpenTag cleanup, or enabling auto-sync, back up all three systems.** The pre-write safety dialog offers one-click backups of both upstreams; the same endpoints are available directly:
+**Before running the Bulk Import Wizard, applying an OpenPrintTag cleanup, or enabling auto-sync, back up all three systems.** The pre-write safety dialog offers one-click backups of both upstreams; the same endpoints are available directly:
 
 ### Spoolman
 
@@ -325,17 +325,17 @@ decision or an explicit enable.
 
 ---
 
-## OpenTag cleanup tool
+## OpenPrintTag cleanup tool
 
-The OpenTag tool matches your Spoolman filaments against the [OpenPrintTag](https://openprinttag.org) database, which provides standardized filament identification (slugs, UUIDs, finish tags).
+The OpenPrintTag tool reconciles your Spoolman filaments with the [OpenPrintTag](https://openprinttag.org) community database — standardized identification (slugs, UUIDs, finish tags) and canonical material data — and helps you contribute back. The page opens to an **idle toolbar** (nothing loads on mount) with three actions:
 
-1. Open the OpenTag Cleanup page — the bridge fetches the dataset directly from the OpenPrintTag GitHub tarball (cached locally for 24 h) and scores every Spoolman filament: brand pre-filter (with configurable vendor aliases), color-profile and polymer-family gates, color-name + hex + finish-aware scoring
-2. Review per filament: the best match plus up to 5 alternates, each with a field-by-field comparison; accept, edit, mark fields "keep mine", switch candidates, or ignore
-3. Confirm and apply — the bridge writes the confirmed fields to Spoolman (creating vendors via find-or-create where you approved a manufacturer change) and stamps `openprinttag_slug`/`openprinttag_uuid` into both systems
+- **Refresh dataset** — *smart* refresh: a cheap upstream commit-SHA check downloads the multi-MB tarball only when OpenPrintTag actually changed; otherwise it just freshens the cache age and offers a **Pull contents anyway** button.
+- **Match to DB** — scores every Spoolman filament (brand pre-filter with configurable vendor aliases, color-profile + polymer-family gates, color/hex/finish-aware scoring), then per filament: the best match plus up to ten alternates, field-by-field; accept/edit/keep-mine, switch candidates, **unmatch** (clear the OpenPrintTag identity), or search manually. The match result is cached and scoring runs off the event loop, so a match never freezes the bridge. **Confirm & Apply** writes the chosen fields to Spoolman (creating vendors via find-or-create where you approved a manufacturer change) and stamps `openprinttag_slug`/`openprinttag_uuid` into both systems.
+- **Show missing values** — a **contribution audit**: for the records you own, it lists every OpenPrintTag-supported field the master database leaves empty (across material, packages, and container) so you know what to go submit upstream. It audits OpenPrintTag, not your spools — your inventory only scopes which records to check.
 
 Vendor-name and color-word mappings for the matcher are editable in Settings. Full guide: [docs/opentag-cleanup.md](docs/opentag-cleanup.md).
 
-<img src="docs/images/opentag-review.png" alt="OpenTag Cleanup — match list across the catalog with an expanded filament showing field-by-field Filament DB / Spoolman / use-value comparison and per-field keep-mine controls" width="820">
+<img src="docs/images/opentag-review.png" alt="OpenPrintTag Cleanup — match list across the catalog with an expanded filament showing field-by-field Filament DB / Spoolman / use-value comparison and per-field keep-mine controls" width="820">
 
 ---
 
@@ -374,7 +374,7 @@ All connection configuration is via environment variables; the service refuses t
 | `VARIANT_LINE_KEYWORDS` | No | `silk,matte,satin,…` | Keywords that separate variant lines (runtime-editable) |
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | Marker appended to generic-container parent names; empty = none (runtime-editable) |
 | `MATERIAL_TAG_IDS` | No | (seed list) | CSV of `keyword=id` pairs overriding the default finish-tag ID map |
-| `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenTag brand matching (runtime-editable) |
+| `OPENTAG_VENDOR_ALIASES` | No | — | CSV of `spoolman_vendor=opentag_brand` pairs for OpenPrintTag brand matching (runtime-editable) |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman extra field for the OpenPrintTag slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman extra field for the OpenPrintTag UUID |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the locally cached OpenPrintTag dataset is considered stale |
@@ -414,7 +414,7 @@ This applies to named volumes and bind mounts alike, including volumes created b
 ┌─────────────┐           │  - Bulk Import Wizard                │           ┌───────────────┐
 │  Filament DB │◄─────────┤  - Continuous sync engine            ├──────────►│    Spoolman   │
 │  (Next.js)   │  FDB API │  - Conflict queue + resolution       │  SM API   │   (FastAPI)   │
-└──────┬───────┘          │  - OpenTag cleanup tool              │           └───────┬───────┘
+└──────┬───────┘          │  - OpenPrintTag cleanup tool         │           └───────┬───────┘
        │                  │  - Web UI (React SPA)                │                   │
        ▼                  └──────────────────────────────────────┘                   ▼
 ┌─────────────┐                                                          ┌───────────────────┐
@@ -440,7 +440,7 @@ Both Filament DB and Spoolman continue to function independently. filament-bridg
 | [docs/wizard.md](docs/wizard.md) | The Bulk Import Wizard, step by step |
 | [docs/conflicts.md](docs/conflicts.md) | Conflict types and what each resolution actually does |
 | [docs/variant-parent-mode.md](docs/variant-parent-mode.md) | `promote_color` vs `generic_container`, container naming |
-| [docs/opentag-cleanup.md](docs/opentag-cleanup.md) | The OpenTag matcher and apply flow |
+| [docs/opentag-cleanup.md](docs/opentag-cleanup.md) | The OpenPrintTag matcher and apply flow |
 | [docs/security.md](docs/security.md) | Auth model, API token, lockout recovery |
 | [docs/spoolman-writes.md](docs/spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [docs/version-update-check.md](docs/version-update-check.md) | Version badge and GitHub update check |
