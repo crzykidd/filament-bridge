@@ -11,6 +11,21 @@ GitHub release.
 
 ### Changed
 
+- **OpenPrintTag "missing values" report now audits OpenPrintTag, not your spools** — the
+  completeness report (`GET /api/openprinttag/completeness`) was reworked from a spool-data
+  diff into a pure OpenPrintTag audit: for each tagged Spoolman filament it lists **every
+  OpenPrintTag-supported field that is empty** across the **material, each package, and each
+  package's container** (using the new `SUPPORTED_*_FIELDS` schema constants as the source of
+  truth). The **"Your value (hint)" column and all Spoolman-value comparison are removed** — the
+  report shows only the missing OpenPrintTag fields; the user decides what to contribute (no
+  applicability/N-A pre-judging). Material `url` and package `url` are now **distinct** line
+  items (a set package URL no longer masks a real material-URL gap, and vice-versa), and each
+  package is reported separately (1 kg vs 5 kg); a material with no package data is flagged as
+  its own gap. **`heatbreakTemperature` is excluded** (0 upstream occurrences — a forward-compat
+  placeholder that would otherwise show "missing" on every record). Response items now carry
+  `sections: [{scope, fields}]` instead of `attributes: [{…, your_value}]`. The expand view
+  groups missing fields by Material / Package / Container; complete records stay hidden by
+  default.
 - **UI: renamed "OpenTag" → "OpenPrintTag" in all user-facing strings** — nav label, page title, button tooltips, table headers, status banners, and doc H1/link labels now read "OpenPrintTag". Component filenames, routes, API paths, TS identifiers, config keys, and extra-field names are unchanged.
 
 ### Fixed

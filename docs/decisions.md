@@ -1,5 +1,40 @@
 # Decision record
 
+## 2026-06-19 — "Missing values" report audits OpenPrintTag, not the user's spools
+
+**Context.** The completeness report had drifted into a *diff against the user's data*: each
+missing OPT field carried a "Your value (hint)" pulled from Spoolman, and the audit was
+material-only. That conflated two questions and produced false signals — e.g. RED
+(`elegoo-pla-red`) showed "Product URL missing" even though its **package** URL is set, because
+the report only knew the material-level `productUrl` and had no package/container layer.
+
+**Decision.** The tool audits **OpenPrintTag's master DB**, full stop. The user's inventory only
+**scopes which records to audit** (filaments with `openprinttag_uuid`).
+- **List every OpenPrintTag-supported empty field** (`v in (None, "", [])`) across **material +
+  each package + that package's container**, using the `SUPPORTED_*_FIELDS` constants as the
+  single source of truth. No second field list in `api/opentag.py`.
+- **Removed the "Your value (hint)" column and all Spoolman-value comparison.** The payload
+  dropped `attributes:[{…, your_value, opt_value}]` for `sections:[{scope, fields:[labels]}]`
+  (scope = `"material"` | `"package:<slug>"` | `"package:none"` | `"container:<slug>"`).
+  `_your_value_hint` and `OpenTagMissingAttribute` were deleted.
+- **No applicability / N-A pre-judging.** Every supported empty field is listed regardless of
+  material type — the user decides what's worth submitting. (secondaryColors stays conditional
+  on multicolor, the one legitimate "doesn't apply" case, preserved from before.)
+- **Material `url` vs package `url` are distinct line items**, reported at their own levels, so a
+  set package URL no longer masks a real material-URL gap (and vice-versa). Verified live on
+  `elegoo-pla-red`: package `url` is set (not flagged), package `gtin` is the real gap (flagged),
+  material `productUrl` is genuinely empty upstream and correctly listed under Material.
+- **Packages are 1→N**: each package is its own section; a material with **no package** is a gap
+  ("No package data").
+- **`heatbreakTemperature` is excluded** from the audit (`_REPORT_EXCLUDED_MATERIAL_KEYS`): the
+  ingest confirmed 0 upstream occurrences, so it would falsely show "missing" on every record.
+
+**Notes / deviations.**
+- "No false material-url gap" from the prompt means the **package** URL (which is set) is no
+  longer mis-reported. The material `productUrl` being listed on RED is *correct* — it is truly
+  empty upstream; the fix is that the two URLs are now separate signals.
+- The compute stays offloaded to `run_in_threadpool`; stale-tag rows are preserved unchanged.
+
 ## 2026-06-19 — OpenPrintTag dataset: ingest the full supported schema (material + packages + containers)
 
 **Context.** The completeness report must show *every* OpenPrintTag-supported field that's

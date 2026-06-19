@@ -831,12 +831,13 @@ export interface OpenTagSearchResponse {
   results: OpenTagCandidate[]
 }
 
-/** One OpenPrintTag attribute that is empty on a matched record. */
-export interface OpenTagMissingAttribute {
-  key: string
-  label: string
-  opt_value: unknown
-  your_value: unknown
+/** One scope (material / a package / a container) and the OpenPrintTag-supported
+ * fields it leaves empty. Audits OpenPrintTag, not the user's spools — no spool data. */
+export interface OpenTagSection {
+  /** "material" | "package:<slug>" | "package:none" | "container:<slug>" */
+  scope: string
+  /** Human labels of the empty supported fields, e.g. "GTIN / barcode". */
+  fields: string[]
 }
 
 /** Completeness assessment for one tagged Spoolman filament. */
@@ -848,7 +849,7 @@ export interface OpenTagCompletenessItem {
   opt_uuid: string | null
   opt_url: string | null
   missing_count: number
-  attributes: OpenTagMissingAttribute[]
+  sections: OpenTagSection[]
   /** True when the SM filament's openprinttag_uuid is not in the current dataset. */
   stale_match: boolean
 }

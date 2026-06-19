@@ -24,8 +24,8 @@ offers three actions:
   this returns instantly when a prior match exists (no re-scoring). Only the first match
   (or an explicit refresh) actually computes. Switches to the match review view.
 - **Show missing values** — switch to the [completeness report](#completeness-report-show-missing-values),
-  which lists each tagged Spoolman filament and which attributes its OpenPrintTag record
-  still leaves empty.
+  which audits each tagged record's OpenPrintTag entry and lists every supported field it
+  leaves empty across material, packages, and container (so you know what to contribute).
 
 The **dataset-status banner** (count, age, stale flag) is always visible — it reads the
 local cache status cheaply without fetching from OpenPrintTag.
@@ -193,43 +193,59 @@ The flag is visible in Spoolman's extra-field UI as "OpenPrintTag Ignore Updates
 ## Completeness report ("Show missing values")
 
 The **Show missing values** toolbar action opens a read-only **completeness report** backed
-by `GET /api/openprinttag/completeness`. For each Spoolman filament that already carries an
-`openprinttag_uuid`, the bridge resolves its OpenPrintTag record and reports which schema
-attributes that record leaves **empty** — so you can go enrich those entries and contribute
-them back to the OpenPrintTag database.
+by `GET /api/openprinttag/completeness`.
 
-It measures **OpenPrintTag record completeness, not a diff against your data.** The missing
-count is driven purely by the OPT record's empty fields. Your own Spoolman value (where a
-sensible mapping exists) is shown beside each missing attribute only as a *"you have this to
-contribute"* hint; a blank hint is normal and never affects the count.
+**This tool audits OpenPrintTag, not your spools.** It answers one question: *for the records
+I own, which OpenPrintTag-supported fields does the master database leave empty, so I can
+decide what to go contribute?* Your own Spoolman data is **never read or compared** — your
+inventory only **scopes which OpenPrintTag records to audit**. For each Spoolman filament with
+a non-empty `openprinttag_uuid`, the bridge resolves its OpenPrintTag record and lists every
+supported-but-empty field across the **material, each of its packages, and each package's
+container**.
 
-- **Missing = empty value, not absent key.** Every OpenPrintTag record carries all of its
-  keys; a field is counted only when its value is `null`, an empty string, or an empty list
-  (an empty `tags` list counts as missing).
-- **Counted attributes** (FFF). Core: material type, abbreviation, primary color, density,
-  nozzle temp min/max, bed temp min/max, tags, photo URL, product URL. Extended: chamber
-  temp, preheat temp, drying temp, drying time, hardness (Shore D), transmission distance.
-  Conditional: **secondary colors** — counted only when the filament is multicolor (Spoolman
+- **No spool-data comparison.** There is no "your value" column and no read of Spoolman field
+  values anywhere in the report — only the OpenPrintTag field labels that are missing.
+- **No applicability / N-A pre-judging.** Every supported field is listed when empty,
+  regardless of whether it makes sense for that material — *you* decide what's worth
+  submitting (e.g. skip chamber temp for PLA yourself). The report never hides a field by
+  material type.
+- **Missing = empty value, not absent key.** A field is listed only when its value is `null`,
+  an empty string, or an empty list (an empty `tags` list counts).
+- **Source of truth = `SUPPORTED_*_FIELDS`.** Emptiness is checked against the canonical
+  `SUPPORTED_MATERIAL_FIELDS` / `SUPPORTED_PACKAGE_FIELDS` / `SUPPORTED_CONTAINER_FIELDS`
+  constants in `core/opentag_cache.py` — adding a field to the parser automatically extends
+  the audit.
+- **`heatbreakTemperature` is excluded.** The ingest confirmed it has **0 upstream
+  occurrences** (a forward-compat placeholder, `None` on every record), so reporting it would
+  falsely show "missing" everywhere. It is filtered out of the material audit (see
+  `_REPORT_EXCLUDED_MATERIAL_KEYS` in `api/opentag.py`).
+- **Material URL vs package URL are distinct fields.** A record may have an empty material
+  `productUrl` while its package `url` is set (or vice-versa). They are reported at their own
+  levels — "Product URL" under Material, "Product URL (package)" under the package — so a
+  set package URL no longer masks a real material-URL gap (and vice-versa).
+- **Packages are 1→N.** Each package gets its own section (e.g. 1 kg vs 5 kg), listing that
+  package's empty fields. A material with **no package data at all** is surfaced as its own
+  gap ("No package data").
+- **Conditional secondary colors.** Counted only when the filament is multicolor (Spoolman
   `multi_color_hexes` set, or the OPT record carries a `coextruded`/`gradient` arrangement
   tag), since a single-color filament legitimately has none.
-- **Never counted:** identity fields (uuid/slug/brand/name — always present) and the dead
-  `completenessScore`/`completenessTier` fields (always null in the dataset).
-- **Stale tags.** A filament whose `openprinttag_uuid` is no longer present in the current
-  dataset is surfaced as a distinct **"stale tag"** row (not silently dropped) — re-match it
-  or refresh the dataset.
+- **Never listed:** identity fields (uuid/slug/brand/name — always present) and the dead
+  `completenessScore`/`completenessTier` fields.
+- **Stale tags.** A filament whose `openprinttag_uuid` is no longer in the current dataset is
+  surfaced as a distinct **"stale tag"** row (not silently dropped) — re-match it or refresh.
 
-**Controls:** the table shows Brand · Filament · OPT match (slug, linked to the record's
-product URL when present) · # missing. Expanding a row shows a per-attribute table of
-*your value (hint)* vs *OpenPrintTag (— missing)*. Sort by **Most missing** (default) or by
-**Brand (A→Z)**; complete records are hidden by default with a **Show complete records**
-toggle. The data is local and small, so the whole report is computed in a single pass with
-no pagination.
+**Response shape.** Each item is
+`{ spoolman_filament_id, brand, name, opt_slug, opt_uuid, opt_url, missing_count,
+sections: [ { scope, fields: [<labels>] } ], stale_match }`, where `scope` is `"material"`,
+`"package:<slug>"`, `"package:none"`, or `"container:<slug>"`.
 
-**Known limitation (ingested fields only).** The report covers only the attributes the
-bridge's dataset parser ingests. A few upstream OpenPrintTag schema fields are not yet
-ingested — `hardness_shore_a`, `heatbreak_temperature`, `max_chamber_temperature`, and
-typed/multiple photos — and are therefore not assessed here. The UI notes this. Extending
-the parser to ingest them is a possible separate follow-up.
+**Controls:** the table shows Brand · Filament · OpenPrintTag match (slug, linked to the
+record's product URL when present) · # missing. Expanding a row shows the missing supported
+fields grouped by section (Material / Package <size> / Container). Sort by **Most missing**
+(default) or **Brand (A→Z)**; records with zero gaps (nothing to contribute) are hidden by
+default with a **Show complete records** toggle — gapped records always show. The data is
+local and small, so the whole report is computed in a single pass (offloaded to a worker
+thread) with no pagination.
 
 ## Review (full review view)
 

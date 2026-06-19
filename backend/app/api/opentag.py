@@ -27,7 +27,14 @@ from app.config import settings as _settings
 from app.core.change_log import record_change as _record_change
 from app.core.log_safe import scrub as _scrub
 from app.core.matcher import normalize_vendor
-from app.core.opentag_cache import _load_cache, get_cache_metadata, load_opentag_dataset
+from app.core.opentag_cache import (
+    SUPPORTED_CONTAINER_FIELDS,
+    SUPPORTED_MATERIAL_FIELDS,
+    SUPPORTED_PACKAGE_FIELDS,
+    _load_cache,
+    get_cache_metadata,
+    load_opentag_dataset,
+)
 from app.core.opentag_match_cache import (
     build_fingerprint,
     inputs_stale,
@@ -157,16 +164,22 @@ class OpenTagMatchesResponse(BaseModel):
 # Completeness report ---------------------------------------------------------
 
 
-class OpenTagMissingAttribute(BaseModel):
-    """One OpenPrintTag attribute that is empty on the matched record."""
-    key: str            # raw OPTMaterial key, e.g. "nozzleTempMin"
-    label: str          # human label, e.g. "Nozzle temp (min)"
-    opt_value: Any      # the (empty) OPT value — always None/""/[] for a missing attr
-    your_value: Any     # best-effort hint from the SM filament, or None
+class OpenTagSection(BaseModel):
+    """One scope (material / a package / a container) and the OpenPrintTag-supported
+    fields it leaves EMPTY. The report audits OpenPrintTag, NOT the user's spools — so a
+    section carries only the upstream field labels that are missing, no spool data."""
+    # "material" | "package:<slug>" | "package:none" | "container:<slug>"
+    scope: str
+    fields: list[str]   # human labels of the empty supported fields, e.g. "GTIN / barcode"
 
 
 class OpenTagCompletenessItem(BaseModel):
-    """Completeness assessment for one tagged Spoolman filament."""
+    """Completeness assessment for one tagged Spoolman filament.
+
+    Scopes the audit to the OpenPrintTag record this filament is tagged to, listing every
+    supported-but-empty field across the material, each of its packages, and each package's
+    container. NO spool-data comparison is performed.
+    """
     spoolman_filament_id: int
     brand: str | None
     name: str | None
@@ -174,7 +187,7 @@ class OpenTagCompletenessItem(BaseModel):
     opt_uuid: str | None
     opt_url: str | None
     missing_count: int
-    attributes: list[OpenTagMissingAttribute]
+    sections: list[OpenTagSection]
     # True when the SM filament carries an openprinttag_uuid that is NOT present in the
     # current dataset (stale tag) — surfaced distinctly rather than silently dropped.
     stale_match: bool = False
@@ -1486,31 +1499,28 @@ def _compute_search(
 # Completeness report — which matched OpenPrintTag records are missing data
 # ---------------------------------------------------------------------------
 
-# (key, label) pairs counted as "missing" when the OPT record's VALUE is empty.
-# Identity (uuid/slug/brandSlug/brandName/name) is excluded — always present.
-# completenessScore/completenessTier are dead (always None) — excluded.
-# secondaryColors is handled separately (conditional on multicolor).
-_COMPLETENESS_FIELDS: list[tuple[str, str]] = [
-    # Core
-    ("type", "Material type"),
-    ("abbreviation", "Abbreviation"),
-    ("color", "Primary color"),
-    ("density", "Density"),
-    ("nozzleTempMin", "Nozzle temp (min)"),
-    ("nozzleTempMax", "Nozzle temp (max)"),
-    ("bedTempMin", "Bed temp (min)"),
-    ("bedTempMax", "Bed temp (max)"),
-    ("tags", "Tags"),
-    ("photoUrl", "Photo URL"),
-    ("productUrl", "Product URL"),
-    # Extended
-    ("chamberTemp", "Chamber temp"),
-    ("preheatTemp", "Preheat temp"),
-    ("dryingTemp", "Drying temp"),
-    ("dryingTime", "Drying time"),
-    ("hardnessShoreD", "Hardness (Shore D)"),
-    ("transmissionDistance", "Transmission distance"),
+# The report's source of truth for "what fields exist" is the canonical
+# SUPPORTED_*_FIELDS schema constants from opentag_cache. We DO NOT maintain a second
+# field list here — adding a field to the parser/schema automatically extends the audit.
+#
+# secondaryColors is handled separately (conditional on multicolor — only a multicolor
+# record "owes" secondary colors). heatbreakTemperature is EXCLUDED from the report: the
+# ingest confirmed 0 upstream occurrences (it's a forward-compat placeholder mapped to
+# None for every record), so reporting it would falsely show "missing" on EVERY material.
+_REPORT_EXCLUDED_MATERIAL_KEYS = {"secondaryColors", "heatbreakTemperature"}
+
+#: Material fields the report checks: the canonical supported set minus the conditional/
+#: placeholder keys above. secondaryColors is re-added per-record when multicolor.
+_MATERIAL_REPORT_FIELDS: list[tuple[str, str]] = [
+    (key, label)
+    for key, label in SUPPORTED_MATERIAL_FIELDS
+    if key not in _REPORT_EXCLUDED_MATERIAL_KEYS
 ]
+
+_SECONDARY_COLORS_LABEL = next(
+    (label for key, label in SUPPORTED_MATERIAL_FIELDS if key == "secondaryColors"),
+    "Secondary colors",
+)
 
 # Arrangement tag strings on an OPT record that imply a multicolor filament.
 _MULTICOLOR_TAG_STRINGS = {"coextruded", "gradient", "gradual_color_change"}
@@ -1532,42 +1542,22 @@ def _is_multicolor(sm_fil: _SpoolmanFilament, opt: dict[str, Any]) -> bool:
     return any(str(t).strip().lower() in _MULTICOLOR_TAG_STRINGS for t in tags)
 
 
-def _your_value_hint(key: str, sm_fil: _SpoolmanFilament) -> Any:
-    """Best-effort "you have this to contribute" hint from the SM filament.
-    Returns None when no sensible SM source exists (blank hint is fine)."""
-    if key == "type":
-        return sm_fil.material
-    if key == "color":
-        return sm_fil.color_hex
-    if key == "density":
-        return sm_fil.density
-    if key in ("nozzleTempMin", "nozzleTempMax"):
-        return sm_fil.settings_extruder_temp
-    if key in ("bedTempMin", "bedTempMax"):
-        return sm_fil.settings_bed_temp
-    if key == "secondaryColors":
-        return sm_fil.multi_color_hexes
-    # tags ← SM finish/material tags: SM filaments carry no first-class tag list the
-    # bridge ingests, so leave blank rather than guess.
-    return None
-
-
 @router.get("/openprinttag/completeness", response_model=OpenTagCompletenessResponse)
 async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
-    """Report OpenPrintTag record completeness for every tagged Spoolman filament.
+    """Audit OpenPrintTag completeness for every tagged Spoolman filament.
 
-    For each SM filament carrying a non-empty ``openprinttag_uuid``, resolve its raw
-    OPTMaterial via the ``by_uuid`` index and report which schema attributes that record
-    leaves EMPTY (the user can then go enrich and contribute them upstream).  This measures
-    OPT-record completeness, NOT a diff against the user's data — the SM value is only a
-    best-effort "you have this to contribute" hint.
+    This tool audits OpenPrintTag's master database, NOT the user's spools. The user's
+    inventory only scopes WHICH OpenPrintTag records to audit: for each SM filament with a
+    non-empty ``openprinttag_uuid`` we resolve its OPT record via ``by_uuid`` and list every
+    OpenPrintTag-supported field that is EMPTY (``None``/``""``/``[]``) across the material,
+    each of its packages, and each package's container. The user decides what is worth
+    contributing — the report does NO applicability/N-A pre-judging and reads NO spool data.
 
-    The raw OPTMaterial dict is inspected directly (NOT through opt_to_spoolman_fields /
-    _build_candidate, which are lossy for self-completeness).
-
-    Known limitation: the bridge's dataset parser does not ingest every upstream OPT schema
-    field (e.g. hardness_shore_a, heatbreak_temperature, max_chamber_temperature, typed/
-    multiple photos).  This report covers only ingested attributes.
+    Field coverage is the canonical ``SUPPORTED_*_FIELDS`` schema from ``opentag_cache``,
+    minus ``heatbreakTemperature`` (0 upstream occurrences — a forward-compat placeholder
+    that would falsely show "missing" on every record). Material ``url`` (Product URL) and
+    package ``url`` (Product URL (package)) are DISTINCT supported fields reported at their
+    own levels.
     """
     sm: Any = request.app.state.spoolman
 
@@ -1588,10 +1578,18 @@ async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
 
     sm_filaments = await sm.get_filaments()
     materials = cache.get("materials", [])
+    packages_by_material = cache.get("packages_by_material", {})
+    containers_by_slug = cache.get("containers_by_slug", {})
 
     # Offload the pure-CPU per-filament completeness scan to a worker thread.
     items, stale_count = await run_in_threadpool(
-        _compute_completeness, sm_filaments, materials, uuid_field, slug_field
+        _compute_completeness,
+        sm_filaments,
+        materials,
+        packages_by_material,
+        containers_by_slug,
+        uuid_field,
+        slug_field,
     )
 
     return OpenTagCompletenessResponse(
@@ -1601,13 +1599,25 @@ async def opentag_completeness(request: Request) -> OpenTagCompletenessResponse:
     )
 
 
+def _missing_fields(record: dict[str, Any], schema: list[tuple[str, str]]) -> list[str]:
+    """Return the human labels of supported fields that are EMPTY on ``record``."""
+    return [label for key, label in schema if _opt_value_missing(record.get(key))]
+
+
 def _compute_completeness(
     sm_filaments: list[Any],
     materials: list[dict[str, Any]],
+    packages_by_material: dict[str, list[dict[str, Any]]],
+    containers_by_slug: dict[str, dict[str, Any]],
     uuid_field: str,
     slug_field: str,
 ) -> tuple[list[OpenTagCompletenessItem], int]:
-    """Pure-CPU completeness scan — safe to run in a worker thread (no I/O)."""
+    """Pure-CPU OpenPrintTag completeness audit — safe to run in a worker thread (no I/O).
+
+    For each tagged SM filament, audits its OPT record across material + every package +
+    each package's container. No spool data is read. Reports a section per scope listing the
+    supported-but-empty field labels.
+    """
     by_uuid: dict[str, dict[str, Any]] = {}
     for m in materials:
         if isinstance(m, dict) and m.get("uuid"):
@@ -1633,28 +1643,56 @@ def _compute_completeness(
                 opt_uuid=opt_uuid,
                 opt_url=None,
                 missing_count=0,
-                attributes=[],
+                sections=[],
                 stale_match=True,
             ))
             continue
 
-        attributes: list[OpenTagMissingAttribute] = []
-        for key, label in _COMPLETENESS_FIELDS:
-            if _opt_value_missing(opt.get(key)):
-                attributes.append(OpenTagMissingAttribute(
-                    key=key,
-                    label=label,
-                    opt_value=opt.get(key),
-                    your_value=_your_value_hint(key, sm_fil),
-                ))
-        # secondaryColors only counts for multicolor filaments.
+        sections: list[OpenTagSection] = []
+
+        # --- Material scope ---------------------------------------------------
+        material_fields = _missing_fields(opt, _MATERIAL_REPORT_FIELDS)
+        # secondaryColors only counts for multicolor records (only they "owe" it).
         if _is_multicolor(sm_fil, opt) and _opt_value_missing(opt.get("secondaryColors")):
-            attributes.append(OpenTagMissingAttribute(
-                key="secondaryColors",
-                label="Secondary colors",
-                opt_value=opt.get("secondaryColors"),
-                your_value=_your_value_hint("secondaryColors", sm_fil),
+            material_fields.append(_SECONDARY_COLORS_LABEL)
+        if material_fields:
+            sections.append(OpenTagSection(scope="material", fields=material_fields))
+
+        # --- Package scopes (1→N per material) --------------------------------
+        material_slug = opt.get("slug")
+        packages = packages_by_material.get(material_slug, []) if material_slug else []
+        if not packages:
+            # No package data at all is itself a gap to contribute.
+            sections.append(OpenTagSection(
+                scope="package:none", fields=["No package data"]
             ))
+        else:
+            for pkg in packages:
+                pkg_slug = pkg.get("slug") or "package"
+                pkg_fields = _missing_fields(pkg, SUPPORTED_PACKAGE_FIELDS)
+                if pkg_fields:
+                    sections.append(OpenTagSection(
+                        scope=f"package:{pkg_slug}", fields=pkg_fields
+                    ))
+
+                # --- Container scope (per package) ----------------------------
+                container_slug = pkg.get("containerSlug")
+                if container_slug:
+                    container = containers_by_slug.get(container_slug)
+                    if container is None:
+                        # Referenced but absent from the container index.
+                        sections.append(OpenTagSection(
+                            scope=f"container:{container_slug}",
+                            fields=["No container data"],
+                        ))
+                    else:
+                        c_fields = _missing_fields(container, SUPPORTED_CONTAINER_FIELDS)
+                        if c_fields:
+                            sections.append(OpenTagSection(
+                                scope=f"container:{container_slug}", fields=c_fields
+                            ))
+
+        missing_count = sum(len(s.fields) for s in sections)
 
         items.append(OpenTagCompletenessItem(
             spoolman_filament_id=sm_fil.id,
@@ -1663,8 +1701,8 @@ def _compute_completeness(
             opt_slug=opt.get("slug"),
             opt_uuid=opt.get("uuid"),
             opt_url=opt.get("productUrl") or None,
-            missing_count=len(attributes),
-            attributes=attributes,
+            missing_count=missing_count,
+            sections=sections,
             stale_match=False,
         ))
 

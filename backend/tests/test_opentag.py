@@ -6204,92 +6204,85 @@ async def test_ignore_endpoint_clears_flag():
 # Completeness report — GET /api/openprinttag/completeness (FR: contribution report)
 # ---------------------------------------------------------------------------
 
-# A deliberately sparse OPT record: identity present, most attributes empty.
-_OPT_SPARSE = {
-    "uuid": "sparse00-0000-0000-0000-000000000001",
-    "slug": "acme-pla-sparse",
-    "brandSlug": "acme",
-    "brandName": "Acme",
-    "name": "PLA Sparse",
-    "type": None,
-    "abbreviation": None,
-    "color": None,
-    "secondaryColors": [],
-    "density": None,
-    "nozzleTempMin": None,
-    "nozzleTempMax": None,
-    "bedTempMin": None,
-    "bedTempMax": None,
-    "chamberTemp": None,
-    "preheatTemp": None,
-    "dryingTemp": None,
-    "dryingTime": None,
-    "hardnessShoreD": None,
-    "transmissionDistance": None,
-    "tags": [],
-    "photoUrl": None,
-    "productUrl": None,
-    "completenessScore": None,
-    "completenessTier": None,
-}
+# NOTE: this report audits OpenPrintTag, NOT the user's spools. There is no "your value"
+# hint anywhere in the payload — only the supported-but-empty OpenPrintTag field labels.
 
-# A rich, single-color OPT record: every counted attribute filled.
-_OPT_RICH = {
-    "uuid": "rich0000-0000-0000-0000-000000000002",
-    "slug": "acme-pla-rich",
-    "brandSlug": "acme",
-    "brandName": "Acme",
-    "name": "PLA Rich",
-    "type": "PLA",
-    "abbreviation": "PLA",
-    "color": "#112233",
-    "secondaryColors": [],
-    "density": 1.24,
-    "nozzleTempMin": 200,
-    "nozzleTempMax": 220,
-    "bedTempMin": 50,
-    "bedTempMax": 60,
-    "chamberTemp": 30,
-    "preheatTemp": 40,
-    "dryingTemp": 45,
-    "dryingTime": 360,
-    "hardnessShoreD": 80.0,
-    "transmissionDistance": 1.2,
-    "tags": ["matte"],
-    "photoUrl": "https://example.test/photo.png",
-    "productUrl": "https://example.test/product",
-    "completenessScore": None,
-    "completenessTier": None,
-}
 
-# A multicolor (coextruded) OPT record missing secondaryColors.
-_OPT_MULTI_NO_SECONDARY = {
-    "uuid": "multi000-0000-0000-0000-000000000003",
-    "slug": "acme-pla-dual",
-    "brandSlug": "acme",
-    "brandName": "Acme",
-    "name": "PLA Dual",
-    "type": "PLA",
-    "abbreviation": "PLA",
-    "color": "#FF0000",
-    "secondaryColors": [],          # empty — but multicolor → should be flagged
-    "density": 1.24,
-    "nozzleTempMin": 200,
-    "nozzleTempMax": 220,
-    "bedTempMin": 50,
-    "bedTempMax": 60,
-    "chamberTemp": 30,
-    "preheatTemp": 40,
-    "dryingTemp": 45,
-    "dryingTime": 360,
-    "hardnessShoreD": 80.0,
-    "transmissionDistance": 1.2,
-    "tags": ["coextruded"],
-    "photoUrl": "https://example.test/photo.png",
-    "productUrl": "https://example.test/product",
-    "completenessScore": None,
-    "completenessTier": None,
-}
+def _full_material(uuid, slug, **overrides):
+    """A full-schema OPTMaterial with every supported field present (filled) by default.
+
+    Pass overrides to blank specific fields and exercise the empty-field audit. Mirrors
+    the cache parser's full key set so SUPPORTED_MATERIAL_FIELDS lookups are accurate.
+    """
+    base = {
+        "uuid": uuid,
+        "slug": slug,
+        "brandSlug": "acme",
+        "brandName": "Acme",
+        "name": slug,
+        "type": "PLA",
+        "abbreviation": "PLA",
+        "color": "#112233",
+        "secondaryColors": [],
+        "density": 1.24,
+        "nozzleTempMin": 200,
+        "nozzleTempMax": 220,
+        "bedTempMin": 50,
+        "bedTempMax": 60,
+        "chamberTemp": 30,
+        "chamberTempMin": 25,
+        "chamberTempMax": 35,
+        "preheatTemp": 40,
+        "dryingTemp": 45,
+        "dryingTime": 360,
+        "hardnessShoreA": 95.0,   # supported field — filled so default record is gap-free
+        "hardnessShoreD": 80.0,
+        # forward-compat placeholder — 0 upstream occurrences, EXCLUDED from the report.
+        "heatbreakTemperature": None,
+        "transmissionDistance": 1.2,
+        "tags": ["matte"],
+        "photoUrl": "https://example.test/photo.png",
+        "productUrl": "https://example.test/product",
+        "completenessScore": None,
+        "completenessTier": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def _full_package(slug, container_slug, **overrides):
+    """A full OPTPackage with every supported field filled by default."""
+    base = {
+        "slug": slug,
+        "uuid": f"{slug}-uuid",
+        "gtin": "0123456789012",
+        "brandSpecificId": "SKU-123",
+        "url": "https://example.test/package",
+        "nominalNettoFullWeight": 1000,
+        "filamentDiameter": 1750,
+        "filamentDiameterTolerance": 20,
+        "containerSlug": container_slug,
+    }
+    base.update(overrides)
+    return base
+
+
+def _full_container(slug, **overrides):
+    """A full OPTContainer with every supported field filled by default."""
+    base = {
+        "uuid": f"{slug}-uuid",
+        "slug": slug,
+        "name": "Standard spool",
+        "class": "spool",
+        "brand": "acme",
+        "emptyWeight": 200,
+        "outerDiameter": 200,
+        "innerDiameter": 55,
+        "holeDiameter": 55,
+        "width": 70,
+    }
+    base.update(overrides)
+    return base
 
 
 def _tagged_sm_filament(fil_id, uuid, *, multi=False, material=None, color_hex=None):
@@ -6309,14 +6302,22 @@ def _tagged_sm_filament(fil_id, uuid, *, multi=False, material=None, color_hex=N
     )
 
 
-def _completeness_client(tmp_path, materials, sm_filaments):
+def _completeness_client(
+    tmp_path, materials, sm_filaments, *, packages=None, containers=None
+):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api.opentag import router
     from app.core.opentag_cache import _save_cache
     import datetime as _dt
 
-    _save_cache(str(tmp_path), materials, _dt.datetime.now(_dt.timezone.utc).isoformat())
+    _save_cache(
+        str(tmp_path),
+        materials,
+        _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        packages_by_material=packages or {},
+        containers_by_slug=containers or {},
+    )
 
     fake_sm = AsyncMock()
     fake_sm.get_filaments = AsyncMock(return_value=sm_filaments)
@@ -6328,78 +6329,202 @@ def _completeness_client(tmp_path, materials, sm_filaments):
     return TestClient(app)
 
 
-def test_completeness_sparse_vs_rich(tmp_path):
-    """A sparse record reports many missing attrs; a rich record reports none."""
+def _sections_by_scope(item):
+    return {s["scope"]: s["fields"] for s in item["sections"]}
+
+
+def test_completeness_audits_material_package_and_container(tmp_path):
+    """A tagged record reports empty supported fields across material + package + container;
+    NO your_value / spool data in the payload."""
     import app.api.opentag as _ot_mod
-    sm_fils = [
-        _tagged_sm_filament(1, _OPT_SPARSE["uuid"], material="PLA", color_hex="#AABBCC"),
-        _tagged_sm_filament(2, _OPT_RICH["uuid"]),
-    ]
+    # Material: blank type + tags. Package: blank gtin. Container: blank emptyWeight.
+    mat = _full_material(
+        "u1-0000-0000-0000-000000000001", "acme-pla",
+        type=None, tags=[],
+    )
+    pkg = _full_package("acme-pla-1kg", "spool-std", gtin=None)
+    cont = _full_container("spool-std", emptyWeight=None)
+    sm_fils = [_tagged_sm_filament(1, mat["uuid"], material="PLA")]
     orig = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = _completeness_client(tmp_path, [_OPT_SPARSE, _OPT_RICH], sm_fils)
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla": [pkg]}, containers={"spool-std": cont},
+        )
         resp = client.get("/api/openprinttag/completeness")
         assert resp.status_code == 200, resp.text
-        data = resp.json()
-        by_id = {i["spoolman_filament_id"]: i for i in data["items"]}
+        item = resp.json()["items"][0]
 
-        # Sparse single-color: all 17 core+extended fields missing, secondaryColors NOT
-        # counted (single color), identity + dead fields never counted → 17.
-        sparse = by_id[1]
-        assert sparse["missing_count"] == 17
-        keys = {a["key"] for a in sparse["attributes"]}
-        assert "secondaryColors" not in keys
-        assert "uuid" not in keys and "slug" not in keys and "name" not in keys
-        assert "completenessScore" not in keys and "completenessTier" not in keys
-        # your_value hints surfaced where a sensible SM source exists
-        type_attr = next(a for a in sparse["attributes"] if a["key"] == "type")
-        assert type_attr["your_value"] == "PLA"
-        color_attr = next(a for a in sparse["attributes"] if a["key"] == "color")
-        assert color_attr["your_value"] == "#AABBCC"
+        # No spool-data hint anywhere in the payload.
+        assert "attributes" not in item
+        assert "your_value" not in resp.text and "opt_value" not in resp.text
 
-        # Rich record: nothing missing
-        rich = by_id[2]
-        assert rich["missing_count"] == 0
-        assert rich["attributes"] == []
-        assert rich["opt_url"] == "https://example.test/product"
-        assert data["stale_count"] == 0
+        by_scope = _sections_by_scope(item)
+        assert by_scope["material"] == ["Material type", "Tags"]
+        assert by_scope["package:acme-pla-1kg"] == ["GTIN / barcode"]
+        assert by_scope["container:spool-std"] == ["Empty weight (tare)"]
+        assert item["missing_count"] == 4
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_rich_record_has_no_gaps(tmp_path):
+    """A fully-filled material + package + container reports zero gaps."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u2-0000-0000-0000-000000000002", "acme-pla-rich")
+    pkg = _full_package("acme-pla-rich-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(2, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-rich": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        assert item["missing_count"] == 0
+        assert item["sections"] == []
+        assert item["opt_url"] == "https://example.test/product"
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_heatbreak_excluded(tmp_path):
+    """heatbreakTemperature is empty on every record but must NEVER appear as a gap."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u3-0000-0000-0000-000000000003", "acme-pla-hb")
+    pkg = _full_package("acme-pla-hb-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(3, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-hb": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        all_fields = [f for s in item["sections"] for f in s["fields"]]
+        assert "Heatbreak temp" not in all_fields
+        assert item["missing_count"] == 0
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_material_url_distinct_from_package_url(tmp_path):
+    """The RED bug: material url is set but package url is blank → only the package-level
+    "Product URL (package)" is a gap; material "Product URL" is NOT falsely flagged."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u4-0000-0000-0000-000000000004", "acme-pla-red")  # productUrl set
+    pkg = _full_package("acme-pla-red-1kg", "spool-std", url=None, gtin=None)
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(4, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-red": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        by_scope = _sections_by_scope(item)
+        # Material has no gaps (its Product URL is set) → no material section at all.
+        assert "material" not in by_scope
+        # Package surfaces the real gaps: blank package URL + GTIN.
+        assert set(by_scope["package:acme-pla-red-1kg"]) == {
+            "Product URL (package)", "GTIN / barcode"
+        }
     finally:
         _ot_mod._settings.data_dir = orig
 
 
 def test_completeness_missing_is_empty_value_not_absent_key(tmp_path):
-    """Missing is driven by empty VALUE (None/''/[]); empty tags list counts as missing."""
+    """Missing is driven by empty VALUE (None/''/[]); an empty tags list counts as a gap."""
     import app.api.opentag as _ot_mod
-    sm_fils = [_tagged_sm_filament(1, _OPT_SPARSE["uuid"])]
+    mat = _full_material(
+        "u5-0000-0000-0000-000000000005", "acme-pla-sparse",
+        tags=[], density=None,
+    )
+    pkg = _full_package("acme-pla-sparse-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(5, mat["uuid"])]
     orig = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = _completeness_client(tmp_path, [_OPT_SPARSE], sm_fils)
-        data = client.get("/api/openprinttag/completeness").json()
-        attrs = {a["key"]: a for a in data["items"][0]["attributes"]}
-        # empty list → missing
-        assert "tags" in attrs and attrs["tags"]["opt_value"] == []
-        # None → missing
-        assert "density" in attrs and attrs["density"]["opt_value"] is None
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-sparse": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        material_fields = _sections_by_scope(item)["material"]
+        assert "Tags" in material_fields          # empty list → gap
+        assert "Density" in material_fields        # None → gap
     finally:
         _ot_mod._settings.data_dir = orig
 
 
 def test_completeness_secondary_colors_only_for_multicolor(tmp_path):
-    """secondaryColors counts as missing only when the filament is multicolor."""
+    """secondaryColors counts as a material gap only when the filament is multicolor."""
     import app.api.opentag as _ot_mod
-    # filament 3 → multicolor OPT record (coextruded tag), empty secondaryColors
-    sm_fils = [_tagged_sm_filament(3, _OPT_MULTI_NO_SECONDARY["uuid"], multi=True)]
+    mat = _full_material(
+        "u6-0000-0000-0000-000000000006", "acme-pla-dual",
+        secondaryColors=[], tags=["coextruded"],
+    )
+    pkg = _full_package("acme-pla-dual-1kg", "spool-std")
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(6, mat["uuid"], multi=True)]
     orig = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = _completeness_client(tmp_path, [_OPT_MULTI_NO_SECONDARY], sm_fils)
-        data = client.get("/api/openprinttag/completeness").json()
-        item = data["items"][0]
-        keys = {a["key"] for a in item["attributes"]}
-        # Rich-but-multicolor: only secondaryColors should be flagged
-        assert keys == {"secondaryColors"}
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-dual": [pkg]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        # Multicolor + everything else filled → only Secondary colors flagged.
+        assert _sections_by_scope(item)["material"] == ["Secondary colors"]
+        assert item["missing_count"] == 1
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_multi_package_lists_each(tmp_path):
+    """A material with 1kg + 5kg packages lists each package's own gaps separately."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u7-0000-0000-0000-000000000007", "acme-pla-multi")
+    pkg1 = _full_package("acme-pla-1kg", "spool-std", gtin=None)
+    pkg5 = _full_package("acme-pla-5kg", "spool-std", brandSpecificId=None)
+    cont = _full_container("spool-std")
+    sm_fils = [_tagged_sm_filament(7, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(
+            tmp_path, [mat], sm_fils,
+            packages={"acme-pla-multi": [pkg1, pkg5]}, containers={"spool-std": cont},
+        )
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        by_scope = _sections_by_scope(item)
+        assert by_scope["package:acme-pla-1kg"] == ["GTIN / barcode"]
+        assert by_scope["package:acme-pla-5kg"] == ["SKU (brand-specific ID)"]
+    finally:
+        _ot_mod._settings.data_dir = orig
+
+
+def test_completeness_no_package_flagged(tmp_path):
+    """A material with NO package data surfaces that as its own gap."""
+    import app.api.opentag as _ot_mod
+    mat = _full_material("u8-0000-0000-0000-000000000008", "acme-pla-nopkg")
+    sm_fils = [_tagged_sm_filament(8, mat["uuid"])]
+    orig = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+    try:
+        client = _completeness_client(tmp_path, [mat], sm_fils)  # no packages/containers
+        item = client.get("/api/openprinttag/completeness").json()["items"][0]
+        by_scope = _sections_by_scope(item)
+        assert by_scope["package:none"] == ["No package data"]
         assert item["missing_count"] == 1
     finally:
         _ot_mod._settings.data_dir = orig
@@ -6408,16 +6533,18 @@ def test_completeness_secondary_colors_only_for_multicolor(tmp_path):
 def test_completeness_stale_tag_surfaced(tmp_path):
     """A tagged filament whose uuid isn't in the dataset is surfaced as a stale match."""
     import app.api.opentag as _ot_mod
+    mat = _full_material("u9-0000-0000-0000-000000000009", "acme-pla-rich")
     sm_fils = [_tagged_sm_filament(9, "no-such-uuid-0000-0000-000000000099")]
     orig = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = _completeness_client(tmp_path, [_OPT_RICH], sm_fils)
+        client = _completeness_client(tmp_path, [mat], sm_fils)
         data = client.get("/api/openprinttag/completeness").json()
         assert data["stale_count"] == 1
         item = data["items"][0]
         assert item["stale_match"] is True
         assert item["missing_count"] == 0
+        assert item["sections"] == []
         assert item["opt_uuid"] == "no-such-uuid-0000-0000-000000000099"
     finally:
         _ot_mod._settings.data_dir = orig
@@ -6426,14 +6553,15 @@ def test_completeness_stale_tag_surfaced(tmp_path):
 def test_completeness_excludes_untagged(tmp_path):
     """Untagged filaments are excluded entirely."""
     import app.api.opentag as _ot_mod
+    mat = _full_material("u10-0000-0000-0000-000000000010", "acme-pla-rich")
     sm_fils = [
-        _tagged_sm_filament(1, _OPT_RICH["uuid"]),
+        _tagged_sm_filament(1, mat["uuid"]),
         _tagged_sm_filament(2, None),  # untagged
     ]
     orig = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        client = _completeness_client(tmp_path, [_OPT_RICH], sm_fils)
+        client = _completeness_client(tmp_path, [mat], sm_fils)
         data = client.get("/api/openprinttag/completeness").json()
         assert {i["spoolman_filament_id"] for i in data["items"]} == {1}
     finally:

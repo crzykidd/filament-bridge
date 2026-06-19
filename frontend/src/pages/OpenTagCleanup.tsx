@@ -1293,6 +1293,15 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
 
 type MissingSort = 'most-missing' | 'brand'
 
+/** Human heading for a section scope ("material" | "package:<slug>" | "container:<slug>"). */
+function sectionHeading(scope: string): string {
+  if (scope === 'material') return 'Material'
+  if (scope === 'package:none') return 'Package'
+  if (scope.startsWith('package:')) return `Package — ${scope.slice('package:'.length)}`
+  if (scope.startsWith('container:')) return `Container — ${scope.slice('container:'.length)}`
+  return scope
+}
+
 /** One expandable row in the completeness report table. */
 function MissingValuesRow({ item }: { item: OpenTagCompletenessItem }) {
   const [open, setOpen] = useState(false)
@@ -1351,33 +1360,30 @@ function MissingValuesRow({ item }: { item: OpenTagCompletenessItem }) {
                 is not in the current dataset — the tag may be stale. Re-match this filament or refresh
                 the dataset.
               </p>
-            ) : item.attributes.length === 0 ? (
+            ) : item.sections.length === 0 ? (
               <p className="text-sm text-gray-500 dark:text-gray-400 italic">
-                This OpenPrintTag record has every ingested attribute filled. Nothing to contribute.
+                This OpenPrintTag record has every supported field filled. Nothing to contribute.
               </p>
             ) : (
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                    <th className="px-3 py-1 font-medium">Attribute</th>
-                    <th className="px-3 py-1 font-medium">Your value (hint)</th>
-                    <th className="px-3 py-1 font-medium">OpenPrintTag</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {item.attributes.map(attr => (
-                    <tr key={attr.key} className="border-t border-gray-100 dark:border-gray-700">
-                      <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300">{attr.label}</td>
-                      <td className="px-3 py-1.5 text-gray-700 dark:text-gray-300">
-                        {attr.your_value === null || attr.your_value === undefined || attr.your_value === ''
-                          ? <span className="text-gray-400 dark:text-gray-500 italic">—</span>
-                          : renderValue(attr.your_value)}
-                      </td>
-                      <td className="px-3 py-1.5 text-gray-400 dark:text-gray-500 italic">— missing</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="space-y-3">
+                {item.sections.map(section => (
+                  <div key={section.scope}>
+                    <p className="text-xs uppercase tracking-wide font-medium text-gray-500 dark:text-gray-400 mb-1">
+                      {sectionHeading(section.scope)}
+                    </p>
+                    <ul className="flex flex-wrap gap-x-3 gap-y-1">
+                      {section.fields.map(label => (
+                        <li
+                          key={label}
+                          className="px-2 py-0.5 rounded text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300"
+                        >
+                          {label}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
             )}
           </td>
         </tr>
@@ -1447,14 +1453,16 @@ function MissingValuesReport() {
       <div className="mb-4 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg text-sm text-blue-800 dark:text-blue-300">
         <p className="font-medium mb-1">OpenPrintTag completeness report</p>
         <p>
-          For each tagged filament, this shows which attributes its OpenPrintTag record leaves empty —
-          so you can enrich and contribute them upstream. {tagged} tagged filament{tagged !== 1 ? 's' : ''},{' '}
-          {needWork} with missing data{data.stale_count > 0 ? `, ${data.stale_count} stale tag${data.stale_count !== 1 ? 's' : ''}` : ''}.
+          For each tagged filament, this lists every OpenPrintTag-supported field its OpenPrintTag
+          record leaves empty — across the material, each package, and each package's container — so
+          you can decide what to contribute upstream. This audits OpenPrintTag, not your spools.{' '}
+          {tagged} tagged filament{tagged !== 1 ? 's' : ''},{' '}
+          {needWork} with gaps{data.stale_count > 0 ? `, ${data.stale_count} stale tag${data.stale_count !== 1 ? 's' : ''}` : ''}.
         </p>
         <p className="mt-1 text-xs text-blue-700 dark:text-blue-400">
-          Covers only attributes the bridge ingests from the dataset. Some upstream schema fields
-          (hardness Shore A, heatbreak temperature, max chamber temperature, typed/multiple photos)
-          are not yet ingested and are not assessed here.
+          Every supported field is listed regardless of whether it applies to this material — you
+          decide what is worth submitting. (Heatbreak temperature is excluded: it has no upstream
+          data yet.)
         </p>
       </div>
 
