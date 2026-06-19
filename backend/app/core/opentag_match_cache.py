@@ -15,7 +15,7 @@ Cache file shape (``opentag_matches_cache.json``)::
         "fingerprint": {
             "dataset": "abc123…",  # upstream commit SHA (falls back to count:fetched_at)
             "sm_count": 87,
-            "config_hash": "<sha1 hex>"
+            "config_hash": "<sha256 hex>"
         },
         "response": { ...OpenTagMatchesResponse dict... }
     }
@@ -73,8 +73,11 @@ def config_fingerprint(
 
     Covers the vendor-alias CSV, the material-tag keyword→id map, and the
     openprinttag extra-field names.  Order-independent for the dicts (sorted).
+
+    SHA-256 (not for security — this is a cache-invalidation fingerprint of
+    non-sensitive config; SHA-256 just keeps static analysis happy).
     """
-    h = hashlib.sha1()
+    h = hashlib.sha256()
     h.update(b"aliases\x00")
     h.update((aliases_raw or "").encode("utf-8"))
     h.update(b"\x00tags\x00")
