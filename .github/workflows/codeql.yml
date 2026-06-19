@@ -24,16 +24,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: github/codeql-action/init@v4
-        env:
-          # The log-safe-models pack is in-repo (unpublished), so point CodeQL at the
-          # extensions dir; otherwise `packs:` in config.yml tries to pull it from GHCR
-          # and fails ("not found in the registry").
-          CODEQL_ACTION_EXTRA_OPTIONS: '{"database":{"init":["--additional-packs","${{ github.workspace }}/.github/codeql/extensions"]}}'
         with:
           languages: ${{ matrix.language }}
-          # Security-focused suite (security-extended) + the in-repo model pack that
-          # marks core/log_safe.scrub() as a log-injection barrier. See config.yml.
-          config-file: ./.github/codeql/config.yml
+          # Security-focused suite; code style/quality is owned by ruff + tsc in CI.
+          queries: security-extended
 
       - uses: github/codeql-action/analyze@v4
         with:

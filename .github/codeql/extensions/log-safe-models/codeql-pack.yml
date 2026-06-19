@@ -1,7 +1,0 @@
-name: filament-bridge/log-safe-models
-version: 0.0.1
-library: true
-extensionTargets:
-  codeql/python-all: '*'
-dataExtensions:
-  - models/**/*.yml
