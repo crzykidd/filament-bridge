@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.2.1-blue)
+![version](https://img.shields.io/badge/version-0.3.0-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -56,6 +56,17 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.3.0 (2026-06-19)
+
+A big OpenPrintTag-focused release plus broad UX polish:
+
+- **OpenPrintTag Cleanup overhaul** — renamed throughout to **OpenPrintTag**; an idle landing toolbar (Refresh dataset · Match to DB · Show missing values), inline **unmatch / change-match** from the candidate dropdown, and the dropdown now shows for single-candidate brands
+- **Faster & smarter** — matching runs off the event loop (a match no longer freezes the bridge) with a cached result; **smart dataset refresh** does a cheap commit-SHA check and only re-downloads the tarball when OpenPrintTag actually changed ("Pull contents anyway" forces it)
+- **Contribution audit** — "Show missing values" now audits the OpenPrintTag database (not your spools): for the records you own it lists every supported field — across material, packages, and containers — that the community DB leaves empty, with per-field toggle chips (remembered per browser) so you decide what's worth submitting
+- **Version awareness** — an **"Update Available"** pill (daily check) and a one-time **release-notes modal after you upgrade**
+- **UX polish** — consistent **Back/Next bars on top and bottom** of every wizard/commit step; the pre-write backup prompt is now **friendly and optional** (debug actions keep a strict confirm); wizard Match **select-all** works reliably across groupings
+- **Fixes** — Dashboard spools-vs-filaments / master-count clarity (#3); tooltips no longer clipped by the sidebar/header
 
 ### v0.2.1 (2026-06-17)
 

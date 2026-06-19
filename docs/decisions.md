@@ -1,5 +1,13 @@
 # Decision record
 
+## 2026-06-19 — Defer the per-minor CHANGELOG archive (deviation from release-prep-and-cut)
+
+The adopted `release-prep-and-cut` standard archives the previous minor series into
+`docs/CHANGELOG-<minor>.x.md` on every new-minor release. For v0.3.0 we **deliberately skipped**
+that step: `CHANGELOG.md` keeps the full history (`0.2.0` + `0.2.1` + `0.3.0`) in one file. We'll
+archive at some later point, not per-minor. So a future release session should NOT "fix" the
+missing archive — the single-file changelog is intentional until we decide to split it.
+
 ## 2026-06-19 — "Missing values" report audits OpenPrintTag, not the user's spools
 
 **Context.** The completeness report had drifted into a *diff against the user's data*: each

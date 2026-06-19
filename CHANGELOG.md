@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-19
+
 ### Changed
 
 - **OpenPrintTag "missing values" report now audits OpenPrintTag, not your spools** — the
