@@ -1,0 +1,12 @@
+# Declare core/log_safe.scrub() as a log-injection sanitizer (barrier).
+# scrub() strips CR/LF + non-printable chars; CodeQL doesn't infer this from the
+# helper body, so we model its return as a barrier for the log-injection threat.
+# Requires CodeQL >= 2.25.2 (barrierModel support; bundled with codeql-action@v4).
+extensions:
+  - addsTo:
+      pack: codeql/python-all
+      extensible: barrierModel
+    data:
+      # [type, path, kind] — the value returned by app.core.log_safe.scrub is a
+      # barrier for the "log-injection" query family.
+      - ["app.core.log_safe", "Member[scrub].ReturnValue", "log-injection"]

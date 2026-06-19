@@ -1,0 +1,11 @@
+# CodeQL advanced-setup config (referenced by .github/workflows/codeql.yml).
+# Keeps the security-extended suite and loads the in-repo model pack that marks
+# core/log_safe.scrub() as a log-injection barrier (see extensions/log-safe-models).
+name: filament-bridge CodeQL config
+
+queries:
+  - uses: security-extended
+
+packs:
+  python:
+    - filament-bridge/log-safe-models

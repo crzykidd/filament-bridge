@@ -26,8 +26,9 @@ jobs:
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          # Security-focused suite; code style/quality is owned by ruff + tsc in CI.
-          queries: security-extended
+          # Security-focused suite (security-extended) + the in-repo model pack that
+          # marks core/log_safe.scrub() as a log-injection barrier. See config.yml.
+          config-file: ./.github/codeql/config.yml
 
       - uses: github/codeql-action/analyze@v4
         with:
