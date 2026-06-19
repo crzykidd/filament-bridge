@@ -24,6 +24,25 @@ GitHub release.
 
 ### Added
 
+- **OpenPrintTag dataset: ingest the full supported schema (material + packages + containers)** —
+  the dataset cache now carries the complete OpenPrintTag schema instead of a material-only
+  subset. The material parse keeps every upstream `properties` key: **distinct chamber
+  min/max** (`chamberTempMin`/`chamberTempMax`, plus the back-compat collapsed `chamberTemp`),
+  `hardnessShoreA` (alongside `hardnessShoreD`), and `heatbreakTemperature` (mapped for
+  forward-compat; absent from the current dataset). Two new tarball passes — over the *same*
+  single download — populate `packages_by_material` (`{material_slug: [package, …]}` with
+  `slug`, `uuid`, `gtin`, `brandSpecificId` (SKU), package-level `url`,
+  `nominalNettoFullWeight`, `filamentDiameter`, `filamentDiameterTolerance`, `containerSlug`)
+  and `containers_by_slug` (`uuid`, `name`, `class`, `brand`, `emptyWeight` (spool tare),
+  `outerDiameter`, `innerDiameter`, `holeDiameter`, `width`). The product URL is now correctly
+  understood to live at the *package* level. Canonical "every supported field" lists
+  (`SUPPORTED_MATERIAL_FIELDS` / `SUPPORTED_PACKAGE_FIELDS` / `SUPPORTED_CONTAINER_FIELDS`) are
+  exported as module constants for the completeness report to check emptiness against. The
+  cache file gains a `schema_version` (`CACHE_SCHEMA_VERSION`) that self-heals an older-shaped
+  cache by forcing a re-parse from the tarball (mirroring the `lexicon_version` self-heal) — no
+  manual Refresh needed. Container `emptyWeight` (= spool tare) is ingested but not yet used;
+  it is a candidate input for a future weight-model improvement.
+
 - **OpenTag Cleanup: smart dataset refresh (commit-SHA gate)** — the OpenPrintTag dataset is
   a large GitHub tarball, so the bridge no longer re-downloads it on every refresh or stale
   reload. The cache now stores the upstream `main` HEAD **commit SHA** (`commit_sha`)

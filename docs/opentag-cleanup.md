@@ -90,6 +90,37 @@ The match-result cache fingerprint keys its dataset identity off this `commit_sh
 present (falling back to `count:fetched_at` when the SHA is unknown), so a hash-only refresh
 that doesn't change the dataset doesn't spuriously invalidate the cached match.
 
+### Cached data model (full supported schema)
+
+The single tarball download is parsed into three cache structures (all in
+`opentag_cache.json`):
+
+- **`materials`** — one OPTMaterial dict per `class: FFF` material. Carries the full
+  upstream `properties` set: nozzle/bed/chamber temps (chamber now keeps **distinct
+  `chamberTempMin`/`chamberTempMax`** plus a back-compat collapsed `chamberTemp`), density,
+  drying temp/time, preheat temp, **`hardnessShoreA`** and `hardnessShoreD`, transmission
+  distance, tags, photo URL, the material-level product URL, and primary/secondary colors.
+  (`heatbreakTemperature` is mapped for forward-compat but absent from the current dataset.)
+- **`packages_by_material`** — `{ material_slug: [package, …] }` (a material has 1→N
+  packages). Each package carries `slug`, `uuid`, `gtin` (barcode), `brandSpecificId` (the
+  **SKU**), package-level `url`, `nominalNettoFullWeight`, `filamentDiameter`,
+  `filamentDiameterTolerance`, and `containerSlug` (FK into the container index). The
+  product **URL lives at the package level**, not the material level — a material with no
+  package URL but a populated `materials.productUrl` is not "missing" a URL.
+- **`containers_by_slug`** — `{ container_slug: container }`. Each container carries `uuid`,
+  `name`, `class`, `brand`, `emptyWeight` (the **spool tare** — a likely future weight-model
+  input; currently ingested but unused), `outerDiameter`, `innerDiameter`, `holeDiameter`,
+  and `width`.
+
+The canonical "every supported field" lists live as module constants in
+`backend/app/core/opentag_cache.py` — `SUPPORTED_MATERIAL_FIELDS`,
+`SUPPORTED_PACKAGE_FIELDS`, `SUPPORTED_CONTAINER_FIELDS` — and are the source of truth for
+the completeness report's emptiness checks.
+
+The cache file carries a `schema_version` (`CACHE_SCHEMA_VERSION`). Bumping it self-heals
+an older-shaped cache by forcing a re-parse from the tarball (mirroring the
+`lexicon_version` self-heal), so new fields populate without a manual Refresh.
+
 ## How matching works
 
 Per Spoolman filament:

@@ -12,10 +12,12 @@ import httpx
 import pytest
 
 from app.core.opentag_cache import (
+    CACHE_SCHEMA_VERSION,
     _fetch_from_tarball as _real_fetch_from_tarball,
     _is_stale,
     _load_cache,
     _parse_tarball,
+    _parse_tarball_full,
     _rgba_to_hex,
     _save_cache,
     get_cache_metadata,
@@ -89,6 +91,20 @@ _OPT_PLA_MATTE = {
     "bedTempMax": 60,
     "completenessScore": 80,
 }
+
+
+def _fetch_result(*materials: dict, packages=None, containers=None) -> dict:
+    """Wrap materials into the full ``_fetch_from_tarball`` / ``_parse_tarball_full``
+    return shape (``{materials, packages_by_material, containers_by_slug}``).
+
+    Used to mock ``_fetch_from_tarball`` now that it returns the full schema dict
+    instead of a bare materials list.
+    """
+    return {
+        "materials": list(materials),
+        "packages_by_material": packages or {},
+        "containers_by_slug": containers or {},
+    }
 
 
 def _sm_fil(
@@ -166,7 +182,7 @@ async def test_load_opentag_dataset_uses_cache_when_fresh(tmp_path):
 
     with _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
         fetch_mock.assert_not_called()
@@ -185,7 +201,7 @@ async def test_load_opentag_dataset_fetches_when_stale(tmp_path):
 
     with _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG, _OPT_PLA_MATTE)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
         fetch_mock.assert_called_once()
@@ -201,7 +217,7 @@ async def test_load_opentag_dataset_force_refresh(tmp_path):
 
     with _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=True)
         fetch_mock.assert_called_once()
@@ -251,7 +267,7 @@ async def test_sha_unchanged_bumps_age_no_download(tmp_path):
         AsyncMock(return_value=_SHA_A),
     ), _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG, _OPT_PLA_MATTE)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
         fetch_mock.assert_not_called()
@@ -277,7 +293,7 @@ async def test_sha_changed_downloads(tmp_path):
         AsyncMock(return_value=_SHA_B),
     ), _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG, _OPT_PLA_MATTE]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG, _OPT_PLA_MATTE)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
         fetch_mock.assert_called_once()
@@ -300,7 +316,7 @@ async def test_force_pull_downloads_even_when_sha_matches(tmp_path):
         "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
     ), _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force_pull=True)
         fetch_mock.assert_called_once()
@@ -322,7 +338,7 @@ async def test_missing_stored_sha_downloads(tmp_path):
         "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
     ), _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
         fetch_mock.assert_called_once()
@@ -346,7 +362,7 @@ async def test_sha_check_failure_falls_back_to_download(tmp_path):
         AsyncMock(return_value=None),
     ), _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force_check=True)
         fetch_mock.assert_called_once()
@@ -365,7 +381,7 @@ async def test_fresh_cache_no_check_serves_without_sha_call(tmp_path):
         "app.core.opentag_cache.get_upstream_commit_sha", sha_mock,
     ), _patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24)
         sha_mock.assert_not_called()
@@ -1421,7 +1437,7 @@ async def test_openprinttag_refresh_route_responds(tmp_path):
     original_data_dir = _ot_mod._settings.data_dir
     _ot_mod._settings.data_dir = str(tmp_path)
     try:
-        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK))):
             client = TestClient(test_app)
             resp = client.post("/api/openprinttag/refresh")
             assert resp.status_code == 200
@@ -1463,7 +1479,7 @@ async def test_openprinttag_status_reports_persisted_last_count(tmp_path, monkey
     test_app.state.filamentdb = AsyncMock()
     test_app.state.spoolman = AsyncMock()
 
-    with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG])):
+    with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK, _OPT_PETG))):
         client = TestClient(test_app)
 
         # Fresh: no cache, nothing persisted yet.
@@ -1763,7 +1779,7 @@ async def test_cache_self_heals_when_materials_are_strings(tmp_path):
 
     with patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PLA_SILK, _OPT_PETG]),
+        AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK, _OPT_PETG)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
@@ -1786,7 +1802,7 @@ async def test_cache_self_heals_when_materials_is_empty_list(tmp_path):
 
     with patch(
         "app.core.opentag_cache._fetch_from_tarball",
-        AsyncMock(return_value=[_OPT_PLA_SILK]),
+        AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK)),
     ) as fetch_mock:
         result = await load_opentag_dataset(str(tmp_path), 24, force=False)
 
@@ -1909,7 +1925,7 @@ async def test_matches_returns_200_when_cache_has_malformed_data(tmp_path):
     try:
         with patch(
             "app.core.opentag_cache._fetch_from_tarball",
-            AsyncMock(return_value=[_OPT_PLA_SILK]),
+            AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK)),
         ) as fetch_mock:
             client = TestClient(test_app, raise_server_exceptions=True)
             resp = client.get("/api/openprinttag/matches")
@@ -3948,11 +3964,15 @@ def test_rgba_to_hex_none_returns_none():
 def _build_test_tar(
     materials: list[dict],
     brands: list[dict] | None = None,
+    packages: list[dict] | None = None,
+    containers: list[dict] | None = None,
 ) -> bytes:
     """Build an in-memory gzipped tarball with OPT-shaped ``data/`` entries.
 
-    ``materials`` → ``data/materials/brand/material_N.yaml``
-    ``brands``    → ``data/brands/brand_N.yaml`` (optional)
+    ``materials``  → ``data/materials/brand/material_N.yaml``
+    ``brands``     → ``data/brands/brand_N.yaml`` (optional)
+    ``packages``   → ``data/material-packages/brand/package_N.yaml`` (optional)
+    ``containers`` → ``data/material-containers/container_N.yaml`` (optional)
     """
     import io as _io
     import tarfile as _tarfile
@@ -3960,20 +3980,26 @@ def _build_test_tar(
 
     buf = _io.BytesIO()
     with _tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        def _add(name: str, doc: dict) -> None:
+            content = _yaml.dump(doc).encode()
+            info = _tarfile.TarInfo(name=name)
+            info.size = len(content)
+            tf.addfile(info, _io.BytesIO(content))
+
         for i, mat in enumerate(materials):
-            content = _yaml.dump(mat).encode()
-            info = _tarfile.TarInfo(
-                name=f"openprinttag-database-main/data/materials/brand/material_{i}.yaml"
-            )
-            info.size = len(content)
-            tf.addfile(info, _io.BytesIO(content))
+            _add(f"openprinttag-database-main/data/materials/brand/material_{i}.yaml", mat)
         for i, brand in enumerate(brands or []):
-            content = _yaml.dump(brand).encode()
-            info = _tarfile.TarInfo(
-                name=f"openprinttag-database-main/data/brands/brand_{i}.yaml"
+            _add(f"openprinttag-database-main/data/brands/brand_{i}.yaml", brand)
+        for i, pkg in enumerate(packages or []):
+            _add(
+                f"openprinttag-database-main/data/material-packages/brand/package_{i}.yaml",
+                pkg,
             )
-            info.size = len(content)
-            tf.addfile(info, _io.BytesIO(content))
+        for i, cont in enumerate(containers or []):
+            _add(
+                f"openprinttag-database-main/data/material-containers/container_{i}.yaml",
+                cont,
+            )
     return buf.getvalue()
 
 
@@ -4120,6 +4146,173 @@ def test_parse_tarball_transmission_distance_top_level():
 
 
 # ---------------------------------------------------------------------------
+# Full schema: extended material properties + packages + containers
+# ---------------------------------------------------------------------------
+
+
+def test_parse_full_extended_material_properties():
+    """Material parse keeps the full upstream property set: distinct chamber
+    min/max, hardness Shore A, and the material-level url → productUrl."""
+    materials = [
+        {
+            "uuid": "ext-uuid",
+            "slug": "brand-tpu-a95",
+            "class": "FFF",
+            "brand": {"slug": "brand"},
+            "name": "TPU A95",
+            "type": "TPU",
+            "url": "https://example.com/tpu",
+            "properties": {
+                "hardness_shore_a": 95,
+                "hardness_shore_d": 50,
+                "min_chamber_temperature": 25,
+                "max_chamber_temperature": 45,
+            },
+        }
+    ]
+    mat = _parse_tarball(_build_test_tar(materials))[0]
+    assert mat["hardnessShoreA"] == 95
+    assert mat["hardnessShoreD"] == 50
+    # Chamber min/max distinct, plus back-compat collapsed value (= min).
+    assert mat["chamberTempMin"] == 25
+    assert mat["chamberTempMax"] == 45
+    assert mat["chamberTemp"] == 25
+    assert mat["productUrl"] == "https://example.com/tpu"
+    # heatbreak_temperature is not in the dataset → forward-compat None.
+    assert mat["heatbreakTemperature"] is None
+
+
+def test_parse_full_packages_and_containers():
+    """packages_by_material keyed by material.slug, containers_by_slug by container slug.
+
+    Mirrors the live ELEGOO PLA Red 1kg package + cardboard spool container.
+    """
+    materials = [
+        {
+            "uuid": "m-uuid",
+            "slug": "elegoo-pla-red",
+            "class": "FFF",
+            "brand": {"slug": "elegoo"},
+            "name": "PLA Red",
+            "type": "PLA",
+        }
+    ]
+    packages = [
+        {
+            "slug": "elegoo-pla-red-1kg",
+            "class": "FFF",
+            "brand_specific_id": "SPUS-EL-3D-P06",
+            "url": "https://us.elegoo.com/products/pla?variant=43734133833909",
+            "material": {"slug": "elegoo-pla-red"},
+            "nominal_netto_full_weight": 1000,
+            "container": {"slug": "elegoo-cardboard-spool-1kg"},
+            "filament_diameter": 1750,
+            # NOTE: no gtin, no filament_diameter_tolerance (ELEGOO gap).
+        }
+    ]
+    containers = [
+        {
+            "uuid": "53bc78b9-d70f-45cd-a4ec-6db1035100e8",
+            "slug": "elegoo-cardboard-spool-1kg",
+            "name": "ELEGOO Cardboard Spool 1kg",
+            "class": "FFF",
+            "brand": {"slug": "elegoo"},
+            "hole_diameter": 54,
+            "outer_diameter": 200,
+            "width": 65,
+            "empty_weight": 154,
+        }
+    ]
+    parsed = _parse_tarball_full(
+        _build_test_tar(materials, packages=packages, containers=containers)
+    )
+
+    pkgs = parsed["packages_by_material"]["elegoo-pla-red"]
+    assert len(pkgs) == 1
+    pkg = pkgs[0]
+    assert pkg["slug"] == "elegoo-pla-red-1kg"
+    assert pkg["brandSpecificId"] == "SPUS-EL-3D-P06"
+    assert pkg["url"] is not None
+    assert pkg["gtin"] is None  # ELEGOO has no GTIN — a real contributable gap
+    assert pkg["filamentDiameterTolerance"] is None
+    assert pkg["nominalNettoFullWeight"] == 1000
+    assert pkg["filamentDiameter"] == 1750
+    assert pkg["containerSlug"] == "elegoo-cardboard-spool-1kg"
+
+    cont = parsed["containers_by_slug"]["elegoo-cardboard-spool-1kg"]
+    assert cont["emptyWeight"] == 154  # spool tare
+    assert cont["outerDiameter"] == 200
+    assert cont["holeDiameter"] == 54
+    assert cont["width"] == 65
+    assert cont["brand"] == "elegoo"
+    assert cont["innerDiameter"] is None  # absent in this container
+
+
+@pytest.mark.asyncio
+async def test_cache_self_heals_from_old_schema(tmp_path):
+    """An old-shape cache (no schema_version / no packages) re-parses from the
+    tarball when CACHE_SCHEMA_VERSION bumps — even though it is still fresh."""
+    import json as _json
+    from pathlib import Path as _Path
+    from unittest.mock import patch as _patch
+
+    # Write a v1-shaped cache by hand: fresh timestamp, valid materials, but no
+    # schema_version and no packages/containers keys.
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    legacy = {
+        "fetched_at": fresh_ts,
+        "count": 1,
+        "commit_sha": "c" * 40,
+        "materials": [_OPT_PLA_SILK],
+        "lexicon_version": 0,
+    }
+    cache_path = _Path(tmp_path) / "opentag_cache.json"
+    cache_path.write_text(_json.dumps(legacy))
+
+    fetch_mock = AsyncMock(
+        return_value=_fetch_result(
+            _OPT_PETG,
+            packages={"elegoo-petg-red": [{"slug": "p1"}]},
+            containers={"c1": {"slug": "c1", "emptyWeight": 200}},
+        )
+    )
+    with _patch("app.core.opentag_cache._fetch_from_tarball", fetch_mock), _patch(
+        "app.core.opentag_cache.get_upstream_commit_sha",
+        AsyncMock(return_value="d" * 40),
+    ):
+        result = await load_opentag_dataset(str(tmp_path), 24)
+        # Schema outdated → forced download despite being fresh.
+        fetch_mock.assert_called_once()
+
+    assert result["schema_version"] == CACHE_SCHEMA_VERSION
+    assert result["packages_by_material"] == {"elegoo-petg-red": [{"slug": "p1"}]}
+    assert result["containers_by_slug"]["c1"]["emptyWeight"] == 200
+    loaded = _load_cache(str(tmp_path))
+    assert loaded["schema_version"] == CACHE_SCHEMA_VERSION
+
+
+def test_save_load_round_trips_packages_and_containers(tmp_path):
+    """_save_cache / _load_cache / get_cache_metadata carry the new keys."""
+    fresh_ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_cache(
+        str(tmp_path),
+        [_OPT_PLA_SILK],
+        fresh_ts,
+        packages_by_material={"slug-a": [{"slug": "pkg-a"}]},
+        containers_by_slug={"cont-a": {"slug": "cont-a", "emptyWeight": 154}},
+    )
+    loaded = _load_cache(str(tmp_path))
+    assert loaded["schema_version"] == CACHE_SCHEMA_VERSION
+    assert loaded["packages_by_material"] == {"slug-a": [{"slug": "pkg-a"}]}
+    assert loaded["containers_by_slug"]["cont-a"]["emptyWeight"] == 154
+
+    meta = get_cache_metadata(str(tmp_path), 24)
+    assert meta["schema_version"] == CACHE_SCHEMA_VERSION
+    assert meta["package_material_count"] == 1
+    assert meta["container_count"] == 1
+
+
+# ---------------------------------------------------------------------------
 # _fetch_from_tarball — injectable HTTP client tests
 # ---------------------------------------------------------------------------
 
@@ -4151,8 +4344,10 @@ async def test_fetch_from_tarball_calls_github_and_parses():
     result = await _real_fetch_from_tarball(http=fake_http)
 
     fake_http.get.assert_called_once()
-    assert len(result) == 1
-    assert result[0]["uuid"] == "fetch-uuid"
+    # _fetch_from_tarball now returns the full schema dict, not a bare list.
+    assert set(result) == {"materials", "packages_by_material", "containers_by_slug"}
+    assert len(result["materials"]) == 1
+    assert result["materials"][0]["uuid"] == "fetch-uuid"
 
 
 @pytest.mark.asyncio
@@ -5865,7 +6060,7 @@ async def test_matches_sets_has_update_for_drifted_tagged_filament(tmp_path):
     test_app.state.filamentdb = AsyncMock()
 
     try:
-        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK))):
             client = TestClient(test_app)
             resp = client.get("/api/openprinttag/matches")
             assert resp.status_code == 200, resp.text
@@ -5915,7 +6110,7 @@ async def test_matches_excludes_ignored_filament_from_updates_count(tmp_path):
     test_app.state.filamentdb = AsyncMock()
 
     try:
-        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=[_OPT_PLA_SILK])):
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=_fetch_result(_OPT_PLA_SILK))):
             client = TestClient(test_app)
             resp = client.get("/api/openprinttag/matches")
             assert resp.status_code == 200, resp.text

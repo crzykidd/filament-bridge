@@ -1,5 +1,45 @@
 # Decision record
 
+## 2026-06-19 — OpenPrintTag dataset: ingest the full supported schema (material + packages + containers)
+
+**Context.** The completeness report must show *every* OpenPrintTag-supported field that's
+empty for a matched record, and the per-record contribution UI needs the real source-of-truth
+fields. The parser kept only a material subset and dropped the **package** and **container**
+layers entirely. That both omitted real gaps and *mis-reported* — e.g. flagging "Product URL
+missing" when the URL actually lives at the package level, and collapsing chamber temp to a
+single value.
+
+**Decision.**
+- **Material parse keeps the full upstream `properties` set.** Added `hardnessShoreA`,
+  `heatbreakTemperature`, and **distinct** `chamberTempMin`/`chamberTempMax` (kept the
+  collapsed `chamberTemp` for back-compat so the matcher and existing consumers are
+  untouched). The material-level `url` already maps to `productUrl`. ADD-only — no existing
+  key renamed.
+- **Two new tarball passes over the same single download** build `packages_by_material`
+  (`{material_slug: [package…]}`, 1→N per material: `slug`, `uuid`, `gtin`, `brandSpecificId`
+  (SKU), package `url`, `nominalNettoFullWeight`, `filamentDiameter`,
+  `filamentDiameterTolerance`, `containerSlug`) and `containers_by_slug` (`uuid`, `name`,
+  `class`, `brand`, `emptyWeight`, `outerDiameter`, `innerDiameter`, `holeDiameter`, `width`).
+  No second fetch.
+- **Canonical supported-field schema** lives as module constants in `opentag_cache.py`
+  (`SUPPORTED_MATERIAL_FIELDS` / `SUPPORTED_PACKAGE_FIELDS` / `SUPPORTED_CONTAINER_FIELDS`) —
+  the single source of truth the completeness report (next task) checks emptiness against.
+- **Cache shape is versioned** via `CACHE_SCHEMA_VERSION` (currently 2). An older-shaped
+  cache (no `schema_version`, no packages) is treated like a missing cache → forced re-parse
+  from the tarball, mirroring the `lexicon_version` self-heal. `_save_cache`/`_load_cache`/
+  `get_cache_metadata` carry the new keys; `materials`/`commit_sha`/`fetched_at` untouched.
+
+**Notes / deviations.**
+- `heatbreak_temperature` was named in the source prompt's verified facts but does **not**
+  exist anywhere in the current upstream dataset (confirmed: zero occurrences across 13k+
+  materials; `preheat_temperature` is the only heat-related key). The key is still mapped for
+  forward-compatibility but is always `None` today.
+- Container `emptyWeight` is the **spool tare** — a strong candidate input for a future
+  weight-model improvement (today the bridge defaults missing tare to ~200 g). Ingested now,
+  **out of scope** for any weight-model change here.
+- FFF-only filter unchanged: ~12.9k of 13.1k materials kept; ~2.8k materials carry packages;
+  78 containers.
+
 ## 2026-06-18 — Parent/variant + OpenPrintTag rework: PARKED, blocked on upstream
 
 The bridge currently writes all material props + OpenPrintTag identity on each **variant** and
