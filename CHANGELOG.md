@@ -9,6 +9,10 @@ GitHub release.
 
 ## [Unreleased]
 
+### Changed
+
+- **UI: renamed "OpenTag" → "OpenPrintTag" in all user-facing strings** — nav label, page title, button tooltips, table headers, status banners, and doc H1/link labels now read "OpenPrintTag". Component filenames, routes, API paths, TS identifiers, config keys, and extra-field names are unchanged.
+
 ### Fixed
 
 - **Wizard Match step: the top "select all" now reliably selects and clears** — unselectable

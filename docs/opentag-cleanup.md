@@ -1,4 +1,4 @@
-# OpenTag Cleanup tool
+# OpenPrintTag Cleanup tool
 
 A standalone, on-demand tool that matches your Spoolman filaments against the
 [OpenPrintTag](https://openprinttag.org) community database, lets you review every proposed

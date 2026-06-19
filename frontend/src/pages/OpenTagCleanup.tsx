@@ -214,7 +214,7 @@ function OpenTagStampedBadge({ existingUuid, dataDiffers }: { existingUuid: stri
     return (
       <span
         className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700"
-        title="Tagged in OpenPrintTag — Spoolman data differs from OpenTag"
+        title="Tagged in OpenPrintTag — Spoolman data differs from OpenPrintTag"
       >
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
           <path d="M2 3a1 1 0 0 1 1-1h4.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 0 1.414l-4.586 4.586a1 1 0 0 1-1.414 0L2.293 8.293A1 1 0 0 1 2 7.586V3Z" />
@@ -349,7 +349,7 @@ function FilamentCard({
           {displayMulticolorMismatch && (
             <span
               className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 text-xs font-medium"
-              title="Spoolman has multicolor data but the matched OpenTag entry is single-color"
+              title="Spoolman has multicolor data but the matched OpenPrintTag entry is single-color"
             >
               multicolor mismatch
             </span>
@@ -378,7 +378,7 @@ function FilamentCard({
               ))}
               {/* Unmatch is only meaningful for rows that already carry an OPT identity. */}
               {existingUuid && (
-                <option value={UNMATCH_IDX}>— unmatch (clear OpenTag identity) —</option>
+                <option value={UNMATCH_IDX}>— unmatch (clear OpenPrintTag identity) —</option>
               )}
             </select>
           )}
@@ -401,7 +401,7 @@ function FilamentCard({
           <span className="inline-flex items-center">
             {confidenceBadge(displayConfidence)}
             <HelpTip
-              text="Match score vs the OpenTag entry: material, brand, color name, color hex, and finish all contribute. Below 30% = unmatched."
+              text="Match score vs the OpenPrintTag entry: material, brand, color name, color hex, and finish all contribute. Below 30% = unmatched."
               learnMoreHref="/docs/opentag-cleanup"
             />
           </span>
@@ -448,12 +448,12 @@ function FilamentCard({
               className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
               onClick={() => setShowSearch(true)}
             >
-              🔍 Wrong match? Search OpenTag manually…
+              🔍 Wrong match? Search OpenPrintTag manually…
             </button>
           ) : (
             <div className="space-y-2">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Search OpenTag</span>
+                <span className="text-xs font-medium text-gray-600 dark:text-gray-300">Search OpenPrintTag</span>
                 <button
                   type="button"
                   className="text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
@@ -527,7 +527,7 @@ function FilamentCard({
               <tr className="bg-gray-50 dark:bg-gray-900/40 text-xs text-gray-500 dark:text-gray-400 uppercase">
                 <th className="px-3 py-1 text-left">Field</th>
                 <th className="px-3 py-1 text-left">Spoolman</th>
-                <th className="px-3 py-1 text-left">OpenTag</th>
+                <th className="px-3 py-1 text-left">OpenPrintTag</th>
                 <th className="px-3 py-1 text-left">Use value</th>
                 <th className="px-3 py-1 text-left" />
               </tr>
@@ -598,7 +598,7 @@ function ConfirmStep({
           name: m.spoolman_name,
           field: 'unmatch',
           oldValue: 'tagged',
-          newValue: 'clear OpenTag identity',
+          newValue: 'clear OpenPrintTag identity',
         })
         continue
       }
@@ -938,7 +938,7 @@ function UpdatesReviewRow({
               <tr className="bg-gray-50 dark:bg-gray-900/40 text-gray-500 dark:text-gray-400 uppercase">
                 <th className="px-3 py-1 text-left">Field</th>
                 <th className="px-3 py-1 text-left">Current (Spoolman)</th>
-                <th className="px-3 py-1 text-left">Updated (OpenTag)</th>
+                <th className="px-3 py-1 text-left">Updated (OpenPrintTag)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
@@ -1142,7 +1142,7 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
           ← Back
         </button>
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          Review OpenTag updates
+          Review OpenPrintTag updates
         </h2>
         <span className="text-sm text-gray-500 dark:text-gray-400">
           {displayMatches.length} filament{displayMatches.length !== 1 ? 's' : ''} with updated values
@@ -1150,7 +1150,7 @@ function UpdatesReviewSection({ matches, onBack, onApplied }: UpdatesReviewProps
       </div>
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
         These filaments are already tagged with an OpenPrintTag UUID but their Spoolman
-        data differs from the latest OpenTag dataset. Select the ones you want to update
+        data differs from the latest OpenPrintTag dataset. Select the ones you want to update
         and click <strong>Apply selected</strong>.
       </p>
 
@@ -1629,7 +1629,7 @@ export default function OpenTagCleanup() {
         const recordHint = known > 0 ? `${known.toLocaleString()}+ records` : 'thousands of records'
         setStatusMsg(
           datasetMode === 'pull'
-            ? `Downloading the OpenTag dataset from OpenPrintTag… (${recordHint} — up to a minute)`
+            ? `Downloading the OpenPrintTag dataset from OpenPrintTag… (${recordHint} — up to a minute)`
             : 'Checking OpenPrintTag for updates…',
         )
         const meta = await postOpenTagRefresh(datasetMode === 'pull')
@@ -1907,15 +1907,15 @@ export default function OpenTagCleanup() {
     <>
     <BackupSafetyDialog
       open={showBackupDialog}
-      actionLabel="Apply OpenTag writes"
+      actionLabel="Apply OpenPrintTag writes"
       onCancel={() => setShowBackupDialog(false)}
       onProceed={() => { setShowBackupDialog(false); void runApply() }}
     />
     <div className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">OpenTag Cleanup</h1>
+      <h1 className="text-2xl font-bold mb-1 text-gray-900 dark:text-gray-100">OpenPrintTag Cleanup</h1>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Match your Spoolman filaments against the OpenPrintTag database, review field
-        differences, and apply canonical data — including pushing OpenTag identity into
+        differences, and apply canonical data — including pushing OpenPrintTag identity into
         Filament DB.
       </p>
 
@@ -1930,7 +1930,7 @@ export default function OpenTagCleanup() {
           }`}
           onClick={() => void handleRefresh()}
           disabled={working}
-          title="Re-download the OpenTag dataset from OpenPrintTag, then reprocess"
+          title="Re-download the OpenPrintTag dataset from OpenPrintTag, then reprocess"
         >
           Refresh dataset
         </button>
@@ -1943,7 +1943,7 @@ export default function OpenTagCleanup() {
           }`}
           onClick={handleMatchToDb}
           disabled={working}
-          title="Scan Spoolman filaments and match against the OpenTag dataset"
+          title="Scan Spoolman filaments and match against the OpenPrintTag dataset"
         >
           Match to DB
         </button>
@@ -1966,7 +1966,7 @@ export default function OpenTagCleanup() {
         {cacheStatus?.exists ? (
           <>
             <span className="text-sm text-gray-600 dark:text-gray-300">
-              OpenTag dataset: <strong>{cacheStatus.count}</strong> materials
+              OpenPrintTag dataset: <strong>{cacheStatus.count}</strong> materials
             </span>
             <span className="text-sm text-gray-500 dark:text-gray-400">
               fetched {formatAge(cacheStatus.fetched_at)}
@@ -1985,7 +1985,7 @@ export default function OpenTagCleanup() {
                 className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                 onClick={() => void handleForcePull()}
                 disabled={working}
-                title="Force a full re-download of the OpenTag dataset even though the upstream commit is unchanged"
+                title="Force a full re-download of the OpenPrintTag dataset even though the upstream commit is unchanged"
               >
                 Pull contents anyway
               </button>

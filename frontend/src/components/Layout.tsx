@@ -221,7 +221,7 @@ const NAV_ITEMS = [
   { to: '/conflicts', label: 'Conflicts', exact: false },
   { to: '/sync-log', label: 'Sync Log', exact: false },
   { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
-  { to: '/opentag-cleanup', label: 'OpenTag Cleanup', exact: false },
+  { to: '/opentag-cleanup', label: 'OpenPrintTag Cleanup', exact: false },
 ]
 
 function navClass({ isActive }: { isActive: boolean }) {
