@@ -905,6 +905,9 @@ export interface VersionInfo {
   release_url: string | null
   release_name: string | null
   release_notes: string | null
+  current_release_url: string | null
+  current_release_name: string | null
+  current_release_notes: string | null
   channel: string
   commit: string | null
   build: string

@@ -39,6 +39,17 @@ GitHub release.
 
 ### Added
 
+- **Version badge: "Update Available" pill + daily check + post-upgrade release notes modal** —
+  the update-available pill label changed from "↑ vX.Y.Z" to **"Update Available"** (version
+  stays in the hover title); the GitHub check TTL increased from 6 h to **24 h** (lazy-on-load,
+  no scheduler). `GET /api/version` now also fetches the **running** version's GitHub release
+  via `/releases/tags/v{current}` and returns three new fields: `current_release_notes`,
+  `current_release_name`, `current_release_url` (all `null` on 404/dev/failure). On the
+  frontend, a second independent `localStorage` key (`fb_last_running_version`) triggers a
+  one-time modal showing the now-running version's release notes after an upgrade; first run
+  silently seeds the key with no modal; post-upgrade modal takes precedence over the
+  update-available modal when both could fire.
+
 - **OpenPrintTag dataset: ingest the full supported schema (material + packages + containers)** —
   the dataset cache now carries the complete OpenPrintTag schema instead of a material-only
   subset. The material parse keeps every upstream `properties` key: **distinct chamber

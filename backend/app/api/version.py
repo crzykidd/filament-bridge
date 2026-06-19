@@ -2,7 +2,7 @@
 
 Public endpoint (no auth required): current version / channel / commit are not
 sensitive, and the badge must be visible even if the session has expired.
-Caches the GitHub releases API response in-memory for 6 hours; degrades
+Caches the GitHub releases API response in-memory for 24 hours; degrades
 gracefully on any network or parse error.
 """
 
@@ -22,10 +22,14 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _GITHUB_URL = "https://api.github.com/repos/crzykidd/filament-bridge/releases/latest"
-_TTL_SECONDS = 6 * 3600  # 6 hours
+_GITHUB_TAG_URL = "https://api.github.com/repos/crzykidd/filament-bridge/releases/tags/v{version}"
+_TTL_SECONDS = 24 * 3600  # 24 hours
 
 # Module-level cache: {"result": {...}, "fetched_at": float}
 _cache: dict[str, Any] = {}
+
+# Module-level cache for current-version release: {"result": {...}, "fetched_at": float}
+_current_cache: dict[str, Any] = {}
 
 
 def _parse_semver(v: str) -> tuple[int, ...] | None:
@@ -83,6 +87,39 @@ def _fetch_github() -> dict[str, Any]:
     }
 
 
+def _fetch_github_by_tag(version: str) -> dict[str, Any] | None:
+    """Call the GitHub releases/tags API for a specific version tag.
+
+    Returns parsed fields on success, or None on 404 (untagged/dev build)
+    or any other error. Never raises.
+    """
+    url = _GITHUB_TAG_URL.format(version=version)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "filament-bridge",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = json_loads(resp.read().decode())
+        return {
+            "current_release_url": body.get("html_url"),
+            "current_release_name": body.get("name"),
+            "current_release_notes": body.get("body"),
+        }
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            logger.debug("GitHub tag v%s not found (untagged/dev build)", version)
+        else:
+            logger.warning("GitHub tag fetch for v%s failed: %s", version, exc)
+        return None
+    except (urllib.error.URLError, TimeoutError, JSONDecodeError, KeyError, OSError) as exc:
+        logger.warning("GitHub tag fetch for v%s failed: %s", version, exc)
+        return None
+
+
 def _refresh_cache() -> None:
     """Attempt to refresh the in-memory cache from GitHub.
 
@@ -98,6 +135,18 @@ def _refresh_cache() -> None:
         logger.warning("GitHub release check failed: %s", exc)
 
 
+def _refresh_current_cache(version: str) -> None:
+    """Attempt to refresh the current-version release cache from GitHub.
+
+    On failure or 404, stores null result so we don't hammer GitHub on every
+    request for untagged/dev builds. The null result expires like any other entry.
+    """
+    data = _fetch_github_by_tag(version)
+    # Store even None result (with timestamp) so TTL applies to 404s too
+    _current_cache["result"] = data  # None means not found / error
+    _current_cache["fetched_at"] = time.monotonic()
+
+
 def _cached_github() -> dict[str, Any]:
     """Return the cached GitHub result, refreshing if stale or absent."""
     now = time.monotonic()
@@ -105,6 +154,15 @@ def _cached_github() -> dict[str, Any]:
     if fetched_at is None or (now - fetched_at) > _TTL_SECONDS:
         _refresh_cache()
     return _cache.get("result") or {}
+
+
+def _cached_current_release(version: str) -> dict[str, Any] | None:
+    """Return the cached current-version release, refreshing if stale or absent."""
+    now = time.monotonic()
+    fetched_at = _current_cache.get("fetched_at")
+    if fetched_at is None or (now - fetched_at) > _TTL_SECONDS:
+        _refresh_current_cache(version)
+    return _current_cache.get("result")  # may be None (404/error)
 
 
 def _build_label(current: str) -> str:
@@ -134,6 +192,10 @@ async def get_version() -> dict:
         # Dev builds are typically ahead of the latest release; suppress the nag.
         update_available = False
 
+    # Fetch the running version's own GitHub release (for post-upgrade notes).
+    # Returns None on dev/untagged builds (404) or any network failure — never 5xx.
+    current_release = _cached_current_release(current) if not is_dev else None
+
     return {
         "current": current,
         "latest": latest,
@@ -141,6 +203,9 @@ async def get_version() -> dict:
         "release_url": gh.get("release_url"),
         "release_name": gh.get("release_name"),
         "release_notes": gh.get("release_notes"),
+        "current_release_url": current_release.get("current_release_url") if current_release else None,
+        "current_release_name": current_release.get("current_release_name") if current_release else None,
+        "current_release_notes": current_release.get("current_release_notes") if current_release else None,
         "channel": __channel__,
         "commit": __commit__,
         "build": build,
