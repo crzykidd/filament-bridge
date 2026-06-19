@@ -16,6 +16,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
+      packages: read  # pull the log-safe-models CodeQL pack from GHCR
     strategy:
       fail-fast: false
       matrix:
@@ -26,8 +27,9 @@ jobs:
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          # Security-focused suite; code style/quality is owned by ruff + tsc in CI.
-          queries: security-extended
+          # Query suite + the log-safe-models barrier pack (pulled from GHCR using
+          # the default workflow token, which can read the repo-linked package).
+          config-file: ./.github/codeql/config.yml
 
       - uses: github/codeql-action/analyze@v4
         with:

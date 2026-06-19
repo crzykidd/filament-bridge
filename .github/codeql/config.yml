@@ -1,0 +1,18 @@
+# CodeQL analysis config for filament-bridge.
+#
+# - queries: the security-focused suite (code style/quality is owned by ruff + tsc).
+# - packs (python): the in-repo log-safe-models model pack, published to GHCR by
+#   .github/workflows/codeql-pack-publish.yml. It declares core/log_safe.scrub()
+#   a log-injection barrier so scrub()-sanitized log values stop producing
+#   py/log-injection false positives. Pinned exactly — bump in lockstep with the
+#   `version` in the pack's codeql-pack.yml after republishing.
+#   The analysis pulls this private package using the workflow token, so the
+#   CodeQL job must grant `packages: read`.
+name: filament-bridge CodeQL config
+
+queries:
+  - uses: security-extended
+
+packs:
+  python:
+    - crzykidd/log-safe-models@1.0.0
