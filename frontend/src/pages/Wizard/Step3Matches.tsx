@@ -5,7 +5,7 @@ import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import { HelpTip } from '../../components/HelpTip'
 import { WizardActionBar } from '../../components/WizardActionBar'
-import type { FilamentRef, MatchDecision } from '../../api/types'
+import type { FilamentRef, MatchDecision, WizardMatchesResponse } from '../../api/types'
 import type { WizardCtx } from './index'
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -90,6 +90,42 @@ function isIncluded(r: FlatRow, decisions: Record<number, MatchDecision>): boole
   if (r.status === 'unmatched_sm') return (d?.action ?? 'create') !== 'skip'
   if (r.status === 'ambiguous') return d?.action === 'link'
   return false
+}
+
+/**
+ * Assemble the MatchDecision[] to persist from the loaded match data + the user's
+ * per-row toggles. Mirrors what the checkboxes display:
+ *   - matched rows default to `link` when untouched,
+ *   - unmatched Spoolman rows default to `create` when untouched (they render
+ *     checked-by-default), and
+ *   - ambiguous rows have no safe default, so only explicit picks are persisted.
+ * Exported for unit testing — the untouched-unmatched default is load-bearing:
+ * without it, a user who clicks Next without toggling each new color imports nothing.
+ */
+export function buildSaveDecisions(
+  data: WizardMatchesResponse,
+  decisions: Record<number, MatchDecision>,
+): MatchDecision[] {
+  const all: MatchDecision[] = []
+  for (const p of data.matched) {
+    const id = p.spoolman.spoolman_filament_id!
+    all.push(
+      decisions[id] ?? {
+        spoolman_filament_id: id,
+        action: 'link',
+        filamentdb_id: p.filamentdb.filamentdb_filament_id,
+      },
+    )
+  }
+  for (const s of data.unmatched_spoolman) {
+    const id = s.spoolman_filament_id!
+    all.push(decisions[id] ?? { spoolman_filament_id: id, action: 'create' })
+  }
+  for (const a of data.ambiguous) {
+    const d = decisions[a.spoolman.spoolman_filament_id!]
+    if (d) all.push(d)
+  }
+  return all
 }
 
 function triState(flags: boolean[]) {
@@ -456,13 +492,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   async function handleSave() {
     if (!data) return
     setSaving(true); setSaveErr(null)
-    const all: MatchDecision[] = []
-    for (const p of data.matched) {
-      const id = p.spoolman.spoolman_filament_id!
-      all.push(decisions[id] ?? { spoolman_filament_id: id, action: 'link', filamentdb_id: p.filamentdb.filamentdb_filament_id })
-    }
-    for (const s of data.unmatched_spoolman) { const d = decisions[s.spoolman_filament_id!]; if (d) all.push(d) }
-    for (const a of data.ambiguous) { const d = decisions[a.spoolman.spoolman_filament_id!]; if (d) all.push(d) }
+    const all = buildSaveDecisions(data, decisions)
     try { await postWizardMatches({ decisions: all }); next() }
     catch (e) { setSaveErr(e instanceof Error ? e.message : String(e)) }
     finally { setSaving(false) }
