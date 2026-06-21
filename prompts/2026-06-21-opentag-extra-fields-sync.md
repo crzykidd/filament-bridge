@@ -93,17 +93,23 @@ Already native/synced: type, color, secondaryColors, density, bedTempMax, diamet
 native Spoolman targets (no extra field) but aren't populated from OPT today and need the
 package/container lookup. Better weight-model accuracy; decide separately.
 
-**Decisions needed before Phase 2 (USER SIGN-OFF):**
-1. Approve the 7-field set above (add/drop any)?
-2. Extra-field **type**: keep the existing all-`text` pattern (JSON-encoded) or introduce typed
-   integer/float fields? (All current bridge extras are `text`.)
-3. **Write entry point**: populate via the explicit OpenTag **Apply** flow (review/confirm —
-   recommended, matches current OPT behavior) or automatically each sync cycle (`_sync_opentag_identity`)?
-4. **Direction/precedence**: ride the existing material-properties category (obeys its
-   direction/conflict policy) or a new category? OPT-wins silently or surface a conflict when FDB
-   was manually edited? Honor `should_skip_inherited` for variants + the both-snapshots refresh
-   (anti-ping-pong) on every FDB write.
-5. Confirm FDB `dryingTime` unit is hours (apply ÷60) before mapping.
+**Decisions — SIGNED OFF 2026-06-21:**
+1. **Scope: the 7 material extra fields PLUS the weight-model bonus** — also populate native
+   `spool_weight` from OPT container `emptyWeight` and native `weight` from package full weight
+   (requires the material-slug → package → container lookup). Note: writing `spool_weight` changes
+   the tare used in net↔gross weight conversion — handle that interaction carefully + anti-ping-pong.
+2. **Typed fields** — register the new Spoolman extra fields as integer/float (not the legacy all-
+   `text` pattern). `ensure_extra_fields` must create them with the correct `field_type`.
+3. **OPT → Spoolman via the existing review/confirm Apply flow** — extend the current OpenPrintTag
+   apply path (where the user reviews and confirms OPT values) to also write these new fields.
+   NOT automatic each cycle. dryingTime converts OPT minutes → FDB hours (÷60) at write time.
+4. **Spoolman ↔ FDB: ride the EXISTING field-sync logic** — on initial sync write the values, then
+   on ongoing sync follow the same merge / one-way / conflict-resolution as the other material
+   fields (the material-properties category's `direction` + `conflict_policy`). No bespoke
+   precedence. MUST honor `should_skip_inherited` for FDB variants and refresh BOTH snapshots after
+   any FDB write (anti-ping-pong), same as the existing scalar/temperature sync.
+5. Confirm FDB `dryingTime` unit is hours (apply ÷60). Dataset check: OPT `dryingTime` sample 360
+   ≈ 6 h, i.e. minutes → ÷60. Verify against FDB API once more during build.
 
 ## Phase 2 — implement (after Phase-1 sign-off)
 
