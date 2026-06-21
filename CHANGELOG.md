@@ -9,6 +9,13 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Variances step shows the OpenPrintTag (OPT) badge** — each filament in the variant-grouping
+  step now displays an "OPT" pill when it's tagged in OpenPrintTag, so when you pick the master
+  for a cluster you can choose the OPT-backed one (which carries the standardized settings) rather
+  than a variant that isn't in OpenPrintTag.
+
 ### Fixed
 
 - **Bulk Import Wizard (generic-container mode): adding variants under an existing master no
