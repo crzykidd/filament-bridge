@@ -880,7 +880,9 @@ def test_container_name_override_applied_at_execute(db):
 
 
 def test_container_name_override_skip_omits_cluster(db):
-    """Item 4: a saved override with skip=True causes the entire cluster to be omitted."""
+    """A saved skip=True override omits the cluster ONLY when it genuinely collides. Here the PLA
+    container name clashes with a non-reusable existing FDB filament (it has a parentId, so it
+    isn't a reusable container), so the collision is live and the skip is honored."""
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "variant_parent_mode", "generic_container")
     set_config_value(db, "wizard_match_decisions", [
@@ -918,12 +920,19 @@ def test_container_name_override_skip_omits_cluster(db):
         create_calls.append(dict(payload))
         return MagicMock(id=f"fdb-{call_counter}")
 
-    filamentdb = _fake_filamentdb()
+    # Genuine collision: an existing FDB filament shares the PLA container name "ELEGOO PLA
+    # (Master)" but is NOT a reusable null-parent container (it has a parentId). So the cluster
+    # genuinely collides and the skip override is honored.
+    pla_clash = FDBFilament.model_validate({
+        "_id": "pla-clash", "name": "ELEGOO PLA (Master)", "vendor": "ELEGOO",
+        "type": "PLA", "parentId": "some-parent",
+    })
+    filamentdb = _fake_filamentdb(filaments=[pla_clash])
     filamentdb.create_filament = AsyncMock(side_effect=_create)
     client = _client(db, spoolman, filamentdb)
 
     client.post("/api/wizard/execute")
-    # PLA cluster skipped entirely, PETG cluster should proceed
+    # PLA cluster skipped entirely (live collision), PETG cluster should proceed
     containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
     container_names = {c["name"] for c in containers}
     # PLA container must NOT be created
@@ -933,6 +942,51 @@ def test_container_name_override_skip_omits_cluster(db):
     # PETG container should be created
     assert any("PETG" in n for n in container_names), (
         f"PETG cluster should have been created but got containers: {container_names}"
+    )
+
+
+def test_stale_skip_override_ignored_when_no_collision(db):
+    """Bug fix: a leftover skip=True override for a cluster that no longer collides (no existing
+    FDB filament with that name) is IGNORED — the cluster imports instead of being silently
+    dropped. Reproduces 'can't sync if the master exists in Filament DB' where a stale skip from a
+    past collision persisted across an FDB wipe and kept skipping the cluster."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+    ])
+    sm_filaments = [
+        _sm_filament(10, "PLA Red", material="PLA"),
+        _sm_filament(11, "PLA Blue", material="PLA"),
+    ]
+    pla_cluster_key_str = "('elegoo', 'pla', '')"
+    set_config_value(db, "wizard_container_name_overrides", {
+        pla_cluster_key_str: {"cluster_key": pla_cluster_key_str, "name_override": None, "skip": True},
+    })
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+    create_calls: list[dict] = []
+    cc = 0
+
+    async def _create(payload):
+        nonlocal cc
+        cc += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{cc}")
+
+    filamentdb = _fake_filamentdb()  # no existing filaments → no collision → stale skip
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    client.post("/api/wizard/execute")
+    container_names = {
+        c["name"] for c in create_calls if c.get("color") is None and "parentId" not in c
+    }
+    assert any("PLA" in n for n in container_names), (
+        f"stale skip (no live collision) must be ignored and the PLA cluster imported; "
+        f"got containers: {container_names}"
     )
 
 

@@ -11,6 +11,15 @@ GitHub release.
 
 ### Fixed
 
+- **Bulk Import: a stale "skip" override no longer blocks importing under an existing master** —
+  in generic-container mode the wizard execute honored a saved container-name `skip` override
+  unconditionally, so a skip you chose during a *past* name-collision kept silently dropping the
+  whole cluster on every later import — even after the collision was gone (the master now exists
+  and is reusable) and the dry-run preview showed the variants as "create". Execute now honors a
+  `skip` only when the cluster *genuinely* collides right now (using the same collision check as
+  the preview), so a stale skip is ignored and the variants import under the existing master. Fixes
+  "can't sync if the master exists in Filament DB"; preview and execute now agree.
+
 - **Empty spools no longer spam `new_spool` conflicts when "skip empty & archived" is on** —
   with `never_import_empties` enabled, an empty (0 g) unmapped spool on an already-mapped
   filament was re-queued as a `new_spool` conflict every sync cycle (it can never auto-import),

@@ -1148,15 +1148,44 @@ async def _execute_spoolman_to_fdb(
         # Load container-name overrides dict: cluster_key_str → {name_override, skip}
         _cn_overrides: dict[str, dict] = container_name_overrides or {}
 
+        # Which clusters genuinely collide RIGHT NOW — computed with the SAME logic the dry-run
+        # preview uses (_compute_name_collisions). A "skip" override is only honored for a cluster
+        # that still collides; a leftover skip (set during a past collision that no longer applies —
+        # e.g. the master now exists and is reusable, or nothing matches anymore) must NOT drop a
+        # cluster we can import. This keeps execute consistent with the preview, which is why a
+        # cluster showed "create" in the dry run but "skipped" on execute (reported bug).
+        _gc_container_names = {
+            ck: (
+                _cn_overrides.get(str(ck), {}).get("name_override")
+                or _container_display_name(ms, kw, marker=container_parent_marker)
+            )
+            for ck, ms in _clusters_gc.items() if ms
+        }
+        _gc_colliding_keys: set[str] = {
+            c.cluster_key
+            for c in _compute_name_collisions(plan, fdb_filaments, _gc_container_names)
+            if c.is_container_collision and c.cluster_key
+        }
+
         for cluster_key, members in _clusters_gc.items():
             if not members:
                 continue
 
             cluster_key_str = str(cluster_key)
 
-            # Check for user-set override or skip
+            # Resolve the container display name first (the skip decision below needs it).
             _override_entry = _cn_overrides.get(cluster_key_str, {})
-            if _override_entry.get("skip"):
+            _name_override = _override_entry.get("name_override")
+            if _name_override:
+                display_name = _name_override
+            else:
+                display_name = _container_display_name(members, kw, marker=container_parent_marker)
+            vendor_name = members[0].vendor.name if members[0].vendor else None
+
+            # Honor a "skip" override ONLY for a cluster that genuinely collides right now
+            # (see _gc_colliding_keys above). A stale skip whose collision no longer applies is
+            # ignored, so the cluster imports — attaching to the existing master if one exists.
+            if _override_entry.get("skip") and cluster_key_str in _gc_colliding_keys:
                 logger.info(
                     "wizard execute %s: cluster %s skipped per user container-name override",
                     res.cycle_id, cluster_key_str,
@@ -1164,13 +1193,6 @@ async def _execute_spoolman_to_fdb(
                 for _m in members:
                     _skipped_gc_sm_ids.add(_m.id)
                 continue
-
-            _name_override = _override_entry.get("name_override")
-            if _name_override:
-                display_name = _name_override
-            else:
-                display_name = _container_display_name(members, kw, marker=container_parent_marker)
-            vendor_name = members[0].vendor.name if members[0].vendor else None
 
             # --- Idempotency: find existing synthetic parent for this cluster ---
             # Primary: look for a synthetic FilamentMapping whose filamentdb_id is
