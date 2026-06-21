@@ -417,6 +417,9 @@ def profiles_compatible(a: str, b: str) -> bool:
 def opt_to_spoolman_fields(
     opt: dict[str, Any],
     tag_map: dict[str, int] | None = None,
+    *,
+    packages: list[dict[str, Any]] | None = None,
+    containers_by_slug: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Map an OPTMaterial dict to a Spoolman filament update payload.
 
@@ -435,6 +438,26 @@ def opt_to_spoolman_fields(
     - bedTempMax → settings_bed_temp
     - slug → extra.openprinttag_slug
     - uuid → extra.openprinttag_uuid
+
+    OpenPrintTag material-setting extras (typed Spoolman extra fields; only emitted
+    when the OPT value is present). Each maps to a first-class Filament DB field via
+    the material-properties sync pass — see ``core/fields.py:OPENTAG_EXTRA_FIELDS``:
+    - nozzleTempMin → extra.openprinttag_nozzle_temp_min
+    - nozzleTempMax → extra.openprinttag_nozzle_temp_max
+    - dryingTemp    → extra.openprinttag_drying_temp
+    - dryingTime    → extra.openprinttag_drying_time  (OPT MINUTES → HOURS, ÷60)
+    - hardnessShoreA→ extra.openprinttag_hardness_shore_a
+    - hardnessShoreD→ extra.openprinttag_hardness_shore_d
+    - transmissionDistance → extra.openprinttag_transmission_distance
+
+    Weight-model bonus (NATIVE Spoolman fields, only when package/container data is
+    supplied AND carries the value):
+    - container emptyWeight (tare)        → spool_weight
+    - package nominalNettoFullWeight (net)→ weight
+
+    ``packages`` is the OPT package list for this material's slug
+    (``packages_by_material[slug]``); ``containers_by_slug`` is the container lookup.
+    Both default to None → the weight-model fields are simply not emitted.
     """
     if tag_map is None:
         tag_map = DEFAULT_MATERIAL_TAG_IDS
@@ -564,6 +587,58 @@ def opt_to_spoolman_fields(
     uuid_val = opt.get("uuid")
     if uuid_val:
         result["extra.openprinttag_uuid"] = uuid_val
+
+    # OpenPrintTag material-setting extras (typed) — only emit a key when the OPT
+    # value is present.  Keys are config-overridable (resolved from Settings).
+    from app.config import settings as _settings
+    from app.core.fields import OPENTAG_EXTRA_FIELDS, opentag_drying_time_to_fdb_hours
+
+    for ef in OPENTAG_EXTRA_FIELDS:
+        raw = opt.get(ef.opt_key)
+        if raw is None:
+            continue
+        if ef.opt_key == "dryingTime":
+            value: Any = opentag_drying_time_to_fdb_hours(raw)
+        elif ef.field_type == "integer":
+            try:
+                value = int(round(float(raw)))
+            except (TypeError, ValueError):
+                continue
+        else:  # float
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                continue
+        if value is None:
+            continue
+        key = getattr(_settings, ef.config_attr)
+        result[f"extra.{key}"] = value
+
+    # Weight-model bonus — native Spoolman fields from the material→package→container
+    # lookup.  Only emit when the relevant OPT value is actually present.
+    if packages:
+        # Container tare (emptyWeight) → spool_weight.  Take the first package whose
+        # container has a non-null emptyWeight.
+        if containers_by_slug:
+            for pkg in packages:
+                cslug = pkg.get("containerSlug")
+                container = containers_by_slug.get(cslug) if cslug else None
+                empty_weight = container.get("emptyWeight") if container else None
+                if empty_weight is not None:
+                    try:
+                        result["spool_weight"] = float(empty_weight)
+                    except (TypeError, ValueError):
+                        pass
+                    break
+        # Package full net weight (nominalNettoFullWeight) → weight.  First non-null.
+        for pkg in packages:
+            full_weight = pkg.get("nominalNettoFullWeight")
+            if full_weight is not None:
+                try:
+                    result["weight"] = float(full_weight)
+                except (TypeError, ValueError):
+                    pass
+                break
 
     return result
 

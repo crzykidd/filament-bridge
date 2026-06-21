@@ -9,6 +9,28 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **OpenPrintTag material settings now sync into Filament DB** — seven standardized
+  OpenPrintTag material settings that Spoolman has no native field for (nozzle temp
+  min/max, drying temperature, drying time, Shore A/D hardness, and transmission
+  distance) are now captured as **typed** (integer/float) Spoolman extra fields and
+  mirrored to/from their first-class Filament DB counterparts
+  (`temperatures.nozzleRangeMin/Max`, `dryingTemperature`, `dryingTime`,
+  `shoreHardnessA`, `shoreHardnessD`, `transmissionDistance`). The bridge registers
+  the extra fields on startup; the OpenTag cleanup **Apply** flow populates them from
+  the matched OpenPrintTag material (drying time is converted from OpenPrintTag minutes
+  to Filament DB hours, ÷60); and the ongoing sync mirrors them under the same
+  material-properties direction + conflict policy as the other material fields,
+  honoring Filament DB variant inheritance and refreshing both snapshots after a write
+  (no ping-pong). Each extra-field key is overridable via a
+  `SPOOLMAN_FIELD_OPENPRINTTAG_*` env var.
+- **OpenTag weight-model bonus** — when the matched OpenPrintTag material has package
+  and container data, the Apply flow now also offers to set Spoolman's native
+  `spool_weight` (empty-reel tare, from the container `emptyWeight`) and `weight`
+  (nominal full net weight, from the package `nominalNettoFullWeight`), giving the
+  weight model an accurate tare from the start.
+
 ### Fixed
 
 - **Bulk Import: a single new color now attaches to its existing Filament DB master instead of

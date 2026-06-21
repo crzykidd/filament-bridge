@@ -258,6 +258,22 @@ class SpoolmanClient:
             existing_filament_keys = set()
 
         # Build the runtime field list, substituting the config-overridable keys.
+        # Text fields get an empty-string default; typed (integer/float) fields are
+        # registered WITHOUT a default_value (Spoolman rejects a '""' default on a
+        # numeric field).
+        from app.core.fields import OPENTAG_EXTRA_FIELDS
+
+        # Human-readable names for the seven OpenPrintTag material-setting extras.
+        _OPENTAG_FIELD_NAMES: dict[str, str] = {
+            "openprinttag_nozzle_temp_min": "OpenPrintTag Nozzle Temp (min)",
+            "openprinttag_nozzle_temp_max": "OpenPrintTag Nozzle Temp (max)",
+            "openprinttag_drying_temp": "OpenPrintTag Drying Temp",
+            "openprinttag_drying_time": "OpenPrintTag Drying Time (h)",
+            "openprinttag_hardness_shore_a": "OpenPrintTag Hardness (Shore A)",
+            "openprinttag_hardness_shore_d": "OpenPrintTag Hardness (Shore D)",
+            "openprinttag_transmission_distance": "OpenPrintTag Transmission Distance",
+        }
+
         runtime_filament_fields = [
             {
                 "key": _settings.spoolman_field_filamentdb_material_tags,
@@ -280,6 +296,14 @@ class SpoolmanClient:
                 "field_type": "text",
             },
         ]
+        # Append the seven TYPED OpenPrintTag material-setting extras.
+        for ef in OPENTAG_EXTRA_FIELDS:
+            key = getattr(_settings, ef.config_attr)
+            runtime_filament_fields.append({
+                "key": key,
+                "name": _OPENTAG_FIELD_NAMES.get(ef.default_key, ef.default_key),
+                "field_type": ef.field_type,
+            })
 
         for field_def in runtime_filament_fields:
             key = field_def["key"]
@@ -288,8 +312,11 @@ class SpoolmanClient:
             payload = {
                 "name": field_def["name"],
                 "field_type": field_def["field_type"],
-                "default_value": encode_extra_value(""),  # '""'
             }
+            # Text fields carry an empty-string default; numeric fields must NOT
+            # (Spoolman 422s on a string default for an integer/float field).
+            if field_def["field_type"] == "text":
+                payload["default_value"] = encode_extra_value("")  # '""'
             try:
                 resp = await self._http.post(f"/api/v1/field/filament/{key}", json=payload)
                 resp.raise_for_status()

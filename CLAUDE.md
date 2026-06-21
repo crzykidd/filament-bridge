@@ -249,6 +249,13 @@ filament-bridge/
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag material slug |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag material UUID |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_IGNORE` | No | `openprinttag_ignore` | Spoolman filament extra field storing the "ignore future updates" flag (`"1"` = ignored, `""` = not ignored). Written by the Updates Review UI. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MIN` | No | `openprinttag_nozzle_temp_min` | Spoolman filament **integer** extra field for OPT `nozzleTempMin` (°C). Synced ↔ FDB `temperatures.nozzleRangeMin`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MAX` | No | `openprinttag_nozzle_temp_max` | Spoolman filament **integer** extra field for OPT `nozzleTempMax` (°C). Synced ↔ FDB `temperatures.nozzleRangeMax`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TEMP` | No | `openprinttag_drying_temp` | Spoolman filament **integer** extra field for OPT `dryingTemp` (°C). Synced ↔ FDB `dryingTemperature`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TIME` | No | `openprinttag_drying_time` | Spoolman filament **integer** extra field for drying time in **hours**. OPT stores minutes; the OpenTag Apply flow converts ÷60. Synced ↔ FDB `dryingTime` (hours). |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_A` | No | `openprinttag_hardness_shore_a` | Spoolman filament **float** extra field for OPT `hardnessShoreA`. Synced ↔ FDB `shoreHardnessA`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_D` | No | `openprinttag_hardness_shore_d` | Spoolman filament **float** extra field for OPT `hardnessShoreD`. Synced ↔ FDB `shoreHardnessD`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_TRANSMISSION_DISTANCE` | No | `openprinttag_transmission_distance` | Spoolman filament **float** extra field for OPT `transmissionDistance` (mm). Synced ↔ FDB `transmissionDistance`. |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | String appended (after a space) to generic-container parent names in the wizard. Empty string = no suffix. Overridable at runtime via Settings. |
 | `BRIDGE_CHANNEL` | No | `release` | Build channel baked in at image build time (Docker build arg `BUILD_CHANNEL`). When `dev`, the displayed version gets a `-dev` suffix (+ short commit). |

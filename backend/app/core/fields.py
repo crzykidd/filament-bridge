@@ -31,6 +31,91 @@ _FDB_DOTTED_FIELDS: frozenset[str] = frozenset({
 FDB_SYNCABLE_FIELDS: frozenset[str] = _FDB_SCALAR_FIELDS | _FDB_DOTTED_FIELDS
 
 
+# ---------------------------------------------------------------------------
+# OpenPrintTag material-setting extra fields (Spoolman extra ↔ FDB first-class)
+# ---------------------------------------------------------------------------
+# These seven standardized OpenPrintTag material settings have no native Spoolman
+# field but a writable Filament DB counterpart.  They are stored as TYPED Spoolman
+# filament extra fields (integer/float), populated from OPT via the cleanup-tool
+# Apply flow, and synced to/from FDB by the material-properties sync pass.
+#
+# Each entry: (config attribute on Settings, default key, Spoolman field_type,
+#             OPT source key, FDB target path, normalizer name).  The config
+# attribute lets a deployment override the extra-field key via SPOOLMAN_FIELD_*
+# env vars (resolved at runtime, like every other extra-field key).
+#
+# ``opt_conversion`` is applied to the raw OPT value before it is written to the
+# Spoolman extra field (e.g. dryingTime OPT-minutes → FDB-hours, ÷60).
+
+
+@dataclass(frozen=True)
+class OpenTagExtraField:
+    config_attr: str   # attribute name on Settings holding the (overridable) key
+    default_key: str   # default Spoolman extra-field key
+    field_type: str    # Spoolman field_type: "integer" | "float"
+    opt_key: str       # key on the OPTMaterial dict
+    fdb_path: str      # dotted FDB filament field path (in FDB_SYNCABLE_FIELDS)
+    label: str         # human label / sync-log + snapshot field name
+
+
+#: The seven OpenPrintTag material-setting extra fields.  Order is stable.
+OPENTAG_EXTRA_FIELDS: tuple[OpenTagExtraField, ...] = (
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_nozzle_temp_min",
+        "openprinttag_nozzle_temp_min", "integer",
+        "nozzleTempMin", "temperatures.nozzleRangeMin", "opt_nozzle_temp_min",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_nozzle_temp_max",
+        "openprinttag_nozzle_temp_max", "integer",
+        "nozzleTempMax", "temperatures.nozzleRangeMax", "opt_nozzle_temp_max",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_drying_temp",
+        "openprinttag_drying_temp", "integer",
+        "dryingTemp", "dryingTemperature", "opt_drying_temp",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_drying_time",
+        "openprinttag_drying_time", "integer",
+        "dryingTime", "dryingTime", "opt_drying_time",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_hardness_shore_a",
+        "openprinttag_hardness_shore_a", "float",
+        "hardnessShoreA", "shoreHardnessA", "opt_hardness_shore_a",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_hardness_shore_d",
+        "openprinttag_hardness_shore_d", "float",
+        "hardnessShoreD", "shoreHardnessD", "opt_hardness_shore_d",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_transmission_distance",
+        "openprinttag_transmission_distance", "float",
+        "transmissionDistance", "transmissionDistance", "opt_transmission_distance",
+    ),
+)
+
+# Every FDB target for the OPT extra fields must be in the writable allow-list.
+assert all(f.fdb_path in FDB_SYNCABLE_FIELDS for f in OPENTAG_EXTRA_FIELDS)
+
+
+def opentag_drying_time_to_fdb_hours(opt_minutes: float | int | None) -> int | None:
+    """Convert an OPT ``dryingTime`` (MINUTES) to the FDB ``dryingTime`` unit (HOURS).
+
+    OpenPrintTag stores drying time in minutes (sample 360 = 6 h); Filament DB's
+    ``dryingTime`` field is in hours.  Divides by 60 and rounds to the nearest
+    whole hour.  Returns ``None`` for a ``None`` input.
+    """
+    if opt_minutes is None:
+        return None
+    try:
+        return int(round(float(opt_minutes) / 60.0))
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class FieldMapping:
     fdb_path: str    # dotted FDB field path, e.g. "temperatures.nozzle"

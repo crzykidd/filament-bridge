@@ -628,6 +628,93 @@ def test_opt_to_spoolman_fields_material_tags_encodes_to_json_string():
     assert not isinstance(decoded, list), "Spoolman text field rejects JSON arrays — encode must produce a string"
 
 
+# ---------------------------------------------------------------------------
+# OpenPrintTag material-setting extras + weight-model bonus emission
+# ---------------------------------------------------------------------------
+
+
+def test_opt_to_spoolman_fields_emits_material_setting_extras():
+    """The seven typed openprinttag_* extras are emitted when the OPT value is present,
+    keyed by the configured Spoolman extra-field name, with dryingTime ÷60 (min→h)."""
+    from app.config import settings as _s
+    opt = {
+        **_OPT_PLA_SILK,
+        "nozzleTempMin": 200,
+        "nozzleTempMax": 230,
+        "dryingTemp": 55,
+        "dryingTime": 360,  # OPT minutes → 6 hours
+        "hardnessShoreA": 95.5,
+        "hardnessShoreD": 80.0,
+        "transmissionDistance": 3.2,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_nozzle_temp_min}"] == 200
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_nozzle_temp_max}"] == 230
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_drying_temp}"] == 55
+    # dryingTime: 360 OPT minutes → 6 FDB hours
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_drying_time}"] == 6
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_hardness_shore_a}"] == 95.5
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_hardness_shore_d}"] == 80.0
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_transmission_distance}"] == 3.2
+
+
+def test_opt_to_spoolman_fields_omits_absent_material_setting_extras():
+    """Material-setting extras are NOT emitted when the OPT value is absent/None."""
+    from app.config import settings as _s
+    opt = {
+        **_OPT_PETG,
+        "nozzleTempMin": None,
+        "nozzleTempMax": None,
+        "dryingTemp": None,
+        "dryingTime": None,
+        "hardnessShoreA": None,
+        "hardnessShoreD": None,
+        "transmissionDistance": None,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    for attr in (
+        "spoolman_field_openprinttag_nozzle_temp_min",
+        "spoolman_field_openprinttag_nozzle_temp_max",
+        "spoolman_field_openprinttag_drying_temp",
+        "spoolman_field_openprinttag_drying_time",
+        "spoolman_field_openprinttag_hardness_shore_a",
+        "spoolman_field_openprinttag_hardness_shore_d",
+        "spoolman_field_openprinttag_transmission_distance",
+    ):
+        assert f"extra.{getattr(_s, attr)}" not in fields
+
+
+def test_opentag_drying_time_to_fdb_hours():
+    """OPT dryingTime (minutes) → FDB hours, ÷60, rounded; None passthrough."""
+    from app.core.fields import opentag_drying_time_to_fdb_hours
+    assert opentag_drying_time_to_fdb_hours(360) == 6
+    assert opentag_drying_time_to_fdb_hours(480) == 8
+    assert opentag_drying_time_to_fdb_hours(90) == 2  # 1.5h → 2 (rounded)
+    assert opentag_drying_time_to_fdb_hours(None) is None
+
+
+def test_opt_to_spoolman_fields_weight_bonus_from_package_container():
+    """Weight-model bonus: container emptyWeight → spool_weight, package full → weight.
+    Only emitted when package/container data is supplied AND carries the value."""
+    opt = {**_OPT_PLA_SILK, "slug": "buddy3d-pla-silk-bronze"}
+    packages = [
+        {"containerSlug": "reel-x", "nominalNettoFullWeight": 1000},
+    ]
+    containers = {"reel-x": {"slug": "reel-x", "emptyWeight": 215}}
+    fields = opt_to_spoolman_fields(
+        opt, packages=packages, containers_by_slug=containers,
+    )
+    assert fields["spool_weight"] == 215.0
+    assert fields["weight"] == 1000.0
+
+
+def test_opt_to_spoolman_fields_no_weight_bonus_without_package_data():
+    """Without package/container data, the native weight-model fields are not emitted."""
+    fields = opt_to_spoolman_fields(_OPT_PLA_SILK)
+    assert "spool_weight" not in fields
+    assert "weight" not in fields
+
+
 def test_score_candidate_exact_vendor_and_material():
     sm = _sm_fil(vendor="Buddy3D", material="PLA Silk", color_hex="B87333")
     score = score_candidate(sm, _OPT_PLA_SILK)
@@ -3461,15 +3548,23 @@ async def test_ensure_extra_fields_skips_already_existing_filament_fields():
                 {"key": "filamentdb_spool_id", "name": "x", "field_type": "text", "entity_type": "spool"},
             ])
         else:
-            # All filament fields already exist (including the new ignore field)
+            # All filament fields already exist (including the ignore field and the
+            # seven typed OpenPrintTag material-setting extras).
+            from app.core.fields import OPENTAG_EXTRA_FIELDS
             resp = MagicMock()
             resp.raise_for_status = MagicMock()
-            resp.json = MagicMock(return_value=[
+            existing = [
                 {"key": _s.spoolman_field_filamentdb_material_tags, "name": "x", "field_type": "text", "entity_type": "filament"},
                 {"key": _s.spoolman_field_openprinttag_slug, "name": "x", "field_type": "text", "entity_type": "filament"},
                 {"key": _s.spoolman_field_openprinttag_uuid, "name": "x", "field_type": "text", "entity_type": "filament"},
                 {"key": _s.spoolman_field_openprinttag_ignore, "name": "x", "field_type": "text", "entity_type": "filament"},
-            ])
+            ]
+            for _ef in OPENTAG_EXTRA_FIELDS:
+                existing.append({
+                    "key": getattr(_s, _ef.config_attr), "name": "x",
+                    "field_type": _ef.field_type, "entity_type": "filament",
+                })
+            resp.json = MagicMock(return_value=existing)
         return resp
 
     async def _fake_post(url, json=None):

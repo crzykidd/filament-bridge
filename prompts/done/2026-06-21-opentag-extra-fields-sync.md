@@ -1,10 +1,10 @@
 ---
 name: 2026-06-21-opentag-extra-fields-sync
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-06-21
 model: opus              # research + design first, then implementation
-completed:
-result:
+completed: 2026-06-21
+result: Phase 2 done — 7 typed OPT material extras + weight-model bonus; OPT→SM via Apply, SM↔FDB via new engine pass (inheritance + anti-ping-pong); tests + ruff green.
 ---
 
 # Task: Spoolman extra fields for OpenPrintTag settings → sync the FDB-supported ones
