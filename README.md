@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.3.0-blue)
+![version](https://img.shields.io/badge/version-0.3.1-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -56,6 +56,10 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.3.1 (2026-06-21)
+
+- **Bulk Import Wizard fix** — new Spoolman colors shown checked-by-default on the Match step are now actually imported when you click **Next** without toggling each one. Previously those untouched rows were silently dropped, so the Execute step created nothing in Filament DB — most visibly when adding new color variants under an existing "use existing master" parent. Unchecking a row still skips it.
 
 ### v0.3.0 (2026-06-19)
 

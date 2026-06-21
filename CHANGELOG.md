@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-21
+
 ### Fixed
 
 - **Bulk Import Wizard: new Spoolman colors left checked-by-default are now actually
