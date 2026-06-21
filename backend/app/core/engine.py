@@ -2494,6 +2494,10 @@ async def run_sync_cycle(
     # New-record handling policies.
     new_filament_policy: str = config.get("new_filament_policy", "manual_review") or "manual_review"
     new_spool_policy: str = config.get("new_spool_policy", "manual_review") or "manual_review"
+    # Import-only gate: when set, ongoing new-spool import skips zero-remaining (empty)
+    # spools the same way the wizard does. (Archived spools are already excluded from
+    # new-spool detection below — see the active-only `sm_spools` set.)
+    never_import_empties: bool = bool(config.get("never_import_empties", False))
     # Variant grouping config (needed by new-filament auto-import path).
     _engine_variant_parent_mode: str = config.get("variant_parent_mode", "unset") or "unset"
     _engine_variant_keywords_raw: str = config.get("variant_line_keywords", "") or ""
@@ -2564,10 +2568,12 @@ async def run_sync_cycle(
     mapped_sm_spool_ids: set[int] = {m.spoolman_spool_id for m in spool_mappings}
     mapped_fdb_spool_ids: set[str] = {m.filamentdb_spool_id for m in spool_mappings}
 
-    # ---- Clear stale new_spool conflicts for now-mapped spools ----
+    # ---- Clear stale new_spool conflicts that no longer apply ----
     # A spool may have accumulated open new_spool conflicts before it was mapped
-    # (e.g. via the wizard). Auto-resolve them now so the queue stays clean.
-    if not dry_run and (mapped_sm_spool_ids or mapped_fdb_spool_ids):
+    # (e.g. via the wizard), OR a previously-conflicted spool may now be archived /
+    # empty-with-never_import_empties — meaning it will never import and the conflict
+    # would otherwise linger forever. Auto-resolve both so the queue stays clean.
+    if not dry_run:
         _now = datetime.datetime.now(datetime.timezone.utc)
         stale_conflicts = (
             db.query(Conflict)
@@ -2579,10 +2585,18 @@ async def run_sync_cycle(
             .all()
         )
         for stale in stale_conflicts:
-            if (
+            now_mapped = (
                 (stale.spoolman_id is not None and stale.spoolman_id in mapped_sm_spool_ids)
                 or (stale.filamentdb_spool_id is not None and stale.filamentdb_spool_id in mapped_fdb_spool_ids)
-            ):
+            )
+            _sp = (
+                sm_spools_with_archived.get(stale.spoolman_id)
+                if stale.spoolman_id is not None else None
+            )
+            not_importable = _sp is not None and (
+                _sp.archived or (never_import_empties and (_sp.remaining_weight or 0.0) <= 0.0)
+            )
+            if now_mapped:
                 stale.resolved_at = _now
                 stale.resolution = "resolved_mapped"
                 _log(
@@ -2591,6 +2605,16 @@ async def run_sync_cycle(
                     fdb_spool_id=stale.filamentdb_spool_id,
                     field_name="new_spool",
                     error_message="auto-resolved stale new_spool conflict (spool is now mapped)",
+                )
+            elif not_importable:
+                stale.resolved_at = _now
+                stale.resolution = "resolved_not_imported"
+                _log(
+                    db, cycle_id, "auto", "info", "spool",
+                    spoolman_id=stale.spoolman_id,
+                    fdb_spool_id=stale.filamentdb_spool_id,
+                    field_name="new_spool",
+                    error_message="auto-resolved stale new_spool conflict (spool archived/empty — never imported)",
                 )
 
     # Synthetic parents (is_synthetic_parent=True) have no Spoolman counterpart.
@@ -3343,6 +3367,19 @@ async def run_sync_cycle(
             fdb_spool_id = decode_extra_value(fdb_spool_id_raw)
             if fdb_spool_id and fdb_spool_id in fdb_spool_index:
                 continue  # has live cross-ref but no SpoolMapping row — orphan, skip
+            # never_import_empties: don't import (or queue a conflict for) a zero-remaining
+            # spool. Without this an empty unmapped spool on a mapped filament was re-queued
+            # as a `new_spool` conflict every cycle (it can never auto-import). Archived spools
+            # are already excluded upstream (active-only `sm_spools`).
+            if never_import_empties and (sm_spool.remaining_weight or 0.0) <= 0.0:
+                if not dry_run:
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "skip", "spool",
+                        spoolman_id=sm_spool.id,
+                        field_name="never_import_empties",
+                        new_value="skipped empty spool (0 g remaining)",
+                    )
+                continue
             await _handle_new_sm_spool(
                 db, cycle_id, result, dry_run,
                 sm_spool, filament_mappings_by_sm, fdb_filaments,

@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-21 — `never_import_empties` is honored by the ongoing engine (not just the wizard)
+
+**Context.** `never_import_empties` was documented (CLAUDE.md) as making "the wizard AND ongoing
+new-spool import skip empty/archived spools," but the engine never referenced the setting. Archived
+spools were already excluded from new-spool detection (active-only `sm_spools`, engine.py ~2546),
+but **empty (0 g) active** spools fell through to the `manual_review` path and were re-queued as a
+`new_spool` conflict every cycle — they can never auto-import, so the conflict just regenerated
+forever (observed on Amolen "PLA Basic-High Speed Cream Yellow", SM spool 208).
+
+**Decision.**
+- The new-spool detection loop now skips a zero-remaining spool when `never_import_empties` is on
+  (mirrors the wizard import gate and the existing archived exclusion), logging a `skip` instead of
+  queuing a conflict.
+- The stale-conflict pass now also **auto-resolves** any open `new_spool` conflict whose spool has
+  since become **archived** (regardless of the gate — archived never enters new-spool detection) or
+  **empty with the gate on** (`resolution="resolved_not_imported"`), so pre-existing conflicts from
+  before this fix clear themselves rather than lingering.
+- **Out of scope (left as-is):** the active-only exclusion at ~2546 unconditionally drops archived
+  spools from new-spool detection even when `never_import_empties` is OFF — so the ongoing engine
+  never imports an unmapped archived spool as a retired FDB spool the way the wizard does. Not
+  changed here (the affected user runs with the gate ON); flagged for a future pass if needed.
+
 ## 2026-06-21 — CI is push-only; CodeQL is PR-gated (no dual push+PR triggers)
 
 **Context.** Both `ci.yml` and `codeql.yml` triggered on `push: [dev, main]` AND

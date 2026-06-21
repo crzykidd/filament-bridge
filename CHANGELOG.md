@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Empty spools no longer spam `new_spool` conflicts when "skip empty & archived" is on** —
+  with `never_import_empties` enabled, an empty (0 g) unmapped spool on an already-mapped
+  filament was re-queued as a `new_spool` conflict every sync cycle (it can never auto-import),
+  cluttering the conflict queue. The ongoing sync now honors the gate and skips empty spools the
+  same way the wizard does (archived spools were already excluded from new-spool detection), and
+  it auto-resolves any lingering `new_spool` conflict for a spool that's since become
+  empty/archived (never-importable) so old conflicts clear themselves.
+
 ## [0.4.0] — 2026-06-21
 
 ### Added
