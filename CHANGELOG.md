@@ -9,6 +9,20 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-21
+
+### Fixed
+
+- **Bulk Import Wizard: new Spoolman colors left checked-by-default are now actually
+  imported** — on the Match step, unmatched Spoolman filaments render with their import
+  checkbox already ticked, but the decision was only recorded when you explicitly toggled
+  a row. Clicking **Next** without touching the checkboxes dropped those rows, so the
+  Execute step created nothing in Filament DB — most visibly when adding new color variants
+  under an existing "use existing master" parent (the variants silently vanished). The save
+  step now persists the displayed default (`create`) for untouched unmatched rows, so a
+  plain Next imports them; unchecking a row still records an explicit skip. Ambiguous rows
+  are unchanged (they have no safe default and still require an explicit pick).
+
 ## [0.3.0] — 2026-06-19
 
 ### Changed

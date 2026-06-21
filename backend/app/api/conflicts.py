@@ -291,7 +291,9 @@ async def resolve_conflict(
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(
-                "apply_master_divergence failed for conflict %d: %s", conflict_id, _scrub(exc)
+                "apply_master_divergence failed for conflict %s: %s",
+                _scrub(conflict_id),
+                _scrub(exc),
             )
             raise api_error(
                 502, "upstream_write_failed",
@@ -319,7 +321,9 @@ async def resolve_conflict(
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(
-                "apply_lifecycle_conflict failed for conflict %d: %s", conflict_id, _scrub(exc)
+                "apply_lifecycle_conflict failed for conflict %s: %s",
+                _scrub(conflict_id),
+                _scrub(exc),
             )
             raise api_error(
                 502, "upstream_write_failed",
@@ -465,7 +469,7 @@ async def import_conflict_record(
     except Exception as exc:
         import logging as _logging
         _logging.getLogger(__name__).error(
-            "import_conflict_record %d: upstream error: %s", conflict_id, _scrub(exc)
+            "import_conflict_record %s: upstream error: %s", _scrub(conflict_id), _scrub(exc)
         )
         raise api_error(
             502, "upstream_write_failed",
