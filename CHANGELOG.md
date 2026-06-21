@@ -22,6 +22,10 @@ GitHub release.
 
 ### Fixed
 
+- **In-app release notes now render as Markdown** instead of preformatted text, fixing the
+  odd wrapping caused by CHANGELOG hard-wrap lines and 2-space list-continuation indents
+  showing literally in the update-available and post-upgrade modals.
+
 - **Bulk Import Wizard (generic-container mode): adding variants under an existing master no
   longer skips the whole cluster** — when the colorless container name (e.g. `ELEGOO PLA
   (Master)`) already existed in Filament DB, the preview reported it as a name collision
