@@ -33,6 +33,12 @@ GitHub release.
 
 ### Fixed
 
+- **Bulk Import: finish-line filament names are no longer doubled** — a Silk/Matte/etc. variant
+  whose Spoolman name carried the finish (e.g. `PLA Silk Pink`) was created in Filament DB with the
+  finish word duplicated (`Buddy3D PLA Silk Silk Pink`), because the line base already includes the
+  finish and the color suffix re-added it. The color suffix now drops a leading finish word when the
+  base already carries it → `Buddy3D PLA Silk Pink`.
+
 - **Bulk Import: a single new color now attaches to its existing Filament DB master instead of
   importing standalone** — the Variances step only formed a variant group (with the "Attach to
   «master»" control) for clusters of **2+** selected colors, so a base line where you picked just

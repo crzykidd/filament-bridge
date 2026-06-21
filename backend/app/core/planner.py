@@ -107,9 +107,14 @@ def _patch_fdb_name(
     base_material_lo = base_material_lo.strip()
     if base_material_lo and color_lo.startswith(base_material_lo):
         suffix = color[len(base_material_lo):].strip()
+        # base_name already carries the finish line (e.g. "Silk"); drop a leading finish word from
+        # the color suffix so the variant name isn't doubled ("PLA Silk Silk Pink" → "PLA Silk Pink").
+        finish = extract_finish_line(sm.name or "", raw_material, keywords=variant_keywords)
+        if finish and base_lo.endswith(finish) and suffix.lower().startswith(finish):
+            suffix = suffix[len(finish):].strip()
         if suffix:
             return f"{base_name} {suffix}"
-        # color == material only → return base_name
+        # color == material/finish only → return base_name
         return base_name
 
     if color:

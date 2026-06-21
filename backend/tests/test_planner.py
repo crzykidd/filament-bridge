@@ -709,6 +709,18 @@ def test_patch_fdb_name_plain_color_gets_qualified(db):
     assert result == "ELEGOO PLA Light Blue"
 
 
+def test_patch_fdb_name_no_double_finish_word(db):
+    """Regression: a Silk variant whose SM name carries the finish ("PLA Silk Pink") must not
+    double the finish in the FDB name ("PLA Silk Silk Pink"). The base already includes "Silk",
+    so the color suffix drops the leading finish word → "Buddy3D PLA Silk Pink"."""
+    buddy = SpoolmanVendor(id=1, name="Buddy3D")
+    sm = SpoolmanFilament(id=1, name="PLA Silk Pink", vendor=buddy, material="PLA", weight=1000.0)
+    # Derived base path.
+    assert _patch_fdb_name(sm, variant_keywords=["silk"]) == "Buddy3D PLA Silk Pink"
+    # Explicit master base_name (the variant-attach path) — same result, no double Silk.
+    assert _patch_fdb_name(sm, base_name="Buddy3D PLA Silk", variant_keywords=["silk"]) == "Buddy3D PLA Silk Pink"
+
+
 # ---------------------------------------------------------------------------
 # Stale FilamentMapping / SpoolMapping validation
 # ---------------------------------------------------------------------------
