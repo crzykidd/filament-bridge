@@ -677,6 +677,8 @@ export interface SyncLogEntry {
   direction: string
   action: string
   entity_type: string
+  /** Human-readable record name ("Vendor Name"), resolved from the mapping; null if unresolved. */
+  label: string | null
   spoolman_id: number | null
   filamentdb_filament_id: string | null
   filamentdb_spool_id: string | null

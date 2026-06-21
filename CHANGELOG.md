@@ -11,6 +11,10 @@ GitHub release.
 
 ### Added
 
+- **Sync Log shows the record name** — the log had only ids; each row now carries a human-readable
+  "Record" column (e.g. `Amolen PLA Basic-High Speed Cream Yellow`) resolved from the
+  filament/spool mapping, with a best-effort live-Spoolman fallback so even not-yet-mapped records
+  (e.g. `new_filament` conflicts) are named. Makes triaging "why didn't X import" far easier.
 - **Variances step shows the OpenPrintTag (OPT) badge** — each filament in the variant-grouping
   step now displays an "OPT" pill when it's tagged in OpenPrintTag, so when you pick the master
   for a cluster you can choose the OPT-backed one (which carries the standardized settings) rather

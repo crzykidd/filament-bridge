@@ -787,6 +787,9 @@ class SyncLogEntry(BaseModel):
     direction: str
     action: str
     entity_type: str
+    # Human-readable record name ("Vendor Name"), resolved at read time from the
+    # filament/spool mapping identity. None when the record can't be resolved.
+    label: str | None = None
     spoolman_id: int | None = None
     filamentdb_filament_id: str | None = None
     filamentdb_spool_id: str | None = None
