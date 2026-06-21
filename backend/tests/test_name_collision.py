@@ -127,6 +127,49 @@ def test_same_vendor_name_intra_batch():
     assert set(entry.sm_filament_ids) == {10, 11}
 
 
+def _fdb_filament_with_parent(fid: str, name: str, parent_id: str, vendor: str | None = None) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": fid,
+        "name": name,
+        "vendor": vendor,
+        "parentId": parent_id,
+    })
+
+
+def test_container_name_reuses_existing_null_parent_container_no_collision():
+    """A proposed container name matching an existing null-parent FDB container is REUSE
+    (execute find-or-attach), not a collision — so no container-collision entry is emitted."""
+    sm = _sm_filament(10, "PLA Black", "ELEGOO")
+    plan = _plan_with_items([_create_plan_item(sm, "PLA Black", "ELEGOO")])
+    # Existing container has NO parentId → reusable.
+    existing = [_fdb_filament("fdb-container", "ELEGOO PLA (Master)", "ELEGOO")]
+    container_names = {("elegoo", "pla", ""): "ELEGOO PLA (Master)"}
+
+    collisions = _compute_name_collisions(plan, existing, container_names)
+
+    container_cols = [c for c in collisions if c.is_container_collision]
+    assert container_cols == [], (
+        f"Existing null-parent container should be reused, not flagged: {container_cols}"
+    )
+
+
+def test_container_name_clash_with_variant_is_reported():
+    """A proposed container name taken ONLY by a non-container record (a variant that has a
+    parentId) is a genuine clash and IS reported — execute can't reuse a variant as a parent."""
+    sm = _sm_filament(10, "PLA Black", "ELEGOO")
+    plan = _plan_with_items([_create_plan_item(sm, "PLA Black", "ELEGOO")])
+    # The only FDB filament with the container name is a VARIANT (has a parentId).
+    existing = [_fdb_filament_with_parent("fdb-variant", "ELEGOO PLA (Master)", "some-parent", "ELEGOO")]
+    container_names = {("elegoo", "pla", ""): "ELEGOO PLA (Master)"}
+
+    collisions = _compute_name_collisions(plan, existing, container_names)
+
+    container_cols = [c for c in collisions if c.is_container_collision]
+    assert len(container_cols) == 1
+    assert container_cols[0].vs_existing is True
+    assert container_cols[0].existing_fdb_filament_id == "fdb-variant"
+
+
 # ---------------------------------------------------------------------------
 # Helpers for API-level preview tests (generic_container collision guard)
 # ---------------------------------------------------------------------------
@@ -237,14 +280,17 @@ def test_preview_already_linked_cluster_excluded_from_container_collisions(db):
     )
 
 
-def test_preview_created_cluster_container_collision_still_reported(db):
-    """generic_container: a cluster that IS being created and whose container name collides with
-    an existing FDB filament MUST still be reported in name_collisions (no over-filtering).
+def test_preview_existing_container_reused_not_collision(db):
+    """generic_container: when the proposed container name already exists in FDB as a
+    null-parent container, the cluster REUSES it (execute find-or-attach) and must NOT be
+    flagged as a vs_existing collision — flagging it forced the whole cluster to be skipped.
+
+    Regression for the reported bug: the user picked the existing FDB master in Variances,
+    but the preview said "container name already exists — rename or skip" and the cluster
+    got skipped instead of attaching the new variants to that master.
     """
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "variant_parent_mode", "generic_container")
-    # User selected PLA filament (id=10) to create — its container "ELEGOO PLA (Master)"
-    # collides with an existing FDB filament.
     set_config_value(db, "wizard_match_decisions", [
         {"spoolman_filament_id": 10, "action": "create"},
     ])
@@ -252,7 +298,7 @@ def test_preview_created_cluster_container_collision_still_reported(db):
 
     sm_pla = _sm_fil(10, "PLA Black", material="PLA")
 
-    # FDB already has "ELEGOO PLA (Master)" — should trigger a collision since we ARE creating.
+    # FDB already has "ELEGOO PLA (Master)" with NO parent → it's a reusable container.
     existing_fdb = FDBFilament.model_validate({
         "_id": "fdb-pla-master",
         "name": "ELEGOO PLA (Master)",
@@ -272,6 +318,6 @@ def test_preview_created_cluster_container_collision_still_reported(db):
         c for c in container_collisions
         if "pla" in (c.get("proposed_name") or "").lower()
     ]
-    assert len(pla_collisions) >= 1, (
-        f"Created PLA cluster container collision must be reported, got collisions: {collisions}"
+    assert pla_collisions == [], (
+        f"Existing null-parent container must be reused (no collision), got: {pla_collisions}"
     )

@@ -10,6 +10,7 @@ import {
 import { useApi } from '../../api/hooks'
 import { DeepLinks } from '../../components/DeepLinks'
 import { HelpTip } from '../../components/HelpTip'
+import { OptBadge } from '../../components/OptBadge'
 import { WizardActionBar } from '../../components/WizardActionBar'
 import type {
   ReconciledField,
@@ -623,6 +624,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                             <span className={`text-sm ${isMaster ? 'font-semibold text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-200'}`}>
                               {filData.ref.name}
                             </span>
+                            {filData.ref.openprinttag && <OptBadge />}
                             {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
                             {filData.color_hex && <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{filData.color_hex}</span>}
                             {/* Type chip — primary source is SM material; FDB material_type shown as mismatch only */}
@@ -947,6 +949,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <ColorSwatch hex={f.color_hex} />
                       <span className="text-sm text-gray-700 dark:text-gray-200">{f.ref.name}</span>
+                      {f.ref.openprinttag && <OptBadge />}
                       {f.ref.vendor && <span className="text-xs text-gray-400 dark:text-gray-500">{f.ref.vendor}</span>}
                       {f.color_hex && <span className="text-xs font-mono text-gray-400 dark:text-gray-500">{f.color_hex}</span>}
                       {/* Type chip — primary source is SM material; FDB material_type shown as mismatch only */}
@@ -1071,6 +1074,7 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       <span className={`text-sm flex-1 min-w-0 ${isMaster ? 'font-semibold text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-200'}`}>
                         {filData.ref.name}
                       </span>
+                      {filData.ref.openprinttag && <OptBadge />}
                       {isMaster && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">master</span>}
                       <div className="flex items-center gap-1 shrink-0">
                         {isMoving ? (

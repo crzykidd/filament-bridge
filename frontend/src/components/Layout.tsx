@@ -1,5 +1,9 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { Components } from 'react-markdown'
+import type { AnchorHTMLAttributes } from 'react'
 import { getHealth, authLogout, getAuthStatus, getVersionInfo } from '../api/client'
 import type { HealthResponse, VersionInfo } from '../api/types'
 import { RequiredSettingsGate } from './RequiredSettingsGate'
@@ -43,6 +47,60 @@ function setLastRunningVersion(version: string): void {
   } catch {
     // ignore storage errors
   }
+}
+
+// ---------------------------------------------------------------------------
+// Release-notes modal — Markdown component map (trimmed subset for release-note content)
+// ---------------------------------------------------------------------------
+
+const releaseNotesComponents: Components = {
+  p: ({ children, ...props }) => (
+    <p className="text-sm text-gray-700 dark:text-gray-300 mb-3 leading-relaxed" {...props}>
+      {children}
+    </p>
+  ),
+  ul: ({ children, ...props }) => (
+    <ul className="list-disc list-outside pl-5 mb-3 space-y-1 text-sm text-gray-700 dark:text-gray-300" {...props}>
+      {children}
+    </ul>
+  ),
+  ol: ({ children, ...props }) => (
+    <ol className="list-decimal list-outside pl-5 mb-3 space-y-1 text-sm text-gray-700 dark:text-gray-300" {...props}>
+      {children}
+    </ol>
+  ),
+  li: ({ children, ...props }) => (
+    <li className="leading-relaxed" {...props}>{children}</li>
+  ),
+  h3: ({ children, ...props }) => (
+    <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mt-4 mb-2" {...props}>
+      {children}
+    </h3>
+  ),
+  h4: ({ children, ...props }) => (
+    <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-3 mb-1" {...props}>
+      {children}
+    </h4>
+  ),
+  strong: ({ children, ...props }) => (
+    <strong className="font-semibold text-gray-900 dark:text-gray-100" {...props}>{children}</strong>
+  ),
+  code: ({ children, ...props }) => (
+    <code className="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded px-1 py-0.5 text-xs font-mono" {...props}>
+      {children}
+    </code>
+  ),
+  a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-indigo-600 dark:text-indigo-400 hover:underline"
+      {...props}
+    >
+      {children}
+    </a>
+  ),
 }
 
 // ---------------------------------------------------------------------------
@@ -97,12 +155,12 @@ function ReleaseNotesModal({ releaseName, releaseNotes, releaseUrl, subtitle, on
             ×
           </button>
         </div>
-        {/* Body — release notes rendered as plain text (untrusted markdown from GitHub) */}
+        {/* Body — release notes rendered as Markdown */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {releaseNotes ? (
-            <pre className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300 font-sans leading-relaxed">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={releaseNotesComponents}>
               {releaseNotes}
-            </pre>
+            </ReactMarkdown>
           ) : (
             <p className="text-sm text-gray-500 dark:text-gray-400">No release notes available.</p>
           )}

@@ -147,7 +147,7 @@ export default function SyncLog() {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
               <thead className="bg-gray-50 dark:bg-gray-750">
                 <tr>
-                  {['Time', 'Direction', 'Action', 'Type', 'Field', 'Old → New', 'Links'].map(h => (
+                  {['Time', 'Direction', 'Action', 'Type', 'Record', 'Field', 'Old → New', 'Links'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                       {h}
                     </th>
@@ -157,7 +157,7 @@ export default function SyncLog() {
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {items.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">No log entries</td>
+                    <td colSpan={8} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">No log entries</td>
                   </tr>
                 )}
 
@@ -165,7 +165,7 @@ export default function SyncLog() {
                 {groups !== null && groups.map(({ cycleId, entries }) => (
                   <>
                     <tr key={`hdr-${cycleId ?? 'manual'}`} className="bg-indigo-50 dark:bg-indigo-900/20">
-                      <td colSpan={7} className="px-4 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                      <td colSpan={8} className="px-4 py-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300">
                         {cycleId
                           ? <>Sync window <span className="font-mono">{cycleId.slice(0, 8)}</span> — {formatLocal(entries[0].timestamp)} — {entries.length} {entries.length === 1 ? 'entry' : 'entries'}</>
                           : <>Manual / wizard — {entries.length} {entries.length === 1 ? 'entry' : 'entries'}</>
@@ -237,6 +237,14 @@ function EntryRow({ entry }: { entry: SyncLogEntry }) {
         </span>
       </td>
       <td className="px-4 py-2 text-gray-600 dark:text-gray-300 text-xs">{entry.entity_type}</td>
+      <td className="px-4 py-2 text-xs">
+        {entry.label
+          ? <span className="text-gray-800 dark:text-gray-100">{entry.label}</span>
+          : <span className="text-gray-400 dark:text-gray-500">—</span>}
+        {entry.spoolman_id != null && (
+          <span className="text-gray-400 dark:text-gray-500 ml-1.5 font-mono">SM #{entry.spoolman_id}</span>
+        )}
+      </td>
       <td className="px-4 py-2 text-gray-600 dark:text-gray-300 text-xs font-mono">{entry.field_name ?? '—'}</td>
       <td className="px-4 py-2 text-xs font-mono text-gray-500 dark:text-gray-400">
         {entry.error_message

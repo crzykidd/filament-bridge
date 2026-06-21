@@ -2032,29 +2032,41 @@ def _compute_name_collisions(
                 existing_fdb_filament_id=existing.get(key),
             ))
 
-    # Container-name collision entries (separate from the plan-item collisions above)
+    # Container-name "collision" entries (generic_container mode).
+    #
+    # An existing FDB filament whose name matches the proposed container name and has NO
+    # parent (parentId is None) is a *reusable container*, NOT a blocking collision: the
+    # execute path attaches the cluster to it via find-or-attach
+    # (_find_fdb_by_name(..., prefer_null_parent=True)) instead of creating a duplicate.
+    # Flagging that as a "rename or skip" collision made the whole cluster get skipped even
+    # when the user had picked the existing FDB master in the Variances step (reported bug).
+    # So a null-parent name match is treated as reuse (no entry). Only a genuine clash is
+    # reported: the name is taken ONLY by non-container records (variants, parentId set), or
+    # two different clusters in this batch generate the same container name (intra-batch).
     if container_names:
+        _fdb_by_id_local = {f.id: f for f in fdb_filaments}
         for cluster_key, cname in container_names.items():
             norm_name = normalize_name(cname)
-            # Check vs_existing in FDB
-            existing_fdb_id: str | None = None
-            for (ev, en), eid in existing.items():
-                if en == norm_name:
-                    existing_fdb_id = eid
-                    break
-            # Intra-batch: two clusters with the same generated name
-            same_name_clusters = [k for k, v in container_names.items() if normalize_name(v) == norm_name and k != cluster_key]
+            # Intra-batch: two clusters with the same generated name.
+            same_name_clusters = [
+                k for k, v in container_names.items()
+                if normalize_name(v) == norm_name and k != cluster_key
+            ]
             intra_batch = len(same_name_clusters) > 0
-            vs_existing_container = existing_fdb_id is not None
+            # Mirror execute's container find-or-attach: a null-parent name match is reused,
+            # so it is not a vs-existing collision. A name taken only by variants is a clash.
+            reuse_target = _find_fdb_by_name(cname, _fdb_by_id_local, prefer_null_parent=True)
+            reuse_ok = reuse_target is not None and reuse_target.parentId is None
+            vs_existing_container = reuse_target is not None and not reuse_ok
 
-            # Only report if there is a collision
+            # Only report a genuine collision; a reusable container is not one.
             if vs_existing_container or intra_batch:
                 result.append(NameCollisionEntry(
                     normalized_name=norm_name,
                     sm_filament_ids=[],  # container has no SM filament ids
                     vs_existing=vs_existing_container,
                     intra_batch=intra_batch,
-                    existing_fdb_filament_id=existing_fdb_id,
+                    existing_fdb_filament_id=reuse_target.id if reuse_target else None,
                     is_container_collision=True,
                     cluster_key=str(cluster_key),
                     proposed_name=cname,

@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.3.1-blue)
+![version](https://img.shields.io/badge/version-0.4.0-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -56,6 +56,13 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.4.0 (2026-06-21)
+
+- **Sync Log shows record names** — each log row now has a "Record" column with the human-readable filament/spool name (resolved from the mapping, with a live-Spoolman fallback for not-yet-mapped records), so triaging "why didn't X import" is much easier.
+- **OpenPrintTag badge on the Variances step** — filaments tagged in OpenPrintTag show an "OPT" pill, so you can pick the OPT-backed one as master (it carries the standardized settings).
+- **In-app release notes render as Markdown** — fixes the odd wrapping in the update-available and post-upgrade modals.
+- **Bulk Import fix (generic-container)** — adding new variants under a master that already exists in Filament DB now attaches them to that master instead of skipping the whole cluster on a false "name collision".
 
 ### v0.3.1 (2026-06-21)
 
