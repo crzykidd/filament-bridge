@@ -1,8 +1,13 @@
 name: CodeQL
 
 on:
+  # The dev→main PR is the gate: pull_request scans changes BEFORE they can reach
+  # main (the modern replacement for the old direct-to-main scan), and push:[main]
+  # re-scans + keeps the default-branch baseline current. dev is intentionally NOT
+  # a push trigger — scanning every dev push duplicated the pull_request run during
+  # an open PR (stuck required checks) and added heavy load to frequent dev pushes.
   push:
-    branches: [dev, main]
+    branches: [main]
   pull_request:
     branches: [main]
   schedule:

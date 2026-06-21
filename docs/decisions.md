@@ -1,5 +1,33 @@
 # Decision record
 
+## 2026-06-21 — CI is push-only; CodeQL is PR-gated (no dual push+PR triggers)
+
+**Context.** Both `ci.yml` and `codeql.yml` triggered on `push: [dev, main]` AND
+`pull_request: [main]`. During an open `dev→main` PR, every push to `dev` fired both
+events, producing two check runs with the **same name** (`CI / Lint`,
+`CodeQL / Analyze (python)`, …) on the PR head. GitHub branch protection requires those
+contexts by bare name, and the duplicate left them stuck at "Expected — Waiting for
+status to be reported" — forcing a manual merge bypass (used once, for v0.3.1). Branch
+protection on `main` is **non-strict** (`strict: false`), so a check on the PR head
+commit satisfies the requirement regardless of which event produced it.
+
+**Decision — each required context is produced exactly once per PR:**
+- **`ci.yml` → `push: [dev, main]` only** (dropped `pull_request`). Every dev push still
+  gets the full, cheap CI suite (fast feedback); the PR's required CI checks are already
+  on the head commit, so the gate is satisfied with no second run. CI is light enough to
+  run on every dev push.
+- **`codeql.yml` → `pull_request: [main]` + `push: [main]` + weekly cron** (dropped `dev`
+  from push). The PR is the gate — `pull_request` scans changes before they can reach
+  `main` (the modern replacement for the old direct-to-main scan that originally motivated
+  broad push triggers), and `push: [main]` keeps the default-branch baseline current.
+  CodeQL is heavy, so it does NOT run on every frequent dev push.
+
+**Trade-off accepted.** CodeQL no longer reports the instant a `dev` push introduces an
+issue; it surfaces when the PR is opened (which scans the accumulated diff). With the
+batch-dev-then-PR-at-release flow, the PR is the natural checkpoint. A future session
+should NOT "restore" `pull_request` on CI or `dev` push on CodeQL — that reintroduces the
+duplicate-context bypass.
+
 ## 2026-06-19 — CodeQL log-injection FPs are int path params, not `scrub`; no model pack
 
 **Context.** A recurring set of `py/log-injection` (CWE-117) alerts kept needing manual

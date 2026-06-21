@@ -1,8 +1,11 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
+  # Push-only (no pull_request). Every dev push gets the full CI feedback, and the
+  # dev→main PR's required checks are satisfied by the head commit's push run
+  # (branch protection is non-strict). Triggering on both push AND pull_request
+  # produced duplicate same-named check runs that left required checks stuck at
+  # "Expected — Waiting for status to be reported", forcing a manual merge bypass.
   push:
     branches: [dev, main]
 
