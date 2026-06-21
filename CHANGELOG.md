@@ -9,6 +9,18 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bulk Import Wizard (generic-container mode): adding variants under an existing master no
+  longer skips the whole cluster** — when the colorless container name (e.g. `ELEGOO PLA
+  (Master)`) already existed in Filament DB, the preview reported it as a name collision
+  ("This container name already exists — rename it or skip"), so the cluster was skipped and
+  nothing imported — even though the execute step *reuses* an existing container by
+  find-or-attach. The preview now recognizes an existing null-parent container as a reuse
+  target rather than a collision, so the new variants attach to the master you already have.
+  A genuine clash (the name taken only by a non-container/variant record, or two clusters in
+  the batch generating the same name) is still flagged.
+
 ## [0.3.1] — 2026-06-21
 
 ### Fixed
