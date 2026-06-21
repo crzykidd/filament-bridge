@@ -1,0 +1,1 @@
+probe: capture CI/CodeQL check-run context names; this commit + PR are disposable.
