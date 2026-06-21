@@ -703,7 +703,12 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
     groups: list[VariancesGroupRow] = []
 
     for (vendor_norm, material_norm, finish_norm), members in clusters.items():
-        if len(members) < 2:
+        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm, finish_norm))  # D3
+        # Group a multi-color cluster, OR a SINGLETON that matches an existing FDB line/master —
+        # so a lone new color attaches to its existing parent instead of importing standalone
+        # ("show all the masters to match to if they exist in Filament DB"). A singleton with no
+        # existing FDB line stays ungrouped (genuinely standalone).
+        if len(members) < 2 and existing_fdb_parent is None:
             continue
         master = max(members, key=lambda f: (spools_per_filament.get(f.id, 0), -len(f.name)))
         grouped_ids.update(m.id for m in members)
@@ -735,7 +740,6 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
         display_base = normalize_name(
             f"{(master.vendor.name + ' ') if master.vendor else ''}{master.material or ''}".strip()
         )
-        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm, finish_norm))  # D3
         groups.append(VariancesGroupRow(
             base_name=display_base,
             vendor=master.vendor.name if master.vendor else None,

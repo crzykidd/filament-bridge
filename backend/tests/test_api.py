@@ -2779,6 +2779,39 @@ def test_wizard_variances_spoolman_returns_groups_and_ungrouped(db):
     assert body["ungrouped"][0]["ref"]["spoolman_filament_id"] == 12
 
 
+def test_wizard_variances_singleton_attaches_to_existing_fdb_master(db):
+    """A SINGLE new color whose cluster matches an existing FDB master forms a group with
+    existing_fdb_parent (so it can attach), instead of dropping to ungrouped/standalone.
+    Regression for 'with multiple base types only the first master matches, others come in
+    standalone' — a lone-variant line is now matched to its existing FDB master."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 12, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=12, name="PETG Red", vendor=elegoo, material="PETG", color_hex="#ff0000"),
+    ]
+    # Existing FDB PETG master (a parent — hasVariants) the singleton should attach to.
+    fdb_master = FDBFilament.model_validate({
+        "_id": "fdb-petg-master", "name": "ELEGOO PETG (Master)", "vendor": "ELEGOO",
+        "type": "PETG", "hasVariants": True,
+    })
+    client = _client(
+        db, _fake_spoolman(filaments=sm_filaments, spools=[]),
+        _fake_filamentdb(filaments=[fdb_master]),
+    )
+
+    body = client.get("/api/wizard/variances").json()
+    assert len(body["groups"]) == 1, body
+    g = body["groups"][0]
+    assert g["existing_fdb_parent"] is not None, "singleton should match the existing FDB master"
+    assert g["existing_fdb_parent"]["filamentdb_filament_id"] == "fdb-petg-master"
+    assert {m["ref"]["spoolman_filament_id"] for m in g["members"]} == {12}
+    assert body["ungrouped"] == []
+
+
 def test_wizard_variances_filters_skip_and_undecided(db):
     """skip and undecided SM filaments absent from variances response."""
     set_config_value(db, "import_direction", "spoolman")

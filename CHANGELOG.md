@@ -11,6 +11,16 @@ GitHub release.
 
 ### Fixed
 
+- **Bulk Import: a single new color now attaches to its existing Filament DB master instead of
+  importing standalone** — the Variances step only formed a variant group (with the "Attach to
+  «master»" control) for clusters of **2+** selected colors, so a base line where you picked just
+  **one** new color fell through to "ungrouped" and imported as a standalone filament — never
+  matched to the master it already has in Filament DB. With several base types this looked like
+  "only the first master matches, the others come in standalone." A singleton whose
+  (vendor, material, finish) matches an existing FDB parent now forms a group and attaches to that
+  master (still overridable to "Create new parent" / "Standalone"); a singleton with no existing
+  line stays standalone as before.
+
 - **Bulk Import: a stale "skip" override no longer blocks importing under an existing master** —
   in generic-container mode the wizard execute honored a saved container-name `skip` override
   unconditionally, so a skip you chose during a *past* name-collision kept silently dropping the

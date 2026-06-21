@@ -1,12 +1,29 @@
 ---
 name: 2026-06-09-variance-uses-all-fdb-filaments-PONDER
-status: pending          # pending | completed | failed  (DESIGN — needs a decision before build)
+status: completed        # pending | completed | failed  (DESIGN — needs a decision before build)
 created: 2026-06-09
 rescoped: 2026-06-21      # re-scoped against shipped wizard work (D3 attach, container reuse, all-FDB collisions)
 model: opus              # decide the design first, then hand to sonnet
-completed:
-result:
+completed: 2026-06-21
+result: Decision 1 shipped — a singleton cluster matching an existing FDB parent now forms a variances group and attaches to that master (wizard.py:705). Decisions 2 (index non-parent/flat FDB filaments) and 3 (adopt unmapped FDB parents) deferred as edge cases — open a fresh prompt if needed.
 ---
+
+## IMPLEMENTED 2026-06-21 (decision 1)
+
+The core symptom — "with multiple base types only the first master matches, others come in
+standalone" — was decision 1 (singleton attach). Shipped: the variances grouping no longer skips a
+`len(members) < 2` cluster when its `(vendor, material, finish)` key matches an existing FDB parent
+(`fdb_parent_by_key`); it forms a group with `existing_fdb_parent` so the lone color attaches
+(overridable). See `wizard.py` (the `clusters.items()` loop) + tests in `test_api.py`
+(`test_wizard_variances_singleton_attaches_to_existing_fdb_master`).
+
+**Deferred (edge cases, not needed for the reported scenario):**
+- Decision 2 — `fdb_parent_by_key` still only indexes FDB filaments that are already PARENTS
+  (`f.id in _parent_ids or f.hasVariants`). A childless lone master, or matching under a flat
+  (non-parent) FDB filament, is not handled. The user's masters have children, so this didn't bite.
+- Decision 3 — adopting/creating a `FilamentMapping` for an unmapped existing FDB parent on attach.
+
+Open a new focused prompt for 2/3 if a childless-master or flat-filament case shows up.
 
 # Task (DESIGN/PONDER): Variant grouping should match against ALL existing FDB filaments
 
