@@ -33,6 +33,14 @@ GitHub release.
 
 ### Fixed
 
+- **Bulk Import: a filament whose only spools are empty/archived is no longer half-imported** —
+  with "skip empty & archived" on, the wizard skipped the empty spool but still created the
+  filament (and its master), leaving a spool-less Filament DB record with no Spoolman counterpart
+  that showed as "unmatched" (e.g. an archived 0 g `Buddy3D PLA Silk Pink`). The import now skips
+  the **filament** too when it has no importable spool, so nothing half-syncs. Archived-but-
+  *non-empty* spools still import as retired (a filament with one keeps its spool and is created),
+  and the ongoing archive/retire mirroring for already-mapped pairs is unaffected.
+
 - **Bulk Import: finish-line filament names are no longer doubled** — a Silk/Matte/etc. variant
   whose Spoolman name carried the finish (e.g. `PLA Silk Pink`) was created in Filament DB with the
   finish word duplicated (`Buddy3D PLA Silk Silk Pink`), because the line base already includes the

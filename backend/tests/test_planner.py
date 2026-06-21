@@ -1097,6 +1097,35 @@ def test_planner_archived_empty_spool_skipped_when_never_import_empties(db):
     assert len(plan.spool_items) == 0, (
         f"Expected 0 spool items when never_import_empties=True, got {len(plan.spool_items)}"
     )
+    # ...and the FILAMENT itself is skipped (no spool-less half-synced record).
+    fil = next(i for i in plan.filament_items if i.sm_filament.id == 63)
+    assert fil.action == "skip", (
+        f"filament with no importable spool must be skipped, got '{fil.action}'"
+    )
+    assert fil.resolved is False
+
+
+def test_planner_filament_with_one_nonempty_spool_still_created(db):
+    """Control: a filament with at least one importable (non-empty) spool is still CREATED when
+    never_import_empties is ON — only the empty siblings are skipped. Guards against over-skipping."""
+    sm_fil = _sm_filament(fid=63, name="Light Purple PLA", weight=1000.0)
+    empty = _sm_spool_archived(65, sm_fil, remaining=-47.98, archived=True)
+    full = _sm_spool(66, sm_fil, remaining=500.0)
+
+    decisions_by_sm = {63: {"spoolman_filament_id": 63, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[empty, full],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+        include_empty_spools=False,
+    )
+    fil = next(i for i in plan.filament_items if i.sm_filament.id == 63)
+    assert fil.action == "create", "filament with an importable spool must still be created"
+    assert any(si.action == "create" for si in plan.spool_items), "the non-empty spool imports"
 
 
 # ---- test 3: active empty spool → retired=False when imported ----

@@ -522,4 +522,21 @@ def _plan_spoolman_to_fdb(
                 stale_spool_mapping=_stale_spool_mapping,
             ))
 
+    # D4 extension — when empties are excluded (never_import_empties is ON), a filament whose ONLY
+    # spools were empty/depleted ends up with no create-spool-item; importing the filament alone
+    # leaves a spool-less, "unmatched" record (reported: Buddy3D PLA Silk Pink, archived 0 g spool).
+    # Skip the filament too so nothing half-syncs. Archived-but-NON-empty spools still import as
+    # retired above, so those filaments keep a spool and are NOT affected. This is import-only and
+    # does not touch the ongoing archive/retire lifecycle mirroring for already-mapped pairs.
+    if not include_empty_spools:
+        _fil_with_create_spool = {
+            id(si.fil_item) for si in plan.spool_items if si.action == "create"
+        }
+        for item in plan.filament_items:
+            if item.action == "create" and id(item) not in _fil_with_create_spool:
+                item.action = "skip"
+                item.resolved = False
+                item.detail = "all spools empty/archived — skipped (never import empties)"
+                plan.spool_items = [si for si in plan.spool_items if si.fil_item is not item]
+
     return plan
