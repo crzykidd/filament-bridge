@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-21
+
 ### Added
 
 - **Sync Log shows the record name** — the log had only ids; each row now carries a human-readable
