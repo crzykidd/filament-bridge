@@ -159,6 +159,14 @@ function FTag({ f, side }: { f: FilamentRef | null; side?: 'sm' | 'fdb' }) {
       <span className="font-medium">{f.name ?? '—'}</span>
       {f.vendor && <span className="text-gray-500">· {f.vendor}</span>}
       {f.color && <span className="text-gray-400">· {f.color}</span>}
+      {side === 'sm' && f.active_spool_count != null && (
+        <span
+          className={`text-xs ${f.active_spool_count === 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-500'}`}
+          title={f.active_spool_count === 0 ? 'No active spools — only archived/empty spools, which are skipped on import' : undefined}
+        >
+          · {f.active_spool_count} active {f.active_spool_count === 1 ? 'spool' : 'spools'}
+        </span>
+      )}
     </span>
   )
 }

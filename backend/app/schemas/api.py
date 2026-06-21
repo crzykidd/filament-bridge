@@ -386,6 +386,10 @@ class FilamentRef(BaseModel):
     # True when the Spoolman filament has a non-empty openprinttag_uuid extra field.
     # Always False for FDB-only refs (no SM side).
     openprinttag: bool = False
+    # Count of ACTIVE (non-archived) Spoolman spools on this filament. None when not computed
+    # (FDB-only refs / endpoints that don't load spools). Surfaced on the Match step so a
+    # filament with 0 active spools (e.g. only archived) is visible before import.
+    active_spool_count: int | None = None
     # True when this FDB ref is a synthetic container parent (bridge-owned, no SM counterpart).
     # Used in the Matches step to show a "Master / Parent" badge instead of "Unmatched (FDB)".
     is_master_container: bool = False

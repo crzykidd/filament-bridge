@@ -30,6 +30,11 @@ GitHub release.
   `spool_weight` (empty-reel tare, from the container `emptyWeight`) and `weight`
   (nominal full net weight, from the package `nominalNettoFullWeight`), giving the
   weight model an accurate tare from the start.
+- **Bulk Import Match step shows each Spoolman filament's active spool count** — every
+  Spoolman record on the Match step now displays its number of non-archived spools (e.g.
+  `· 0 active spools`, highlighted amber when zero). Makes it obvious at a glance why a
+  filament whose only spools are empty/archived (e.g. `Buddy3D PLA Silk Pink`) won't
+  carry a spool into Filament DB.
 
 ### Fixed
 

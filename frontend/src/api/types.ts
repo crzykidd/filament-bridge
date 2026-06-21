@@ -349,6 +349,8 @@ export interface FilamentRef {
   material?: string | null
   /** True when the Spoolman filament has a non-empty openprinttag_uuid extra field. */
   openprinttag?: boolean
+  /** Count of active (non-archived) Spoolman spools; null when not computed. */
+  active_spool_count?: number | null
   /** True when this FDB ref is a synthetic container parent (bridge-owned, no SM counterpart). */
   is_master_container?: boolean
 }

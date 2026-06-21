@@ -911,6 +911,35 @@ def test_wizard_matches_openprinttag_flag(db):
     assert matched[11]["openprinttag"] is False, "untagged filament should have openprinttag=False"
 
 
+def test_wizard_matches_active_spool_count(db):
+    """SM refs expose active_spool_count = number of non-archived spools on that filament."""
+    sm_two = SpoolmanFilament(id=10, name="PLA", material="PLA",
+                              vendor=SpoolmanVendor(id=1, name="Brand"))
+    sm_archived_only = SpoolmanFilament(id=11, name="PETG", material="PETG",
+                                        vendor=SpoolmanVendor(id=1, name="Brand"))
+
+    def _spool(spool_id, fil, archived):
+        return SpoolmanSpool(id=spool_id, filament=fil, remaining_weight=500.0,
+                             archived=archived, extra={})
+
+    spools = [
+        _spool(1, sm_two, False),
+        _spool(2, sm_two, False),
+        _spool(3, sm_archived_only, True),   # archived → not counted
+    ]
+    fdb = [
+        FDBFilament.model_validate({"_id": "f1", "name": "PLA", "vendor": "Brand", "type": "PLA"}),
+        FDBFilament.model_validate({"_id": "f2", "name": "PETG", "vendor": "Brand", "type": "PETG"}),
+    ]
+    client = _client(db, _fake_spoolman(filaments=[sm_two, sm_archived_only], spools=spools),
+                     _fake_filamentdb(filaments=fdb))
+
+    body = client.get("/api/wizard/matches").json()
+    matched = {p["spoolman"]["spoolman_filament_id"]: p["spoolman"] for p in body["matched"]}
+    assert matched[10]["active_spool_count"] == 2, "two active spools should count as 2"
+    assert matched[11]["active_spool_count"] == 0, "only an archived spool → 0 active"
+
+
 def test_wizard_save_matches_persists(db):
     client = _client(db)
     resp = client.post("/api/wizard/matches", json={"decisions": [

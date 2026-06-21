@@ -174,7 +174,7 @@ def _find_fdb_by_name(
 # ---------------------------------------------------------------------------
 
 
-def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
+def _sm_ref(sm: SpoolmanFilament, *, active_spool_count: int | None = None) -> FilamentRef:
     opt_uuid_raw = (sm.extra or {}).get(_settings.spoolman_field_openprinttag_uuid)
     return FilamentRef(
         spoolman_filament_id=sm.id,
@@ -183,6 +183,7 @@ def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
         color=sm.color_hex,  # display-only ref; bare Spoolman format is fine here
         material=sm.material,
         openprinttag=bool(decode_extra_value(opt_uuid_raw)),
+        active_spool_count=active_spool_count,
     )
 
 
@@ -360,6 +361,14 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
         # One xref per filament id is sufficient; first non-empty wins.
         xref_by_sm_filament.setdefault(spool.filament.id, fdb_id)
 
+    # Active (non-archived) spool count per SM filament — surfaced on the Match step so a
+    # filament with 0 active spools (e.g. only archived ones, which won't import) is visible.
+    active_spool_count: dict[int, int] = {}
+    for spool in sm_spools:
+        if spool.filament is None or spool.archived:
+            continue
+        active_spool_count[spool.filament.id] = active_spool_count.get(spool.filament.id, 0) + 1
+
     mr = match_filaments(sm_filaments, fdb_filaments, xref_by_sm_filament=xref_by_sm_filament or None)
 
     # Build set of synthetic parent FDB ids (for is_master_container flag).
@@ -378,7 +387,10 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
 
     matched = [
         MatchPairRow(
-            spoolman=_sm_ref(p.spoolman_filament),
+            spoolman=_sm_ref(
+                p.spoolman_filament,
+                active_spool_count=active_spool_count.get(p.spoolman_filament.id, 0),
+            ),
             filamentdb=_fdb_ref(p.fdb_filament),
             confidence=p.confidence,
             vendor_dedup_hint=_vendor_hint(
@@ -389,14 +401,20 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
         for p in mr.matched
     ]
     ambiguous = [
-        AmbiguousRow(spoolman=_sm_ref(sm), candidates=[_fdb_ref(f) for f in cands])
+        AmbiguousRow(
+            spoolman=_sm_ref(sm, active_spool_count=active_spool_count.get(sm.id, 0)),
+            candidates=[_fdb_ref(f) for f in cands],
+        )
         for sm, cands in mr.ambiguous
     ]
     raw_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     saved_decisions = [MatchDecision.model_validate(d) for d in raw_decisions]
     return WizardMatchesResponse(
         matched=matched,
-        unmatched_spoolman=[_sm_ref(s) for s in mr.unmatched_spoolman],
+        unmatched_spoolman=[
+            _sm_ref(s, active_spool_count=active_spool_count.get(s.id, 0))
+            for s in mr.unmatched_spoolman
+        ],
         unmatched_filamentdb=[
             _fdb_ref(f, is_master_container=_is_master_fdb(f)) for f in mr.unmatched_fdb
         ],
