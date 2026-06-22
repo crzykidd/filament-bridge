@@ -811,6 +811,50 @@ async def test_sm_deletion_queues_conflict(db):
 
 
 @pytest.mark.asyncio
+async def test_reappeared_pair_auto_resolves_stale_deletion_conflict(db):
+    """A stale 'record deleted' conflict self-heals once both sides are present again.
+
+    Regression for the archived-spool-invisible bug: an archived spool that the bridge
+    could not see was (mis)flagged as deleted. After the fetch fix it reappears; the
+    leftover open deletion conflict must auto-resolve instead of lingering forever.
+    """
+    from app.models.conflict import DELETION_FIELD
+
+    fdb_fil = _fdb_filament("fil-1", "spool-1", 1000.0)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+
+    # Pre-existing open deletion conflict from a cycle when the spool was invisible.
+    db.add(
+        Conflict(
+            entity_type="spool",
+            spoolman_id=1,
+            filamentdb_filament_id="fil-1",
+            filamentdb_spool_id="spool-1",
+            field_name=DELETION_FIELD,
+            filamentdb_value='{"exists": true, "deleted_side": "spoolman"}',
+        )
+    )
+    db.commit()
+
+    # Both sides present and in agreement (net 800 == 800) — healthy pair.
+    spoolman = _fake_spoolman(spools=[_sm_spool(1, 800.0)])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    assert result.conflicts == 0
+    conflict = db.query(Conflict).filter_by(field_name=DELETION_FIELD).one()
+    assert conflict.resolved_at is not None
+    assert conflict.resolution == "auto_resolved_reappeared"
+    assert db.query(Conflict).filter_by(resolved_at=None).count() == 0
+
+
+@pytest.mark.asyncio
 async def test_archived_sm_spool_with_unknown_baseline_is_noop(db):
     """Archived mapped spool whose snapshot lacks an 'archived' baseline must NOT be
     treated as a fresh flip — a missing baseline defaults to the current value so the

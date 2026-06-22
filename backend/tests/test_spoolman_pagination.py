@@ -31,58 +31,63 @@ def _filament_row(i: int) -> dict:
 
 @pytest.mark.asyncio
 async def test_get_spools_paginates_across_two_pages():
-    """get_spools paginates the active endpoint, then fetches the archived endpoint."""
+    """get_spools paginates a single allow_archived listing across multiple pages."""
     page1 = [_spool_row(i) for i in range(1000)]
     page2 = [_spool_row(i) for i in range(1000, 1005)]
 
     client = SpoolmanClient("http://spoolman.test")
     client._client = AsyncMock()
 
-    # active page1, active page2, then the (empty) archived fetch.
     client._client.get = AsyncMock(
-        side_effect=[_make_response(page1), _make_response(page2), _make_response([])]
+        side_effect=[_make_response(page1), _make_response(page2)]
     )
 
     spools = await client.get_spools()
 
     assert len(spools) == 1005
     calls = client._client.get.call_args_list
-    assert len(calls) == 3  # 2 active pages + 1 archived fetch
+    assert len(calls) == 2  # 2 pages of the single allow_archived listing
     assert calls[0].kwargs["params"]["offset"] == 0
-    assert "archived" not in calls[0].kwargs["params"]
+    assert calls[0].kwargs["params"].get("allow_archived") == "true"
     assert calls[1].kwargs["params"]["offset"] == 1000
-    assert calls[2].kwargs["params"].get("archived") == "true"
+    assert calls[1].kwargs["params"].get("allow_archived") == "true"
 
 
 @pytest.mark.asyncio
-async def test_get_spools_makes_one_request_per_endpoint():
-    """A single-page library still costs one active request + one archived request."""
+async def test_get_spools_makes_one_request_for_small_library():
+    """A single-page library costs exactly one request (allow_archived listing)."""
     page1 = [_spool_row(i) for i in range(5)]
 
     client = SpoolmanClient("http://spoolman.test")
     client._client = AsyncMock()
-    client._client.get = AsyncMock(side_effect=[_make_response(page1), _make_response([])])
+    client._client.get = AsyncMock(side_effect=[_make_response(page1)])
 
     spools = await client.get_spools()
 
     assert len(spools) == 5
-    assert client._client.get.call_count == 2  # active + archived
+    assert client._client.get.call_count == 1
+    assert client._client.get.call_args_list[0].kwargs["params"].get("allow_archived") == "true"
 
 
 @pytest.mark.asyncio
-async def test_get_spools_merges_active_and_archived():
-    """get_spools fetches BOTH endpoints and merges — archived spools are included."""
-    active = [_spool_row(1), _spool_row(2)]
-    archived = [
+async def test_get_spools_includes_archived():
+    """get_spools passes allow_archived=true so archived spools are returned.
+
+    Regression guard: Spoolman has no ``archived`` filter param — only
+    ``allow_archived`` includes archived spools (active + archived in one listing).
+    An unknown ``?archived=true`` was silently ignored, hiding archived spools and
+    making archived mapped spools look deleted.
+    """
+    rows = [
+        _spool_row(1),
+        _spool_row(2),
         {**_spool_row(3), "archived": True},
         {**_spool_row(4), "archived": True},
     ]
 
     client = SpoolmanClient("http://spoolman.test")
     client._client = AsyncMock()
-    client._client.get = AsyncMock(
-        side_effect=[_make_response(active), _make_response(archived)]
-    )
+    client._client.get = AsyncMock(side_effect=[_make_response(rows)])
 
     spools = await client.get_spools()
     by_id = {s.id: s for s in spools}
@@ -90,8 +95,8 @@ async def test_get_spools_merges_active_and_archived():
     assert set(by_id) == {1, 2, 3, 4}
     assert by_id[3].archived is True and by_id[4].archived is True
     calls = client._client.get.call_args_list
-    assert "archived" not in calls[0].kwargs["params"]
-    assert calls[1].kwargs["params"].get("archived") == "true"
+    assert calls[0].kwargs["params"].get("allow_archived") == "true"
+    assert "archived" not in {k for k in calls[0].kwargs["params"] if k != "allow_archived"}
 
 
 @pytest.mark.asyncio
