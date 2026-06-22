@@ -3100,6 +3100,34 @@ async def run_sync_cycle(
 
         fdb_filament_id, fdb_spool = fdb_entry
 
+        # Both sides are present and live — the pair is healthy. Auto-resolve any open
+        # deletion conflict left over from a cycle in which one side was (mis)read as
+        # gone (e.g. an archived spool that was temporarily invisible to the bridge), so
+        # a transient false "record deleted" conflict self-heals instead of lingering in
+        # the queue forever.
+        if not dry_run:
+            _now_heal = datetime.datetime.now(datetime.timezone.utc)
+            for _stale_del in (
+                db.query(Conflict)
+                .filter(
+                    Conflict.resolved_at.is_(None),
+                    Conflict.field_name == DELETION_FIELD,
+                    Conflict.spoolman_id == mapping.spoolman_spool_id,
+                    Conflict.filamentdb_spool_id == mapping.filamentdb_spool_id,
+                )
+                .all()
+            ):
+                _stale_del.resolved_at = _now_heal
+                _stale_del.resolution = "auto_resolved_reappeared"
+                _log(
+                    db, cycle_id, "auto", "info", "spool",
+                    spoolman_id=mapping.spoolman_spool_id,
+                    fdb_filament_id=mapping.filamentdb_filament_id,
+                    fdb_spool_id=mapping.filamentdb_spool_id,
+                    field_name=DELETION_FIELD,
+                    error_message="auto-resolved stale deletion conflict (both sides present again)",
+                )
+
         # Load snapshots
         sm_snap = _get_snapshot(db, "spoolman", "spool", str(sm_spool.id))
         fdb_snap = _get_snapshot(db, "filamentdb", "spool", fdb_spool.id)

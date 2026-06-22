@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.5.0-blue)
+![version](https://img.shields.io/badge/version-0.5.1-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -56,6 +56,11 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.5.1 (2026-06-22)
+
+- **Archived spools no longer read as deleted** — the bridge was requesting archived Spoolman spools with a parameter Spoolman ignores, so it only ever saw active spools. Once a spool was archived (e.g. mirrored from a retired Filament DB spool) it disappeared from view and the next sync raised a false **"upstream record deleted (spoolman)"** conflict. The bridge now uses Spoolman's `allow_archived` parameter; archived spools stay visible and mirror correctly, any false deletion conflict already queued auto-resolves on the next sync, and archived spools are again visible to the Bulk Import Wizard.
+- **Bulk Import Variances: attaching to an existing master is clearer** — when a group attaches to an existing Filament DB parent, that parent is shown as the master and the confusing per-color "master" radio/pill and reconcile-against-master box are dropped (display-only; the import outcome is unchanged).
 
 ### v0.5.0 (2026-06-22)
 

@@ -347,7 +347,7 @@ lifecycle push, refresh BOTH snapshots (same anti-ping-pong rule as weight).
 - `POST /api/v1/vendor` — create vendor
 - `GET /api/v1/export/spools?fmt=csv` — CSV export (all spools, no pagination limit)
 - `PUT /api/v1/spool/{id}/use` — decrement weight (used by OctoPrint/Moonraker, NOT by bridge)
-- Note: `?archived=true` returns ONLY archived spools, not "include archived"
+- Note: archived spools are EXCLUDED from `/api/v1/spool` by default. Pass `?allow_archived=true` to include them (returns active + archived in one listing). There is NO `archived` filter param — an unknown `?archived=true` is silently ignored and returns the active-only list (this once hid archived spools from the bridge, making archived mapped spools look deleted).
 
 ### Filament DB data model gotchas
 - Spools are embedded subdocuments in the `spools[]` array on the filament document — there is no standalone spool collection or endpoint. Every spool operation goes through `/api/filaments/:filamentId/spools/:spoolId`.
