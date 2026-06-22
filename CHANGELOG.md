@@ -9,6 +9,19 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bulk Import Variances: attaching to an existing Filament DB master no longer asks you to
+  pick a Spoolman color as the master** — when a group attaches to an existing Filament DB
+  parent (e.g. `ELEGOO PLA (Master)`), that parent *is* the master and every Spoolman color
+  attaches to it as a variant. The step previously still selected one Spoolman color as
+  "master" (with a master radio, "master" pill, and a "Reconcile conflicting properties"
+  box comparing the others against it), which was confusing — the import already attached all
+  colors to the Filament DB parent regardless. The Variances step now shows the existing
+  Filament DB parent as the master, drops the per-color master radio/pill, and hides the
+  reconcile-against-master section for attach groups. Display-only — the import outcome is
+  unchanged.
+
 ## [0.5.0] — 2026-06-22
 
 ### Added

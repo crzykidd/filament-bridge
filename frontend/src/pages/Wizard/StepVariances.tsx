@@ -527,6 +527,10 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             const masterId = masters[groupIdx]
             const membership = groupMembership[groupIdx]
             if (membership.size === 0) return null  // group dissolved — all members moved/ignored
+            // Attaching to an existing Filament DB parent: that FDB parent IS the master.
+            // All Spoolman colors below become its variants, so we must NOT ask the user to
+            // pick a Spoolman color as master (and there's nothing to reconcile against it).
+            const attaching = !!(group.existing_fdb_parent && attachDecision[groupIdx] === 'attach')
             const masterTareVal = tareBySMId[masterId] ?? '200'
             const masterData = allFilamentData.get(masterId)
             const tareIsDefault = masterData?.tare_source === 'default'
@@ -557,6 +561,12 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                       ))}
                       <HelpTip text="Attach: new colors become variants of your existing Filament DB parent. Create new: a separate parent is created for this group." />
                     </div>
+                    {attaching && (
+                      <p className="mt-2 text-xs text-blue-700 dark:text-blue-300">
+                        <span className="font-semibold">{group.existing_fdb_parent!.name}</span> is the master.
+                        All colors below attach to it as <span className="font-medium">variants</span> — no Spoolman color is the master.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -590,8 +600,9 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                 </div>
 
                 <div className="mb-3 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-3 py-2">
-                  All variants in this group will use the master's empty-reel tare: <strong>{masterTareVal} g</strong>.
-                  Filament DB stores one tare per filament.
+                  {attaching
+                    ? <>All colors here attach to «{group.existing_fdb_parent!.name}» and use this empty-reel tare: <strong>{masterTareVal} g</strong>. Filament DB stores one tare per filament.</>
+                    : <>All variants in this group will use the master's empty-reel tare: <strong>{masterTareVal} g</strong>. Filament DB stores one tare per filament.</>}
                 </div>
 
                 {/* Per-member rows with labeled action buttons */}
@@ -599,23 +610,30 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                   {Array.from(membership).filter(id => !ignoredIds.has(id)).map(smId => {
                     const filData = allFilamentData.get(smId)
                     if (!filData) return null
-                    const isMaster = smId === masterId
-                    const conflicts = getLiveConflicts(groupIdx, smId)
+                    const isMaster = !attaching && smId === masterId
+                    const conflicts = attaching ? [] : getLiveConflicts(groupIdx, smId)
                     const isMoving = movingMember?.smId === smId && movingMember.fromGroupType === 'auto' && movingMember.fromIdx === groupIdx
                     const isIgnoring = ignoringId === smId
                     return (
                       <div key={smId} className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 dark:hover:bg-gray-700/40">
                         <span className="flex items-start">
-                          <input
-                            type="radio"
-                            name={`master-${groupIdx}`}
-                            checked={isMaster}
-                            onChange={() => pickMaster(groupIdx, smId)}
-                            className="mt-1 accent-indigo-600 shrink-0"
-                            title="Set as master (parent)"
-                          />
-                          {isMaster && (
-                            <HelpTip text="The master becomes (or maps to) the Filament DB parent. Variants inherit its print settings." />
+                          {attaching ? (
+                            // No master radio when attaching — the existing FDB parent is the master.
+                            <span className="mt-1 w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                          ) : (
+                            <>
+                              <input
+                                type="radio"
+                                name={`master-${groupIdx}`}
+                                checked={isMaster}
+                                onChange={() => pickMaster(groupIdx, smId)}
+                                className="mt-1 accent-indigo-600 shrink-0"
+                                title="Set as master (parent)"
+                              />
+                              {isMaster && (
+                                <HelpTip text="The master becomes (or maps to) the Filament DB parent. Variants inherit its print settings." />
+                              )}
+                            </>
                           )}
                         </span>
                         <div className="flex-1 min-w-0">
@@ -782,6 +800,9 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
 
                 {/* Phase 2: per-group reconcile UI for conflicting fields */}
                 {(() => {
+                  // Attaching to an existing FDB parent: it's the master and holds the canonical
+                  // properties, so there's no Spoolman master to reconcile against — hide the section.
+                  if (attaching) return null
                   // Collect all conflicts across all members (excluding master).
                   // material_type is derived/display-only and not in _RECONCILE_FIELD_MAP — skip it.
                   const conflictFields = new Map<string, { values: Map<string, { smId: number; value: unknown }[]> }>()
