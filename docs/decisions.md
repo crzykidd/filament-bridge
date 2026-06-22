@@ -4271,3 +4271,30 @@ with loading/ok/error states) is extracted into an exported `BackupButtons` comp
 Settings call sites #4 and #5 (`Settings.tsx:608-619` pre-change) are repointed to
 `DebugConfirmDialog`. The `window.confirm` reset-bridge path and the full-reset inline modal in
 `Settings.tsx` are untouched.
+
+## 2026-06-22 — Changelog archiving is summarize-on-archive (release-prep-and-cut v1.1.0)
+
+**Context.** The `release-prep-and-cut` standard (v1.0.0) archived a closed minor series by
+moving its full detail out of the active `CHANGELOG.md` and leaving only an index link. That
+loses the at-a-glance history — a reader of the active changelog sees only the current series.
+Archiving was deliberately **deferred** at the 0.4.0 and 0.5.0 releases pending this rule change,
+so the active `CHANGELOG.md` currently still holds the full `0.3.x`, `0.4.x`, and `0.5.x` series.
+
+**Decision.** Adopt **summarize-on-archive** (standard bumped to v1.1.0):
+
+- **Trigger** — archiving fires only on a **minor (`0.x.0`) or major (`x.0.0`)** bump; patch
+  bumps never archive.
+- **What it produces** — for each closed minor series, the **full detail** moves to a per-minor
+  archive file (`docs/CHANGELOG-<minor>.x.md`), and the active `CHANGELOG.md` keeps a **summary
+  block** per archived version: a `## [<version>] — <date> (summary)` heading with **one bullet
+  per major feature/fix** (small/trivial entries dropped) plus a deep link to the full archived
+  section. Net: active file = `[Unreleased]` + current minor in full + older minors summarized.
+- **Backlog scope** — a triggering bump archives **every closed minor series** still in the
+  active file, not just the immediately-prior one. So the next minor (0.6.0) will archive
+  `0.3.x` + `0.4.x` + `0.5.x` in one pass. (Chosen over "only the prior minor" because it
+  self-heals the deferred backlog and keeps the rule simple. Open to revisit if the maintainer
+  prefers archiving only the immediately-prior series.)
+
+**Where.** Source standard `homelab-configs/standards/release-prep-and-cut` (README + `release-prep.md`
+template, v1.0.0 → v1.1.0, tag `release-prep-and-cut/v1.1.0`); re-adopted here via `standards.md`
+re-pin + `.claude/commands/release-prep.md` Step 3 (+ Step 0c wording).
