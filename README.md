@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.4.0-blue)
+![version](https://img.shields.io/badge/version-0.5.0-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -56,6 +56,14 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.5.0 (2026-06-22)
+
+- **OpenPrintTag material settings now sync into Filament DB** — seven standardized settings Spoolman can't store natively (nozzle temp min/max, drying temperature, drying time, Shore A/D hardness, transmission distance) are captured as typed Spoolman extra fields and mirrored to/from their Filament DB counterparts. The OpenTag **Apply** flow populates them from the matched material, and ongoing sync keeps them current under the material-properties direction/policy.
+- **OpenTag weight-model bonus** — when the matched OpenPrintTag material has package/container data, Apply also offers to set Spoolman's native `spool_weight` (empty-reel tare) and `weight` (nominal full net weight), so the weight model starts accurate.
+- **Bulk Import Match step shows each Spoolman filament's active spool count** — every record shows its number of non-archived spools (amber when zero), making it obvious why a filament whose only spools are empty/archived won't carry a spool into Filament DB.
+- **Bulk Import fixes** — a filament whose only spools are empty/archived is no longer half-imported (skips the filament too, not just the spool); finish-line names are no longer doubled (e.g. `Buddy3D PLA Silk Silk Pink` → `Buddy3D PLA Silk Pink`); a single new color now attaches to its existing Filament DB master instead of importing standalone; and a stale "skip" override no longer blocks importing under an existing master.
+- **Fewer phantom conflicts** — empty spools no longer spam `new_spool` conflicts when "skip empty & archived" is on, and lingering such conflicts auto-resolve.
 
 ### v0.4.0 (2026-06-21)
 

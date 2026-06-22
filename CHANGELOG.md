@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-22
+
 ### Added
 
 - **OpenPrintTag material settings now sync into Filament DB** — seven standardized
