@@ -911,6 +911,35 @@ def test_wizard_matches_openprinttag_flag(db):
     assert matched[11]["openprinttag"] is False, "untagged filament should have openprinttag=False"
 
 
+def test_wizard_matches_active_spool_count(db):
+    """SM refs expose active_spool_count = number of non-archived spools on that filament."""
+    sm_two = SpoolmanFilament(id=10, name="PLA", material="PLA",
+                              vendor=SpoolmanVendor(id=1, name="Brand"))
+    sm_archived_only = SpoolmanFilament(id=11, name="PETG", material="PETG",
+                                        vendor=SpoolmanVendor(id=1, name="Brand"))
+
+    def _spool(spool_id, fil, archived):
+        return SpoolmanSpool(id=spool_id, filament=fil, remaining_weight=500.0,
+                             archived=archived, extra={})
+
+    spools = [
+        _spool(1, sm_two, False),
+        _spool(2, sm_two, False),
+        _spool(3, sm_archived_only, True),   # archived → not counted
+    ]
+    fdb = [
+        FDBFilament.model_validate({"_id": "f1", "name": "PLA", "vendor": "Brand", "type": "PLA"}),
+        FDBFilament.model_validate({"_id": "f2", "name": "PETG", "vendor": "Brand", "type": "PETG"}),
+    ]
+    client = _client(db, _fake_spoolman(filaments=[sm_two, sm_archived_only], spools=spools),
+                     _fake_filamentdb(filaments=fdb))
+
+    body = client.get("/api/wizard/matches").json()
+    matched = {p["spoolman"]["spoolman_filament_id"]: p["spoolman"] for p in body["matched"]}
+    assert matched[10]["active_spool_count"] == 2, "two active spools should count as 2"
+    assert matched[11]["active_spool_count"] == 0, "only an archived spool → 0 active"
+
+
 def test_wizard_save_matches_persists(db):
     client = _client(db)
     resp = client.post("/api/wizard/matches", json={"decisions": [
@@ -2777,6 +2806,39 @@ def test_wizard_variances_spoolman_returns_groups_and_ungrouped(db):
     # PETG Red is ungrouped
     assert len(body["ungrouped"]) == 1
     assert body["ungrouped"][0]["ref"]["spoolman_filament_id"] == 12
+
+
+def test_wizard_variances_singleton_attaches_to_existing_fdb_master(db):
+    """A SINGLE new color whose cluster matches an existing FDB master forms a group with
+    existing_fdb_parent (so it can attach), instead of dropping to ungrouped/standalone.
+    Regression for 'with multiple base types only the first master matches, others come in
+    standalone' — a lone-variant line is now matched to its existing FDB master."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 12, "action": "create"},
+    ])
+    db.commit()
+    elegoo = SpoolmanVendor(id=1, name="ELEGOO")
+    sm_filaments = [
+        SpoolmanFilament(id=12, name="PETG Red", vendor=elegoo, material="PETG", color_hex="#ff0000"),
+    ]
+    # Existing FDB PETG master (a parent — hasVariants) the singleton should attach to.
+    fdb_master = FDBFilament.model_validate({
+        "_id": "fdb-petg-master", "name": "ELEGOO PETG (Master)", "vendor": "ELEGOO",
+        "type": "PETG", "hasVariants": True,
+    })
+    client = _client(
+        db, _fake_spoolman(filaments=sm_filaments, spools=[]),
+        _fake_filamentdb(filaments=[fdb_master]),
+    )
+
+    body = client.get("/api/wizard/variances").json()
+    assert len(body["groups"]) == 1, body
+    g = body["groups"][0]
+    assert g["existing_fdb_parent"] is not None, "singleton should match the existing FDB master"
+    assert g["existing_fdb_parent"]["filamentdb_filament_id"] == "fdb-petg-master"
+    assert {m["ref"]["spoolman_filament_id"] for m in g["members"]} == {12}
+    assert body["ungrouped"] == []
 
 
 def test_wizard_variances_filters_skip_and_undecided(db):

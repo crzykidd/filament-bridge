@@ -71,6 +71,20 @@ class Settings(BaseSettings):
     # Stored on the Spoolman filament so it travels with the record.
     spoolman_field_openprinttag_ignore: str = "openprinttag_ignore"
 
+    # OpenPrintTag material-setting extra fields on the Spoolman filament entity.
+    # These hold standardized OPT material settings that Spoolman has no native field
+    # for but Filament DB CAN store as first-class fields.  Populated from OpenPrintTag
+    # via the cleanup-tool Apply flow, then synced to FDB by the material-properties
+    # sync pass (same direction/conflict policy as the other material fields).
+    # Registered as TYPED (integer/float) Spoolman extra fields by ensure_extra_fields.
+    spoolman_field_openprinttag_nozzle_temp_min: str = "openprinttag_nozzle_temp_min"
+    spoolman_field_openprinttag_nozzle_temp_max: str = "openprinttag_nozzle_temp_max"
+    spoolman_field_openprinttag_drying_temp: str = "openprinttag_drying_temp"
+    spoolman_field_openprinttag_drying_time: str = "openprinttag_drying_time"
+    spoolman_field_openprinttag_hardness_shore_a: str = "openprinttag_hardness_shore_a"
+    spoolman_field_openprinttag_hardness_shore_d: str = "openprinttag_hardness_shore_d"
+    spoolman_field_openprinttag_transmission_distance: str = "openprinttag_transmission_distance"
+
     # Local OpenTag cache staleness threshold (hours)
     opentag_cache_max_age_hours: int = 24
 

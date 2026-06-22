@@ -709,6 +709,18 @@ def test_patch_fdb_name_plain_color_gets_qualified(db):
     assert result == "ELEGOO PLA Light Blue"
 
 
+def test_patch_fdb_name_no_double_finish_word(db):
+    """Regression: a Silk variant whose SM name carries the finish ("PLA Silk Pink") must not
+    double the finish in the FDB name ("PLA Silk Silk Pink"). The base already includes "Silk",
+    so the color suffix drops the leading finish word → "Buddy3D PLA Silk Pink"."""
+    buddy = SpoolmanVendor(id=1, name="Buddy3D")
+    sm = SpoolmanFilament(id=1, name="PLA Silk Pink", vendor=buddy, material="PLA", weight=1000.0)
+    # Derived base path.
+    assert _patch_fdb_name(sm, variant_keywords=["silk"]) == "Buddy3D PLA Silk Pink"
+    # Explicit master base_name (the variant-attach path) — same result, no double Silk.
+    assert _patch_fdb_name(sm, base_name="Buddy3D PLA Silk", variant_keywords=["silk"]) == "Buddy3D PLA Silk Pink"
+
+
 # ---------------------------------------------------------------------------
 # Stale FilamentMapping / SpoolMapping validation
 # ---------------------------------------------------------------------------
@@ -1085,6 +1097,35 @@ def test_planner_archived_empty_spool_skipped_when_never_import_empties(db):
     assert len(plan.spool_items) == 0, (
         f"Expected 0 spool items when never_import_empties=True, got {len(plan.spool_items)}"
     )
+    # ...and the FILAMENT itself is skipped (no spool-less half-synced record).
+    fil = next(i for i in plan.filament_items if i.sm_filament.id == 63)
+    assert fil.action == "skip", (
+        f"filament with no importable spool must be skipped, got '{fil.action}'"
+    )
+    assert fil.resolved is False
+
+
+def test_planner_filament_with_one_nonempty_spool_still_created(db):
+    """Control: a filament with at least one importable (non-empty) spool is still CREATED when
+    never_import_empties is ON — only the empty siblings are skipped. Guards against over-skipping."""
+    sm_fil = _sm_filament(fid=63, name="Light Purple PLA", weight=1000.0)
+    empty = _sm_spool_archived(65, sm_fil, remaining=-47.98, archived=True)
+    full = _sm_spool(66, sm_fil, remaining=500.0)
+
+    decisions_by_sm = {63: {"spoolman_filament_id": 63, "action": "create"}}
+    plan = _plan_spoolman_to_fdb(
+        db,
+        sm_filaments=[sm_fil],
+        sm_spools=[empty, full],
+        fdb_filaments=[],
+        decisions_by_sm=decisions_by_sm,
+        master_of_sm={},
+        tare_by_sm_spool={},
+        include_empty_spools=False,
+    )
+    fil = next(i for i in plan.filament_items if i.sm_filament.id == 63)
+    assert fil.action == "create", "filament with an importable spool must still be created"
+    assert any(si.action == "create" for si in plan.spool_items), "the non-empty spool imports"
 
 
 # ---- test 3: active empty spool → retired=False when imported ----

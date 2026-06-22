@@ -29,8 +29,25 @@ Created once at startup (`ensure_extra_fields()`). Key names are overridable via
 | `openprinttag_uuid` | text | OpenPrintTag material UUID — written by the OpenTag cleanup tool Apply action |
 | `openprinttag_ignore` | text | `"1"` when the user has suppressed future update alerts for this filament via the Updates Review view; empty string = not ignored |
 
-All extras are stored JSON-encoded (`encode_extra_value`). Everything below writes native
-Spoolman fields or these extras.
+**Filament-level OpenPrintTag material-setting extras** (TYPED; keys overridable via
+`SPOOLMAN_FIELD_OPENPRINTTAG_*` env vars). These hold standardized OPT material settings
+Spoolman has no native field for but Filament DB can store as first-class fields. Populated
+from OpenPrintTag by the OpenTag cleanup Apply flow, then synced ↔ FDB by the
+material-properties sync pass (same direction + conflict policy as the other material fields):
+
+| Field key | Type | FDB counterpart | Purpose |
+|---|---|---|---|
+| `openprinttag_nozzle_temp_min` | integer | `temperatures.nozzleRangeMin` | OPT `nozzleTempMin` (°C) |
+| `openprinttag_nozzle_temp_max` | integer | `temperatures.nozzleRangeMax` | OPT `nozzleTempMax` (°C) |
+| `openprinttag_drying_temp` | integer | `dryingTemperature` | OPT `dryingTemp` (°C) |
+| `openprinttag_drying_time` | integer | `dryingTime` | Drying time in **hours** (OPT minutes ÷60 at Apply time) |
+| `openprinttag_hardness_shore_a` | float | `shoreHardnessA` | OPT `hardnessShoreA` |
+| `openprinttag_hardness_shore_d` | float | `shoreHardnessD` | OPT `hardnessShoreD` |
+| `openprinttag_transmission_distance` | float | `transmissionDistance` | OPT `transmissionDistance` (mm) |
+
+All extras are stored JSON-encoded (`encode_extra_value`) — including the typed numeric ones
+(Spoolman returns `230` as `"230"`, which `decode_extra_value` parses back to `230`).
+Everything below writes native Spoolman fields or these extras.
 
 ## Ongoing auto-sync writes (per cycle, change-driven)
 
@@ -52,6 +69,7 @@ lone change, one-way FDB→SM, or an FDB-winning conflict policy). See
 | Filament | `spool_weight` | Native-scalar sync resolves FDB→SM (from FDB `spoolWeight`) |
 | Filament | `weight` | Native-scalar sync resolves FDB→SM (from FDB `netFilamentWeight`) |
 | Filament | `extra.filamentdb_material_tags` | Finish-tag sync resolves FDB→SM (Filament DB ≥ 1.33.0); CSV of OpenPrintTag IDs from FDB `optTags` |
+| Filament | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` | OpenPrintTag material-setting sync resolves FDB→SM (from the FDB counterpart field). Master/variant-gated SM→FDB; both snapshots refresh after a write (anti-ping-pong) |
 | Spool | `extra.{mapped field}` | Generic field-mapping sync (FR-11) resolves FDB→SM; arbitrary mapped FDB fields stored as spool extras |
 | Spool | `archived` (bool) | Lifecycle sync resolves FDB→SM — a *mapped* spool retired in Filament DB (`retired`) flips Spoolman `archived` to match; un-retire mirrors back (`archived: false`). Runs **after** the weight pass so a depleted spool's final decrement settles first. Governed by `archive_sync_direction` / `archive_conflict_policy`, not by `never_import_empties`. See [sync-model.md](sync-model.md). |
 
@@ -122,6 +140,8 @@ Only the fields the user confirmed (not marked "keep mine") are written.
 | Filament | update | `name` | User confirmed the reviewable name field (defaults to the OpenTag material name) |
 | Filament | update | `vendor` → `vendor_id` | User confirmed the Manufacturer field; the Manufacturer row surfaces whenever SM vendor and OpenTag brand differ by any visible character (including case-only). Resolved via find-or-create (`_ensure_vendor`): exact trimmed name match against existing vendors; creates a new vendor if no exact match. Re-points THIS filament only — existing vendor never renamed, other filaments never touched. A case-only diff intentionally creates a near-duplicate vendor (accepted trade-off). **This is the only OpenTag path that may CREATE a new Spoolman vendor.** |
 | Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes`, `multi_color_direction` (any subset) | User confirmed in the review/confirm UI |
+| Filament | update | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` (any subset) | User confirmed; the seven typed OpenPrintTag material-setting extras. Only emitted as review rows when the OPT material carries the value; `drying_time` is OPT minutes ÷60 → hours |
+| Filament | update | `spool_weight`, `weight` (native) | User confirmed; weight-model bonus from the OPT material→package→container lookup — container `emptyWeight` → `spool_weight` (tare), package `nominalNettoFullWeight` → `weight`. Only surfaced when the dataset has package/container data for the matched material |
 | Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
 | Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |
 | Filament | update | `extra.openprinttag_slug` = `""`, `extra.openprinttag_uuid` = `""` | **Unmatch** — when the user stages "— unmatch —" in the candidate dropdown (decision `clear_identity=true`) or calls `POST /api/openprinttag/clear/{id}`. Blanks both identity extras; does NOT touch `openprinttag_ignore`. |
@@ -160,6 +180,16 @@ apply endpoint.
   actually used for `totalWeight`, so Filament DB's % bar is accurate from first import.
 - The Variances reconcile write-back is the only place the bridge *corrects existing*
   Spoolman filament data; all ongoing-sync writes are change-driven.
+- **OpenTag weight-model bonus interacts with the weight model.** `spool_weight` is the
+  empty-reel tare used in the net↔gross weight conversion (`spoolman_to_fdb_gross` /
+  `fdb_to_spoolman_net`). Writing it from OPT container `emptyWeight` only happens via the
+  user-confirmed OpenTag Apply flow (never automatically each cycle) and changes the tare
+  used by subsequent weight syncs — but since the weight sync stores the *gross* on the FDB
+  side and *net* on the SM side and refreshes both snapshots after each propagation, a tare
+  change does not itself create a weight write or a ping-pong; it only affects the conversion
+  applied to the *next* genuine weight change. `weight` (native, from package
+  `nominalNettoFullWeight`) is the nominal full net weight and is not part of the
+  conversion math.
 - Cross-reference extras are always JSON-encoded via `encode_extra_value` / decoded via
   `decode_extra_value` — never written raw.
 - **Stale cross-refs do not block spool creation.** A `filamentdb_spool_id` extra on a

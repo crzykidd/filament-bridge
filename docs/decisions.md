@@ -1,5 +1,69 @@
 # Decision record
 
+## 2026-06-21 — OpenPrintTag material settings sync as TYPED Spoolman extras → FDB first-class fields
+
+**Context.** OpenPrintTag carries standardized material settings (temps, drying,
+hardness, transmission distance) that Spoolman has no native field for but Filament DB
+*can* store. We wanted those to land in Spoolman and mirror into FDB. (Phase 1 plan in
+`prompts/done/2026-06-21-opentag-extra-fields-sync.md`.)
+
+**Decisions (signed off 2026-06-21).**
+
+1. **Scope = 7 material extra fields + a weight-model bonus.** The seven: nozzle temp
+   min/max, drying temp, drying time, Shore A/D hardness, transmission distance. The
+   bonus populates Spoolman's *native* `spool_weight` (from OPT container `emptyWeight`)
+   and `weight` (from OPT package `nominalNettoFullWeight`) via a new
+   material-slug → package → container lookup (the cache already parses
+   `packages_by_material` / `containers_by_slug`; nothing read them before).
+2. **Typed, not the legacy all-text pattern.** The seven extras register as Spoolman
+   `integer`/`float` fields. `ensure_extra_fields` omits `default_value` for numeric
+   fields (Spoolman 422s on a `""` default for a numeric field). Values still travel
+   JSON-encoded on the wire (`230` ↔ `"230"`), so `encode/decode_extra_value` is unchanged.
+3. **OPT → Spoolman only via the existing review/confirm Apply flow** (not automatic each
+   cycle). `opt_to_spoolman_fields` emits the seven extras (and the two native weight
+   fields when package/container data is supplied) so they surface as review rows and the
+   existing `_build_sm_patch` Apply path writes whatever the user confirms.
+   **`dryingTime` is OPT minutes → FDB hours (÷60)** applied at emit time
+   (`opentag_drying_time_to_fdb_hours`; sample 360 → 6 h). Verified against the dataset.
+4. **Spoolman ↔ FDB rides the existing field-sync logic — no bespoke precedence.** A new
+   engine pass `_sync_opentag_material_fields` mirrors the seven SM extras ↔ their FDB
+   first-class fields under the **material-properties** category's `direction` +
+   `conflict_policy`, structured exactly like `_sync_material_scalars`: per-field
+   `_mp_<sm_key>` baseline, `resolve_sync_action`, master/variant gate via
+   `should_skip_inherited` (inherited+diverged → `master_divergence`, no write), and BOTH
+   snapshots refreshed after any write (anti-ping-pong). The two nozzle-range targets are
+   dotted `temperatures.*` and write via a read-modify-write that preserves sibling temps.
+
+**Weight-model interaction (handled carefully).** `spool_weight` is the tare in the
+net↔gross conversion. It is only ever written by the **user-confirmed** Apply flow, never
+automatically per cycle, so it cannot start a weight loop on its own; and because the
+weight sync stores gross on FDB / net on SM and refreshes both snapshots after each
+propagation, changing the tare only affects the conversion applied to the *next* genuine
+weight change — it does not itself emit a weight write. `weight` (nominal full net) is not
+part of the conversion math.
+
+## 2026-06-21 — `never_import_empties` is honored by the ongoing engine (not just the wizard)
+
+**Context.** `never_import_empties` was documented (CLAUDE.md) as making "the wizard AND ongoing
+new-spool import skip empty/archived spools," but the engine never referenced the setting. Archived
+spools were already excluded from new-spool detection (active-only `sm_spools`, engine.py ~2546),
+but **empty (0 g) active** spools fell through to the `manual_review` path and were re-queued as a
+`new_spool` conflict every cycle — they can never auto-import, so the conflict just regenerated
+forever (observed on Amolen "PLA Basic-High Speed Cream Yellow", SM spool 208).
+
+**Decision.**
+- The new-spool detection loop now skips a zero-remaining spool when `never_import_empties` is on
+  (mirrors the wizard import gate and the existing archived exclusion), logging a `skip` instead of
+  queuing a conflict.
+- The stale-conflict pass now also **auto-resolves** any open `new_spool` conflict whose spool has
+  since become **archived** (regardless of the gate — archived never enters new-spool detection) or
+  **empty with the gate on** (`resolution="resolved_not_imported"`), so pre-existing conflicts from
+  before this fix clear themselves rather than lingering.
+- **Out of scope (left as-is):** the active-only exclusion at ~2546 unconditionally drops archived
+  spools from new-spool detection even when `never_import_empties` is OFF — so the ongoing engine
+  never imports an unmapped archived spool as a retired FDB spool the way the wizard does. Not
+  changed here (the affected user runs with the gate ON); flagged for a future pass if needed.
+
 ## 2026-06-21 — CI is push-only; CodeQL is PR-gated (no dual push+PR triggers)
 
 **Context.** Both `ci.yml` and `codeql.yml` triggered on `push: [dev, main]` AND

@@ -174,7 +174,7 @@ def _find_fdb_by_name(
 # ---------------------------------------------------------------------------
 
 
-def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
+def _sm_ref(sm: SpoolmanFilament, *, active_spool_count: int | None = None) -> FilamentRef:
     opt_uuid_raw = (sm.extra or {}).get(_settings.spoolman_field_openprinttag_uuid)
     return FilamentRef(
         spoolman_filament_id=sm.id,
@@ -183,6 +183,7 @@ def _sm_ref(sm: SpoolmanFilament) -> FilamentRef:
         color=sm.color_hex,  # display-only ref; bare Spoolman format is fine here
         material=sm.material,
         openprinttag=bool(decode_extra_value(opt_uuid_raw)),
+        active_spool_count=active_spool_count,
     )
 
 
@@ -360,6 +361,14 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
         # One xref per filament id is sufficient; first non-empty wins.
         xref_by_sm_filament.setdefault(spool.filament.id, fdb_id)
 
+    # Active (non-archived) spool count per SM filament — surfaced on the Match step so a
+    # filament with 0 active spools (e.g. only archived ones, which won't import) is visible.
+    active_spool_count: dict[int, int] = {}
+    for spool in sm_spools:
+        if spool.filament is None or spool.archived:
+            continue
+        active_spool_count[spool.filament.id] = active_spool_count.get(spool.filament.id, 0) + 1
+
     mr = match_filaments(sm_filaments, fdb_filaments, xref_by_sm_filament=xref_by_sm_filament or None)
 
     # Build set of synthetic parent FDB ids (for is_master_container flag).
@@ -378,7 +387,10 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
 
     matched = [
         MatchPairRow(
-            spoolman=_sm_ref(p.spoolman_filament),
+            spoolman=_sm_ref(
+                p.spoolman_filament,
+                active_spool_count=active_spool_count.get(p.spoolman_filament.id, 0),
+            ),
             filamentdb=_fdb_ref(p.fdb_filament),
             confidence=p.confidence,
             vendor_dedup_hint=_vendor_hint(
@@ -389,14 +401,20 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
         for p in mr.matched
     ]
     ambiguous = [
-        AmbiguousRow(spoolman=_sm_ref(sm), candidates=[_fdb_ref(f) for f in cands])
+        AmbiguousRow(
+            spoolman=_sm_ref(sm, active_spool_count=active_spool_count.get(sm.id, 0)),
+            candidates=[_fdb_ref(f) for f in cands],
+        )
         for sm, cands in mr.ambiguous
     ]
     raw_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     saved_decisions = [MatchDecision.model_validate(d) for d in raw_decisions]
     return WizardMatchesResponse(
         matched=matched,
-        unmatched_spoolman=[_sm_ref(s) for s in mr.unmatched_spoolman],
+        unmatched_spoolman=[
+            _sm_ref(s, active_spool_count=active_spool_count.get(s.id, 0))
+            for s in mr.unmatched_spoolman
+        ],
         unmatched_filamentdb=[
             _fdb_ref(f, is_master_container=_is_master_fdb(f)) for f in mr.unmatched_fdb
         ],
@@ -703,7 +721,12 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
     groups: list[VariancesGroupRow] = []
 
     for (vendor_norm, material_norm, finish_norm), members in clusters.items():
-        if len(members) < 2:
+        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm, finish_norm))  # D3
+        # Group a multi-color cluster, OR a SINGLETON that matches an existing FDB line/master —
+        # so a lone new color attaches to its existing parent instead of importing standalone
+        # ("show all the masters to match to if they exist in Filament DB"). A singleton with no
+        # existing FDB line stays ungrouped (genuinely standalone).
+        if len(members) < 2 and existing_fdb_parent is None:
             continue
         master = max(members, key=lambda f: (spools_per_filament.get(f.id, 0), -len(f.name)))
         grouped_ids.update(m.id for m in members)
@@ -735,7 +758,6 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
         display_base = normalize_name(
             f"{(master.vendor.name + ' ') if master.vendor else ''}{master.material or ''}".strip()
         )
-        existing_fdb_parent = fdb_parent_by_key.get((vendor_norm, material_norm, finish_norm))  # D3
         groups.append(VariancesGroupRow(
             base_name=display_base,
             vendor=master.vendor.name if master.vendor else None,
@@ -1148,15 +1170,44 @@ async def _execute_spoolman_to_fdb(
         # Load container-name overrides dict: cluster_key_str → {name_override, skip}
         _cn_overrides: dict[str, dict] = container_name_overrides or {}
 
+        # Which clusters genuinely collide RIGHT NOW — computed with the SAME logic the dry-run
+        # preview uses (_compute_name_collisions). A "skip" override is only honored for a cluster
+        # that still collides; a leftover skip (set during a past collision that no longer applies —
+        # e.g. the master now exists and is reusable, or nothing matches anymore) must NOT drop a
+        # cluster we can import. This keeps execute consistent with the preview, which is why a
+        # cluster showed "create" in the dry run but "skipped" on execute (reported bug).
+        _gc_container_names = {
+            ck: (
+                _cn_overrides.get(str(ck), {}).get("name_override")
+                or _container_display_name(ms, kw, marker=container_parent_marker)
+            )
+            for ck, ms in _clusters_gc.items() if ms
+        }
+        _gc_colliding_keys: set[str] = {
+            c.cluster_key
+            for c in _compute_name_collisions(plan, fdb_filaments, _gc_container_names)
+            if c.is_container_collision and c.cluster_key
+        }
+
         for cluster_key, members in _clusters_gc.items():
             if not members:
                 continue
 
             cluster_key_str = str(cluster_key)
 
-            # Check for user-set override or skip
+            # Resolve the container display name first (the skip decision below needs it).
             _override_entry = _cn_overrides.get(cluster_key_str, {})
-            if _override_entry.get("skip"):
+            _name_override = _override_entry.get("name_override")
+            if _name_override:
+                display_name = _name_override
+            else:
+                display_name = _container_display_name(members, kw, marker=container_parent_marker)
+            vendor_name = members[0].vendor.name if members[0].vendor else None
+
+            # Honor a "skip" override ONLY for a cluster that genuinely collides right now
+            # (see _gc_colliding_keys above). A stale skip whose collision no longer applies is
+            # ignored, so the cluster imports — attaching to the existing master if one exists.
+            if _override_entry.get("skip") and cluster_key_str in _gc_colliding_keys:
                 logger.info(
                     "wizard execute %s: cluster %s skipped per user container-name override",
                     res.cycle_id, cluster_key_str,
@@ -1164,13 +1215,6 @@ async def _execute_spoolman_to_fdb(
                 for _m in members:
                     _skipped_gc_sm_ids.add(_m.id)
                 continue
-
-            _name_override = _override_entry.get("name_override")
-            if _name_override:
-                display_name = _name_override
-            else:
-                display_name = _container_display_name(members, kw, marker=container_parent_marker)
-            vendor_name = members[0].vendor.name if members[0].vendor else None
 
             # --- Idempotency: find existing synthetic parent for this cluster ---
             # Primary: look for a synthetic FilamentMapping whose filamentdb_id is

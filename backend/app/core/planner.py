@@ -107,9 +107,14 @@ def _patch_fdb_name(
     base_material_lo = base_material_lo.strip()
     if base_material_lo and color_lo.startswith(base_material_lo):
         suffix = color[len(base_material_lo):].strip()
+        # base_name already carries the finish line (e.g. "Silk"); drop a leading finish word from
+        # the color suffix so the variant name isn't doubled ("PLA Silk Silk Pink" → "PLA Silk Pink").
+        finish = extract_finish_line(sm.name or "", raw_material, keywords=variant_keywords)
+        if finish and base_lo.endswith(finish) and suffix.lower().startswith(finish):
+            suffix = suffix[len(finish):].strip()
         if suffix:
             return f"{base_name} {suffix}"
-        # color == material only → return base_name
+        # color == material/finish only → return base_name
         return base_name
 
     if color:
@@ -516,5 +521,22 @@ def _plan_spoolman_to_fdb(
                 retired=_spool_retired,
                 stale_spool_mapping=_stale_spool_mapping,
             ))
+
+    # D4 extension — when empties are excluded (never_import_empties is ON), a filament whose ONLY
+    # spools were empty/depleted ends up with no create-spool-item; importing the filament alone
+    # leaves a spool-less, "unmatched" record (reported: Buddy3D PLA Silk Pink, archived 0 g spool).
+    # Skip the filament too so nothing half-syncs. Archived-but-NON-empty spools still import as
+    # retired above, so those filaments keep a spool and are NOT affected. This is import-only and
+    # does not touch the ongoing archive/retire lifecycle mirroring for already-mapped pairs.
+    if not include_empty_spools:
+        _fil_with_create_spool = {
+            id(si.fil_item) for si in plan.spool_items if si.action == "create"
+        }
+        for item in plan.filament_items:
+            if item.action == "create" and id(item) not in _fil_with_create_spool:
+                item.action = "skip"
+                item.resolved = False
+                item.detail = "all spools empty/archived — skipped (never import empties)"
+                plan.spool_items = [si for si in plan.spool_items if si.fil_item is not item]
 
     return plan

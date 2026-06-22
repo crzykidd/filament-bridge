@@ -1,10 +1,10 @@
 ---
 name: 2026-06-21-opentag-extra-fields-sync
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-06-21
 model: opus              # research + design first, then implementation
-completed:
-result:
+completed: 2026-06-21
+result: Phase 2 done — 7 typed OPT material extras + weight-model bonus; OPT→SM via Apply, SM↔FDB via new engine pass (inheritance + anti-ping-pong); tests + ruff green.
 ---
 
 # Task: Spoolman extra fields for OpenPrintTag settings → sync the FDB-supported ones
@@ -61,6 +61,55 @@ mirrored into Filament DB.
    needed.
 5. Write the proposal into `docs/decisions.md` (or a docs/ design note) and PAUSE for
    user review before Phase 2.
+
+## Phase 1 findings & proposal (completed 2026-06-21 — awaiting sign-off)
+
+Sources: `core/opentag_cache.py:178-223` (SUPPORTED_*_FIELDS), `core/fields.py:17-31`
+(`FDB_SYNCABLE_FIELDS` — the writable FDB allow-list), `schemas/spoolman.py` (native fields),
+`core/opentag_match.py:417-568` (`opt_to_spoolman_fields` — what's already consumed),
+`docs/spoolman-writes.md`. **Key constraint:** the OPT data the bridge consumes today is all
+*material-level*; package/container dicts are cached but only read by the completeness audit, so
+package/container fields need a new material-slug→package→container lookup before they can sync.
+
+**Proposed NEW Spoolman extra fields** (OPT material fields FDB can store but Spoolman lacks
+natively & we don't sync yet). Coverage = # of OPT materials populating it (of ~13k):
+
+| key (env-overridable `SPOOLMAN_FIELD_*`) | OPT source | FDB target (writable) | coverage | conversion |
+|---|---|---|---|---|
+| `openprinttag_nozzle_temp_min` | `nozzleTempMin` | `temperatures.nozzleRangeMin` | 662 | °C int |
+| `openprinttag_nozzle_temp_max` | `nozzleTempMax` | `temperatures.nozzleRangeMax` | 662 | °C int (also feeds native `settings_extruder_temp` today) |
+| `openprinttag_drying_temp` | `dryingTemp` | `dryingTemperature` | 329 | °C |
+| `openprinttag_drying_time` | `dryingTime` | `dryingTime` | 329 | **OPT minutes → FDB hours (÷60)** — sample 360=6h |
+| `openprinttag_hardness_shore_a` | `hardnessShoreA` | `shoreHardnessA` | 682 | numeric |
+| `openprinttag_hardness_shore_d` | `hardnessShoreD` | `shoreHardnessD` | 164 | numeric |
+| `openprinttag_transmission_distance` | `transmissionDistance` | `transmissionDistance` | 125 | mm float |
+
+Out of scope (no FDB home / settings-only): abbreviation, bed/chamber min, preheatTemp,
+heatbreakTemperature (always null), photoUrl, productUrl, all package geo + container geo fields.
+Already native/synced: type, color, secondaryColors, density, bedTempMax, diameter, tags, etc.
+
+**High-value follow-up (separate, NOT new extra fields):** OPT container `emptyWeight`→native
+`spool_weight`→FDB `spoolWeight`, and package `nominalNettoFullWeight`→native `weight`. These are
+native Spoolman targets (no extra field) but aren't populated from OPT today and need the
+package/container lookup. Better weight-model accuracy; decide separately.
+
+**Decisions — SIGNED OFF 2026-06-21:**
+1. **Scope: the 7 material extra fields PLUS the weight-model bonus** — also populate native
+   `spool_weight` from OPT container `emptyWeight` and native `weight` from package full weight
+   (requires the material-slug → package → container lookup). Note: writing `spool_weight` changes
+   the tare used in net↔gross weight conversion — handle that interaction carefully + anti-ping-pong.
+2. **Typed fields** — register the new Spoolman extra fields as integer/float (not the legacy all-
+   `text` pattern). `ensure_extra_fields` must create them with the correct `field_type`.
+3. **OPT → Spoolman via the existing review/confirm Apply flow** — extend the current OpenPrintTag
+   apply path (where the user reviews and confirms OPT values) to also write these new fields.
+   NOT automatic each cycle. dryingTime converts OPT minutes → FDB hours (÷60) at write time.
+4. **Spoolman ↔ FDB: ride the EXISTING field-sync logic** — on initial sync write the values, then
+   on ongoing sync follow the same merge / one-way / conflict-resolution as the other material
+   fields (the material-properties category's `direction` + `conflict_policy`). No bespoke
+   precedence. MUST honor `should_skip_inherited` for FDB variants and refresh BOTH snapshots after
+   any FDB write (anti-ping-pong), same as the existing scalar/temperature sync.
+5. Confirm FDB `dryingTime` unit is hours (apply ÷60). Dataset check: OPT `dryingTime` sample 360
+   ≈ 6 h, i.e. minutes → ÷60. Verify against FDB API once more during build.
 
 ## Phase 2 — implement (after Phase-1 sign-off)
 

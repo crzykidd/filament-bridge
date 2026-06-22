@@ -9,6 +9,78 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-22
+
+### Added
+
+- **OpenPrintTag material settings now sync into Filament DB** — seven standardized
+  OpenPrintTag material settings that Spoolman has no native field for (nozzle temp
+  min/max, drying temperature, drying time, Shore A/D hardness, and transmission
+  distance) are now captured as **typed** (integer/float) Spoolman extra fields and
+  mirrored to/from their first-class Filament DB counterparts
+  (`temperatures.nozzleRangeMin/Max`, `dryingTemperature`, `dryingTime`,
+  `shoreHardnessA`, `shoreHardnessD`, `transmissionDistance`). The bridge registers
+  the extra fields on startup; the OpenTag cleanup **Apply** flow populates them from
+  the matched OpenPrintTag material (drying time is converted from OpenPrintTag minutes
+  to Filament DB hours, ÷60); and the ongoing sync mirrors them under the same
+  material-properties direction + conflict policy as the other material fields,
+  honoring Filament DB variant inheritance and refreshing both snapshots after a write
+  (no ping-pong). Each extra-field key is overridable via a
+  `SPOOLMAN_FIELD_OPENPRINTTAG_*` env var.
+- **OpenTag weight-model bonus** — when the matched OpenPrintTag material has package
+  and container data, the Apply flow now also offers to set Spoolman's native
+  `spool_weight` (empty-reel tare, from the container `emptyWeight`) and `weight`
+  (nominal full net weight, from the package `nominalNettoFullWeight`), giving the
+  weight model an accurate tare from the start.
+- **Bulk Import Match step shows each Spoolman filament's active spool count** — every
+  Spoolman record on the Match step now displays its number of non-archived spools (e.g.
+  `· 0 active spools`, highlighted amber when zero). Makes it obvious at a glance why a
+  filament whose only spools are empty/archived (e.g. `Buddy3D PLA Silk Pink`) won't
+  carry a spool into Filament DB.
+
+### Fixed
+
+- **Bulk Import: a filament whose only spools are empty/archived is no longer half-imported** —
+  with "skip empty & archived" on, the wizard skipped the empty spool but still created the
+  filament (and its master), leaving a spool-less Filament DB record with no Spoolman counterpart
+  that showed as "unmatched" (e.g. an archived 0 g `Buddy3D PLA Silk Pink`). The import now skips
+  the **filament** too when it has no importable spool, so nothing half-syncs. Archived-but-
+  *non-empty* spools still import as retired (a filament with one keeps its spool and is created),
+  and the ongoing archive/retire mirroring for already-mapped pairs is unaffected.
+
+- **Bulk Import: finish-line filament names are no longer doubled** — a Silk/Matte/etc. variant
+  whose Spoolman name carried the finish (e.g. `PLA Silk Pink`) was created in Filament DB with the
+  finish word duplicated (`Buddy3D PLA Silk Silk Pink`), because the line base already includes the
+  finish and the color suffix re-added it. The color suffix now drops a leading finish word when the
+  base already carries it → `Buddy3D PLA Silk Pink`.
+
+- **Bulk Import: a single new color now attaches to its existing Filament DB master instead of
+  importing standalone** — the Variances step only formed a variant group (with the "Attach to
+  «master»" control) for clusters of **2+** selected colors, so a base line where you picked just
+  **one** new color fell through to "ungrouped" and imported as a standalone filament — never
+  matched to the master it already has in Filament DB. With several base types this looked like
+  "only the first master matches, the others come in standalone." A singleton whose
+  (vendor, material, finish) matches an existing FDB parent now forms a group and attaches to that
+  master (still overridable to "Create new parent" / "Standalone"); a singleton with no existing
+  line stays standalone as before.
+
+- **Bulk Import: a stale "skip" override no longer blocks importing under an existing master** —
+  in generic-container mode the wizard execute honored a saved container-name `skip` override
+  unconditionally, so a skip you chose during a *past* name-collision kept silently dropping the
+  whole cluster on every later import — even after the collision was gone (the master now exists
+  and is reusable) and the dry-run preview showed the variants as "create". Execute now honors a
+  `skip` only when the cluster *genuinely* collides right now (using the same collision check as
+  the preview), so a stale skip is ignored and the variants import under the existing master. Fixes
+  "can't sync if the master exists in Filament DB"; preview and execute now agree.
+
+- **Empty spools no longer spam `new_spool` conflicts when "skip empty & archived" is on** —
+  with `never_import_empties` enabled, an empty (0 g) unmapped spool on an already-mapped
+  filament was re-queued as a `new_spool` conflict every sync cycle (it can never auto-import),
+  cluttering the conflict queue. The ongoing sync now honors the gate and skips empty spools the
+  same way the wizard does (archived spools were already excluded from new-spool detection), and
+  it auto-resolves any lingering `new_spool` conflict for a spool that's since become
+  empty/archived (never-importable) so old conflicts clear themselves.
+
 ## [0.4.0] — 2026-06-21
 
 ### Added

@@ -35,7 +35,14 @@ from app.core.color import (
 )
 from app.core.dates import spool_provenance_dates
 from app.core.differ import diff_spool_pair
-from app.core.fields import FieldMapping, get_fdb_field_value, resolve_effective_cost, resolve_field_map, should_skip_inherited
+from app.core.fields import (
+    OPENTAG_EXTRA_FIELDS,
+    FieldMapping,
+    get_fdb_field_value,
+    resolve_effective_cost,
+    resolve_field_map,
+    should_skip_inherited,
+)
 from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text, parse_material_tags, serialize_material_tags
 from app.core.sync_policy import SyncAction, resolve_sync_action
 from app.core.version import MULTICOLOR_MIN_FDB, incompatibilities, version_gte
@@ -1727,6 +1734,296 @@ async def _sync_material_scalars(
 
 
 # ---------------------------------------------------------------------------
+# OpenPrintTag material-setting extras ↔ FDB first-class fields (bidirectional)
+# ---------------------------------------------------------------------------
+
+
+def _norm_opt_field(value: Any, field_type: str) -> Any:
+    """Normalise an OpenPrintTag material-setting value for comparison/storage.
+
+    Integer fields → int (rounded); float fields → 2-decimal float.  ``None``
+    passes through.  Mirrors ``_norm_temp`` / ``_norm_float2``.
+    """
+    if value is None:
+        return None
+    try:
+        if field_type == "integer":
+            return int(round(float(value)))
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _sync_opentag_material_fields(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    dry_run: bool,
+    *,
+    filament_mappings: list[FilamentMapping],
+    sm_filaments: dict[int, Any],
+    fdb_filaments: dict[str, Any],
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
+) -> None:
+    """Bidirectional sync of the seven OpenPrintTag material-setting extras.
+
+    Each ``OPENTAG_EXTRA_FIELDS`` entry maps a TYPED Spoolman filament extra
+    field (``extra.openprinttag_*``) to a writable first-class Filament DB field
+    (e.g. ``temperatures.nozzleRangeMin``, ``dryingTime``, ``shoreHardnessA``).
+
+    This rides the SAME material-properties direction + conflict policy as the
+    native scalar/temperature passes — no bespoke precedence.  SM→FDB writes are
+    master/variant-gated (``should_skip_inherited`` + master_divergence) exactly
+    like ``_sync_material_scalars``; both snapshots are refreshed after any write
+    to prevent ping-pong.  Per-field baseline key: ``_mp_<sm_extra_key>``.
+
+    Note: the OPT→Spoolman population happens via the OpenTag cleanup Apply flow
+    (not here).  This pass only mirrors the already-stored Spoolman extra values
+    to/from Filament DB on ongoing cycles.
+    """
+    for m in filament_mappings:
+        sm_fil = sm_filaments.get(m.spoolman_filament_id)
+        fdb_fil = fdb_filaments.get(m.filamentdb_id)
+        if sm_fil is None or fdb_fil is None:
+            continue
+        label_name = getattr(sm_fil, "name", None) or getattr(fdb_fil, "name", None)
+
+        # Detail view (needed for inherited_fields + dotted temperatures read-modify-write).
+        # Fetched lazily once per pair, only when a field actually has a value to compare.
+        fdb_detail: Any = None
+
+        for ef in OPENTAG_EXTRA_FIELDS:
+            sm_key = getattr(_settings, ef.config_attr)
+            sm_now = _norm_opt_field(decode_extra_value(sm_fil.extra.get(sm_key)), ef.field_type)
+
+            if fdb_detail is None:
+                try:
+                    fdb_detail = await filamentdb.get_filament(m.filamentdb_id)
+                except Exception as exc:
+                    logger.error(
+                        "Cycle %s: opentag-field detail fetch failed %s: %s",
+                        cycle_id, m.filamentdb_id, exc,
+                    )
+                    result.errors += 1
+                    break  # skip all OPT fields for this pair
+            fdb_now = _norm_opt_field(get_fdb_field_value(fdb_detail, ef.fdb_path), ef.field_type)
+
+            if fdb_now is None and sm_now is None:
+                continue
+
+            snap_key = f"_mp_{sm_key}"
+            sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
+            fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
+            sm_then = sm_snap.get(snap_key) if sm_snap else None
+            fdb_then = fdb_snap.get(snap_key) if fdb_snap else None
+
+            def _store(sv: Any, fv: Any, _k: str = snap_key) -> None:
+                _merge_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id), {_k: sv})
+                _merge_snapshot(db, "filamentdb", "filament", m.filamentdb_id, {_k: fv})
+
+            # First sight — store baseline, no write.
+            if sm_then is None and fdb_then is None:
+                if not dry_run:
+                    _store(sm_now, fdb_now)
+                else:
+                    result.preview.append({
+                        "action": "skip", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": ef.label, "old": None, "new": None,
+                        "reason": "first sync of this pair — baseline stored, no diff yet",
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.skipped += 1
+                continue
+
+            sm_changed = sm_then != sm_now
+            fdb_changed = fdb_then != fdb_now
+            if not sm_changed and not fdb_changed:
+                continue
+            # Both changed into agreement → refresh baseline silently.
+            if sm_changed and fdb_changed and sm_now == fdb_now:
+                if not dry_run:
+                    _store(sm_now, fdb_now)
+                continue
+
+            action = resolve_sync_action(
+                sm_changed=sm_changed, fdb_changed=fdb_changed,
+                direction=matprop_direction, policy=matprop_policy,
+            )
+
+            if action == SyncAction.NOOP:
+                continue
+
+            if action == SyncAction.QUEUE_CONFLICT:
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "filament", ef.label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        conflict_type="cross_system",
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "filament", ef.label,
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            spoolman_value=sm_now, filamentdb_value=fdb_now,
+                            conflict_type="cross_system",
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": ef.label, "old": sm_now, "new": fdb_now,
+                        "reason": f"both sides changed {ef.label}",
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.conflicts += 1
+                continue
+
+            if action == SyncAction.PUSH_SM_TO_FDB:
+                # Master/variant gate (same three cases as _sync_material_scalars).
+                has_parent = fdb_detail.parentId is not None
+                inherited = should_skip_inherited(fdb_detail, ef.fdb_path)
+
+                if not has_parent or not inherited:
+                    # Standalone OR already overridden — write directly.
+                    payload = _fdb_field_payload(fdb_detail, ef.fdb_path, sm_now)
+                    if not dry_run:
+                        try:
+                            await filamentdb.update_filament(m.filamentdb_id, payload)
+                            _store(sm_now, sm_now)
+                            _log(
+                                db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                                field_name=ef.label, old_value=fdb_now, new_value=sm_now,
+                            )
+                            result.updated += 1
+                        except Exception as exc:
+                            logger.error(
+                                "Cycle %s: %s SM→FDB failed %s: %s",
+                                cycle_id, ef.label, m.filamentdb_id, exc,
+                            )
+                            _log(
+                                db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                                field_name=ef.label, error_message=str(exc),
+                            )
+                            result.errors += 1
+                    else:
+                        result.preview.append({
+                            "action": "update", "entity_type": "filament",
+                            "direction": "spoolman_to_filamentdb", "label": label_name,
+                            "field": ef.label, "old": fdb_now, "new": sm_now, "reason": None,
+                            "spoolman_id": m.spoolman_filament_id,
+                            "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                        })
+                        result.updated += 1
+                    continue
+
+                # Inherited — compare against the resolved (inherited) value.
+                if sm_now == fdb_now:
+                    logger.info(
+                        "Cycle %s: skip %s SM→FDB for FDB filament %s "
+                        "— matches inherited master, left inherited",
+                        cycle_id, ef.label, m.filamentdb_id,
+                    )
+                    if dry_run:
+                        result.preview.append({
+                            "action": "skip", "entity_type": "filament",
+                            "direction": "spoolman_to_filamentdb", "label": label_name,
+                            "field": ef.label, "old": None, "new": None,
+                            "reason": "matches inherited master — left inherited",
+                            "spoolman_id": m.spoolman_filament_id,
+                            "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                        })
+                    result.skipped += 1
+                    continue
+
+                # Inherited AND diverges from master — queue master_divergence (no write).
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "filament", ef.label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        conflict_type="master_divergence",
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "filament", ef.label,
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            spoolman_value=sm_now, filamentdb_value=fdb_now,
+                            conflict_type="master_divergence",
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict", "entity_type": "filament", "direction": None,
+                        "label": label_name, "field": ef.label, "old": sm_now, "new": fdb_now,
+                        "reason": (
+                            f"SM→FDB would override inherited master field {ef.label!r} "
+                            "— master_divergence queued (approval required)"
+                        ),
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.conflicts += 1
+                continue
+
+            if action == SyncAction.PUSH_FDB_TO_SM:
+                # FDB→SM — write the resolved FDB value back into the SM extra field.
+                if not dry_run:
+                    try:
+                        await spoolman.update_filament(
+                            m.spoolman_filament_id,
+                            {"extra": {sm_key: encode_extra_value(fdb_now)}},
+                        )
+                        _store(fdb_now, fdb_now)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=ef.label, old_value=sm_now, new_value=fdb_now,
+                        )
+                        result.updated += 1
+                    except Exception as exc:
+                        logger.error(
+                            "Cycle %s: %s FDB→SM failed %s: %s",
+                            cycle_id, ef.label, m.spoolman_filament_id, exc,
+                        )
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                            spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                            field_name=ef.label, error_message=str(exc),
+                        )
+                        result.errors += 1
+                else:
+                    result.preview.append({
+                        "action": "update", "entity_type": "filament",
+                        "direction": "filamentdb_to_spoolman", "label": label_name,
+                        "field": ef.label, "old": sm_now, "new": fdb_now, "reason": None,
+                        "spoolman_id": m.spoolman_filament_id,
+                        "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                    })
+                    result.updated += 1
+
+
+def _fdb_field_payload(fdb_detail: Any, fdb_path: str, value: Any) -> dict:
+    """Build an FDB ``update_filament`` payload for a (possibly dotted) field.
+
+    For a dotted ``temperatures.<attr>`` path, read-modify-write the whole
+    ``temperatures`` object so sibling temps are preserved (same approach as
+    ``_sync_material_props``).  For a scalar path, write the single field.
+    """
+    parts = fdb_path.split(".", 1)
+    if len(parts) == 1:
+        return {fdb_path: value}
+    obj_name, attr = parts
+    current = getattr(fdb_detail, obj_name, None)
+    obj_payload = current.model_dump() if current is not None else {}
+    obj_payload[attr] = value
+    return {obj_name: obj_payload}
+
+
+# ---------------------------------------------------------------------------
 # Finish-tag sync (OpenPrintTag model, bidirectional)
 # ---------------------------------------------------------------------------
 
@@ -2494,6 +2791,10 @@ async def run_sync_cycle(
     # New-record handling policies.
     new_filament_policy: str = config.get("new_filament_policy", "manual_review") or "manual_review"
     new_spool_policy: str = config.get("new_spool_policy", "manual_review") or "manual_review"
+    # Import-only gate: when set, ongoing new-spool import skips zero-remaining (empty)
+    # spools the same way the wizard does. (Archived spools are already excluded from
+    # new-spool detection below — see the active-only `sm_spools` set.)
+    never_import_empties: bool = bool(config.get("never_import_empties", False))
     # Variant grouping config (needed by new-filament auto-import path).
     _engine_variant_parent_mode: str = config.get("variant_parent_mode", "unset") or "unset"
     _engine_variant_keywords_raw: str = config.get("variant_line_keywords", "") or ""
@@ -2564,10 +2865,12 @@ async def run_sync_cycle(
     mapped_sm_spool_ids: set[int] = {m.spoolman_spool_id for m in spool_mappings}
     mapped_fdb_spool_ids: set[str] = {m.filamentdb_spool_id for m in spool_mappings}
 
-    # ---- Clear stale new_spool conflicts for now-mapped spools ----
+    # ---- Clear stale new_spool conflicts that no longer apply ----
     # A spool may have accumulated open new_spool conflicts before it was mapped
-    # (e.g. via the wizard). Auto-resolve them now so the queue stays clean.
-    if not dry_run and (mapped_sm_spool_ids or mapped_fdb_spool_ids):
+    # (e.g. via the wizard), OR a previously-conflicted spool may now be archived /
+    # empty-with-never_import_empties — meaning it will never import and the conflict
+    # would otherwise linger forever. Auto-resolve both so the queue stays clean.
+    if not dry_run:
         _now = datetime.datetime.now(datetime.timezone.utc)
         stale_conflicts = (
             db.query(Conflict)
@@ -2579,10 +2882,18 @@ async def run_sync_cycle(
             .all()
         )
         for stale in stale_conflicts:
-            if (
+            now_mapped = (
                 (stale.spoolman_id is not None and stale.spoolman_id in mapped_sm_spool_ids)
                 or (stale.filamentdb_spool_id is not None and stale.filamentdb_spool_id in mapped_fdb_spool_ids)
-            ):
+            )
+            _sp = (
+                sm_spools_with_archived.get(stale.spoolman_id)
+                if stale.spoolman_id is not None else None
+            )
+            not_importable = _sp is not None and (
+                _sp.archived or (never_import_empties and (_sp.remaining_weight or 0.0) <= 0.0)
+            )
+            if now_mapped:
                 stale.resolved_at = _now
                 stale.resolution = "resolved_mapped"
                 _log(
@@ -2591,6 +2902,16 @@ async def run_sync_cycle(
                     fdb_spool_id=stale.filamentdb_spool_id,
                     field_name="new_spool",
                     error_message="auto-resolved stale new_spool conflict (spool is now mapped)",
+                )
+            elif not_importable:
+                stale.resolved_at = _now
+                stale.resolution = "resolved_not_imported"
+                _log(
+                    db, cycle_id, "auto", "info", "spool",
+                    spoolman_id=stale.spoolman_id,
+                    fdb_spool_id=stale.filamentdb_spool_id,
+                    field_name="new_spool",
+                    error_message="auto-resolved stale new_spool conflict (spool archived/empty — never imported)",
                 )
 
     # Synthetic parents (is_synthetic_parent=True) have no Spoolman counterpart.
@@ -3316,6 +3637,22 @@ async def run_sync_cycle(
         matprop_policy=matprop_policy,
     )
 
+    # ---- OpenPrintTag material-setting extras ↔ FDB first-class fields ----
+    # The seven typed openprinttag_* extras (nozzle range, drying temp/time, shore
+    # hardness, transmission distance) mirror to/from their FDB counterparts under
+    # the same material-properties direction + conflict policy.  SM→FDB writes are
+    # master/variant-gated; both snapshots refresh after a write (anti-ping-pong).
+    await _sync_opentag_material_fields(
+        db, cycle_id, result, dry_run,
+        filament_mappings=filament_mappings,
+        sm_filaments=sm_filaments,
+        fdb_filaments=fdb_filaments,
+        spoolman=spoolman,
+        filamentdb=filamentdb,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
+    )
+
     # ---- Finish-tag sync (OpenPrintTag material-tags, bidirectional) ----
     # Gated on FDB >= 1.33.0: optTags (the FDB finish-tag carrier) shipped with that release.
     await _sync_finish_tags(
@@ -3343,6 +3680,19 @@ async def run_sync_cycle(
             fdb_spool_id = decode_extra_value(fdb_spool_id_raw)
             if fdb_spool_id and fdb_spool_id in fdb_spool_index:
                 continue  # has live cross-ref but no SpoolMapping row — orphan, skip
+            # never_import_empties: don't import (or queue a conflict for) a zero-remaining
+            # spool. Without this an empty unmapped spool on a mapped filament was re-queued
+            # as a `new_spool` conflict every cycle (it can never auto-import). Archived spools
+            # are already excluded upstream (active-only `sm_spools`).
+            if never_import_empties and (sm_spool.remaining_weight or 0.0) <= 0.0:
+                if not dry_run:
+                    _log(
+                        db, cycle_id, "spoolman_to_filamentdb", "skip", "spool",
+                        spoolman_id=sm_spool.id,
+                        field_name="never_import_empties",
+                        new_value="skipped empty spool (0 g remaining)",
+                    )
+                continue
             await _handle_new_sm_spool(
                 db, cycle_id, result, dry_run,
                 sm_spool, filament_mappings_by_sm, fdb_filaments,

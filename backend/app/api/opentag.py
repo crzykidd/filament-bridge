@@ -389,13 +389,23 @@ def _build_candidate(
     material: dict[str, Any],
     confidence: float,
     tag_map: dict[str, Any],
+    packages_by_material: dict[str, list[dict[str, Any]]] | None = None,
+    containers_by_slug: dict[str, dict[str, Any]] | None = None,
 ) -> OpenTagCandidate:
     """Build an OpenTagCandidate from a material dict for a given SM filament.
 
     Computes the per-field comparison (SM current vs this candidate's OPT values),
     the multicolor_mismatch flag, and assembles the identity fields.
+
+    ``packages_by_material`` / ``containers_by_slug`` (when supplied) let the
+    OpenPrintTag material-setting extras and the weight-model bonus fields
+    (spool_weight / weight) surface as review rows.
     """
-    opt_fields = opt_to_spoolman_fields(material, tag_map)
+    slug = material.get("slug")
+    pkgs = (packages_by_material or {}).get(slug) if slug else None
+    opt_fields = opt_to_spoolman_fields(
+        material, tag_map, packages=pkgs, containers_by_slug=containers_by_slug,
+    )
     field_rows = _build_field_rows(sm_fil, opt_fields)
     opt_profile = opt_color_profile(material, tag_map)
     sm_profile = sm_color_profile(sm_fil)
@@ -682,6 +692,8 @@ def _compute_matches(
     vendor_aliases: dict[str, str],
     uuid_field: str,
     ignore_field: str,
+    packages_by_material: dict[str, list[dict[str, Any]]] | None = None,
+    containers_by_slug: dict[str, dict[str, Any]] | None = None,
 ) -> list[OpenTagFilamentMatch]:
     """Pure-CPU OpenTag match computation — safe to run in a worker thread.
 
@@ -794,7 +806,10 @@ def _compute_matches(
             best = by_uuid[existing_uuid]
             confidence = 1.0
             matched += 1
-            best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+            best_candidate = _build_candidate(
+                sm_fil, best, confidence, tag_map,
+                packages_by_material, containers_by_slug,
+            )
 
             # Compute alternates (un-bypass): gate this filament's brand candidates and
             # score them, excluding the already-pinned exact match.
@@ -810,7 +825,10 @@ def _compute_matches(
                 for alt_mat, alt_score in alt_pairs:
                     if alt_mat.get("uuid") == existing_uuid:
                         continue  # already pinned as best
-                    tagged_candidates.append(_build_candidate(sm_fil, alt_mat, alt_score, tag_map))
+                    tagged_candidates.append(_build_candidate(
+                        sm_fil, alt_mat, alt_score, tag_map,
+                        packages_by_material, containers_by_slug,
+                    ))
 
             differs = _data_differs(best_candidate)
             has_update = differs and not ignored_updates
@@ -893,12 +911,18 @@ def _compute_matches(
 
         # multicolor_mismatch: SM is multicolor but the matched OPT entry is NOT
         # (no secondaryColors AND no arrangement tag).
-        best_candidate = _build_candidate(sm_fil, best, confidence, tag_map)
+        best_candidate = _build_candidate(
+            sm_fil, best, confidence, tag_map,
+            packages_by_material, containers_by_slug,
+        )
 
         # Build structured candidates list: best first, then up to 5 alternates.
         structured_candidates: list[OpenTagCandidate] = [best_candidate]
         for alt_mat, alt_score in zip(alternates, alternate_scores):
-            structured_candidates.append(_build_candidate(sm_fil, alt_mat, alt_score, tag_map))
+            structured_candidates.append(_build_candidate(
+                sm_fil, alt_mat, alt_score, tag_map,
+                packages_by_material, containers_by_slug,
+            ))
 
         # has_update: already tagged (has existing_uuid) and data has drifted,
         # but the user has not suppressed this filament via openprinttag_ignore.
@@ -1004,6 +1028,8 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
 
     materials: list[dict[str, Any]] = dataset["materials"]
     dataset_lexicon: dict[str, list[str]] | None = dataset.get("lexicon")
+    packages_by_material: dict[str, list[dict[str, Any]]] = dataset.get("packages_by_material", {})
+    containers_by_slug: dict[str, dict[str, Any]] = dataset.get("containers_by_slug", {})
     _record_last_count(dataset["count"])
 
     sm_filaments = await sm.get_filaments()
@@ -1018,6 +1044,8 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
         vendor_aliases,
         field_names["uuid"],
         field_names["ignore"],
+        packages_by_material,
+        containers_by_slug,
     )
 
     updates_count = sum(1 for m in matches if m.has_update)
@@ -1425,6 +1453,8 @@ async def opentag_search(
 
     materials: list[dict[str, Any]] = [m for m in cache.get("materials", []) if isinstance(m, dict)]
     dataset_lexicon: dict[str, list[str]] | None = cache.get("lexicon")
+    packages_by_material: dict[str, list[dict[str, Any]]] = cache.get("packages_by_material", {})
+    containers_by_slug: dict[str, dict[str, Any]] = cache.get("containers_by_slug", {})
 
     # Resolve config off the data sources, then offload the pure scoring loop.
     _aliases_raw, tag_map, vendor_aliases, _field_names = _resolve_match_config()
@@ -1432,6 +1462,7 @@ async def opentag_search(
     results = await run_in_threadpool(
         _compute_search,
         materials, dataset_lexicon, tag_map, vendor_aliases, brand, material, q, limit,
+        packages_by_material, containers_by_slug,
     )
     return OpenTagSearchResponse(results=results)
 
@@ -1445,6 +1476,8 @@ def _compute_search(
     material: str,
     q: str,
     limit: int,
+    packages_by_material: dict[str, list[dict[str, Any]]] | None = None,
+    containers_by_slug: dict[str, dict[str, Any]] | None = None,
 ) -> list[OpenTagCandidate]:
     """Pure-CPU manual-search scoring — safe to run in a worker thread (no I/O)."""
     from app.core.opentag_match import DEFAULT_COLOR_KEYWORDS
@@ -1492,7 +1525,11 @@ def _compute_search(
 
     results: list[OpenTagCandidate] = []
     for conf, mat in scored[:limit]:
-        opt_fields = opt_to_spoolman_fields(mat, tag_map)
+        _slug = mat.get("slug")
+        _pkgs = (packages_by_material or {}).get(_slug) if _slug else None
+        opt_fields = opt_to_spoolman_fields(
+            mat, tag_map, packages=_pkgs, containers_by_slug=containers_by_slug,
+        )
         sm_for_fields = _SpoolmanFilament(
             id=0,
             name=q or "",
