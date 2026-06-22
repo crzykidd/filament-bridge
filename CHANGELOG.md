@@ -9,8 +9,19 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-06-22
+
 ### Fixed
 
+- **Archived Spoolman spools are no longer mistaken for deleted records** — the bridge was
+  asking Spoolman for archived spools with a query parameter Spoolman doesn't recognize, so
+  it silently received only the *active* spools. Once a spool was archived in Spoolman (for
+  example when a retired Filament DB spool mirrored across), it vanished from the bridge's
+  view and the next sync raised a false **"upstream record deleted (spoolman)"** conflict.
+  The bridge now uses Spoolman's `allow_archived` parameter, so archived spools stay visible
+  and mirror correctly. Any false deletion conflict already sitting in the queue auto-resolves
+  on the next sync once both sides are seen again. This also fixes archived spools being
+  invisible to the Bulk Import Wizard.
 - **Bulk Import Variances: attaching to an existing Filament DB master no longer asks you to
   pick a Spoolman color as the master** — when a group attaches to an existing Filament DB
   parent (e.g. `ELEGOO PLA (Master)`), that parent *is* the master and every Spoolman color
