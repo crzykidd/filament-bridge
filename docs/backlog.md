@@ -7,8 +7,8 @@ Work top-to-bottom. Within a tier, issues are roughly independent unless a depen
 
 ## Tier 1 — Bugs (do first)
 
-1. **[#21](https://github.com/crzykidd/filament-bridge/issues/21)** — `cross_system` conflict resolve re-queues next cycle (resolve is a no-op on the data). _Confirmed empirically._ Fix: generalize the lifecycle resolve path (write the chosen value upstream + refresh both snapshots). Add a regression test (resolve → 2nd cycle → no re-queue, data converged).
-2. **[#22](https://github.com/crzykidd/filament-bridge/issues/22)** — sync-log retention only prunes on auto-sync ticks; never prunes when auto-sync is off. Prune on manual trigger and/or the nightly backup job.
+1. ~~**[#21](https://github.com/crzykidd/filament-bridge/issues/21)** — `cross_system` conflict resolve re-queues next cycle.~~ ✅ **Fixed on `dev`** (`af9028d` per-row + `5fd1283` bulk-resolve): `apply_cross_system_conflict` writes the chosen value to both sides + refreshes both snapshots for every field family; weight is a direct absolute write; bulk-resolve converges with per-conflict failure isolation. Closes on the next release PR (`Fixes #21`).
+2. **[#22](https://github.com/crzykidd/filament-bridge/issues/22)** — sync-log retention only prunes on auto-sync ticks; never prunes when auto-sync is off. Prune on manual trigger and/or the nightly backup job. ← **next**
 
 ## Tier 2 — Wizard UX behavior changes
 
