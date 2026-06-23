@@ -390,19 +390,82 @@ def test_resolve_manual_requires_value(db):
 
 
 def test_bulk_resolve(db):
-    for sid in (1, 2, 3):
-        db.add(Conflict(entity_type="spool", spoolman_id=sid, field_name="weight",
-                        filamentdb_value=json.dumps(sid)))
+    """bulk-resolve CONVERGES cross_system conflicts (writes to both sides) and skips
+    missing/already-resolved ids (#21)."""
+    from app.schemas.filamentdb import FDBFilamentDetail
+    for sid, spool in ((1, "spool-1"), (2, "spool-2")):
+        db.add(Conflict(
+            entity_type="spool", spoolman_id=sid,
+            filamentdb_filament_id="fil-1", filamentdb_spool_id=spool,
+            field_name="weight", conflict_type="cross_system",
+            spoolman_value=json.dumps(700.0 + sid), filamentdb_value=json.dumps(1000.0 + sid),
+        ))
+        _snap(db, "spoolman", str(sid), {"remaining_weight": 700.0 + sid})
+        _snap(db, "filamentdb", spool, {"totalWeight": 1000.0 + sid})
     db.commit()
     ids = [c.id for c in db.query(Conflict).all()]
-    client = _client(db)
+
+    spoolman = _fake_spoolman()
+    fdb_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-1", "name": "PLA", "spoolWeight": 200.0, "_inherited": [],
+        "spools": [{"_id": "spool-1", "totalWeight": 1001.0, "retired": False},
+                   {"_id": "spool-2", "totalWeight": 1002.0, "retired": False}],
+    })
+    filamentdb = _fake_filamentdb(detail=fdb_detail)
+    client = _client(db, spoolman, filamentdb)
 
     resp = client.post("/api/conflicts/bulk-resolve",
-                       json={"ids": ids + [999], "resolution": "filamentdb"})
+                       json={"ids": ids + [999], "resolution": "spoolman"})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["resolved"] == 3
+    assert body["resolved"] == 2
     assert body["skipped"] == [999]
+    assert body["failed"] == []
+    # Converged: each conflict wrote to BOTH systems.
+    assert spoolman.update_spool.await_count == 2
+    assert filamentdb.update_spool.await_count == 2
+    # Open queue is empty — none re-queue.
+    assert client.get("/api/conflicts?status=open").json() == []
+
+
+def test_bulk_resolve_failure_isolation(db):
+    """A conflict whose apply fails (unsupported field) lands in `failed` and stays open;
+    the other conflicts in the batch still converge."""
+    from app.schemas.filamentdb import FDBFilamentDetail
+    db.add(Conflict(
+        entity_type="spool", spoolman_id=1,
+        filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1",
+        field_name="weight", conflict_type="cross_system",
+        spoolman_value=json.dumps(700.0), filamentdb_value=json.dumps(1000.0),
+    ))
+    _snap(db, "spoolman", "1", {"remaining_weight": 700.0})
+    _snap(db, "filamentdb", "spool-1", {"totalWeight": 1000.0})
+    db.add(Conflict(
+        entity_type="filament", spoolman_id=5,
+        filamentdb_filament_id="fil-5",
+        field_name="bogus_unmapped_field", conflict_type="cross_system",
+        spoolman_value=json.dumps("a"), filamentdb_value=json.dumps("b"),
+    ))
+    db.commit()
+    good_id, bad_id = [c.id for c in db.query(Conflict).order_by(Conflict.id).all()]
+
+    spoolman = _fake_spoolman()
+    fdb_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-1", "name": "PLA", "spoolWeight": 200.0, "_inherited": [],
+        "spools": [{"_id": "spool-1", "totalWeight": 1000.0, "retired": False}],
+    })
+    filamentdb = _fake_filamentdb(detail=fdb_detail)
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/conflicts/bulk-resolve",
+                       json={"ids": [good_id, bad_id], "resolution": "spoolman"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["resolved"] == 1
+    assert body["failed"] == [bad_id]
+    # Good one converged and left the queue; the unsupported one stays open.
+    open_ids = [c["id"] for c in client.get("/api/conflicts?status=open").json()]
+    assert open_ids == [bad_id]
 
 
 def test_resolve_deletion_conflict_removes_mapping_and_snapshots(db):

@@ -17,7 +17,9 @@ GitHub release.
   unchanged divergence was re-detected and a brand-new conflict re-queued every sync cycle.
   Resolving now writes the chosen value to **both** systems and refreshes both snapshots
   (mirroring the lifecycle and master-divergence paths), so it converges and stays resolved.
-  Weight conflicts apply as a direct absolute write to both sides (no usage entry). (#21)
+  Weight conflicts apply as a direct absolute write to both sides (no usage entry).
+  **Bulk-resolve converges the same way**, isolating any single failed write (returned in a
+  `failed` list, left open) so the rest of the batch still resolves. (#21)
 
 ### Added
 

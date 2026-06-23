@@ -186,6 +186,8 @@ export interface BulkResolveRequest {
 export interface BulkResolveResponse {
   resolved: number
   skipped: number[]
+  /** cross_system conflicts whose upstream write failed/was unsupported — left open (#21). */
+  failed: number[]
 }
 
 // ---------------------------------------------------------------------------

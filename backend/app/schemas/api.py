@@ -199,6 +199,9 @@ class BulkResolveRequest(BaseModel):
 class BulkResolveResponse(BaseModel):
     resolved: int
     skipped: list[int] = Field(default_factory=list)
+    # cross_system conflicts converge on resolve (write upstream); a conflict whose
+    # upstream write fails or is unsupported lands here and stays open (#21).
+    failed: list[int] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

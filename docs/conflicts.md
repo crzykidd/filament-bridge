@@ -62,8 +62,13 @@ Each field family reuses its sync pass's exact write + conversion + snapshot key
 
 If an upstream write fails, the resolve returns an error and **leaves the conflict open**
 (no partial snapshot advance). A conflict whose field has no known apply path is rejected
-visibly rather than silently recorded. (Bulk-resolve currently records the choice without
-the converge writes; prefer the per-row resolve for cross-system fields.)
+visibly rather than silently recorded.
+
+**Bulk-resolve converges too.** `POST /conflicts/bulk-resolve` routes each `cross_system`
+conflict through the same converge path, committing per conflict so a single upstream-write
+failure isolates to that conflict: it is returned in the response `failed[]` list and left
+open, while the rest of the batch still converges. Deletion-marker and master-divergence
+conflicts keep their record-only / per-row-action behavior in bulk.
 
 ### Master divergence — applies upstream on resolve
 
