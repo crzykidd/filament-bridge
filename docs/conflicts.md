@@ -35,13 +35,35 @@ Expanding a conflict row shows:
 
 ## What resolving does, per type
 
-### Cross-system (weight / property / multicolor) — record-only
+### Cross-system (weight / property / multicolor) — converges on resolve
 
 The expanded card shows the conflicting values side-by-side. Pick **Use Spoolman**,
-**Use Filament DB**, or enter a **Manual value**. This records your choice and removes
-the conflict from the queue — **it does not write the value upstream.** Make the actual
-edit in whichever system you chose against, and the next sync cycle propagates it
-normally. (Bulk-resolve works the same way for many rows at once.)
+**Use Filament DB**, or enter a **Manual value**. Resolving **writes the chosen value to
+BOTH systems and refreshes both snapshots**, then removes the conflict from the queue — so
+the next sync cycle re-reads the agreed value and does not re-queue it (GitHub #21). This
+is human-approved reconciliation, not silent auto-apply: choosing a side *is* the approval.
+
+Each field family reuses its sync pass's exact write + conversion + snapshot key:
+
+- **Weight** — a **direct absolute write** to both sides: Spoolman `remaining_weight = W`,
+  Filament DB `totalWeight = W + tare`. **No usage entry is logged** — a human-approved
+  reconciliation is a correction (the same path as a weight *increase*), so the usage-delta
+  audit trail is intentionally bypassed. `W` is the net remaining weight in Spoolman units:
+  *Use Spoolman* → the stored SM value; *Use Filament DB* → stored FDB `totalWeight − tare`;
+  *Manual* → the value you entered (net).
+- **Multicolor / material-tags** — these conflicts store a system-agnostic *signature*, so
+  the write payload is re-derived from the chosen side's **live** state (via the same
+  `core/color` / `core/material_tags` converters the engine uses) and written to both sides.
+  Manual entry is not supported for these (no single scalar represents the state) — pick a side.
+- **Cost, temperatures, native scalars, OpenPrintTag material-setting fields, and dynamic
+  `FIELD_MAPPINGS` extras** — the chosen value is written to the native field on each system
+  (Filament DB temperature objects are read-modify-written so sibling temps survive; the
+  `material ↔ type` / `weight ↔ netFilamentWeight` name remaps are honored).
+
+If an upstream write fails, the resolve returns an error and **leaves the conflict open**
+(no partial snapshot advance). A conflict whose field has no known apply path is rejected
+visibly rather than silently recorded. (Bulk-resolve currently records the choice without
+the converge writes; prefer the per-row resolve for cross-system fields.)
 
 ### Master divergence — applies upstream on resolve
 

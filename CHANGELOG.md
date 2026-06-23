@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Resolving a cross-system conflict now actually applies your choice** — previously,
+  picking a value for a standard (weight / cost / property / multicolor / material-tags /
+  field-mapping) conflict only recorded the choice and wrote nothing upstream, so the
+  unchanged divergence was re-detected and a brand-new conflict re-queued every sync cycle.
+  Resolving now writes the chosen value to **both** systems and refreshes both snapshots
+  (mirroring the lifecycle and master-divergence paths), so it converges and stays resolved.
+  Weight conflicts apply as a direct absolute write to both sides (no usage entry). (#21)
+
 ### Added
 
 - **Scheduled nightly backups** — the bridge now runs a built-in nightly job (on by

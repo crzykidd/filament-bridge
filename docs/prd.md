@@ -373,13 +373,27 @@ Field names are configurable via environment variables.
   "See conflict" button)
 - For each standard conflict: show both values, let user pick one or enter a manual value
 - **Every conflict row displays two text-badge links** — "FDB" (blue) linking to Filament DB, "SM" (emerald) linking to Spoolman — to the affected record (same URL patterns as FR-4)
-- **Standard (cross_system) conflicts are record-only:** resolving records the chosen value
-  and removes the conflict from the open queue — it does NOT write the value upstream.
-  Deletion conflicts additionally clean up the orphaned bridge mapping and snapshots.
-  New-spool / new-filament conflicts can be **dismissed OR imported directly from the
-  conflict UI** — `POST /conflicts/{id}/import` (driven by `GET /conflicts/{id}/filament-suggestions`)
-  creates the single record, and the Conflicts "Bulk Add" modal imports several at once.
-  The wizard remains the bulk path; the conflict queue is no longer dismiss-only.
+- **Standard (cross_system) conflicts converge on resolve:** resolving WRITES the chosen
+  value to BOTH systems and refreshes both snapshots, then removes the conflict from the open
+  queue. This is human-approved reconciliation (not silent auto-apply) and mirrors how the
+  lifecycle and master-divergence paths already converge — the next sync cycle re-reads the
+  agreed value and does not re-queue (GitHub #21). Every field family is handled by reusing
+  the matching sync-pass write + conversion + snapshot key: `weight` (a **direct absolute
+  write** to both sides — SM `remaining_weight = W`, FDB `totalWeight = W + tare`; **no usage
+  entry**, consistent with the weight-increase correction path), `multicolor`/`material_tags`
+  (signature-based — the write payload is re-derived from the chosen side's live state),
+  `cost`, the temperature/scalar/OpenPrintTag material-property fields, and dynamic
+  `FIELD_MAPPINGS` extra fields. `weight` resolution: `spoolman` → stored SM net; `filamentdb`
+  → stored FDB gross − tare; `manual` → the value entered, interpreted as net (Spoolman units).
+  A conflict whose `field_name` has no known apply path returns **422** (visible, never a silent
+  record-only no-op); `multicolor`/`material_tags` reject `manual` (no scalar representation).
+  Any upstream write failure returns **502** and leaves the conflict open with no partial
+  snapshot advance. Deletion conflicts remain record-only and additionally clean up the
+  orphaned bridge mapping and snapshots. New-spool / new-filament conflicts can be **dismissed
+  OR imported directly from the conflict UI** — `POST /conflicts/{id}/import` (driven by
+  `GET /conflicts/{id}/filament-suggestions`) creates the single record, and the Conflicts
+  "Bulk Add" modal imports several at once. The wizard remains the bulk path; the conflict
+  queue is no longer dismiss-only.
 - **Master-divergence conflicts apply upstream on resolve** (human-approved, never silent).
   The expanded card fetches `GET /conflicts/{id}/divergence-context` (master + full variant
   line with live values and inherited/overridden status) and offers three actions:

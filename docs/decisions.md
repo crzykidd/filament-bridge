@@ -1,5 +1,50 @@
 # Decision record
 
+## 2026-06-23 — Cross-system conflict resolution converges (writes both sides on resolve) (issue #21)
+
+**Context.** Resolving a standard (`cross_system`) conflict was record-only: it stored the
+chosen value on the `Conflict` row but wrote nothing upstream and never advanced the snapshot
+baseline. Since the underlying divergence was untouched, the next `run_sync_cycle` re-detected
+it and queued a brand-new conflict — every cycle, forever. The user's pick had no effect on the
+data. The lifecycle (`field_name="lifecycle"`) and `master_divergence` paths already converged
+by writing both sides + refreshing snapshots; standard conflicts were the odd one out.
+
+**Decision.** Generalize the lifecycle resolve path to ALL `cross_system` field types via
+`core/conflict_apply.py:apply_cross_system_conflict(conflict, resolution, manual_value, db,
+spoolman, filamentdb)`, dispatched from `POST /conflicts/{id}/resolve`. For each field it
+(1) computes the target value from the conflict's stored values or the manual payload,
+(2) writes it to BOTH systems using the SAME client calls + conversions as the matching engine
+pass, and (3) refreshes BOTH snapshot keys to the converged value so the differ doesn't
+re-detect it. Each family mirrors its pass exactly: `weight` (spool), `cost`, `multicolor`,
+`material_tags`, the temperature/native-scalar/OpenPrintTag material-property fields (snapshot
+key `_mp_<sm_field>`, FDB temperature objects read-modify-written), and dynamic `FIELD_MAPPINGS`
+extras (snapshot baselines live on the SPOOL snapshots under `_extra_decoded` / `_field_values`,
+FDB spool id resolved from `SpoolMapping`). `lifecycle` is routed through the unchanged
+`apply_lifecycle_conflict`.
+
+**Why a direct absolute weight write (no usage entry).** Ongoing SM→FDB weight *decrements*
+log a Filament DB usage entry to preserve the audit trail. A human-approved conflict
+resolution is a *correction*, not a print, so weight converges as a direct absolute write to
+both sides (SM `remaining_weight = W`; FDB `totalWeight = W + tare`) — the same path the engine
+already uses for a weight *increase*. `spoolman` → W = stored SM net; `filamentdb` → W = stored
+FDB gross − tare; `manual` → the entered value, interpreted as net (Spoolman units).
+
+**Signature-based fields.** `multicolor` and `material_tags` conflicts store a system-agnostic
+*signature* string, not the raw value, so the write payload is re-derived from the chosen side's
+LIVE upstream state (via `core/color` / `core/material_tags`). They reject `manual` resolution
+(a multicolor/tag-set has no single scalar form) with a 422.
+
+**Failure modes.** Any upstream write failure raises → the endpoint returns 502 and the conflict
+stays open with no partial snapshot advance. A `field_name` with no known apply path raises
+`UnsupportedConflictField` → 422 (visible), never a silent record-only no-op. Deletion-marker
+conflicts (`__record_deleted__`) keep their record-only + mapping-cleanup behavior — there is
+nothing to write upstream. `bulk-resolve` was left record-only (out of scope for the per-row fix).
+
+**Proof.** Per-field-family tests queue the conflict via a real cycle, resolve via the endpoint,
+then run a SECOND `run_sync_cycle` against the post-write state and assert no re-queue + both
+sides converged (`tests/test_cross_system_resolve.py`). The old "resolve does not apply" API
+test was rewritten to assert convergence.
+
 ## 2026-06-23 — Scheduled nightly backups: bridge-state + FDB snapshot only, on by default (issue #5)
 
 **Context.** The manual `POST /backup/filamentdb` button drops a

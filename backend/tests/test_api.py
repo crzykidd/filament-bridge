@@ -238,25 +238,36 @@ def test_dry_run_returns_preview_and_applies_nothing(db):
 
 
 # ---------------------------------------------------------------------------
-# Conflicts — resolve records the choice, never auto-applies (FR-13/FR-16)
+# Conflicts — resolve CONVERGES: writes chosen value to both sides (#21, FR-16)
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_conflict_records_choice_and_does_not_apply(db):
+def test_resolve_conflict_applies_and_converges(db):
+    """Resolving a cross_system weight conflict writes the chosen value to BOTH
+    systems (direct absolute write, no usage entry) and refreshes both snapshots."""
     db.add(Conflict(
         entity_type="spool",
         spoolman_id=1,
         filamentdb_filament_id="fil-1",
         filamentdb_spool_id="spool-1",
         field_name="weight",
-        spoolman_value=json.dumps(790.0),
-        filamentdb_value=json.dumps(1050.0),
+        conflict_type="cross_system",
+        spoolman_value=json.dumps(790.0),     # SM net remaining
+        filamentdb_value=json.dumps(1050.0),  # FDB gross totalWeight
     ))
+    _snap(db, "spoolman", "1", {"remaining_weight": 790.0, "archived": False})
+    _snap(db, "filamentdb", "spool-1", {"totalWeight": 1050.0, "retired": False})
     db.commit()
     conflict_id = db.query(Conflict).first().id
 
     spoolman = _fake_spoolman()
-    filamentdb = _fake_filamentdb()
+    # FDB filament detail carries the tare (spoolWeight) used to compute totalWeight.
+    from app.schemas.filamentdb import FDBFilamentDetail
+    fdb_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-1", "name": "PLA", "spoolWeight": 200.0, "_inherited": [],
+        "spools": [{"_id": "spool-1", "totalWeight": 1050.0, "retired": False}],
+    })
+    filamentdb = _fake_filamentdb(detail=fdb_detail)
     client = _client(db, spoolman, filamentdb)
 
     resp = client.post(f"/api/conflicts/{conflict_id}/resolve", json={"resolution": "spoolman"})
@@ -264,16 +275,107 @@ def test_resolve_conflict_records_choice_and_does_not_apply(db):
     body = resp.json()
     assert body["status"] == "resolved"
     assert body["resolution"] == "spoolman"
-    assert body["resolved_value"] == 790.0  # recorded the chosen side
+    assert body["resolved_value"] == 790.0  # SM net is authoritative
 
-    # Never auto-applied to the other system.
-    spoolman.update_spool.assert_not_called()
+    # Written to BOTH systems — direct absolute write, NO usage entry.
+    spoolman.update_spool.assert_awaited_once_with(1, {"remaining_weight": 790.0})
+    filamentdb.update_spool.assert_awaited_once_with("fil-1", "spool-1", {"totalWeight": 990.0})
     filamentdb.log_usage.assert_not_called()
-    filamentdb.update_spool.assert_not_called()
+
+    # Snapshots advanced to the converged values (anti-ping-pong).
+    sm_snap = db.query(Snapshot).filter_by(source="spoolman", entity_id="1").first()
+    fdb_snap = db.query(Snapshot).filter_by(source="filamentdb", entity_id="spool-1").first()
+    assert json.loads(sm_snap.data)["remaining_weight"] == 790.0
+    assert json.loads(fdb_snap.data)["totalWeight"] == 990.0
 
     # Leaves the open queue.
     assert client.get("/api/conflicts?status=open").json() == []
     assert len(client.get("/api/conflicts?status=resolved").json()) == 1
+
+
+def test_resolve_conflict_filamentdb_wins_converges_from_gross(db):
+    """resolution=filamentdb converges to (FDB totalWeight − tare) on both sides."""
+    db.add(Conflict(
+        entity_type="spool", spoolman_id=2,
+        filamentdb_filament_id="fil-2", filamentdb_spool_id="spool-2",
+        field_name="weight", conflict_type="cross_system",
+        spoolman_value=json.dumps(790.0), filamentdb_value=json.dumps(1050.0),
+    ))
+    _snap(db, "spoolman", "2", {"remaining_weight": 790.0})
+    _snap(db, "filamentdb", "spool-2", {"totalWeight": 1050.0})
+    db.commit()
+    conflict_id = db.query(Conflict).first().id
+
+    spoolman = _fake_spoolman()
+    from app.schemas.filamentdb import FDBFilamentDetail
+    fdb_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-2", "name": "PLA", "spoolWeight": 200.0, "_inherited": [],
+        "spools": [{"_id": "spool-2", "totalWeight": 1050.0, "retired": False}],
+    })
+    filamentdb = _fake_filamentdb(detail=fdb_detail)
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post(f"/api/conflicts/{conflict_id}/resolve", json={"resolution": "filamentdb"})
+    assert resp.status_code == 200
+    # FDB net = 1050 − 200 = 850; FDB gross stays 1050.
+    spoolman.update_spool.assert_awaited_once_with(2, {"remaining_weight": 850.0})
+    filamentdb.update_spool.assert_awaited_once_with("fil-2", "spool-2", {"totalWeight": 1050.0})
+
+
+def test_resolve_conflict_upstream_failure_returns_502_and_keeps_open(db):
+    """An upstream write failure during apply returns 502 and leaves the conflict open
+    with no partial snapshot advance."""
+    db.add(Conflict(
+        entity_type="spool", spoolman_id=3,
+        filamentdb_filament_id="fil-3", filamentdb_spool_id="spool-3",
+        field_name="weight", conflict_type="cross_system",
+        spoolman_value=json.dumps(790.0), filamentdb_value=json.dumps(1050.0),
+    ))
+    _snap(db, "spoolman", "3", {"remaining_weight": 790.0})
+    _snap(db, "filamentdb", "spool-3", {"totalWeight": 1050.0})
+    db.commit()
+    conflict_id = db.query(Conflict).first().id
+
+    spoolman = _fake_spoolman()
+    spoolman.update_spool.side_effect = RuntimeError("SM down")
+    from app.schemas.filamentdb import FDBFilamentDetail
+    fdb_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-3", "name": "PLA", "spoolWeight": 200.0, "_inherited": [],
+        "spools": [{"_id": "spool-3", "totalWeight": 1050.0, "retired": False}],
+    })
+    filamentdb = _fake_filamentdb(detail=fdb_detail)
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post(f"/api/conflicts/{conflict_id}/resolve", json={"resolution": "spoolman"})
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["code"] == "upstream_write_failed"
+
+    # Conflict stays open; snapshot not advanced.
+    db.expire_all()
+    row = db.query(Conflict).filter_by(id=conflict_id).first()
+    assert row.resolved_at is None
+    sm_snap = db.query(Snapshot).filter_by(source="spoolman", entity_id="3").first()
+    assert json.loads(sm_snap.data)["remaining_weight"] == 790.0
+
+
+def test_resolve_unsupported_cross_system_field_returns_422(db):
+    """A cross_system conflict whose field_name has no known apply path returns 422
+    (visible, not a silent record-only regression)."""
+    db.add(Conflict(
+        entity_type="filament", spoolman_id=4, filamentdb_filament_id="fil-4",
+        field_name="totally_unknown_field", conflict_type="cross_system",
+        spoolman_value=json.dumps("a"), filamentdb_value=json.dumps("b"),
+    ))
+    db.commit()
+    conflict_id = db.query(Conflict).first().id
+    client = _client(db)
+
+    resp = client.post(f"/api/conflicts/{conflict_id}/resolve", json={"resolution": "spoolman"})
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["code"] == "unsupported_conflict_field"
+    # Still open.
+    db.expire_all()
+    assert db.query(Conflict).filter_by(id=conflict_id).first().resolved_at is None
 
 
 def test_resolve_manual_requires_value(db):

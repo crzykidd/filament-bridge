@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.engine import _log, _merge_snapshot
+from app.core.fields import OPENTAG_EXTRA_FIELDS
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
 from app.services.filamentdb import FilamentDBClient
@@ -526,6 +527,577 @@ def _get_fdb_field_value(detail: Any, sm_field: str) -> Any:
         attr = fdb_path.split(".", 1)[1]  # "bed" or "nozzle"
         return getattr(temps, attr, None)
     return None
+
+
+# ===========================================================================
+# Generalized cross_system conflict resolution (GitHub #21)
+# ---------------------------------------------------------------------------
+# Resolving a cross_system conflict was previously record-only: it wrote nothing
+# upstream and never advanced the snapshot baseline, so the next sync cycle
+# re-detected the unchanged divergence and re-queued a fresh conflict every
+# cycle.  This dispatcher generalizes the lifecycle resolve path to ALL
+# cross_system field types: compute the chosen value, write it to BOTH systems
+# (idempotent — one side may already match), then refresh BOTH snapshot keys to
+# the converged value so the differ does not re-detect it next cycle.
+#
+# Each field type below MIRRORS the upstream write + conversion + snapshot key of
+# the corresponding engine pass.  See backend/app/core/engine.py.
+# ===========================================================================
+
+
+class UnsupportedConflictField(Exception):
+    """Raised when a cross_system conflict's field_name has no known apply path.
+
+    The endpoint maps this to a 422 so a never-converging conflict is visible,
+    not silently recorded.
+    """
+
+
+# Material-property temperature labels → (FDB temperatures attr, SM native field).
+# Mirrors engine.MATERIAL_PROP_TEMP_PAIRS.  Conflict field_name is the *label*.
+_TEMP_LABELS: dict[str, tuple[str, str]] = {
+    "bed_temp": ("bed", "settings_bed_temp"),
+    "nozzle_temp": ("nozzle", "settings_extruder_temp"),
+}
+
+# Native scalar labels → (FDB field path, SM native field).
+# Mirrors engine.MATERIAL_PROP_SCALAR_PAIRS.  Conflict field_name is the *label*.
+_SCALAR_LABELS: dict[str, tuple[str, str]] = {
+    "material": ("type", "material"),
+    "density": ("density", "density"),
+    "diameter": ("diameter", "diameter"),
+    "spool_weight": ("spoolWeight", "spool_weight"),
+    "net_filament_weight": ("netFilamentWeight", "weight"),
+}
+
+
+def _resolve_value(conflict: Conflict, resolution: str, manual_value: Any) -> Any:
+    """Pick the converged target value for a value-based field.
+
+    ``spoolman``   → the value stored from the Spoolman side.
+    ``filamentdb`` → the value stored from the Filament DB side.
+    ``manual``     → the explicit value supplied by the caller.
+    """
+    if resolution == "spoolman":
+        return _decode(conflict.spoolman_value)
+    if resolution == "filamentdb":
+        return _decode(conflict.filamentdb_value)
+    return manual_value
+
+
+async def apply_cross_system_conflict(
+    conflict: Conflict,
+    resolution: str,
+    manual_value: Any,
+    db: Session,
+    spoolman: SpoolmanClient,
+    filamentdb: FilamentDBClient,
+) -> Any:
+    """Converge a ``cross_system`` conflict by writing the chosen value to BOTH
+    systems and refreshing BOTH snapshot keys (anti-ping-pong).
+
+    Dispatches on ``conflict.field_name`` to the matching engine-pass write path.
+    Raises :class:`UnsupportedConflictField` for an unmappable field_name (the
+    endpoint maps it to 422).  Raises on any upstream write failure so the
+    endpoint returns 502 and the conflict stays open with no partial snapshot
+    advance.
+
+    Returns the converged value recorded on the conflict row.
+    """
+    field = conflict.field_name
+    cycle_id = f"conflict-apply-{conflict.id}-{uuid.uuid4().hex[:8]}"
+
+    if field == "lifecycle":
+        # Pre-record the manual boolean so apply_lifecycle_conflict can read it.
+        if resolution == "manual":
+            conflict.resolved_value = json.dumps(bool(manual_value))
+        await apply_lifecycle_conflict(conflict, resolution, db, spoolman, filamentdb)
+        return _decode(conflict.resolved_value)
+
+    if field == "weight":
+        return await _apply_weight(conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id)
+
+    if field == "multicolor":
+        return await _apply_multicolor(conflict, resolution, db, spoolman, filamentdb, cycle_id)
+
+    if field == "material_tags":
+        return await _apply_material_tags(conflict, resolution, db, spoolman, filamentdb, cycle_id)
+
+    if field == "cost":
+        return await _apply_cost(conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id)
+
+    if field in _TEMP_LABELS:
+        fdb_attr, sm_field = _TEMP_LABELS[field]
+        return await _apply_temperature(
+            conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id,
+            fdb_attr=fdb_attr, sm_field=sm_field,
+        )
+
+    if field in _SCALAR_LABELS:
+        fdb_path, sm_field = _SCALAR_LABELS[field]
+        return await _apply_native_scalar(
+            conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id,
+            fdb_path=fdb_path, sm_field=sm_field,
+        )
+
+    # OpenPrintTag material-setting extras (conflict field_name == ef.label).
+    opt_field = next((ef for ef in OPENTAG_EXTRA_FIELDS if ef.label == field), None)
+    if opt_field is not None:
+        return await _apply_opentag_field(
+            conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id, opt_field,
+        )
+
+    # Dynamic FIELD_MAPPINGS extra fields: field_name is the FDB field path; the
+    # SM side is a spool extra key resolved from the configured mapping.
+    sm_key = _resolve_field_mapping_sm_key(field)
+    if sm_key is not None:
+        return await _apply_field_mapping(
+            conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id,
+            fdb_path=field, sm_key=sm_key,
+        )
+
+    raise UnsupportedConflictField(
+        f"cross_system conflict field {field!r} has no known apply path"
+    )
+
+
+def _resolve_field_mapping_sm_key(fdb_path: str) -> str | None:
+    """Resolve the Spoolman extra key for a dynamic FIELD_MAPPINGS FDB path.
+
+    Mirrors engine's use of ``resolve_field_map``: an explicit ``FIELD_MAPPINGS``
+    pair maps ``fdb_path → sm_key``; otherwise an auto-matched syncable field maps
+    to a same-named SM extra key.  Returns None if the path is not a configured
+    syncable field.
+    """
+    from app.config import settings as _settings
+    from app.core.fields import FDB_SYNCABLE_FIELDS
+
+    excludes = _settings.parsed_field_mapping_excludes
+    explicit = _settings.parsed_field_mappings  # {fdb_path: sm_key}
+
+    if fdb_path in explicit:
+        sm_key = explicit[fdb_path]
+        if fdb_path in excludes or sm_key in excludes:
+            return None
+        return sm_key
+    if fdb_path in FDB_SYNCABLE_FIELDS and fdb_path not in excludes:
+        return fdb_path  # auto-match: SM extra key == FDB field name
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Per-field apply helpers
+# ---------------------------------------------------------------------------
+
+
+async def _apply_weight(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+) -> float:
+    """Converge a spool ``weight`` conflict with a DIRECT ABSOLUTE write to both
+    sides (no usage entry — this is a human-approved correction).
+
+    The converged value ``W`` is the net remaining weight (Spoolman units).
+      - resolution=spoolman   → W = stored SM remaining_weight (already net).
+      - resolution=filamentdb → W = stored FDB totalWeight − tare.
+      - resolution=manual     → manual_value interpreted as net remaining weight.
+    SM gets ``remaining_weight = W``; FDB gets ``totalWeight = W + tare``.
+    Snapshots refresh to the converged values (anti-ping-pong).
+    """
+    from app.config import settings as _settings  # noqa: F401  (kept for parity)
+
+    sm_spool_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_filament_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    fdb_spool_id: str = conflict.filamentdb_spool_id  # type: ignore[assignment]
+
+    # Tare = FDB filament.spoolWeight (default 200 g if missing — same as the engine).
+    from app.core.weight import DEFAULT_TARE_GRAMS
+
+    fdb_detail = await filamentdb.get_filament(fdb_filament_id)
+    tare = getattr(fdb_detail, "spoolWeight", None)
+    if tare is None:
+        tare = DEFAULT_TARE_GRAMS
+
+    sm_net = _decode(conflict.spoolman_value)
+    fdb_gross = _decode(conflict.filamentdb_value)
+
+    if resolution == "spoolman":
+        w = float(sm_net)
+    elif resolution == "filamentdb":
+        w = float(fdb_gross) - float(tare)
+    else:  # manual — net remaining weight in Spoolman units
+        w = float(manual_value)
+
+    w = round(max(w, 0.0), 2)
+    fdb_total = round(w + float(tare), 2)
+
+    await spoolman.update_spool(sm_spool_id, {"remaining_weight": w})
+    await filamentdb.update_spool(fdb_filament_id, fdb_spool_id, {"totalWeight": fdb_total})
+
+    _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"remaining_weight": w})
+    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"totalWeight": fdb_total})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "spool",
+        spoolman_id=sm_spool_id, fdb_filament_id=fdb_filament_id, fdb_spool_id=fdb_spool_id,
+        field_name="weight", old_value="diverged", new_value=w,
+    )
+    _resolve_conflict_row(conflict, resolution, w, db)
+    return w
+
+
+async def _apply_cost(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+) -> Any:
+    """Converge a filament ``cost`` conflict.  FDB ``cost`` / SM filament ``price``.
+    Snapshot key ``_cost`` on both filament snapshots.  Mirrors engine._sync_cost.
+    """
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    value = _resolve_value(conflict, resolution, manual_value)
+
+    await filamentdb.update_filament(fdb_fil_id, {"cost": value})
+    await spoolman.update_filament(sm_fil_id, {"price": value})
+
+    _merge_snapshot(db, "spoolman", "filament", str(sm_fil_id), {"_cost": value})
+    _merge_snapshot(db, "filamentdb", "filament", fdb_fil_id, {"_cost": value})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name="cost", new_value=value,
+    )
+    _resolve_conflict_row(conflict, resolution, value, db)
+    return value
+
+
+async def _apply_temperature(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+    *, fdb_attr: str, sm_field: str,
+) -> Any:
+    """Converge a bed/nozzle temperature conflict.  FDB ``temperatures`` object is
+    read-modify-written so sibling temps survive; SM writes the native filament
+    field.  Snapshot key ``_mp_<sm_field>``.  Mirrors engine._sync_material_props.
+    """
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    value = _resolve_value(conflict, resolution, manual_value)
+    snap_key = f"_mp_{sm_field}"
+
+    # FDB temperatures read-modify-write (preserve siblings).
+    fdb_detail = await filamentdb.get_filament(fdb_fil_id)
+    temps = getattr(fdb_detail, "temperatures", None)
+    temps_payload = temps.model_dump() if temps is not None else {}
+    temps_payload[fdb_attr] = value
+    await filamentdb.update_filament(fdb_fil_id, {"temperatures": temps_payload})
+
+    await spoolman.update_filament(sm_fil_id, {sm_field: value})
+
+    _merge_snapshot(db, "spoolman", "filament", str(sm_fil_id), {snap_key: value})
+    _merge_snapshot(db, "filamentdb", "filament", fdb_fil_id, {snap_key: value})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name=conflict.field_name, new_value=value,
+    )
+    _resolve_conflict_row(conflict, resolution, value, db)
+    return value
+
+
+async def _apply_native_scalar(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+    *, fdb_path: str, sm_field: str,
+) -> Any:
+    """Converge a native scalar filament conflict (material/density/diameter/
+    spool_weight/net_filament_weight).  FDB field path / SM native field (note the
+    SM ``material`` ↔ FDB ``type`` and SM ``weight`` ↔ FDB ``netFilamentWeight``
+    remaps).  Snapshot key ``_mp_<sm_field>``.  Mirrors engine._sync_material_scalars.
+    """
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    value = _resolve_value(conflict, resolution, manual_value)
+    snap_key = f"_mp_{sm_field}"
+
+    await filamentdb.update_filament(fdb_fil_id, _make_fdb_write(fdb_path, value))
+    await spoolman.update_filament(sm_fil_id, {sm_field: value})
+
+    _merge_snapshot(db, "spoolman", "filament", str(sm_fil_id), {snap_key: value})
+    _merge_snapshot(db, "filamentdb", "filament", fdb_fil_id, {snap_key: value})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name=conflict.field_name, new_value=value,
+    )
+    _resolve_conflict_row(conflict, resolution, value, db)
+    return value
+
+
+async def _apply_opentag_field(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+    opt_field: Any,
+) -> Any:
+    """Converge an OpenPrintTag material-setting extra conflict (one of seven).
+
+    FDB first-class field (read-modify-write for dotted temperature paths) / SM
+    TYPED extra field.  Snapshot key ``_mp_<sm_extra_key>``.
+    Mirrors engine._sync_opentag_material_fields.
+    """
+    from app.config import settings as _settings
+    from app.schemas.spoolman import encode_extra_value
+
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    value = _resolve_value(conflict, resolution, manual_value)
+
+    sm_key = getattr(_settings, opt_field.config_attr)
+    snap_key = f"_mp_{sm_key}"
+
+    # FDB write — dotted temperature paths need the object read-modify-written.
+    fdb_detail = await filamentdb.get_filament(fdb_fil_id)
+    fdb_payload = _fdb_field_payload_rmw(fdb_detail, opt_field.fdb_path, value)
+    await filamentdb.update_filament(fdb_fil_id, fdb_payload)
+
+    await spoolman.update_filament(sm_fil_id, {"extra": {sm_key: encode_extra_value(value)}})
+
+    _merge_snapshot(db, "spoolman", "filament", str(sm_fil_id), {snap_key: value})
+    _merge_snapshot(db, "filamentdb", "filament", fdb_fil_id, {snap_key: value})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name=opt_field.label, new_value=value,
+    )
+    _resolve_conflict_row(conflict, resolution, value, db)
+    return value
+
+
+def _fdb_field_payload_rmw(fdb_detail: Any, fdb_path: str, value: Any) -> dict:
+    """Build an FDB update payload, read-modify-writing dotted object paths so
+    siblings survive (mirrors engine._fdb_field_payload)."""
+    parts = fdb_path.split(".", 1)
+    if len(parts) == 1:
+        return {fdb_path: value}
+    obj_name, attr = parts
+    current = getattr(fdb_detail, obj_name, None)
+    obj_payload = current.model_dump() if current is not None else {}
+    obj_payload[attr] = value
+    return {obj_name: obj_payload}
+
+
+async def _apply_field_mapping(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+    *, fdb_path: str, sm_key: str,
+) -> Any:
+    """Converge a dynamic FIELD_MAPPINGS conflict (generic SM spool extra ↔ FDB
+    filament field).  The conflict's ``spoolman_id`` is the SM SPOOL id; the FDB
+    spool id is resolved from SpoolMapping for the snapshot refresh.  Mirrors
+    engine._apply_field_changes + its spool-snapshot baselines.
+    """
+    from app.core.color import to_fdb_color, to_sm_color
+    from app.models.mapping import SpoolMapping
+    from app.schemas.spoolman import encode_extra_value
+
+    sm_spool_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    value = _resolve_value(conflict, resolution, manual_value)
+
+    # FDB write — single PUT for a (possibly dotted) field; `color` is normalized.
+    if fdb_path == "color":
+        fdb_value = to_fdb_color(value)
+        sm_value = to_sm_color(value)
+    else:
+        fdb_value = value
+        sm_value = value
+    await filamentdb.update_filament(fdb_fil_id, _make_fdb_write(fdb_path, fdb_value))
+
+    # SM write — the mapped extra on the SPOOL.
+    await spoolman.update_spool(sm_spool_id, {"extra": {sm_key: encode_extra_value(sm_value)}})
+
+    # Snapshot refresh — baselines live on the SPOOL snapshots under nested keys.
+    mapping = (
+        db.query(SpoolMapping)
+        .filter(SpoolMapping.spoolman_spool_id == sm_spool_id)
+        .first()
+    )
+    _merge_nested_snapshot(db, "spoolman", "spool", str(sm_spool_id), "_extra_decoded", sm_key, sm_value)
+    if mapping is not None:
+        _merge_nested_snapshot(
+            db, "filamentdb", "spool", mapping.filamentdb_spool_id, "_field_values", fdb_path, fdb_value
+        )
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_spool_id, fdb_filament_id=fdb_fil_id,
+        field_name=fdb_path, new_value=value,
+    )
+    _resolve_conflict_row(conflict, resolution, value, db)
+    return value
+
+
+def _merge_nested_snapshot(
+    db: Session, source: str, entity_type: str, entity_id: str,
+    container_key: str, leaf_key: str, value: Any,
+) -> None:
+    """Merge ``{leaf_key: value}`` into a nested dict ``container_key`` of a snapshot,
+    preserving the container's other keys (and the snapshot's other top-level keys)."""
+    from app.core.engine import _get_snapshot
+    existing = _get_snapshot(db, source, entity_type, entity_id) or {}
+    container = dict(existing.get(container_key) or {})
+    container[leaf_key] = value
+    _merge_snapshot(db, source, entity_type, entity_id, {container_key: container})
+
+
+async def _apply_multicolor(
+    conflict: Conflict, resolution: str,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+) -> Any:
+    """Converge a multicolor conflict by adopting the chosen side's LIVE color state
+    on both systems.  The conflict stores signatures (not raw values), so the write
+    payload is re-derived from live data via core/color (mirrors engine._sync_multicolor).
+
+    Only ``spoolman`` / ``filamentdb`` are supported — a multicolor state has no
+    single scalar ``manual`` representation, so ``manual`` raises 422.
+    """
+    from app.core.color import (
+        fdb_multicolor_to_sm,
+        multicolor_signature,
+        sm_multicolor_signature,
+        sm_multicolor_to_fdb,
+    )
+
+    if resolution == "manual":
+        raise UnsupportedConflictField(
+            "multicolor conflicts cannot be resolved manually — choose spoolman or filamentdb"
+        )
+
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+
+    sm_fil = await spoolman.get_filament(sm_fil_id)
+    fdb_detail = await filamentdb.get_filament(fdb_fil_id)
+
+    if resolution == "spoolman":
+        # Adopt SM color state → write to FDB; SM already holds it.
+        mc = sm_multicolor_to_fdb(
+            sm_fil.color_hex, sm_fil.multi_color_hexes, sm_fil.multi_color_direction,
+            existing_opt_tags=fdb_detail.optTags,
+        )
+        await filamentdb.update_filament(fdb_fil_id, {
+            "color": mc["color"], "secondaryColors": mc["secondaryColors"], "optTags": mc["optTags"],
+        })
+        sig = sm_multicolor_signature(
+            sm_fil.color_hex, sm_fil.multi_color_hexes, sm_fil.multi_color_direction
+        )
+        recorded = sig
+    else:  # filamentdb
+        sm = fdb_multicolor_to_sm(fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags)
+        sm_payload: dict = {}
+        if sm["color_hex"] is not None:
+            sm_payload["color_hex"] = sm["color_hex"]
+        if sm["multi_color_hexes"] is not None:
+            sm_payload["multi_color_hexes"] = sm["multi_color_hexes"]
+        if sm["multi_color_direction"] is not None:
+            sm_payload["multi_color_direction"] = sm["multi_color_direction"]
+        await spoolman.update_filament(sm_fil_id, sm_payload)
+        sig = multicolor_signature(fdb_detail.color, fdb_detail.secondaryColors, fdb_detail.optTags)
+        recorded = sig
+
+    _merge_snapshot(db, "spoolman", "filament", str(sm_fil_id), {"_mc_sig": sig})
+    _merge_snapshot(db, "filamentdb", "filament", fdb_fil_id, {"_mc_sig": sig})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name="multicolor", new_value=sig,
+    )
+    _resolve_conflict_row(conflict, resolution, recorded, db)
+    return recorded
+
+
+async def _apply_material_tags(
+    conflict: Conflict, resolution: str,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+) -> Any:
+    """Converge a material_tags (finish-tag) conflict by adopting the chosen side's
+    LIVE finish-tag set on both systems.  The conflict stores signatures, so the
+    write payload is re-derived from live data (mirrors engine._sync_finish_tags).
+
+    SM extra ``filamentdb_material_tags`` (CSV of ints) / FDB ``optTags`` (managed
+    finish subset merged, arrangement + unknown tags preserved).  ``manual`` is
+    unsupported (the value is a tag set, not a scalar) → 422.
+    """
+    from app.config import settings as _settings
+    from app.core.color import apply_finish_tags
+    from app.core.material_tags import (
+        MANAGED_FINISH_IDS,
+        finish_ids_from_text,
+        parse_material_tags,
+        serialize_material_tags,
+    )
+    from app.schemas.spoolman import decode_extra_value, encode_extra_value
+
+    if resolution == "manual":
+        raise UnsupportedConflictField(
+            "material_tags conflicts cannot be resolved manually — choose spoolman or filamentdb"
+        )
+
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    mt_field = _settings.spoolman_field_filamentdb_material_tags
+    tag_map = _settings.parsed_material_tag_ids
+
+    sm_fil = await spoolman.get_filament(sm_fil_id)
+    fdb_detail = await filamentdb.get_filament(fdb_fil_id)
+
+    def _fdb_ids(opt_tags: list | None) -> frozenset[int]:
+        out: set[int] = set()
+        for t in opt_tags or []:
+            try:
+                ti = int(t)
+            except (TypeError, ValueError):
+                continue
+            if ti in MANAGED_FINISH_IDS:
+                out.add(ti)
+        return frozenset(out)
+
+    def _sm_ids() -> frozenset[int]:
+        raw = sm_fil.extra.get(mt_field) if hasattr(sm_fil, "extra") else None
+        if raw is not None:
+            ids = parse_material_tags(decode_extra_value(raw))
+            return frozenset(set(ids) & MANAGED_FINISH_IDS)
+        return frozenset(
+            finish_ids_from_text(getattr(sm_fil, "name", None), getattr(sm_fil, "material", None), tag_map)
+        )
+
+    if resolution == "spoolman":
+        ids = _sm_ids()
+    else:  # filamentdb
+        ids = _fdb_ids(fdb_detail.optTags)
+
+    # Write the chosen ID set to BOTH sides (idempotent).
+    new_opt_tags = apply_finish_tags(fdb_detail.optTags, ids)
+    await filamentdb.update_filament(fdb_fil_id, {"optTags": new_opt_tags})
+    encoded = encode_extra_value(serialize_material_tags(ids))
+    await spoolman.update_filament(sm_fil_id, {"extra": {mt_field: encoded}})
+
+    sig = ",".join(str(i) for i in sorted(ids))
+    _merge_snapshot(db, "spoolman", "filament", str(sm_fil_id), {"_finish_sig": sig})
+    _merge_snapshot(db, "filamentdb", "filament", fdb_fil_id, {"_finish_sig": sig})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name="material_tags", new_value=sig,
+    )
+    _resolve_conflict_row(conflict, resolution, sig, db)
+    return sig
 
 
 # ---------------------------------------------------------------------------

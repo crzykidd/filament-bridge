@@ -1,10 +1,21 @@
 ---
 name: 2026-06-23-cross-system-resolve-converge
-status: pending
+status: done
 created: 2026-06-23
 model: sonnet
-completed:
-result:
+completed: 2026-06-23
+result: >
+  Added core/conflict_apply.py:apply_cross_system_conflict — a dispatcher that converges
+  every cross_system conflict field family (weight, cost, multicolor, material_tags, the
+  temperature/native-scalar/OpenPrintTag material-property fields, dynamic FIELD_MAPPINGS
+  extras) by writing the chosen value to BOTH systems + refreshing both snapshots, mirroring
+  each engine pass's write/conversion/snapshot key. Lifecycle routes through the unchanged
+  apply_lifecycle_conflict. POST /conflicts/{id}/resolve now applies on resolve (502 on upstream
+  failure, 422 for unmappable fields; multicolor/material_tags reject manual). Per-field proof
+  tests (queue → resolve via endpoint → second cycle asserts no re-queue + converged) in
+  tests/test_cross_system_resolve.py; the old "does not apply" API test rewritten. Docs (prd
+  FR-16, conflicts.md, CHANGELOG, decisions.md) + FE copy updated. Full backend suite 1220
+  passing, ruff clean, tsc clean. Closes #21.
 ---
 
 # Task: Make cross_system conflict resolution converge (GitHub #21)

@@ -796,7 +796,7 @@ function ConflictDetail({ conflict, onResolved }: { conflict: ConflictResponse; 
       {!isDeletion && !importable && (
         <div className="space-y-2">
           <p className="text-xs text-gray-400 dark:text-gray-500">
-            Pick a side — this records your choice only. Make the actual edit in that system; sync propagates it next cycle.
+            Pick a side — the chosen value is written to both systems and the conflict is cleared.
           </p>
           <div className="flex items-center gap-2 flex-wrap">
             <button
@@ -1236,9 +1236,9 @@ export default function Conflicts() {
       {/* Info banner — explain what Resolve does */}
       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 text-sm text-blue-800 dark:text-blue-300 space-y-1">
         <p>
-          <strong>Resolving a conflict records your choice and removes it from the queue.</strong> For
-          cross-system conflicts this is record-only (no upstream writes) — make the actual edit in the
-          chosen system; sync propagates it. <strong>Deletion</strong> conflicts remove the bridge mapping.{' '}
+          <strong>Resolving a conflict writes your chosen value to both systems and removes it from the queue.</strong>{' '}
+          For cross-system conflicts the picked value is applied to Spoolman and Filament DB and both snapshots
+          are refreshed, so it does not re-queue next cycle. <strong>Deletion</strong> conflicts remove the bridge mapping.{' '}
           <strong>Master divergence</strong> conflicts apply changes upstream when you choose an action.{' '}
           <strong>New spool / filament</strong> conflicts can be imported directly via the "Add" button.
         </p>
