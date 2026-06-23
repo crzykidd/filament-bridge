@@ -286,6 +286,12 @@ export interface ConfigResponse {
   // API token — value shown in Settings UI; null = not yet generated
   api_token: string | null
   api_token_enabled: boolean
+  // Scheduled nightly backups (issue #5)
+  backup_schedule_enabled: boolean
+  backup_bridge_state_enabled: boolean
+  backup_filamentdb_enabled: boolean
+  backup_retention_days: number
+  backup_hour_utc: number
   // Required settings that must be configured before the bridge is usable
   required_settings_unset: string[]
 }
@@ -318,6 +324,12 @@ export interface ConfigUpdateRequest {
   container_parent_marker?: string | null
   // API token enable/disable (value is managed via /auth/api-token/regenerate)
   api_token_enabled?: boolean | null
+  // Scheduled nightly backups (issue #5)
+  backup_schedule_enabled?: boolean | null
+  backup_bridge_state_enabled?: boolean | null
+  backup_filamentdb_enabled?: boolean | null
+  backup_retention_days?: number | null
+  backup_hour_utc?: number | null
 }
 
 // ---------------------------------------------------------------------------

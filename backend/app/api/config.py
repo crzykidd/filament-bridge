@@ -111,6 +111,50 @@ def _effective_sync_interval(db: Session) -> int:
     return _settings.sync_interval_seconds
 
 
+def _resolve_bool(db: Session, key: str, env_default: bool) -> bool:
+    """Return a boolean config value: DB override wins, else the env start-up default."""
+    val = get_config_value(db, key, None)
+    if val is None:
+        return env_default
+    return bool(val)
+
+
+class _EffectiveBackupConfig:
+    """Resolved scheduled-backup config (DB override wins over env), passed to the job.
+
+    Mirrors the env→DB precedence used for ``sync_interval_seconds``.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.backup_schedule_enabled = _resolve_bool(
+            db, "backup_schedule_enabled", _settings.backup_schedule_enabled
+        )
+        self.backup_bridge_state_enabled = _resolve_bool(
+            db, "backup_bridge_state_enabled", _settings.backup_bridge_state_enabled
+        )
+        self.backup_filamentdb_enabled = _resolve_bool(
+            db, "backup_filamentdb_enabled", _settings.backup_filamentdb_enabled
+        )
+        retention = get_config_value(db, "backup_retention_days", None)
+        self.backup_retention_days = (
+            int(retention) if retention is not None else _settings.backup_retention_days
+        )
+        self.data_dir = _settings.data_dir
+
+
+def effective_backup_config(db: Session) -> _EffectiveBackupConfig:
+    """Public accessor for the resolved scheduled-backup config."""
+    return _EffectiveBackupConfig(db)
+
+
+def effective_backup_hour_utc(db: Session) -> int:
+    """Return the active backup hour (0..23): DB override wins over the env default."""
+    val = get_config_value(db, "backup_hour_utc", None)
+    if val is None:
+        return _settings.backup_hour_utc
+    return int(val)
+
+
 _REQUIRED_SETTINGS = ["variant_parent_mode"]
 
 
@@ -157,6 +201,25 @@ def _config_response(db: Session) -> ConfigResponse:
         container_parent_marker=str(cfg.get("container_parent_marker", _settings.container_parent_marker)),
         api_token=api_token,
         api_token_enabled=bool(cfg.get("api_token_enabled", False)),
+        backup_schedule_enabled=(
+            bool(cfg["backup_schedule_enabled"])
+            if "backup_schedule_enabled" in cfg
+            else _settings.backup_schedule_enabled
+        ),
+        backup_bridge_state_enabled=(
+            bool(cfg["backup_bridge_state_enabled"])
+            if "backup_bridge_state_enabled" in cfg
+            else _settings.backup_bridge_state_enabled
+        ),
+        backup_filamentdb_enabled=(
+            bool(cfg["backup_filamentdb_enabled"])
+            if "backup_filamentdb_enabled" in cfg
+            else _settings.backup_filamentdb_enabled
+        ),
+        backup_retention_days=int(
+            cfg.get("backup_retention_days", _settings.backup_retention_days)
+        ),
+        backup_hour_utc=int(cfg.get("backup_hour_utc", _settings.backup_hour_utc)),
         required_settings_unset=_required_settings_unset(cfg),
     )
 
@@ -203,7 +266,31 @@ def update_config(
             },
         )
 
+    # Validate scheduled-backup numeric ranges with the project's error envelope.
+    if payload.backup_hour_utc is not None and not (0 <= payload.backup_hour_utc <= 23):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_backup_hour",
+                "message": "backup_hour_utc must be between 0 and 23 (UTC hour of day).",
+            },
+        )
+    if payload.backup_retention_days is not None and payload.backup_retention_days < 1:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_backup_retention",
+                "message": "backup_retention_days must be at least 1.",
+            },
+        )
+
     updates = payload.model_dump(exclude_unset=True)
+
+    # Note whether the backup schedule (hour or master-enable) changed so we can
+    # reschedule the nightly_backup cron after persisting.
+    backup_schedule_changed = (
+        "backup_hour_utc" in updates or "backup_schedule_enabled" in updates
+    )
 
     # Extract sync_interval_seconds before persisting so we can reschedule.
     new_interval: int | None = None
@@ -231,5 +318,24 @@ def update_config(
                 logger.info("Sync interval rescheduled to %ds", new_interval)
             except Exception as exc:
                 logger.warning("Could not reschedule sync_cycle job: %s", exc)
+
+    # Reschedule the nightly_backup cron when the hour or master-enable changed.
+    # The job itself re-reads backup_schedule_enabled and early-returns when off,
+    # so changing the hour while disabled still keeps the next fire time correct.
+    if backup_schedule_changed:
+        scheduler = getattr(getattr(request, "app", None), "state", None)
+        scheduler = getattr(scheduler, "scheduler", None) if scheduler is not None else None
+        if scheduler is not None:
+            try:
+                from apscheduler.triggers.cron import CronTrigger
+
+                hour = effective_backup_hour_utc(db)
+                scheduler.reschedule_job(
+                    "nightly_backup",
+                    trigger=CronTrigger(hour=hour, minute=0),
+                )
+                logger.info("Nightly backup rescheduled to %02d:00 UTC", hour)
+            except Exception as exc:
+                logger.warning("Could not reschedule nightly_backup job: %s", exc)
 
     return _config_response(db)

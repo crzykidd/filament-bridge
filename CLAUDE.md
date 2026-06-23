@@ -220,6 +220,7 @@ filament-bridge/
 │   ├── opentag-cleanup.md                  — OpenTag matcher + apply flow
 │   ├── opentag-matching.md                 — OpenTag v2 scorer internals (token decomposition + mined lexicons)
 │   ├── security.md                         — auth model, API token, lockout recovery
+│   ├── backups.md                          — manual export/import, upstream proxies, nightly scheduled backups
 │   ├── version-update-check.md             — version badge + GitHub update check
 │   ├── spoolman-writes.md                  — every field the bridge writes to Spoolman, and when
 │   ├── migration-spoolman-to-filamentdb.md — standalone migration guide
@@ -238,6 +239,11 @@ filament-bridge/
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of Spoolman (e.g., `http://spoolman:7912`) |
 | `FILAMENTDB_API_KEY` | No | — | Bearer token for Filament DB's optional API-key auth (FDB ≥ 1.39.0, set via FDB's own `FILAMENTDB_API_KEY`). When set, the bridge sends `Authorization: Bearer <key>` on every Filament DB request. Empty = no auth header (FDB API unauthenticated). Spoolman's API has no auth. |
 | `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles (also runtime-editable via Settings) |
+| `BACKUP_SCHEDULE_ENABLED` | No | `true` | Master switch for the nightly scheduled backup job (FR-24b). Runtime-editable via Settings (DB value wins, same precedence as the interval). |
+| `BACKUP_BRIDGE_STATE_ENABLED` | No | `true` | Include the bridge-state export (`GET /backup/export` payload) in the nightly backup. Runtime-editable. |
+| `BACKUP_FILAMENTDB_ENABLED` | No | `true` | Include the Filament DB snapshot (`GET /api/snapshot`) in the nightly backup. Runtime-editable. Spoolman is deliberately NOT scheduled (the bridge can't prune Spoolman's own volume). |
+| `BACKUP_RETENTION_DAYS` | No | `7` | Delete bridge-written backups in `{DATA_DIR}/backups/` older than this (matches the `bridge-state-`/`filamentdb-snapshot-` prefixes only). Runtime-editable; min 1. |
+| `BACKUP_HOUR_UTC` | No | `3` | UTC hour (0–23) the nightly backup runs at, minute 0. Runtime-editable; rescheduled on save. |
 | `PUID` | No | `1000` | User ID the container process runs as (entrypoint chowns `/data` then drops to this UID) |
 | `PGID` | No | `1000` | Group ID the container process runs as |
 | `SPOOLMAN_FIELD_FILAMENTDB_ID` | No | `filamentdb_id` | Spoolman extra field name for Filament DB filament ID |
@@ -286,6 +292,11 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `archive_sync_direction` | `two_way` | Direction for the archive/retire lifecycle category (`two_way` / `spoolman_to_filamentdb` / `filamentdb_to_spoolman`). Mirrors SM `archived` ↔ FDB `retired` for already-mapped spool pairs. |
 | `archive_conflict_policy` | `manual` | Conflict policy for the archive/retire category (consulted only under `two_way` when both sides diverge to opposite states): `manual` / `spoolman_wins` / `filamentdb_wins`. `newest_wins` is rejected at the API (422) — the state is a boolean with no timestamp. |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
+| `backup_schedule_enabled` | env fallback (`true`) | Master switch for the nightly scheduled backup job (FR-24b). When off, the `nightly_backup` cron is a no-op. |
+| `backup_bridge_state_enabled` | env fallback (`true`) | Include the bridge-state export in the nightly backup. |
+| `backup_filamentdb_enabled` | env fallback (`true`) | Include the Filament DB snapshot in the nightly backup. Spoolman is intentionally excluded (no prune control). |
+| `backup_retention_days` | env fallback (`7`) | Delete bridge-written backups (`bridge-state-`/`filamentdb-snapshot-` prefixes) in `{DATA_DIR}/backups/` older than this. Min 1; rejected with the error envelope otherwise. |
+| `backup_hour_utc` | env fallback (`3`) | UTC hour (0–23) the nightly backup fires at, minute 0. Validated 0..23; the cron is rescheduled on save. |
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
 | `api_token_enabled` | `false` | When `true`, requests may authenticate via `Authorization: Bearer <token>` or `X-API-Key`. Toggle in Settings → Security. |
 | `api_token` | (none) | The API token value — stored in BridgeConfig so Settings can display it. Regenerate via Settings → Security → Regenerate token. |

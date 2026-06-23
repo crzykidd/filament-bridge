@@ -9,6 +9,17 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Scheduled nightly backups** — the bridge now runs a built-in nightly job (on by
+  default) that saves a backup of its own state (mappings, config, open conflicts) and a
+  Filament DB snapshot into `DATA_DIR/backups/`, then prunes files past a configurable
+  retention window (default 7 days). Spoolman is deliberately left out of the schedule
+  because the bridge can't prune Spoolman's own archives. The master switch, the two
+  backups, the retention window, and the UTC run hour (default 03:00) are all toggleable in
+  **Settings → Scheduled backups**. This resolves the previously-unbounded accumulation of
+  manual Filament DB snapshots.
+
 ## [0.5.1] — 2026-06-22
 
 ### Fixed

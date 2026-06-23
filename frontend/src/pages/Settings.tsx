@@ -215,6 +215,13 @@ export default function Settings() {
   const [autoSyncMsg, setAutoSyncMsg] = useState('')
   const [showAutoSyncBackupDialog, setShowAutoSyncBackupDialog] = useState(false)
 
+  // Scheduled backups state (issue #5)
+  const [backupScheduleEnabled, setBackupScheduleEnabled] = useState<boolean | null>(null)
+  const [backupBridgeStateEnabled, setBackupBridgeStateEnabled] = useState<boolean | null>(null)
+  const [backupFilamentdbEnabled, setBackupFilamentdbEnabled] = useState<boolean | null>(null)
+  const [backupRetentionDays, setBackupRetentionDays] = useState<number | null>(null)
+  const [backupHourUtc, setBackupHourUtc] = useState<number | null>(null)
+
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -273,6 +280,11 @@ export default function Settings() {
     (neverImportEmpties != null && neverImportEmpties !== data.never_import_empties) ||
     (syncIntervalMinutes != null && syncIntervalMinutes !== Math.round(data.sync_interval_seconds / 60)) ||
     (syncLogRetentionDays != null && syncLogRetentionDays !== data.sync_log_retention_days) ||
+    (backupScheduleEnabled != null && backupScheduleEnabled !== data.backup_schedule_enabled) ||
+    (backupBridgeStateEnabled != null && backupBridgeStateEnabled !== data.backup_bridge_state_enabled) ||
+    (backupFilamentdbEnabled != null && backupFilamentdbEnabled !== data.backup_filamentdb_enabled) ||
+    (backupRetentionDays != null && backupRetentionDays !== data.backup_retention_days) ||
+    (backupHourUtc != null && backupHourUtc !== data.backup_hour_utc) ||
     (variantParentMode != null && variantParentMode !== data.variant_parent_mode) ||
     (containerMarkerEnabled != null && containerMarkerEnabled !== (data.container_parent_marker !== '')) ||
     (containerMarkerText != null && containerMarkerEnabled !== false &&
@@ -329,6 +341,12 @@ export default function Settings() {
   const effectiveIntervalMinutes = syncIntervalMinutes ?? Math.round(data.sync_interval_seconds / 60)
   const effectiveRetentionDays = syncLogRetentionDays ?? data.sync_log_retention_days
   const showIntervalWarning = effectiveIntervalMinutes > 5
+
+  const effBackupEnabled = backupScheduleEnabled ?? data.backup_schedule_enabled
+  const effBackupBridgeState = backupBridgeStateEnabled ?? data.backup_bridge_state_enabled
+  const effBackupFilamentdb = backupFilamentdbEnabled ?? data.backup_filamentdb_enabled
+  const effBackupRetention = backupRetentionDays ?? data.backup_retention_days
+  const effBackupHour = backupHourUtc ?? data.backup_hour_utc
 
   const effectiveVariantParentMode = variantParentMode ?? data.variant_parent_mode
   const effectiveDebugMode = debugMode ?? data.debug_mode
@@ -532,6 +550,11 @@ export default function Settings() {
         opentag_vendor_aliases: vendorAliases ?? undefined,
         sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
+        backup_schedule_enabled: backupScheduleEnabled ?? undefined,
+        backup_bridge_state_enabled: backupBridgeStateEnabled ?? undefined,
+        backup_filamentdb_enabled: backupFilamentdbEnabled ?? undefined,
+        backup_retention_days: backupRetentionDays ?? undefined,
+        backup_hour_utc: backupHourUtc ?? undefined,
         never_import_empties: neverImportEmpties ?? undefined,
         variant_parent_mode: variantParentMode ?? undefined,
         container_parent_marker: (containerMarkerEnabled != null || containerMarkerText != null)
@@ -1129,6 +1152,92 @@ export default function Settings() {
           </label>
         </div>
         {importMsg && <p className="text-sm text-gray-600 dark:text-gray-300">{importMsg}</p>}
+      </div>
+
+      {/* Scheduled backups (issue #5) */}
+      <div className={`${cardCls} space-y-3`}>
+        <div className="flex items-center">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Scheduled backups</h2>
+          <HelpTip
+            text="Writes the bridge's own state export and a Filament DB snapshot into the data volume each night, then prunes old files. Spoolman is not included — the bridge can't prune Spoolman's own backups."
+            learnMoreHref="/docs/backups"
+          />
+        </div>
+        <p className={subTextCls}>
+          A nightly job saves backups into <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{'<DATA_DIR>'}/backups/</code> and
+          deletes anything past the retention window. Restore via Import backup above (bridge state),
+          or by copying a Filament DB snapshot into Filament DB.
+        </p>
+
+        {/* Master enable */}
+        <div className={`flex items-center justify-between py-2 ${dividerCls}`}>
+          <span className={labelCls}>Enable scheduled backups</span>
+          <button
+            type="button"
+            onClick={() => setBackupScheduleEnabled(!effBackupEnabled)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ${effBackupEnabled ? toggleOnCls : toggleOffCls}`}
+            aria-pressed={effBackupEnabled}
+          >
+            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${effBackupEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {/* Sub-toggles — greyed out when master is off */}
+        <div className={`space-y-1 ${effBackupEnabled ? '' : 'opacity-50'}`}>
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Back up bridge state</span>
+            <button
+              type="button"
+              disabled={!effBackupEnabled}
+              onClick={() => setBackupBridgeStateEnabled(!effBackupBridgeState)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:cursor-not-allowed ${effBackupBridgeState ? toggleOnCls : toggleOffCls}`}
+              aria-pressed={effBackupBridgeState}
+            >
+              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${effBackupBridgeState ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Back up Filament DB snapshot</span>
+            <button
+              type="button"
+              disabled={!effBackupEnabled}
+              onClick={() => setBackupFilamentdbEnabled(!effBackupFilamentdb)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:cursor-not-allowed ${effBackupFilamentdb ? toggleOnCls : toggleOffCls}`}
+              aria-pressed={effBackupFilamentdb}
+            >
+              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${effBackupFilamentdb ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+
+          {/* Retention (days) */}
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Retention (days)</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              disabled={!effBackupEnabled}
+              value={effBackupRetention}
+              onChange={e => setBackupRetentionDays(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className={`w-24 ${inputCls} text-right disabled:opacity-60`}
+            />
+          </div>
+
+          {/* Run hour (UTC) */}
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Run at (UTC hour)</span>
+            <select
+              disabled={!effBackupEnabled}
+              value={effBackupHour}
+              onChange={e => setBackupHourUtc(parseInt(e.target.value, 10))}
+              className={`w-24 ${inputCls} text-right disabled:opacity-60`}
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
 
       {/* Wizard status */}

@@ -472,6 +472,18 @@ A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag
   - `POST /api/backup/spoolman` — proxies to Spoolman's `POST /api/v1/backup`; Spoolman writes the archive to its own data volume
   - `POST /api/backup/filamentdb` — fetches Filament DB's `GET /api/snapshot` (full JSON backup: filaments, locations, print history, catalogs, tombstones) and writes it to `DATA_DIR/backups/filamentdb-snapshot-<timestamp>.json`; the bridge's data volume must be mounted for the file to survive a restart. Note: unlike Spoolman, FDB delivers the snapshot to the caller rather than writing it internally, so the bridge stores it.
 
+#### FR-24b: Scheduled backups
+- A built-in nightly job writes backups into `DATA_DIR/backups/` and prunes old files, so backups happen without a cron host or manual clicks. **On by default** once deployed.
+- **What it backs up (two independent toggles, both ON by default):**
+  - **Bridge state** — the bridge's own `GET /api/backup/export` payload (mappings, runtime config, open conflicts) → `bridge-state-<UTC timestamp>.json`
+  - **Filament DB snapshot** — the same `GET /api/snapshot` fetch used by the manual FDB backup → `filamentdb-snapshot-<UTC timestamp>.json`
+- **Spoolman is deliberately excluded** from the scheduled path. Spoolman writes its server-side backup into its own data volume and the bridge has no way to prune it, so scheduling it would leak storage with no retention control. The manual `POST /api/backup/spoolman` button is unchanged.
+- **Schedule:** nightly at a configurable UTC hour (default `03:00`, minute 0).
+- **Retention:** configurable, default **7 days**. Only files the bridge writes (the two prefixes above) are eligible for deletion — Spoolman archives and unrelated files in the directory are never touched. Age is read from the UTC timestamp in the filename (mtime fallback).
+- **Master enable** plus the two sub-toggles, the retention window, and the run hour are all editable in **Settings → Scheduled backups**; env vars (`BACKUP_*`) provide the start-up fallback (DB value wins when set, same precedence as the sync interval).
+- This resolves the previously-unbounded accumulation of manual FDB snapshots in `DATA_DIR/backups/` (issue #5).
+- Note: the bridge's own SQLite DB still depends on a host-volume backup — the scheduled job protects mappings/config (via the bridge-state export) but does not copy `bridge.db` itself.
+
 #### FR-25: Configuration-only export *(Not implemented — folded into full backup)*
 - Originally planned as a separate config-only export; folded into `GET /api/backup/export` which includes config in the full dump
 

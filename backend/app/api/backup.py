@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 
 import httpx
 from fastapi import APIRouter, Depends, Request
@@ -100,16 +99,12 @@ async def trigger_filamentdb_backup(request: Request) -> FilamentDBBackupRespons
     returns ``success=False`` with a readable detail string — never raises a 500.
     """
     from app.config import settings  # local import to avoid circular issues at module load
+    from app.core.backup_job import write_filamentdb_backup
 
     try:
-        snapshot = await request.app.state.filamentdb.get_snapshot()
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = os.path.join(settings.data_dir, "backups")
-        os.makedirs(backup_dir, exist_ok=True)
-        filename = f"filamentdb-snapshot-{ts}.json"
-        filepath = os.path.join(backup_dir, filename)
-        with open(filepath, "w", encoding="utf-8") as fh:
-            json.dump(snapshot, fh)
+        filepath = await write_filamentdb_backup(
+            request.app.state.filamentdb, settings.data_dir
+        )
         return FilamentDBBackupResponse(success=True, detail=filepath)
     except httpx.HTTPStatusError as exc:
         return FilamentDBBackupResponse(

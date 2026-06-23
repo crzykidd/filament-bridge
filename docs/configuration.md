@@ -41,6 +41,11 @@ privileges via `gosu`. No manual `chown` is ever needed — pre-existing root-ow
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `SYNC_INTERVAL_SECONDS` | No | `120` | Default seconds between auto-sync cycles. Runtime-editable in Settings → Sync (no restart needed; backend clamps to ≥ 30 s). Auto-sync itself is OFF by default and must be enabled explicitly after the wizard. |
+| `BACKUP_SCHEDULE_ENABLED` | No | `true` | Start-up fallback for the master switch of the nightly scheduled backup job. Runtime-editable in Settings → Scheduled backups (DB value wins). |
+| `BACKUP_BRIDGE_STATE_ENABLED` | No | `true` | Include the bridge-state export in the nightly backup. Runtime-editable. |
+| `BACKUP_FILAMENTDB_ENABLED` | No | `true` | Include the Filament DB snapshot in the nightly backup. Runtime-editable. Spoolman is intentionally excluded from the scheduled path (the bridge can't prune Spoolman's own volume). |
+| `BACKUP_RETENTION_DAYS` | No | `7` | Delete bridge-written backups in `{DATA_DIR}/backups/` older than this. Only the `bridge-state-`/`filamentdb-snapshot-` prefixes are eligible. Runtime-editable; min 1. |
+| `BACKUP_HOUR_UTC` | No | `3` | UTC hour (0–23) the nightly backup fires at, minute 0. Runtime-editable; the cron reschedules on save. See [backups.md](backups.md). |
 
 ### Two-axis sync model
 
@@ -148,6 +153,11 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | Auto-sync enabled | `false` | Sync | Master switch for scheduled sync. Enabling requires a completed wizard and shows a friendly backup prompt (optional — you can proceed immediately). |
 | `sync_interval_seconds` | env (`120`) | Sync | Auto-sync interval; rescheduled immediately on save (min 30 s). |
 | `sync_log_retention_days` | `30` | Sync | Sync-log rows older than this are pruned at the start of each auto-sync tick. `0` = keep forever. |
+| `backup_schedule_enabled` | env (`true`) | Scheduled backups | Master switch for the nightly backup job. When off, the `nightly_backup` cron is a no-op. |
+| `backup_bridge_state_enabled` | env (`true`) | Scheduled backups | Include the bridge-state export in the nightly backup (sub-toggle, greyed out when master off). |
+| `backup_filamentdb_enabled` | env (`true`) | Scheduled backups | Include the Filament DB snapshot in the nightly backup (sub-toggle). Spoolman is intentionally excluded. |
+| `backup_retention_days` | env (`7`) | Scheduled backups | Delete bridge-written backups in `{DATA_DIR}/backups/` older than this. Min 1. Only the bridge's own prefixes are eligible — Spoolman archives are never touched. |
+| `backup_hour_utc` | env (`3`) | Scheduled backups | UTC hour (0–23) the nightly backup runs at, minute 0. Rescheduled immediately on save. See [backups.md](backups.md). |
 | Weight / material-properties / archive-retire / new-record direction + policy | see above | Sync → category cards | The two-axis model. |
 | `archive_sync_direction` | `two_way` | Sync → Archive / retire sync | Which side's archive/retire flip is mirrored: `two_way` (default), `spoolman_to_filamentdb`, or `filamentdb_to_spoolman`. Applies to mapped pairs only. |
 | `archive_conflict_policy` | `manual` | Sync → Archive / retire sync | Consulted only under `two_way` when both sides diverge to opposite states: `manual` (default — queue a `cross_system` lifecycle conflict), `spoolman_wins`, or `filamentdb_wins`. `newest_wins` is **rejected** (422) — the state is a boolean with no timestamp. |

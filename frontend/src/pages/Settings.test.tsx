@@ -123,6 +123,11 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     container_parent_marker: '(Master)',
     api_token: null,
     api_token_enabled: false,
+    backup_schedule_enabled: true,
+    backup_bridge_state_enabled: true,
+    backup_filamentdb_enabled: true,
+    backup_retention_days: 7,
+    backup_hour_utc: 3,
     required_settings_unset: [],
     ...overrides,
   }
@@ -265,5 +270,49 @@ describe('Settings debug section — Full reset', () => {
     expect(screen.queryByRole('button', { name: /full reset/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /clear spoolman cross-refs/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /clear spoolman openprinttag ids/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('Settings — Scheduled backups section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(getAuthStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      auth_enabled: false,
+      password_set: false,
+      authenticated: true,
+      api_token_enabled: false,
+    })
+  })
+
+  it('renders the Scheduled backups heading and controls', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig(),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(
+      screen.getByRole('heading', { name: /^scheduled backups$/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/enable scheduled backups/i)).toBeInTheDocument()
+    expect(screen.getByText(/back up bridge state/i)).toBeInTheDocument()
+    expect(screen.getByText(/back up filament db snapshot/i)).toBeInTheDocument()
+    expect(screen.getByText(/^retention \(days\)$/i)).toBeInTheDocument()
+    expect(screen.getByText(/run at \(utc hour\)/i)).toBeInTheDocument()
+  })
+
+  it('disables the sub-toggles when the master switch is off', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ backup_schedule_enabled: false }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    const bridgeToggle = screen
+      .getByText(/back up bridge state/i)
+      .parentElement!.querySelector('button')!
+    expect(bridgeToggle).toBeDisabled()
   })
 })

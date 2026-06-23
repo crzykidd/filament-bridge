@@ -316,6 +316,13 @@ class ConfigResponse(BaseModel):
     # admin_password_hash and auth_secret are NEVER included in any response.
     api_token: str | None = None
     api_token_enabled: bool = False
+    # Scheduled nightly backups (issue #5) — master enable + two sub-toggles,
+    # retention window (days), and the UTC hour the job fires at.
+    backup_schedule_enabled: bool = True
+    backup_bridge_state_enabled: bool = True
+    backup_filamentdb_enabled: bool = True
+    backup_retention_days: int = 7
+    backup_hour_utc: int = 3
     # Required settings that must be configured before the bridge is usable.
     # Frontend redirects to /settings and shows a modal when this list is non-empty.
     required_settings_unset: list[str] = Field(default_factory=list)
@@ -351,6 +358,13 @@ class ConfigUpdateRequest(BaseModel):
     container_parent_marker: str | None = None
     # API token control (value managed via /auth/api-token/regenerate; only flag is updatable here)
     api_token_enabled: bool | None = None
+    # Scheduled nightly backups (issue #5). Range checks for hour (0..23) and
+    # retention (>= 1) are enforced in update_config with the project error envelope.
+    backup_schedule_enabled: bool | None = None
+    backup_bridge_state_enabled: bool | None = None
+    backup_filamentdb_enabled: bool | None = None
+    backup_retention_days: int | None = Field(default=None, ge=1)
+    backup_hour_utc: int | None = Field(default=None, ge=0, le=23)
 
 
 # ---------------------------------------------------------------------------

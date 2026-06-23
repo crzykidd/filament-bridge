@@ -249,6 +249,15 @@ curl http://<bridge-host>:8090/api/backup/export -o bridge-backup.json
 
 Restore with `POST /api/backup/import`.
 
+### Scheduled nightly backups
+
+The bridge runs a built-in nightly job (on by default) that writes the bridge-state export
+and a Filament DB snapshot into `DATA_DIR/backups/` and prunes files past a retention
+window (default 7 days). Spoolman is intentionally excluded — the bridge can't prune
+Spoolman's own archives. Toggle the two backups, the retention window, and the UTC run hour
+(default `03:00`) in **Settings → Scheduled backups** (env fallback: `BACKUP_*`). Full
+details in [docs/backups.md](docs/backups.md).
+
 **Audit log — `changes.log`:** every write the bridge makes to Spoolman or Filament DB is appended to `{DATA_DIR}/changes.log` (default `/data/changes.log`). Each line shows a UTC timestamp, action, target system, entity id, and old → new values for updates — useful for reviewing what changed after a bad release without needing the UI or the SQLite database. The file rotates automatically at ~10 MB (keeps 3 backups). Disable with `CHANGES_LOG_ENABLED=false`. Pairs with `DEBUG_STARTUP_DUMP` (point-in-time boot snapshot) for a full before/after picture.
 
 ---
@@ -396,6 +405,11 @@ All connection configuration is via environment variables; the service refuses t
 | `FILAMENTDB_URL` | **Yes** | — | Base URL of your Filament DB instance (e.g. `http://filament-db:3000`) |
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of your Spoolman instance (e.g. `http://spoolman:7912`) |
 | `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles (runtime-editable in Settings) |
+| `BACKUP_SCHEDULE_ENABLED` | No | `true` | Master switch for the nightly scheduled backup job (runtime-editable) |
+| `BACKUP_BRIDGE_STATE_ENABLED` | No | `true` | Include the bridge-state export in the nightly backup (runtime-editable) |
+| `BACKUP_FILAMENTDB_ENABLED` | No | `true` | Include the Filament DB snapshot in the nightly backup (runtime-editable) |
+| `BACKUP_RETENTION_DAYS` | No | `7` | Delete bridge-written backups in `DATA_DIR/backups/` older than this (runtime-editable) |
+| `BACKUP_HOUR_UTC` | No | `3` | UTC hour (0–23) the nightly backup runs at, minute 0 (runtime-editable) |
 | `AUTH_ENABLED` | No | `true` | `false` fully bypasses authentication (also the lockout-recovery path) |
 | `PUID` / `PGID` | No | `1000` | UID/GID the container process runs as (see [Permissions](#permissions)) |
 | `DATA_DIR` | No | `/data` | Directory for the SQLite state database and backup files |
@@ -478,6 +492,7 @@ Both Filament DB and Spoolman continue to function independently. filament-bridg
 | [docs/opentag-cleanup.md](docs/opentag-cleanup.md) | The OpenPrintTag matcher and apply flow |
 | [docs/opentag-matching.md](docs/opentag-matching.md) | OpenPrintTag v2 scorer internals (token decomposition + mined lexicons) |
 | [docs/security.md](docs/security.md) | Auth model, API token, lockout recovery |
+| [docs/backups.md](docs/backups.md) | Manual export/import, upstream backup proxies, and the nightly scheduled backup job |
 | [docs/spoolman-writes.md](docs/spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [docs/version-update-check.md](docs/version-update-check.md) | Version badge and GitHub update check |
 | [docs/migration-spoolman-to-filamentdb.md](docs/migration-spoolman-to-filamentdb.md) | Standalone one-time migration guide (without the bridge) |

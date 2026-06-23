@@ -1,5 +1,37 @@
 # Decision record
 
+## 2026-06-23 — Scheduled nightly backups: bridge-state + FDB snapshot only, on by default (issue #5)
+
+**Context.** The manual `POST /backup/filamentdb` button drops a
+`filamentdb-snapshot-<ts>.json` into `DATA_DIR/backups/` every time it's clicked, with no
+retention — files accumulate unbounded. Issue #5 asked for an automatic nightly backup with
+a "keep x days" retention.
+
+**Decisions.**
+
+- **Scope = bridge-state export + FDB snapshot only. Spoolman is excluded from the
+  schedule.** Spoolman writes its server-side backup into its *own* volume and the bridge
+  has no way to enumerate or prune it, so scheduling it would leak storage with no retention
+  control. The manual `POST /backup/spoolman` button stays as-is for ad-hoc use.
+- **On by default**, with a master enable plus two independent sub-toggles (bridge-state,
+  FDB snapshot), all ON. The feature runs automatically once deployed.
+- **Retention default 7 days**, applied only to the two prefixes the bridge writes
+  (`bridge-state-` / `filamentdb-snapshot-`). Spoolman archives and unrelated files in the
+  directory are never deletion-eligible. Age comes from the UTC timestamp in the filename
+  (mtime fallback).
+- **Schedule: nightly at a configurable UTC hour, default 03:00, minute 0** (APScheduler
+  `CronTrigger`). The cron reschedules on Settings save when the hour or master-enable
+  changes, mirroring the existing `sync_cycle` reschedule.
+- **No Alembic migration.** The five keys are runtime-editable `BridgeConfig` KV rows seeded
+  from `_DEFAULTS` (auto-seeded by the `seed_defaults` loop); env vars (`BACKUP_*`) are the
+  start-up fallback, DB value wins — same env→DB precedence as `sync_interval_seconds`.
+- The file-producing logic was extracted into `core/backup_job.py` so both the HTTP
+  endpoints and the scheduled job share one writer/prune path (DRY).
+
+The bridge's own `bridge.db` SQLite file still relies on a host-volume backup — the
+scheduled job protects mappings/config via the bridge-state export but does not copy the DB
+file itself. See `docs/backups.md`.
+
 ## 2026-06-21 — OpenPrintTag material settings sync as TYPED Spoolman extras → FDB first-class fields
 
 **Context.** OpenPrintTag carries standardized material settings (temps, drying,

@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     # Sync
     sync_interval_seconds: int = 120
 
+    # Scheduled nightly backups (issue #5). Env vars are the start-up fallback;
+    # the same keys are runtime-editable via BridgeConfig (DB value wins when set),
+    # same precedence as sync_interval_seconds. The job writes the bridge's own
+    # state export and the FDB snapshot into {data_dir}/backups/ and prunes old
+    # files. Spoolman's server-side backup is deliberately NOT scheduled (the
+    # bridge cannot prune Spoolman's own volume).
+    backup_schedule_enabled: bool = True
+    backup_bridge_state_enabled: bool = True
+    backup_filamentdb_enabled: bool = True
+    backup_retention_days: int = 7
+    backup_hour_utc: int = 3
+
     # Spoolman extra field keys for cross-reference IDs
     spoolman_field_filamentdb_id: str = "filamentdb_id"
     spoolman_field_filamentdb_parent_id: str = "filamentdb_parent_id"

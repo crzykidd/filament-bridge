@@ -199,11 +199,35 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             finally:
                 db.close()
 
+        async def _backup_job() -> None:
+            """Nightly scheduled backup (issue #5).
+
+            Re-reads the live config each fire, early-returns when the master
+            switch is off (mirrors _sync_job's gating), then writes whichever
+            backups are enabled and prunes old files. Any failure is logged, never
+            raised, so a bad backup can't crash the scheduler.
+            """
+            from app.api.config import effective_backup_config
+            from app.core.backup_job import run_scheduled_backup
+
+            db = SessionLocal()
+            try:
+                cfg = effective_backup_config(db)
+                if not cfg.backup_schedule_enabled:
+                    logger.debug("Scheduled backups disabled — skipping nightly run")
+                    return
+                await run_scheduled_backup(db, app.state.filamentdb, settings=cfg)
+            except Exception as exc:
+                logger.error("Unhandled error in backup job: %s", exc, exc_info=True)
+            finally:
+                db.close()
+
         # Determine the effective interval: DB override takes precedence over env default.
-        from app.api.config import _effective_sync_interval
+        from app.api.config import _effective_sync_interval, effective_backup_hour_utc
         db_for_interval = SessionLocal()
         try:
             initial_interval = _effective_sync_interval(db_for_interval)
+            initial_backup_hour = effective_backup_hour_utc(db_for_interval)
         finally:
             db_for_interval.close()
 
@@ -213,13 +237,38 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             seconds=initial_interval,
             id="sync_cycle",
         )
+
+        from apscheduler.triggers.cron import CronTrigger
+
+        _scheduler.add_job(
+            _backup_job,
+            CronTrigger(hour=initial_backup_hour, minute=0),
+            id="nightly_backup",
+        )
         _scheduler.start()
         # Store scheduler on app.state so the config endpoint can reschedule it.
         app.state.scheduler = _scheduler
         logger.info(
-            "Scheduler started — interval=%ds, auto-sync gated by BridgeConfig.auto_sync_enabled",
+            "Scheduler started — interval=%ds, auto-sync gated by BridgeConfig.auto_sync_enabled; "
+            "nightly backup at %02d:00 UTC (gated by backup_schedule_enabled)",
             initial_interval,
+            initial_backup_hour,
         )
+
+        # One-shot prune at startup so stale backups clear even if the nightly
+        # hour hasn't been reached yet. Cheap and failure-tolerant.
+        try:
+            from app.api.config import effective_backup_config
+            from app.core.backup_job import backups_dir, prune_backups
+
+            _prune_db = SessionLocal()
+            try:
+                _bcfg = effective_backup_config(_prune_db)
+            finally:
+                _prune_db.close()
+            prune_backups(backups_dir(_bcfg.data_dir), _bcfg.backup_retention_days)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Startup backup prune failed: %s", exc)
         try:
             yield
         finally:

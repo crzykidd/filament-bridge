@@ -1,10 +1,10 @@
 ---
 name: 2026-06-23-scheduled-backups
-status: pending          # pending | completed | failed
+status: completed        # pending | completed | failed
 created: 2026-06-23
 model: sonnet
-completed:
-result:
+completed: 2026-06-23
+result: Nightly scheduled backups (bridge-state + FDB snapshot) with retention, on by default, env→DB config, Settings UI, shared core/backup_job.py, tests + docs. Backend 1207 passed; frontend 109 passed; ruff + tsc clean.
 ---
 
 # Task: Scheduled nightly backups (issue #5)

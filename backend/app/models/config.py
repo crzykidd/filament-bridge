@@ -75,6 +75,18 @@ _DEFAULTS = {
     "api_token": "null",
     # When true, requests may authenticate via Authorization: Bearer <token> or X-API-Key.
     "api_token_enabled": "false",
+    # Scheduled nightly backups (issue #5). Env vars are the start-up fallback;
+    # these DB values win when set (same precedence as sync_interval_seconds).
+    # Master enable + two independent sub-toggles (bridge-state export, FDB
+    # snapshot), all ON by default so the feature runs once deployed. Spoolman's
+    # server-side backup is intentionally excluded (no prune control). Files land
+    # in {data_dir}/backups/ and are pruned to backup_retention_days. The job runs
+    # nightly at backup_hour_utc:00 UTC.
+    "backup_schedule_enabled": "true",
+    "backup_bridge_state_enabled": "true",
+    "backup_filamentdb_enabled": "true",
+    "backup_retention_days": "7",
+    "backup_hour_utc": "3",
 }
 
 
