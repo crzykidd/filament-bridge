@@ -529,6 +529,43 @@ A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag
   `variant_parent_mode`), a modal prompts the user to visit Settings before using the bridge
 - All timestamps render in the browser's local timezone
 
+#### FR-29: Mobile updates & label printing
+- A printed, QR-coded spool label plus a phone-friendly page to update that spool from a
+  scale. The whole feature is gated by a single master setting `mobile_labels_enabled`
+  (default OFF): while off, every `/api/mobile/*`, `/api/labels/*` endpoint and the `/r/`
+  redirect return **403**, and the "Mobile updates" nav item is hidden
+- **QR identity = Filament DB filament id + spool id.** The QR encodes
+  `{bridge_public_url}/r/{fil}/{spool}`; the bridge resolves the Spoolman spool through its
+  own mapping. Keeping the QR on the durable FDB ids lets a physical label survive
+  re-imports/re-mapping
+- **`/r/` redirect is the indirection point.** `GET /r/{fil}/{spool}` issues a **302** to a
+  target chosen at runtime by `mobile_redirect_target`: `bridge` → the SPA scan page
+  `/scan/{fil}/{spool}` (default); `filamentdb` → `{FILAMENTDB_URL}/filaments/{fil}`. This
+  lets every existing label re-point (e.g. to a future FDB mobile page) **without
+  reprinting**
+- **Update page (scan target + in-nav search).** `GET /api/mobile/spool/{fil}/{spool}`
+  returns the live spool detail; the card accepts a **gross scale weight** (with a live
+  `net = gross − tare` preview, tare = the FDB filament's `spoolWeight`) and a location
+  change (datalist from `GET /api/mobile/locations`). A single
+  `PATCH /api/mobile/spool/{fil}/{spool}` writes both Filament DB and Spoolman and refreshes
+  both snapshots (anti-ping-pong). The in-nav "Mobile updates" page reaches the same card via
+  a per-spool search
+- **Weight-save mode.** `mobile_weight_default_mode` (`direct_correction` default — absolute
+  true-up | `usage` — log an FDB usage entry on a decrease, fall back to absolute on an
+  increase), overridable per save
+- **Label printing via LabelForge.** `POST /api/labels/print` prints a **user-created**
+  LabelForge template (`{placeholder}` text + an optional `{qr_url}` QR element); the bridge
+  supplies only the values for a fixed field catalog — `brand`, `color`, `color_hex`,
+  `number` (Spoolman spool id), `material`, `qr_url` — sending **only** the names listed in
+  `labelforge_fields` (unknown names skipped with a warning). A media mismatch returns 409
+  with an `override=true` retry; `GET /api/labels/printer-status` backs a Settings "Test
+  printer" check
+- **Auth mirrors the app.** No token in the QR and no auth exception for the scan page — the
+  flow sits behind the same session as every other page (open only when `AUTH_ENABLED=false`)
+- **Caveat:** QR *rendering* in LabelForge exists only on its `dev` branch (newer than
+  v0.1.3). The HTTP API is identical, so text fields print on any LabelForge version; a
+  scannable QR element needs a LabelForge `dev` build. Full guide in `docs/mobile-updates.md`
+
 ---
 
 ## Non-functional requirements

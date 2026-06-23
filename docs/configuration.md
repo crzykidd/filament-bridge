@@ -142,6 +142,25 @@ cost, color) are synced by dedicated passes and need no mapping — see
 | `CHANGES_LOG_ENABLED` | No | `true` | When `false` / `0` / `no`, disables the durable per-write audit file. Applies without restart. |
 | `CHANGES_LOG_PATH` | No | `{DATA_DIR}/changes.log` | Override the path for the changes.log file. Useful when `DATA_DIR` is already mounted as read-only or you want the log on a separate volume. |
 
+## Mobile updates & labels
+
+The phone scan-and-update flow and LabelForge label printing. The whole feature is **off by
+default**; while off, every mobile/label endpoint and the `/r/` redirect return 403. Env
+vars are the start-up fallback — the matching runtime setting wins when set. See
+[mobile-updates.md](mobile-updates.md).
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MOBILE_LABELS_ENABLED` | No | `false` | Master switch for the mobile-updates & labels feature. Start-up fallback; runtime-editable in Settings → Mobile & Labels (DB value wins). |
+| `BRIDGE_PUBLIC_URL` | No | — | External base URL baked into the printed QR (`{base}/r/{fil}/{spool}`). Blank = derive from the request (honoring `X-Forwarded-Proto`/`X-Forwarded-Host` behind a proxy). Runtime-editable. |
+| `MOBILE_REDIRECT_TARGET` | No | `bridge` | Where `GET /r/{fil}/{spool}` 302-redirects: `bridge` (the SPA scan page `/scan/{fil}/{spool}`) or `filamentdb` (`{FILAMENTDB_URL}/filaments/{fil}`). Runtime-editable. |
+| `MOBILE_WEIGHT_DEFAULT_MODE` | No | `direct_correction` | Default weight-save mode on the update page: `direct_correction` (absolute true-up) or `usage` (log an FDB usage entry on a decrease). Overridable per save. Runtime-editable. |
+| `LABELFORGE_URL` | No | — | Base URL of the LabelForge instance used for printing. Blank = not configured. Runtime-editable. |
+| `LABELFORGE_TOKEN` | No | — | LabelForge bearer token (secret). Blank = no auth header. Runtime-editable. |
+| `LABELFORGE_TEMPLATE` | No | — | Name of the user-created LabelForge template to print. Blank = not configured. Runtime-editable. |
+| `LABELFORGE_FIELDS` | No | — | CSV of catalog field names to send to LabelForge (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`), e.g. `brand,color,number,qr_url`. Unknown names are skipped with a warning. Runtime-editable. |
+| `LABELFORGE_LABEL_MEDIA` | No | — | Optional per-print media/size hint passed to LabelForge. Blank = the template's stored media. Runtime-editable. |
+
 ---
 
 ## Runtime-editable settings (Settings UI)
@@ -173,6 +192,15 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | `api_token_enabled` | `false` | Security | Allow `Authorization: Bearer` / `X-API-Key` machine auth. |
 | `api_token` | (none) | Security | The token value; generate/regenerate in Settings (displayed masked). |
 | `debug_mode` | `false` | Debug mode | Reveals the Danger Zone and enables the four `/api/debug/*` reset endpoints (403 when off). Never enable in production. |
+| `mobile_labels_enabled` | env (`false`) | Mobile & Labels | Master switch for mobile updates & labels. When off, every mobile/label endpoint and the `/r/` redirect return 403 and the nav item is hidden. |
+| `bridge_public_url` | env (`""`) | Mobile & Labels | External base URL baked into the printed QR. Blank = derive from the request. |
+| `mobile_redirect_target` | env (`bridge`) | Mobile & Labels | `/r/` 302 target: `bridge` (scan page) or `filamentdb` (filament page). Lets every existing label re-point without reprinting. |
+| `mobile_weight_default_mode` | env (`direct_correction`) | Mobile & Labels | Default weight-save mode: `direct_correction` or `usage`. Overridable per save on the update card. |
+| `labelforge_url` | env (`""`) | Mobile & Labels | LabelForge base URL. Blank = printing not configured (`400 labelforge_not_configured`). |
+| `labelforge_token` | env (`""`) | Mobile & Labels | LabelForge bearer token (secret; masked input). Blank = no auth header. |
+| `labelforge_template` | env (`""`) | Mobile & Labels | Name of the user-created LabelForge template to print. |
+| `labelforge_fields` | env (`""`) | Mobile & Labels | CSV of catalog fields to send (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`). Unknown names are skipped with a warning. |
+| `labelforge_label_media` | env (`""`) | Mobile & Labels | Optional per-print media hint; blank = template default. |
 
 The wizard also persists its own decision state in BridgeConfig
 (`import_direction`, `wizard_match_decisions`, `wizard_sm_variant_decisions`,

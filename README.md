@@ -493,6 +493,7 @@ Both Filament DB and Spoolman continue to function independently. filament-bridg
 | [docs/opentag-matching.md](docs/opentag-matching.md) | OpenPrintTag v2 scorer internals (token decomposition + mined lexicons) |
 | [docs/security.md](docs/security.md) | Auth model, API token, lockout recovery |
 | [docs/backups.md](docs/backups.md) | Manual export/import, upstream backup proxies, and the nightly scheduled backup job |
+| [docs/mobile-updates.md](docs/mobile-updates.md) | Phone scan-and-update, the QR `/r/` redirect, and LabelForge label printing |
 | [docs/spoolman-writes.md](docs/spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [docs/version-update-check.md](docs/version-update-check.md) | Version badge and GitHub update check |
 | [docs/migration-spoolman-to-filamentdb.md](docs/migration-spoolman-to-filamentdb.md) | Standalone one-time migration guide (without the bridge) |

@@ -1,10 +1,16 @@
 ---
 name: 2026-06-23-mobile-updates-phase4
-status: pending
+status: done
 created: 2026-06-23
 model: sonnet
-completed:
-result:
+completed: 2026-06-23
+result: >
+  Wrote docs/mobile-updates.md (scan→update flow, /r/ redirect indirection, LabelForge
+  printing + field catalog, weight modes, LabelForge-dev QR caveat, Settings reference);
+  wired it into docs/README.md, README.md, and the CLAUDE.md docs tree; added the nine
+  mobile/labelforge keys to the env-var AND runtime-settings tables in docs/configuration.md
+  and CLAUDE.md; added FR-29 to docs/prd.md; added a CHANGELOG Unreleased "Added" entry.
+  Docs-only, one commit.
 ---
 
 # Task: Mobile Updates & Labels — Phase 4 (docs / PRD / CHANGELOG)

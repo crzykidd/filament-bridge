@@ -221,6 +221,7 @@ filament-bridge/
 │   ├── opentag-matching.md                 — OpenTag v2 scorer internals (token decomposition + mined lexicons)
 │   ├── security.md                         — auth model, API token, lockout recovery
 │   ├── backups.md                          — manual export/import, upstream proxies, nightly scheduled backups
+│   ├── mobile-updates.md                   — phone scan-and-update, QR /r/ redirect, LabelForge printing
 │   ├── version-update-check.md             — version badge + GitHub update check
 │   ├── spoolman-writes.md                  — every field the bridge writes to Spoolman, and when
 │   ├── migration-spoolman-to-filamentdb.md — standalone migration guide
@@ -277,6 +278,15 @@ filament-bridge/
 | `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable snapshot of both upstream systems at boot to `{DATA_DIR}/state-dumps/startup-state-<UTC ts>.txt`. Newest 10 dumps are kept. Never enable in production. |
 | `CHANGES_LOG_ENABLED` | No | `true` | When `false`, disables the durable changes.log file. |
 | `CHANGES_LOG_PATH` | No | `{DATA_DIR}/changes.log` | Override the path for the changes.log file. |
+| `MOBILE_LABELS_ENABLED` | No | `false` | Master switch for the mobile-updates & labels feature. When off, every `/api/mobile/*`, `/api/labels/*` endpoint and the `/r/{fil}/{spool}` redirect return 403. Start-up fallback; runtime-editable via Settings → Mobile & Labels. See `docs/mobile-updates.md`. |
+| `BRIDGE_PUBLIC_URL` | No | — | External base URL baked into the printed QR (`{base}/r/{fil}/{spool}`). Empty = derived from the request (honoring `X-Forwarded-Proto`/`X-Forwarded-Host`). Runtime-editable. |
+| `MOBILE_REDIRECT_TARGET` | No | `bridge` | Target of the `GET /r/{fil}/{spool}` 302: `bridge` (SPA scan page `/scan/{fil}/{spool}`) or `filamentdb` (`{FILAMENTDB_URL}/filaments/{fil}`). The indirection lets labels re-point without reprinting. Runtime-editable. |
+| `MOBILE_WEIGHT_DEFAULT_MODE` | No | `direct_correction` | Default mobile weight-save mode: `direct_correction` (absolute true-up) or `usage` (FDB usage entry on decrease). Overridable per save. Runtime-editable. |
+| `LABELFORGE_URL` | No | — | Base URL of the LabelForge instance used for printing. Empty = not configured. Runtime-editable. |
+| `LABELFORGE_TOKEN` | No | — | LabelForge bearer token (secret). Empty = no auth header. Runtime-editable. |
+| `LABELFORGE_TEMPLATE` | No | — | Name of the user-created LabelForge template to print. Empty = not configured. Runtime-editable. |
+| `LABELFORGE_FIELDS` | No | — | CSV of catalog field names to send (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`). Unknown names are skipped with a warning. Runtime-editable. |
+| `LABELFORGE_LABEL_MEDIA` | No | — | Optional per-print media/size hint passed to LabelForge. Empty = the template's stored media. Runtime-editable. |
 
 ### Runtime-editable settings (BridgeConfig)
 
@@ -302,6 +312,15 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `api_token` | (none) | The API token value — stored in BridgeConfig so Settings can display it. Regenerate via Settings → Security → Regenerate token. |
 | `opentag_vendor_aliases` | env fallback (`""`) | CSV of `sm=opentag` vendor alias pairs for the OpenTag matcher brand pre-filter. |
 | `container_parent_marker` | env fallback (`"(Master)"`) | String appended to generic-container parent names (e.g. "ELEGOO PLA (Master)"). Empty = no suffix. Shown in Settings when `generic_container` mode is active. |
+| `mobile_labels_enabled` | env fallback (`false`) | Master switch for mobile updates & labels (FR-29). When off, every `/api/mobile/*`, `/api/labels/*` endpoint and the `/r/{fil}/{spool}` redirect return 403 and the nav item is hidden. |
+| `bridge_public_url` | env fallback (`""`) | External base URL baked into the printed QR (`{base}/r/{fil}/{spool}`). Empty = derived from the request. |
+| `mobile_redirect_target` | env fallback (`"bridge"`) | `GET /r/{fil}/{spool}` 302 target: `bridge` (SPA scan page) or `filamentdb` (filament page). Lets labels re-point without reprinting. |
+| `mobile_weight_default_mode` | env fallback (`"direct_correction"`) | Default mobile weight-save mode: `direct_correction` (absolute true-up) or `usage` (FDB usage entry on decrease). Overridable per save. |
+| `labelforge_url` | env fallback (`""`) | LabelForge base URL. Empty = printing not configured (`400 labelforge_not_configured`). |
+| `labelforge_token` | env fallback (`""`) | LabelForge bearer token (secret; masked in Settings). Empty = no auth header. |
+| `labelforge_template` | env fallback (`""`) | Name of the user-created LabelForge template to print. |
+| `labelforge_fields` | env fallback (`""`) | CSV of catalog fields to send (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`). Unknown names are skipped with a warning. |
+| `labelforge_label_media` | env fallback (`""`) | Optional per-print media hint; empty = the template's stored media. |
 
 ## Important technical details
 
