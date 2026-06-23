@@ -557,4 +557,4 @@ Contributions welcome. Please open an issue to discuss before submitting PRs for
 
 ## License
 
-MIT
+[MIT](LICENSE) © crzykidd
