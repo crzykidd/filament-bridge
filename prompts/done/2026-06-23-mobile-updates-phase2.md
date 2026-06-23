@@ -1,10 +1,18 @@
 ---
 name: 2026-06-23-mobile-updates-phase2
-status: pending
+status: done
 created: 2026-06-23
 model: sonnet
-completed:
-result:
+completed: 2026-06-23
+result: >
+  Frontend mobile flow implemented. Added the bare /scan/:filId/:spoolId route
+  (sibling outside Layout), the in-nav /mobile-updates page with a spool search,
+  the shared MobileSpoolUpdate component (gross input + live net preview,
+  weight-mode toggle, location datalist, one-PATCH Save), the client wrappers +
+  TS types matching the backend schema, and a minimal Settings "Mobile updates"
+  section (enable toggle + redirect target + default weight mode). The nav item
+  is gated on mobile_labels_enabled read from /api/version. tsc clean, vitest
+  118 passed (+9 new), vite build OK. LabelForge print/Settings deferred to Phase 3.
 ---
 
 # Task: Mobile Updates & Labels — Phase 2 (frontend mobile flow)

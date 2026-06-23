@@ -4436,6 +4436,50 @@ backend decisions; the full user-facing docs land in a later phase.
   and `ConfigResponse`/`ConfigUpdateRequest`/`_config_response`. Frontend, LabelForge printing, and the
   user-facing docs roll-up are deferred to later phases.
 
+## 2026-06-23 — Mobile updates & labels (phase 2 frontend mobile flow)
+
+**Context.** Phase 1 shipped the backend (`/api/mobile/*`, `/r/...` redirect, config keys, the
+`mobile_labels_enabled` flag on `/api/version`). Phase 2 builds the UI: the bare QR scan page, the
+in-nav page, the shared update card, and a minimal Settings section so the feature is testable.
+LabelForge print buttons and the full LabelForge Settings fields stay Phase 3.
+
+**Decisions (implemented):**
+
+- **Nav gate reads `/api/version`, not `/api/config`.** The "Mobile updates" nav item is rendered
+  only when `mobile_labels_enabled` is true. `Layout` already had the version payload in scope (the
+  `VersionBadge` fetches it), so `Layout` does its own `getVersionInfo()` call and conditionally
+  appends `{ to: '/mobile-updates', label: 'Mobile updates' }` to a local `navItems` derived from
+  the static `NAV_ITEMS`. Using `/api/version` (public, already loaded app-wide) rather than
+  `/api/config` keeps the gate cheap and matches where the backend chose to expose the flag. When the
+  flag is off the page is also unreachable in practice (its API calls 403); a user who navigates to
+  `/mobile-updates` directly sees the inline 403 message rather than a crash.
+
+- **Scan route is a SIBLING outside `<Layout/>`; the in-nav page is inside it.** `/scan/:filId/:spoolId`
+  → `ScanTarget` renders the shared card in a full-screen frame modeled on `Login.tsx`
+  (`min-h-screen flex items-start justify-center`, `max-w-md`) with no side nav — it's the single-purpose
+  QR target. `/mobile-updates` → `MobileUpdates` lives inside the Layout wrapper with the normal `p-8`
+  shell. **No auth exception** for either — both sit behind the existing global gate in `App.tsx`, per
+  the plan decision.
+
+- **One shared `MobileSpoolUpdate` component, two entry points.** It takes `{ filId, spoolId }`,
+  fetches the detail via `useApi`, and is rendered by both `ScanTarget` (bare) and `MobileUpdates`
+  (after a search-and-select). The weight input is labelled as the **gross/scale** reading
+  (`inputMode="decimal"`) with a live `gross − tare` net preview; the weight-mode toggle defaults to
+  `detail.weight_default_mode` and is overridable; location is an `<input list>` datalist from
+  `/api/mobile/locations`. Save sends **one** PATCH and only includes `gross_grams` when a valid weight
+  was entered and `location` when it actually changed (`weight_mode` is always sent). Errors/success are
+  inline banners (red text / emerald box) — matching `Conflicts.tsx`; there is no toast system.
+
+- **In-nav search reuses the `SyncedRecords` filter over `getMappings()`.** Only `kind="spool"` rows
+  with both FDB ids are selectable (the mobile flow is per-spool); the search matches name/vendor/color
+  and the Spoolman spool id. No new search endpoint.
+
+- **Minimal Settings section, clear Phase-3 seam.** A "Mobile updates" card exposes the enable toggle,
+  QR redirect target, and default weight mode only. It folds into the existing single-Save config flow
+  (added to `isDirty` + `handleSave`), so one Save covers it. The `labelforge_*` keys exist on the
+  backend and in `ConfigResponse` but are deliberately **not** surfaced in the UI yet — that, plus the
+  Print buttons, is Phase 3.
+
 **Caveat (documented, not blocking):** QR *rendering* in LabelForge exists only on its `dev` branch
 (`421caee`+, not v0.1.3). The HTTP API is identical across main/dev, so the bridge codes against the
 stable API; printing a QR requires the user to run a LabelForge build with that work.

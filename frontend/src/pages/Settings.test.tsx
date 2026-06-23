@@ -128,6 +128,9 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     backup_filamentdb_enabled: true,
     backup_retention_days: 7,
     backup_hour_utc: 3,
+    mobile_labels_enabled: false,
+    mobile_redirect_target: 'bridge',
+    mobile_weight_default_mode: 'direct_correction',
     required_settings_unset: [],
     ...overrides,
   }
@@ -314,5 +317,59 @@ describe('Settings — Scheduled backups section', () => {
       .getByText(/back up bridge state/i)
       .parentElement!.querySelector('button')!
     expect(bridgeToggle).toBeDisabled()
+  })
+})
+
+describe('Settings — Mobile updates section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(getAuthStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      auth_enabled: false,
+      password_set: false,
+      authenticated: true,
+      api_token_enabled: false,
+    })
+  })
+
+  it('renders the Mobile updates heading and controls', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig(),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(screen.getByRole('heading', { name: /^mobile updates$/i })).toBeInTheDocument()
+    expect(screen.getByText(/enable mobile updates/i)).toBeInTheDocument()
+    expect(screen.getByText(/qr redirect target/i)).toBeInTheDocument()
+    expect(screen.getByText(/default weight mode/i)).toBeInTheDocument()
+  })
+
+  it('disables the redirect + weight selects when the feature is off', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: false }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    const redirectSelect = screen
+      .getByText(/qr redirect target/i)
+      .parentElement!.querySelector('select')!
+    expect(redirectSelect).toBeDisabled()
+  })
+
+  it('enables the selects when the feature is on', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    const redirectSelect = screen
+      .getByText(/qr redirect target/i)
+      .parentElement!.querySelector('select')!
+    expect(redirectSelect).not.toBeDisabled()
   })
 })

@@ -4,7 +4,7 @@ import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clear
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DebugConfirmDialog } from '../components/DebugConfirmDialog'
-import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy } from '../api/types'
+import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy, MobileRedirectTarget, MobileWeightMode } from '../api/types'
 import { useTheme } from '../context/ThemeContext'
 import type { ThemeMode } from '../context/ThemeContext'
 import { HelpTip } from '../components/HelpTip'
@@ -262,6 +262,11 @@ export default function Settings() {
   const [togglingToken, setTogglingToken] = useState(false)
   const [tokenToggleMsg, setTokenToggleMsg] = useState('')
 
+  // --- Mobile updates (phase 2) -----------------------------------------
+  const [mobileLabelsEnabled, setMobileLabelsEnabled] = useState<boolean | null>(null)
+  const [mobileRedirectTarget, setMobileRedirectTarget] = useState<MobileRedirectTarget | null>(null)
+  const [mobileWeightDefaultMode, setMobileWeightDefaultMode] = useState<MobileWeightMode | null>(null)
+
   // --- Unsaved-changes guard ---------------------------------------------
   const isDirty = !!data && (
     (weightDir != null && weightDir !== data.weight_sync_direction) ||
@@ -288,7 +293,10 @@ export default function Settings() {
     (variantParentMode != null && variantParentMode !== data.variant_parent_mode) ||
     (containerMarkerEnabled != null && containerMarkerEnabled !== (data.container_parent_marker !== '')) ||
     (containerMarkerText != null && containerMarkerEnabled !== false &&
-      containerMarkerText !== data.container_parent_marker)
+      containerMarkerText !== data.container_parent_marker) ||
+    (mobileLabelsEnabled != null && mobileLabelsEnabled !== data.mobile_labels_enabled) ||
+    (mobileRedirectTarget != null && mobileRedirectTarget !== data.mobile_redirect_target) ||
+    (mobileWeightDefaultMode != null && mobileWeightDefaultMode !== data.mobile_weight_default_mode)
   )
 
   const blocker = useBlocker(
@@ -350,6 +358,10 @@ export default function Settings() {
 
   const effectiveVariantParentMode = variantParentMode ?? data.variant_parent_mode
   const effectiveDebugMode = debugMode ?? data.debug_mode
+
+  const effMobileEnabled = mobileLabelsEnabled ?? data.mobile_labels_enabled
+  const effMobileRedirect = mobileRedirectTarget ?? data.mobile_redirect_target
+  const effMobileWeightMode = mobileWeightDefaultMode ?? data.mobile_weight_default_mode
 
   const savedMarker = data.container_parent_marker
   const effectiveMarkerEnabled = containerMarkerEnabled ?? (savedMarker !== '')
@@ -560,6 +572,9 @@ export default function Settings() {
         container_parent_marker: (containerMarkerEnabled != null || containerMarkerText != null)
           ? effectiveMarkerValue
           : undefined,
+        mobile_labels_enabled: mobileLabelsEnabled ?? undefined,
+        mobile_redirect_target: mobileRedirectTarget ?? undefined,
+        mobile_weight_default_mode: mobileWeightDefaultMode ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -1110,6 +1125,71 @@ export default function Settings() {
             e.g. <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">prusa=prusament, polyterra=polymaker</code>. Required when the vendor
             name in Spoolman differs from the brand name used in OpenTag.
           </span>
+        </div>
+
+        {/* ---------------------------------------------------------------- */}
+        {/* Mobile updates (phase 2 — minimal; LabelForge fields are phase 3) */}
+        {/* ---------------------------------------------------------------- */}
+        <div className={`rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3 mt-2`}>
+          <div className="flex items-center gap-1">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Mobile updates</h3>
+            <HelpTip text="Phone-friendly spool update page reached by scanning a label QR (or via the Mobile updates nav item). When enabled, the nav item appears and the scan/redirect endpoints respond. Label printing settings come later." />
+          </div>
+
+          {/* Enable toggle */}
+          <div className="flex items-start justify-between py-1">
+            <div>
+              <span className={labelCls}>Enable mobile updates</span>
+              <p className={`${subTextCls} mt-0.5`}>
+                Master switch. When off, the &quot;Mobile updates&quot; nav item is hidden and the
+                mobile/scan/redirect endpoints refuse (403).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileLabelsEnabled(!effMobileEnabled)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ml-4 mt-0.5 ${
+                effMobileEnabled ? toggleOnCls : toggleOffCls
+              }`}
+              aria-pressed={effMobileEnabled}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  effMobileEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Redirect target + default weight mode (disabled when off) */}
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 ${effMobileEnabled ? '' : 'opacity-50'}`}>
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>QR redirect target</span>
+              <select
+                value={effMobileRedirect}
+                disabled={!effMobileEnabled}
+                onChange={e => setMobileRedirectTarget(e.target.value as MobileRedirectTarget)}
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              >
+                <option value="bridge">Bridge scan page</option>
+                <option value="filamentdb">Filament DB filament page</option>
+              </select>
+              <span className={subTextCls}>Where the QR&apos;s /r redirect sends the phone.</span>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>Default weight mode</span>
+              <select
+                value={effMobileWeightMode}
+                disabled={!effMobileEnabled}
+                onChange={e => setMobileWeightDefaultMode(e.target.value as MobileWeightMode)}
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              >
+                <option value="direct_correction">Correct weight (direct)</option>
+                <option value="usage">Log as usage</option>
+              </select>
+              <span className={subTextCls}>Preselected save mode on the update page (overridable per save).</span>
+            </label>
+          </div>
         </div>
 
         {/* Save button */}

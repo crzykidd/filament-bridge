@@ -294,6 +294,11 @@ export interface ConfigResponse {
   backup_filamentdb_enabled: boolean
   backup_retention_days: number
   backup_hour_utc: number
+  // Mobile updates & labels (phase 1 backend). The labelforge_* keys exist on the
+  // backend too but are deferred to Phase 3 in the UI — not surfaced here yet.
+  mobile_labels_enabled: boolean
+  mobile_redirect_target: MobileRedirectTarget
+  mobile_weight_default_mode: MobileWeightMode
   // Required settings that must be configured before the bridge is usable
   required_settings_unset: string[]
 }
@@ -332,6 +337,11 @@ export interface ConfigUpdateRequest {
   backup_filamentdb_enabled?: boolean | null
   backup_retention_days?: number | null
   backup_hour_utc?: number | null
+  // Mobile updates & labels (Phase 2 surfaces the toggle + redirect + weight mode;
+  // labelforge_* remain Phase 3).
+  mobile_labels_enabled?: boolean | null
+  mobile_redirect_target?: MobileRedirectTarget | null
+  mobile_weight_default_mode?: MobileWeightMode | null
 }
 
 // ---------------------------------------------------------------------------
@@ -949,6 +959,9 @@ export interface VersionInfo {
   commit: string | null
   build: string
   is_dev: boolean
+  /** Master toggle for the mobile-updates / labels feature. When false, the
+   *  "Mobile updates" nav item is hidden and the mobile/redirect endpoints 403. */
+  mobile_labels_enabled: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +1015,42 @@ export interface ReconcileResponse {
   only_in_spoolman: ReconcileMissingRow[]
   only_in_filamentdb: ReconcileMissingRow[]
   ambiguous: AmbiguousRow[]
+}
+
+// ---------------------------------------------------------------------------
+// Mobile updates (phase 2 — matches backend schemas/api.py)
+// ---------------------------------------------------------------------------
+
+export type MobileRedirectTarget = 'bridge' | 'filamentdb'
+export type MobileWeightMode = 'direct_correction' | 'usage'
+
+/** Assembled, live spool detail for the mobile scan/update page.
+ *  Mirrors backend `MobileSpoolDetail`. Identity is the Filament DB filament id +
+ *  spool id (encoded in the QR); `number` is the Spoolman spool id. */
+export interface MobileSpoolDetail {
+  filamentdb_filament_id: string
+  filamentdb_spool_id: string
+  spoolman_spool_id: number
+  spoolman_filament_id: number | null
+  number: number
+  brand: string | null
+  color_name: string | null
+  color_hex: string | null
+  material: string | null
+  // Weights in grams: gross = FDB totalWeight, net = SM remaining_weight.
+  gross: number | null
+  net: number | null
+  tare: number
+  location: string | null
+  weight_default_mode: MobileWeightMode
+}
+
+/** Body for PATCH /api/mobile/spool/{fil}/{spool}. Mirrors backend
+ *  `MobileSpoolUpdateRequest`. `gross_grams` is a scale (gross) reading. */
+export interface MobileSpoolUpdateRequest {
+  gross_grams?: number | null
+  location?: string | null
+  weight_mode?: MobileWeightMode | null
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ import OpenTagCleanup from './pages/OpenTagCleanup'
 import Reconcile from './pages/Reconcile'
 import DocsViewer from './pages/DocsViewer'
 import { WizardShell } from './pages/Wizard'
+import MobileUpdates from './pages/MobileUpdates'
+import ScanTarget from './pages/ScanTarget'
 import Login from './pages/Login'
 import { getAuthStatus, register401Handler } from './api/client'
 import type { AuthStatusResponse } from './api/types'
@@ -27,19 +29,25 @@ import { ThemeProvider } from './context/ThemeContext'
 // does not provide the data-router context that useBlocker needs.
 const router = createBrowserRouter(
   createRoutesFromElements(
-    <Route element={<Layout />}>
-      <Route index element={<Dashboard />} />
-      <Route path="synced-records" element={<SyncedRecords />} />
-      <Route path="conflicts" element={<Conflicts />} />
-      <Route path="sync-log" element={<SyncLog />} />
-      <Route path="settings" element={<Settings />} />
-      <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
-      <Route path="reconcile" element={<Reconcile />} />
-      <Route path="wizard/*" element={<WizardShell />} />
-      <Route path="docs" element={<DocsViewer />} />
-      <Route path="docs/:slug" element={<DocsViewer />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Route>,
+    <>
+      {/* Bare QR scan-target page — SIBLING of the Layout wrapper so it renders
+          with no side nav. Still behind the global auth gate below. */}
+      <Route path="scan/:filId/:spoolId" element={<ScanTarget />} />
+      <Route element={<Layout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="synced-records" element={<SyncedRecords />} />
+        <Route path="conflicts" element={<Conflicts />} />
+        <Route path="sync-log" element={<SyncLog />} />
+        <Route path="settings" element={<Settings />} />
+        <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
+        <Route path="reconcile" element={<Reconcile />} />
+        <Route path="mobile-updates" element={<MobileUpdates />} />
+        <Route path="wizard/*" element={<WizardShell />} />
+        <Route path="docs" element={<DocsViewer />} />
+        <Route path="docs/:slug" element={<DocsViewer />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </>,
   ),
 )
 
