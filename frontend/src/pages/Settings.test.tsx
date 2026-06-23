@@ -28,6 +28,12 @@ vi.mock('../api/client', () => ({
   authChangePassword: vi.fn(),
   authRegenerateToken: vi.fn(),
   getAuthStatus: vi.fn(),
+  getPrinterStatus: vi.fn(),
+  BridgeApiError: class BridgeApiError extends Error {
+    constructor(public status: number, public code: string, message: string) {
+      super(message)
+    }
+  },
 }))
 
 vi.mock('../api/hooks', () => ({
@@ -89,7 +95,7 @@ vi.mock('react-router-dom', () => ({
 // ---------------------------------------------------------------------------
 
 import Settings from './Settings'
-import { fullReset, clearSpoolmanFdbRefs, resetBridgeState, getAuthStatus } from '../api/client'
+import { fullReset, clearSpoolmanFdbRefs, resetBridgeState, getAuthStatus, getPrinterStatus, updateConfig } from '../api/client'
 import { useApi } from '../api/hooks'
 import type { ConfigResponse, FullResetResponse } from '../api/types'
 
@@ -131,6 +137,12 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     mobile_labels_enabled: false,
     mobile_redirect_target: 'bridge',
     mobile_weight_default_mode: 'direct_correction',
+    bridge_public_url: '',
+    labelforge_url: '',
+    labelforge_token: '',
+    labelforge_template: '',
+    labelforge_fields: '',
+    labelforge_label_media: '',
     required_settings_unset: [],
     ...overrides,
   }
@@ -331,7 +343,7 @@ describe('Settings — Mobile updates section', () => {
     })
   })
 
-  it('renders the Mobile updates heading and controls', () => {
+  it('renders the Mobile & Labels heading and controls', () => {
     ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
       data: makeConfig(),
       loading: false,
@@ -339,10 +351,67 @@ describe('Settings — Mobile updates section', () => {
       reload: vi.fn(),
     })
     render(<Settings />)
-    expect(screen.getByRole('heading', { name: /^mobile updates$/i })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^mobile & labels$/i })).toBeInTheDocument()
     expect(screen.getByText(/enable mobile updates/i)).toBeInTheDocument()
     expect(screen.getByText(/qr redirect target/i)).toBeInTheDocument()
     expect(screen.getByText(/default weight mode/i)).toBeInTheDocument()
+  })
+
+  it('renders the LabelForge connection fields and a Test printer button', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(screen.getByText(/labelforge label printing/i)).toBeInTheDocument()
+    expect(screen.getByText(/^labelforge url$/i)).toBeInTheDocument()
+    expect(screen.getByText(/^labelforge api token$/i)).toBeInTheDocument()
+    expect(screen.getByText(/^fields \(csv\)$/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /test printer/i })).toBeInTheDocument()
+  })
+
+  it('calls getPrinterStatus and shows the result when Test printer is clicked', async () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true, labelforge_url: 'http://lf.test' }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    ;(getPrinterStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ready: true,
+      model: 'QL-800',
+      loaded_media: { id: '62', display_name: '62mm Continuous', width_mm: 62, length_mm: 0, color_capable: false },
+      errors: [],
+    })
+    render(<Settings />)
+    fireEvent.click(screen.getByRole('button', { name: /test printer/i }))
+    await waitFor(() => expect(getPrinterStatus).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText(/QL-800/)).toBeInTheDocument())
+  })
+
+  it('saves the LabelForge fields via updateConfig', async () => {
+    const reload = vi.fn()
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true }),
+      loading: false,
+      error: null,
+      reload,
+    })
+    ;(updateConfig as ReturnType<typeof vi.fn>).mockResolvedValue(makeConfig({ mobile_labels_enabled: true }))
+    render(<Settings />)
+
+    const tmpl = screen
+      .getByText(/^template name$/i)
+      .parentElement!.querySelector('input')!
+    fireEvent.change(tmpl, { target: { value: 'spool' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^save$/i })[0])
+
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+    expect((updateConfig as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      labelforge_template: 'spool',
+    })
   })
 
   it('disables the redirect + weight selects when the feature is off', () => {

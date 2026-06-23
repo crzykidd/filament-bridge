@@ -19,6 +19,7 @@ import { useApi } from '../api/hooks'
 import { BridgeApiError } from '../api/client'
 import { ColorDisplay } from './ColorDisplay'
 import { DeepLinks } from './DeepLinks'
+import { PrintLabelButton } from './PrintLabelButton'
 import type { MobileSpoolDetail, MobileWeightMode, MobileSpoolUpdateRequest } from '../api/types'
 
 interface MobileSpoolUpdateProps {
@@ -227,6 +228,11 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
             {savedMsg}
           </div>
         )}
+      </div>
+
+      {/* Print label (LabelForge) — feature is already gated on the route here */}
+      <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
+        <PrintLabelButton filId={filId} spoolId={spoolId} />
       </div>
     </div>
   )

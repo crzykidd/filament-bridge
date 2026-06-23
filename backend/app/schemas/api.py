@@ -952,3 +952,15 @@ class MobileSpoolUpdateRequest(BaseModel):
     gross_grams: float | None = Field(default=None, ge=0)
     location: str | None = None
     weight_mode: MobileWeightMode | None = None
+
+
+class LabelPrintRequest(BaseModel):
+    """Body for POST /api/labels/print.
+
+    ``fil`` / ``spool`` are the Filament DB filament + spool ids (same identity the
+    QR encodes). ``override`` retries a print past a LabelForge media mismatch.
+    """
+
+    fil: str
+    spool: str
+    override: bool = False

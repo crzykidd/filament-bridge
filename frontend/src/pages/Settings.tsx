@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBlocker, Link } from 'react-router-dom'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus, getPrinterStatus, BridgeApiError } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DebugConfirmDialog } from '../components/DebugConfirmDialog'
@@ -267,6 +267,17 @@ export default function Settings() {
   const [mobileRedirectTarget, setMobileRedirectTarget] = useState<MobileRedirectTarget | null>(null)
   const [mobileWeightDefaultMode, setMobileWeightDefaultMode] = useState<MobileWeightMode | null>(null)
 
+  // --- LabelForge connection (phase 3) ----------------------------------
+  const [bridgePublicUrl, setBridgePublicUrl] = useState<string | null>(null)
+  const [labelforgeUrl, setLabelforgeUrl] = useState<string | null>(null)
+  const [labelforgeToken, setLabelforgeToken] = useState<string | null>(null)
+  const [labelforgeTemplate, setLabelforgeTemplate] = useState<string | null>(null)
+  const [labelforgeFields, setLabelforgeFields] = useState<string | null>(null)
+  const [labelforgeLabelMedia, setLabelforgeLabelMedia] = useState<string | null>(null)
+  const [lfTokenVisible, setLfTokenVisible] = useState(false)
+  const [testingPrinter, setTestingPrinter] = useState(false)
+  const [printerTestMsg, setPrinterTestMsg] = useState('')
+
   // --- Unsaved-changes guard ---------------------------------------------
   const isDirty = !!data && (
     (weightDir != null && weightDir !== data.weight_sync_direction) ||
@@ -296,7 +307,13 @@ export default function Settings() {
       containerMarkerText !== data.container_parent_marker) ||
     (mobileLabelsEnabled != null && mobileLabelsEnabled !== data.mobile_labels_enabled) ||
     (mobileRedirectTarget != null && mobileRedirectTarget !== data.mobile_redirect_target) ||
-    (mobileWeightDefaultMode != null && mobileWeightDefaultMode !== data.mobile_weight_default_mode)
+    (mobileWeightDefaultMode != null && mobileWeightDefaultMode !== data.mobile_weight_default_mode) ||
+    (bridgePublicUrl != null && bridgePublicUrl !== data.bridge_public_url) ||
+    (labelforgeUrl != null && labelforgeUrl !== data.labelforge_url) ||
+    (labelforgeToken != null && labelforgeToken !== data.labelforge_token) ||
+    (labelforgeTemplate != null && labelforgeTemplate !== data.labelforge_template) ||
+    (labelforgeFields != null && labelforgeFields !== data.labelforge_fields) ||
+    (labelforgeLabelMedia != null && labelforgeLabelMedia !== data.labelforge_label_media)
   )
 
   const blocker = useBlocker(
@@ -362,6 +379,13 @@ export default function Settings() {
   const effMobileEnabled = mobileLabelsEnabled ?? data.mobile_labels_enabled
   const effMobileRedirect = mobileRedirectTarget ?? data.mobile_redirect_target
   const effMobileWeightMode = mobileWeightDefaultMode ?? data.mobile_weight_default_mode
+
+  const effBridgePublicUrl = bridgePublicUrl ?? data.bridge_public_url
+  const effLabelforgeUrl = labelforgeUrl ?? data.labelforge_url
+  const effLabelforgeToken = labelforgeToken ?? data.labelforge_token
+  const effLabelforgeTemplate = labelforgeTemplate ?? data.labelforge_template
+  const effLabelforgeFields = labelforgeFields ?? data.labelforge_fields
+  const effLabelforgeLabelMedia = labelforgeLabelMedia ?? data.labelforge_label_media
 
   const savedMarker = data.container_parent_marker
   const effectiveMarkerEnabled = containerMarkerEnabled ?? (savedMarker !== '')
@@ -575,6 +599,12 @@ export default function Settings() {
         mobile_labels_enabled: mobileLabelsEnabled ?? undefined,
         mobile_redirect_target: mobileRedirectTarget ?? undefined,
         mobile_weight_default_mode: mobileWeightDefaultMode ?? undefined,
+        bridge_public_url: bridgePublicUrl ?? undefined,
+        labelforge_url: labelforgeUrl ?? undefined,
+        labelforge_token: labelforgeToken ?? undefined,
+        labelforge_template: labelforgeTemplate ?? undefined,
+        labelforge_fields: labelforgeFields ?? undefined,
+        labelforge_label_media: labelforgeLabelMedia ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -582,6 +612,23 @@ export default function Settings() {
       setSaveMsg(e instanceof Error ? e.message : 'Error saving.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleTestPrinter() {
+    setTestingPrinter(true)
+    setPrinterTestMsg('')
+    try {
+      const status = await getPrinterStatus()
+      const media = status.loaded_media ? status.loaded_media.display_name : 'none'
+      const errs = status.errors?.length ? ` — errors: ${status.errors.join(', ')}` : ''
+      setPrinterTestMsg(
+        `${status.ready ? 'Ready' : 'Not ready'} · ${status.model ?? 'unknown model'} · media: ${media}${errs}`,
+      )
+    } catch (e) {
+      setPrinterTestMsg(e instanceof BridgeApiError ? e.message : String(e))
+    } finally {
+      setTestingPrinter(false)
     }
   }
 
@@ -1128,12 +1175,12 @@ export default function Settings() {
         </div>
 
         {/* ---------------------------------------------------------------- */}
-        {/* Mobile updates (phase 2 — minimal; LabelForge fields are phase 3) */}
+        {/* Mobile & Labels (phase 2 mobile flow + phase 3 LabelForge printing) */}
         {/* ---------------------------------------------------------------- */}
         <div className={`rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3 mt-2`}>
           <div className="flex items-center gap-1">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Mobile updates</h3>
-            <HelpTip text="Phone-friendly spool update page reached by scanning a label QR (or via the Mobile updates nav item). When enabled, the nav item appears and the scan/redirect endpoints respond. Label printing settings come later." />
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Mobile &amp; Labels</h3>
+            <HelpTip text="Phone-friendly spool update page reached by scanning a label QR (or via the Mobile updates nav item), plus LabelForge label printing. When enabled, the nav item appears, the scan/redirect endpoints respond, and the Print-label buttons show." />
           </div>
 
           {/* Enable toggle */}
@@ -1189,6 +1236,117 @@ export default function Settings() {
               </select>
               <span className={subTextCls}>Preselected save mode on the update page (overridable per save).</span>
             </label>
+          </div>
+
+          {/* LabelForge connection (phase 3) — greyed when the feature is off */}
+          <div className={`space-y-3 pt-3 border-t border-gray-100 dark:border-gray-700 ${effMobileEnabled ? '' : 'opacity-50'}`}>
+            <div className="flex items-center gap-1">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">LabelForge label printing</h4>
+              <HelpTip text="Connection to a LabelForge instance (a self-hosted Brother QL print server). The template is created in LabelForge; the bridge only fills its placeholder values. A QR ({qr_url}) element needs a LabelForge dev build (>v0.1.3)." />
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>Bridge public URL</span>
+              <input
+                type="text"
+                value={effBridgePublicUrl}
+                disabled={!effMobileEnabled}
+                onChange={e => setBridgePublicUrl(e.target.value)}
+                placeholder="https://bridge.example.com (blank = derive from request)"
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+              <span className={subTextCls}>External base URL baked into the label QR. Leave blank to derive it from each request.</span>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>LabelForge URL</span>
+              <input
+                type="text"
+                value={effLabelforgeUrl}
+                disabled={!effMobileEnabled}
+                onChange={e => setLabelforgeUrl(e.target.value)}
+                placeholder="http://labelforge:8000"
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>LabelForge API token</span>
+              <div className="flex gap-2">
+                <input
+                  type={lfTokenVisible ? 'text' : 'password'}
+                  value={effLabelforgeToken}
+                  disabled={!effMobileEnabled}
+                  onChange={e => setLabelforgeToken(e.target.value)}
+                  placeholder="Bearer token"
+                  className={`flex-1 ${inputCls} disabled:cursor-not-allowed`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setLfTokenVisible(v => !v)}
+                  className="px-3 py-1 text-xs font-medium rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                >
+                  {lfTokenVisible ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <span className={subTextCls}>Sent as <code>Authorization: Bearer …</code> on every LabelForge call.</span>
+            </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="flex flex-col gap-1">
+                <span className={labelCls}>Template name</span>
+                <input
+                  type="text"
+                  value={effLabelforgeTemplate}
+                  disabled={!effMobileEnabled}
+                  onChange={e => setLabelforgeTemplate(e.target.value)}
+                  placeholder="spool"
+                  className={`${inputCls} disabled:cursor-not-allowed`}
+                />
+                <span className={subTextCls}>Created in LabelForge with {'{placeholder}'} text.</span>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={labelCls}>Label media (optional)</span>
+                <input
+                  type="text"
+                  value={effLabelforgeLabelMedia}
+                  disabled={!effMobileEnabled}
+                  onChange={e => setLabelforgeLabelMedia(e.target.value)}
+                  placeholder="(template default)"
+                  className={`${inputCls} disabled:cursor-not-allowed`}
+                />
+                <span className={subTextCls}>Override the template&apos;s media, e.g. <code>62</code>.</span>
+              </label>
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>Fields (CSV)</span>
+              <input
+                type="text"
+                value={effLabelforgeFields}
+                disabled={!effMobileEnabled}
+                onChange={e => setLabelforgeFields(e.target.value)}
+                placeholder="brand,color,number,qr_url"
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+              <span className={subTextCls}>
+                Which fields to send. Available: <code>brand</code>, <code>color</code>, <code>color_hex</code>, <code>number</code>, <code>material</code>, <code>qr_url</code>. Unknown names are skipped.
+              </span>
+            </label>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleTestPrinter}
+                disabled={!effMobileEnabled || testingPrinter}
+                className="px-3 py-1.5 text-sm font-medium rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {testingPrinter ? 'Testing…' : 'Test printer'}
+              </button>
+              {printerTestMsg && (
+                <span className="text-xs text-gray-600 dark:text-gray-300">{printerTestMsg}</span>
+              )}
+            </div>
           </div>
         </div>
 

@@ -24,6 +24,8 @@ import type {
   MappingUpdateRequest,
   MobileSpoolDetail,
   MobileSpoolUpdateRequest,
+  LabelPrintResponse,
+  PrinterStatus,
   OpenTagApplyRequest,
   OpenTagApplyResponse,
   OpenTagCacheStatus,
@@ -173,6 +175,15 @@ export const updateMobileSpool = (fil: string, spool: string, body: MobileSpoolU
   json<MobileSpoolDetail>(`/mobile/spool/${fil}/${spool}`, 'PATCH', body)
 
 export const getMobileLocations = () => request<string[]>('/mobile/locations')
+
+// ---------------------------------------------------------------------------
+// Labels (phase 3 — LabelForge printing)
+// ---------------------------------------------------------------------------
+
+export const printLabel = (fil: string, spool: string, override = false) =>
+  json<LabelPrintResponse>('/labels/print', 'POST', { fil, spool, override })
+
+export const getPrinterStatus = () => request<PrinterStatus>('/labels/printer-status')
 
 // ---------------------------------------------------------------------------
 // Config

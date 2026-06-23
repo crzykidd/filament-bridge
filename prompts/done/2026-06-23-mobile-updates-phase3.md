@@ -1,10 +1,20 @@
 ---
 name: 2026-06-23-mobile-updates-phase3
-status: pending
+status: done
 created: 2026-06-23
 model: sonnet
-completed:
-result:
+completed: 2026-06-23
+result: >
+  Shipped LabelForge label printing. Backend: services/labelforge.py (per-request
+  Bearer client, structured LabelForgeError), api/labels.py (POST /labels/print +
+  GET /labels/printer-status, gated by _require_labels_enabled, field catalog +
+  CSV selection, qr_url from bridge_public_url or request-derived, registered in
+  main.py). Config accessors added; schemas extended (LabelPrintRequest). Frontend:
+  printLabel/getPrinterStatus client+types, shared PrintLabelButton (MobileSpoolUpdate
+  + SyncedRecords row action gated on mobile_labels_enabled), Settings "Mobile &
+  Labels" section with the LabelForge fields + Test printer. Tests: 20 backend
+  (test_labels.py) + 6 frontend (PrintLabelButton + Settings). Backend 1263 pass,
+  ruff clean; frontend tsc clean, 124 vitest pass, build OK. decisions.md note added.
 ---
 
 # Task: Mobile Updates & Labels — Phase 3 (LabelForge printing)

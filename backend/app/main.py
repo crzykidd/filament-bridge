@@ -34,6 +34,7 @@ from app.api import config as config_router
 from app.api import conflicts as conflicts_router
 from app.api import debug as debug_router
 from app.api import health as health_router
+from app.api import labels as labels_router
 from app.api import version as version_router
 from app.api import mappings as mappings_router
 from app.api import mobile as mobile_router
@@ -313,6 +314,7 @@ app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(mobile_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(labels_router.router, prefix="/api", dependencies=_auth_dep)
 
 
 # QR redirect — the indirection point. The printed QR encodes /r/{fil}/{spool};

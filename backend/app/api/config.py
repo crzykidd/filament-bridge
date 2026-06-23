@@ -184,6 +184,46 @@ def bridge_public_url(db: Session) -> str:
     return str(val)
 
 
+def labelforge_url(db: Session) -> str:
+    """Return the configured LabelForge base URL (empty = not configured)."""
+    val = get_config_value(db, "labelforge_url", None)
+    if val is None:
+        return _settings.labelforge_url
+    return str(val)
+
+
+def labelforge_token(db: Session) -> str:
+    """Return the configured LabelForge API token (empty = no auth header)."""
+    val = get_config_value(db, "labelforge_token", None)
+    if val is None:
+        return _settings.labelforge_token
+    return str(val)
+
+
+def labelforge_template(db: Session) -> str:
+    """Return the configured LabelForge template name (empty = not configured)."""
+    val = get_config_value(db, "labelforge_template", None)
+    if val is None:
+        return _settings.labelforge_template
+    return str(val)
+
+
+def labelforge_fields(db: Session) -> str:
+    """Return the configured CSV of label field names to send (empty = none)."""
+    val = get_config_value(db, "labelforge_fields", None)
+    if val is None:
+        return _settings.labelforge_fields
+    return str(val)
+
+
+def labelforge_label_media(db: Session) -> str:
+    """Return the configured optional label-media hint (empty = template default)."""
+    val = get_config_value(db, "labelforge_label_media", None)
+    if val is None:
+        return _settings.labelforge_label_media
+    return str(val)
+
+
 _REQUIRED_SETTINGS = ["variant_parent_mode"]
 
 

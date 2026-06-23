@@ -4483,3 +4483,54 @@ LabelForge print buttons and the full LabelForge Settings fields stay Phase 3.
 **Caveat (documented, not blocking):** QR *rendering* in LabelForge exists only on its `dev` branch
 (`421caee`+, not v0.1.3). The HTTP API is identical across main/dev, so the bridge codes against the
 stable API; printing a QR requires the user to run a LabelForge build with that work.
+
+## 2026-06-23 — Mobile updates & labels (phase 3 — LabelForge label printing)
+
+**Context.** Phases 1 (backend) + 2 (frontend mobile flow) shipped. Phase 3 wires up label printing:
+a LabelForge service client, a print endpoint, the Print-label buttons, and the LabelForge connection
+fields in Settings. The `labelforge_*` config keys + the `mobile_labels_enabled` gate already existed
+from Phase 1; this phase only *uses* and *surfaces* them. Phase 4 (user-facing docs/PRD roll-up) is
+separate.
+
+**Decisions (implemented):**
+
+- **Per-request LabelForge client; structured `LabelForgeError` (never a bare 500).**
+  `services/labelforge.py:LabelForgeClient` is a plain async context manager (built from the
+  runtime-editable `labelforge_url` + `labelforge_token`, sending `Authorization: Bearer …`). Because
+  the config is runtime-editable and print volume is low, it is constructed per request rather than
+  cached on `app.state` (unlike the always-on Spoolman/FDB clients). Every HTTP 4xx/5xx and network
+  failure is caught and re-raised as a `LabelForgeError` carrying the upstream status code + the
+  (string **or** structured-dict) `detail` — mirroring `api/backup.py`'s proxy-error style. The API
+  layer maps it: a 409 `media_mismatch` → 409 `media_mismatch` (so the UI can offer an override
+  retry), other 4xx pass through, everything else → 502. Never a bare 500.
+
+- **The bridge owns a fixed field *catalog*; the CSV chooses which to send.** `api/labels.py` computes
+  the six fields it can supply — `brand` (vendor), `color` (name), `color_hex`, `number` (= Spoolman
+  spool id), `material`, `qr_url` — from the *same* `core/mobile.assemble_spool_detail` the mobile page
+  uses (one resolve path, live-fetched). It then sends **only** the names listed in `labelforge_fields`
+  (trim/split); an unknown/uncomputable name is **skipped with a warning**, never a hard failure — the
+  template author controls the label, so a typo shouldn't block a print. `labelforge_url` +
+  `labelforge_template` unset → a clear **400 `labelforge_not_configured`** (not a confusing upstream
+  error). The named template itself is **user-created in LabelForge**; the bridge only fills values.
+
+- **`qr_url` = `bridge_public_url` if set, else request-derived.** The QR payload is the absolute
+  redirect `{base}/r/{fil}/{spool}` — the same indirection the redirect endpoint serves. `base` prefers
+  the configured `bridge_public_url` (trailing slash stripped); when blank it is derived from the
+  request, honoring `X-Forwarded-Proto`/`X-Forwarded-Host` so it's correct behind a reverse proxy.
+
+- **One shared `PrintLabelButton`, two placements.** A `block` variant sits below Save on
+  `MobileSpoolUpdate`; a `compact` variant is a row action on `SyncedRecords` (spool rows only, shown
+  only when `mobile_labels_enabled` — read from `/api/version`, matching the nav gate). Success shows
+  "Printed — job #N"; a 409 `media_mismatch` surfaces the detail **plus** a "Print anyway" button that
+  retries with `override=true`. Inline banners, no toast — matching `Conflicts.tsx`.
+
+- **Settings section renamed "Mobile updates" → "Mobile & Labels".** It gains the LabelForge fields:
+  `bridge_public_url`, `labelforge_url`, `labelforge_token` (password input with show/hide, mirroring
+  `api_token`), `labelforge_template`, `labelforge_fields` (CSV), `labelforge_label_media`, and a
+  **Test printer** button (`GET /api/labels/printer-status`). All fold into the existing single
+  `isDirty`/`handleSave` config flow and are greyed when the feature toggle is off.
+
+**Caveat (unchanged from Phase 1, restated):** the QR *element* renders only on LabelForge `dev`
+(>v0.1.3). The bridge codes against the stable API and prints the QR text into `qr_url` regardless; a
+scannable QR simply needs the user to deploy a LabelForge build with that work. The text fields print
+on any LabelForge version.

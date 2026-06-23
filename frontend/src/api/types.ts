@@ -294,11 +294,18 @@ export interface ConfigResponse {
   backup_filamentdb_enabled: boolean
   backup_retention_days: number
   backup_hour_utc: number
-  // Mobile updates & labels (phase 1 backend). The labelforge_* keys exist on the
-  // backend too but are deferred to Phase 3 in the UI — not surfaced here yet.
+  // Mobile updates & labels (phase 1 backend; phase 3 surfaces the LabelForge fields).
   mobile_labels_enabled: boolean
   mobile_redirect_target: MobileRedirectTarget
   mobile_weight_default_mode: MobileWeightMode
+  // LabelForge connection (phase 3). labelforge_token is a secret (returned so the
+  // Settings UI can show it, like api_token).
+  bridge_public_url: string
+  labelforge_url: string
+  labelforge_token: string
+  labelforge_template: string
+  labelforge_fields: string
+  labelforge_label_media: string
   // Required settings that must be configured before the bridge is usable
   required_settings_unset: string[]
 }
@@ -337,11 +344,17 @@ export interface ConfigUpdateRequest {
   backup_filamentdb_enabled?: boolean | null
   backup_retention_days?: number | null
   backup_hour_utc?: number | null
-  // Mobile updates & labels (Phase 2 surfaces the toggle + redirect + weight mode;
-  // labelforge_* remain Phase 3).
+  // Mobile updates & labels (Phase 2 toggle + redirect + weight mode; Phase 3
+  // LabelForge connection fields).
   mobile_labels_enabled?: boolean | null
   mobile_redirect_target?: MobileRedirectTarget | null
   mobile_weight_default_mode?: MobileWeightMode | null
+  bridge_public_url?: string | null
+  labelforge_url?: string | null
+  labelforge_token?: string | null
+  labelforge_template?: string | null
+  labelforge_fields?: string | null
+  labelforge_label_media?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,6 +1064,43 @@ export interface MobileSpoolUpdateRequest {
   gross_grams?: number | null
   location?: string | null
   weight_mode?: MobileWeightMode | null
+}
+
+// ---------------------------------------------------------------------------
+// Labels (phase 3 — LabelForge printing)
+// ---------------------------------------------------------------------------
+
+/** Body for POST /api/labels/print. `fil`/`spool` are the FDB ids (same as the
+ *  QR identity); `override` retries past a LabelForge media mismatch. */
+export interface LabelPrintRequest {
+  fil: string
+  spool: string
+  override?: boolean
+}
+
+/** LabelForge print job result (passthrough of LabelForge's response). */
+export interface LabelPrintResponse {
+  job_id?: number
+  status?: string
+  template?: string
+  label_media?: string | null
+  overflow?: boolean
+  preview_url?: string
+}
+
+/** LabelForge printer status (passthrough of GET /api/printer/status). */
+export interface PrinterStatus {
+  ready: boolean
+  model: string | null
+  loaded_media: {
+    id: string
+    display_name: string
+    width_mm: number
+    length_mm: number
+    color_capable: boolean
+  } | null
+  errors: string[]
+  source?: string
 }
 
 // ---------------------------------------------------------------------------
