@@ -171,8 +171,8 @@ filament-bridge/
 │   │   │   ├── compat.py                   — shared upstream-version compatibility check
 │   │   │   ├── opentag_match.py            — OPTMaterial → Spoolman field mapper + v2 scorer (structured token decomposition + mined lexicons)
 │   │   │   ├── opentag_lexicon.py          — n-gram lexicon miner (modifiers + colors from dataset); LEXICON_VERSION bump triggers cache self-heal
-│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated); stores mined lexicons
-│   │   │   └── opentag_secondary.py        — secondary-color recovery from the raw OPT tarball
+│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated); stores mined lexicons; secondary-color recovery folded in (was opentag_secondary.py)
+│   │   │   └── opentag_match_cache.py      — memoized OpenTag match results
 │   │   ├── schemas/                        — Pydantic models (bridge API, Filament DB, Spoolman shapes)
 │   │   ├── models/
 │   │   │   ├── mapping.py                  — SpoolMapping, FilamentMapping (cross-reference IDs)
@@ -209,6 +209,7 @@ filament-bridge/
 │   └── vite.config.ts
 ├── docs/
 │   ├── README.md                           — docs index
+│   ├── getting-started.md                  — first-run setup walkthrough
 │   ├── prd.md                              — full product requirements (READ THIS)
 │   ├── decisions.md                        — decision log (the "why" record)
 │   ├── configuration.md                    — env vars + runtime settings reference
@@ -217,10 +218,13 @@ filament-bridge/
 │   ├── conflicts.md                        — conflict types + resolution semantics
 │   ├── variant-parent-mode.md              — promote_color vs generic_container
 │   ├── opentag-cleanup.md                  — OpenTag matcher + apply flow
+│   ├── opentag-matching.md                 — OpenTag v2 scorer internals (token decomposition + mined lexicons)
 │   ├── security.md                         — auth model, API token, lockout recovery
 │   ├── version-update-check.md             — version badge + GitHub update check
 │   ├── spoolman-writes.md                  — every field the bridge writes to Spoolman, and when
-│   └── migration-spoolman-to-filamentdb.md — standalone migration guide
+│   ├── migration-spoolman-to-filamentdb.md — standalone migration guide
+│   ├── wizard-redesign.md                  — historical wizard design notes (decisions.md is authoritative)
+│   └── reconcile-backlog.md                — historical reconcile design notes (decisions.md is authoritative)
 ├── prompts/                                — handoff-prompt queue (TEMPLATE.md, done/, assets/)
 ├── standards.md                            — pinned homelab standards this repo implements
 └── private_data/                           — gitignored, user-specific test data

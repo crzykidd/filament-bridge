@@ -476,6 +476,7 @@ Both Filament DB and Spoolman continue to function independently. filament-bridg
 | [docs/conflicts.md](docs/conflicts.md) | Conflict types and what each resolution actually does |
 | [docs/variant-parent-mode.md](docs/variant-parent-mode.md) | `promote_color` vs `generic_container`, container naming |
 | [docs/opentag-cleanup.md](docs/opentag-cleanup.md) | The OpenPrintTag matcher and apply flow |
+| [docs/opentag-matching.md](docs/opentag-matching.md) | OpenPrintTag v2 scorer internals (token decomposition + mined lexicons) |
 | [docs/security.md](docs/security.md) | Auth model, API token, lockout recovery |
 | [docs/spoolman-writes.md](docs/spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [docs/version-update-check.md](docs/version-update-check.md) | Version badge and GitHub update check |

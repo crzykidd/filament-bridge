@@ -115,6 +115,7 @@ cost, color) are synced by dedicated passes and need no mapping — see
 | `OPENTAG_VENDOR_ALIASES` | No | — | Map Spoolman vendor names to OpenPrintTag brand names for the matcher's brand pre-filter. CSV of `spoolman_vendor=opentag_brand` pairs (e.g. `prusa=prusament`). Case-insensitive. **Runtime-editable**; new installs seed `prusa=prusament, polyterra=polymaker`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_SLUG` | No | `openprinttag_slug` | Spoolman filament extra field for the OpenPrintTag slug. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_UUID` | No | `openprinttag_uuid` | Spoolman filament extra field for the OpenPrintTag UUID. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_IGNORE` | No | `openprinttag_ignore` | Spoolman filament extra field storing the "ignore future updates" flag (`"1"` = ignored, `""` = not ignored). Written by the OpenTag Updates Review UI. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MIN` | No | `openprinttag_nozzle_temp_min` | Typed (**integer**) Spoolman filament extra for OPT `nozzleTempMin` (°C). Synced ↔ FDB `temperatures.nozzleRangeMin`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MAX` | No | `openprinttag_nozzle_temp_max` | Typed (**integer**) Spoolman filament extra for OPT `nozzleTempMax` (°C). Synced ↔ FDB `temperatures.nozzleRangeMax`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TEMP` | No | `openprinttag_drying_temp` | Typed (**integer**) Spoolman filament extra for OPT `dryingTemp` (°C). Synced ↔ FDB `dryingTemperature`. |

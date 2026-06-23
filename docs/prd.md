@@ -44,23 +44,32 @@ filament-bridge/
 ├── backend/                 — Python FastAPI application
 │   ├── app/
 │   │   ├── api/             — REST endpoints (sync, conflicts, mappings, config, health,
-│   │   │                       wizard, opentag, backup, sync_log, debug, auth, version)
+│   │   │                       wizard, opentag, backup, sync_log, debug, auth, version,
+│   │   │                       reconcile, errors)
 │   │   ├── core/            — sync engine, diff logic, field mapping
 │   │   │   ├── engine.py        — main sync loop: snapshot, diff, apply, log
 │   │   │   ├── sync_policy.py   — two-axis direction+policy resolver (resolve_sync_action)
 │   │   │   ├── conflict_apply.py— master_divergence resolve→apply actions (Phase B)
+│   │   │   ├── single_record_import.py — single new SM/FDB filament import (conflict UI + engine auto-import)
+│   │   │   ├── masters.py       — master/variant reconcile report helpers
 │   │   │   ├── planner.py       — wizard execution planner
 │   │   │   ├── dryrun.py        — dry-run preview helpers
 │   │   │   ├── differ.py        — snapshot diff, change classification
 │   │   │   ├── matcher.py       — fuzzy matching, variant cluster keys, finish-line extraction
 │   │   │   ├── fields.py        — field mapping resolution (auto-match + explicit)
+│   │   │   ├── filament_status.py — per-record sync-status classification
 │   │   │   ├── weight.py        — net↔gross conversion, change threshold
 │   │   │   ├── color.py         — multicolor/gradient conversion (FDB ↔ Spoolman)
 │   │   │   ├── material_tags.py — finish-tag detection and serialization
 │   │   │   ├── dates.py         — Spoolman timestamp → FDB date provenance mapping
 │   │   │   ├── version.py       — semver helpers + MIN_FDB / MIN_SPOOLMAN gates
 │   │   │   ├── compat.py        — shared upstream-version compatibility check
-│   │   │   ├── opentag_match.py — OPTMaterial → Spoolman field mapper + scorer
+│   │   │   ├── change_log.py    — durable changes.log audit writer
+│   │   │   ├── state_dump.py    — DEBUG_STARTUP_DUMP boot-state snapshot writer
+│   │   │   ├── log_safe.py      — log-redaction helpers
+│   │   │   ├── opentag_match.py — OPTMaterial → Spoolman field mapper + v2 scorer
+│   │   │   ├── opentag_lexicon.py — n-gram lexicon miner (modifiers + colors); LEXICON_VERSION self-heal
+│   │   │   ├── opentag_match_cache.py — memoized match results
 │   │   │   └── opentag_cache.py — local OpenTag dataset cache (JSON, TTL-gated); direct tarball fetch + parse
 │   │   ├── models/          — SQLAlchemy models (mapping, conflicts, log, snapshot, config)
 │   │   ├── schemas/         — Pydantic models (bridge API, Filament DB, Spoolman shapes)
@@ -71,7 +80,8 @@ filament-bridge/
 │   ├── src/
 │   │   ├── components/      — shared UI components
 │   │   ├── pages/           — Wizard/, Dashboard.tsx, Conflicts.tsx, SyncLog.tsx,
-│   │   │                       SyncedRecords.tsx, Settings.tsx, OpenTagCleanup.tsx
+│   │   │                       SyncedRecords.tsx, Settings.tsx, OpenTagCleanup.tsx,
+│   │   │                       Reconcile.tsx, Login.tsx, DocsViewer.tsx
 │   │   └── App.tsx
 │   ├── package.json
 │   └── vite.config.ts
@@ -366,7 +376,10 @@ Field names are configurable via environment variables.
 - **Standard (cross_system) conflicts are record-only:** resolving records the chosen value
   and removes the conflict from the open queue — it does NOT write the value upstream.
   Deletion conflicts additionally clean up the orphaned bridge mapping and snapshots.
-  New-spool conflicts are dismiss-only notices (creation happens via the wizard).
+  New-spool / new-filament conflicts can be **dismissed OR imported directly from the
+  conflict UI** — `POST /conflicts/{id}/import` (driven by `GET /conflicts/{id}/filament-suggestions`)
+  creates the single record, and the Conflicts "Bulk Add" modal imports several at once.
+  The wizard remains the bulk path; the conflict queue is no longer dismiss-only.
 - **Master-divergence conflicts apply upstream on resolve** (human-approved, never silent).
   The expanded card fetches `GET /conflicts/{id}/divergence-context` (master + full variant
   line with live values and inherited/overridden status) and offers three actions:
@@ -406,7 +419,7 @@ Field names are configurable via environment variables.
 
 ### P2 — Enhanced features
 
-#### FR-20: Discord notifications *(Not implemented — v0.3.0)*
+#### FR-20: Discord notifications *(Not implemented)*
 - `DISCORD_WEBHOOK_URL` env var is declared and validated, but no posting code exists
 - On conflict: post to configured Discord webhook with conflict details *(planned)*
 - On sync error: post with error details and retry status *(planned)*
@@ -419,7 +432,7 @@ Field names are configurable via environment variables.
 - **Weight settles before the archive bit:** the lifecycle pass runs after the weight pass, so a depleted-and-archived spool propagates its final decrement and FDB usage-log entry (and refreshes both snapshots) before the archive/retire bit mirrors — never retired/archived with a stale weight or missing its final usage entry
 - A one-sided flip is a clean push (not a conflict). Only genuine divergence (both sides flipped to opposite states since the last snapshot) queues a `cross_system` conflict with `field_name="lifecycle"`; resolving it writes the chosen boolean to both systems and refreshes both snapshots. Both sides flipping to the same state converges silently
 
-#### FR-22: Print history enrichment *(Not implemented — v0.3.0)*
+#### FR-22: Print history enrichment *(Not implemented)*
 - Planned: when a weight decrement is synced from Spoolman, optionally create a `POST /api/print-history` record in Filament DB
 - Would require OctoPrint job metadata (filename, duration) — may need an OctoPrint API call or Spoolman webhook
 
@@ -431,19 +444,21 @@ Field names are configurable via environment variables.
 #### FR-23b: OpenTag (OpenPrintTag) Cleanup tool
 A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag community dataset and apply corrections.
 
-- **Dataset:** fetched directly from the OpenPrintTag GitHub tarball (no FDB involvement), cached locally at `DATA_DIR/opentag_cache.json` with a TTL of `OPENTAG_CACHE_MAX_AGE_HOURS`. Brand names, material properties, and secondary colors are all parsed in a single tarball download by `core/opentag_cache.py` (`_parse_tarball`).
+- **Dataset:** fetched directly from the OpenPrintTag GitHub tarball (no FDB involvement), cached locally at `DATA_DIR/opentag_cache.json` with a TTL of `OPENTAG_CACHE_MAX_AGE_HOURS`. Brand names, material properties, and secondary colors are all parsed in a single tarball download by `core/opentag_cache.py` (`_parse_tarball`); `core/opentag_lexicon.py` mines modifier/color n-gram lexicons from the dataset (a `LEXICON_VERSION` bump self-heals the cache).
 - **Matching** (`core/opentag_match.py`): per-Spoolman-filament scoring by material family, vendor/brand (via `OPENTAG_VENDOR_ALIASES` map), color name similarity, hex proximity, and finish-tag overlap. Color-profile pre-filter (single/coextruded/gradient) prevents cross-profile matches. UUID exact-match bypasses fuzzy scoring for filaments already tagged by a prior run.
 - **Review UI** (`frontend/src/pages/OpenTagCleanup.tsx`): per-filament card with a best match + up to 5 alternate candidates. Each candidate shows per-field comparison (current Spoolman value vs OpenTag suggestion). User selects a candidate and can mark individual fields "keep mine" or edit the suggested value. The **Manufacturer** field (vendor) shows only when the Spoolman vendor name and OpenTag brand differ after normalization.
 - **Apply** (`POST /api/openprinttag/apply`): writes confirmed fields to Spoolman; for the vendor field, resolves or creates the Spoolman vendor via find-or-create (`_ensure_vendor`). After the Spoolman write, stamps `openprinttag_slug`/`openprinttag_uuid` into the linked FDB filament's `settings{}` bag via `FilamentDBClient.merge_filament_settings()` (the approved scoped exception).
-- Routes: `GET /api/openprinttag/status`, `POST /api/openprinttag/refresh`, `GET /api/openprinttag/matches`, `POST /api/openprinttag/apply`.
+- **Ignore flow:** a filament can be marked "ignore future updates" (`POST /api/openprinttag/ignore/{filament_id}`, stored in the `openprinttag_ignore` extra field) so the Updates Review banner stops surfacing it; its identity extras can be blanked via `POST /api/openprinttag/clear/{filament_id}`.
+- Routes (8): `GET /api/openprinttag/status`, `POST /api/openprinttag/refresh`, `GET /api/openprinttag/matches`, `POST /api/openprinttag/apply`, `POST /api/openprinttag/clear/{filament_id}`, `POST /api/openprinttag/ignore/{filament_id}`, `GET /api/openprinttag/search`, `GET /api/openprinttag/completeness`.
 
 #### FR-23c: Debug mode and reset tools
 - `debug_mode` is a runtime-editable BridgeConfig flag (default `false`), toggled in Settings
-- When `debug_mode` is `false`, all three debug endpoints return **403**
+- When `debug_mode` is `false`, all four debug endpoints return **403**
 - `POST /api/debug/clear-spoolman-fdb-refs` — blanks the three `filamentdb_*` cross-ref extras on every Spoolman spool that has any set. Spoolman side only; the bridge DB is untouched.
+- `POST /api/debug/clear-spoolman-opentag-ids` — blanks the OpenPrintTag identity extras (`openprinttag_slug`/`openprinttag_uuid`) on every Spoolman filament that has any set. Spoolman side only; the bridge DB and Filament DB are untouched.
 - `POST /api/debug/reset-bridge-state` — deletes all rows from the five bridge state tables (mappings, snapshots, conflicts, sync log) and re-arms the wizard (`wizard_completed = false`). Bridge side only; BridgeConfig settings other than `wizard_completed` are preserved; upstream systems are untouched.
 - `POST /api/debug/full-reset` — both cleanups in one call (Spoolman cross-refs first, then the bridge DB). A Spoolman failure does not abort the local reset; it is reported in `spoolman_error`.
-- Neither tool ever deletes records in Filament DB or Spoolman.
+- None of these tools ever delete records in Filament DB or Spoolman.
 - These are development/testing tools and must never be called in an automated workflow.
 
 #### FR-24: Backup and restore
@@ -560,7 +575,7 @@ These appear in: the Bulk Import Wizard match review (FR-4), the synced records 
 
 5. **Moonraker compatibility** — ⏳ **Deferred.** Test once the sync engine is fully validated.
 
-6. **Rate limiting / full-snapshot diff** — ✅ **Resolved by code.** Full-snapshot diff each cycle; `GET /api/v1/spool?limit=1000` returns all spools (incl. archived — filtered `archived == false` client-side). Add incremental fetch only if a larger inventory demands it.
+6. **Rate limiting / full-snapshot diff** — ✅ **Resolved by code.** Full-snapshot diff each cycle. Spoolman's `GET /api/v1/spool` **excludes archived spools by default**, so the bridge fetches with `?allow_archived=true&limit=1000` to get active + archived in one listing (there is no `archived` filter param — an unknown `?archived=true` is silently ignored and returns active only; this once hid archived spools and made archived mapped spools look deleted, fixed in 0.5.1). Active-only callers filter `archived == false` client-side. Add incremental fetch only if a larger inventory demands it.
 
 7. **Multi-printer attribution** — ✅ **Resolved.** Accept the aggregate delta; per-printer attribution is out of scope (documented, not silently dropped).
 
