@@ -41,6 +41,7 @@ from app.core.engine import (
     _sm_snapshot_dict,
     _upsert_snapshot,
 )
+from app.core.locations import ensure_fdb_location
 from app.core.masters import is_master_fdb
 from app.core.material_tags import finish_ids_from_text, serialize_material_tags
 from app.core.matcher import (
@@ -1823,15 +1824,13 @@ async def _execute_spoolman_to_fdb(
                 continue
             try:
                 sm_location = spool_item.sm_spool.location
-                if sm_location and sm_location not in _fdb_loc_cache:
-                    new_loc = await filamentdb.create_location(sm_location)
-                    _fdb_loc_cache[sm_location] = new_loc["_id"]
+                loc_id = await ensure_fdb_location(filamentdb, sm_location, _fdb_loc_cache)
                 spool_payload: dict = {
                     "totalWeight": spool_item.planned_gross,
                     fdb_field_name: str(spool_item.sm_spool.id),
                 }
-                if sm_location:
-                    spool_payload["locationId"] = _fdb_loc_cache[sm_location]
+                if loc_id:
+                    spool_payload["locationId"] = loc_id
                 # Preserve the spool's age (purchase/opened dates) from Spoolman.
                 spool_payload.update(spool_provenance_dates(spool_item.sm_spool))
                 # Archived SM spools import as retired FDB spools (O1: archived ⇒ retired).

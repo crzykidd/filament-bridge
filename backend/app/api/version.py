@@ -14,9 +14,12 @@ from json import JSONDecodeError
 from json import loads as json_loads
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
 
 from app import __channel__, __commit__, __version__
+from app.api.config import mobile_labels_enabled
+from app.db import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -180,7 +183,7 @@ def _build_label(current: str) -> str:
 
 
 @router.get("/version")
-async def get_version() -> dict:
+async def get_version(db: Session = Depends(get_db)) -> dict:
     current = __version__
     is_dev = __channel__ != "release"
     build = _build_label(current)
@@ -210,4 +213,7 @@ async def get_version() -> dict:
         "commit": __commit__,
         "build": build,
         "is_dev": is_dev,
+        # Feature flag exposed publicly so the SPA can hide the "Mobile updates"
+        # nav item when the feature is off (the app already loads /api/version).
+        "mobile_labels_enabled": mobile_labels_enabled(db),
     }

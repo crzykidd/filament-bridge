@@ -33,6 +33,10 @@ VariantParentMode = Literal["unset", "promote_color", "generic_container"]
 # New-record handling policy for ongoing sync (not the wizard).
 NewRecordPolicy = Literal["manual_review", "auto_import"]
 
+# Mobile updates & labels (phase 1)
+MobileRedirectTarget = Literal["bridge", "filamentdb"]
+MobileWeightMode = Literal["direct_correction", "usage"]
+
 # Backup envelope schema version — bump when the export shape changes.
 BACKUP_SCHEMA_VERSION = 1
 
@@ -326,6 +330,18 @@ class ConfigResponse(BaseModel):
     backup_filamentdb_enabled: bool = True
     backup_retention_days: int = 7
     backup_hour_utc: int = 3
+    # Mobile updates & labels (phase 1) — master toggle + connection settings.
+    # labelforge_token is the only secret; it is returned so the Settings UI can
+    # display/edit it (same treatment as api_token).
+    mobile_labels_enabled: bool = False
+    bridge_public_url: str = ""
+    mobile_redirect_target: MobileRedirectTarget = "bridge"
+    mobile_weight_default_mode: MobileWeightMode = "direct_correction"
+    labelforge_url: str = ""
+    labelforge_token: str = ""
+    labelforge_template: str = ""
+    labelforge_fields: str = ""
+    labelforge_label_media: str = ""
     # Required settings that must be configured before the bridge is usable.
     # Frontend redirects to /settings and shows a modal when this list is non-empty.
     required_settings_unset: list[str] = Field(default_factory=list)
@@ -368,6 +384,17 @@ class ConfigUpdateRequest(BaseModel):
     backup_filamentdb_enabled: bool | None = None
     backup_retention_days: int | None = Field(default=None, ge=1)
     backup_hour_utc: int | None = Field(default=None, ge=0, le=23)
+    # Mobile updates & labels (phase 1). Enum values are validated by the Literal
+    # types (bad value → 422 before update_config runs).
+    mobile_labels_enabled: bool | None = None
+    bridge_public_url: str | None = None
+    mobile_redirect_target: MobileRedirectTarget | None = None
+    mobile_weight_default_mode: MobileWeightMode | None = None
+    labelforge_url: str | None = None
+    labelforge_token: str | None = None
+    labelforge_template: str | None = None
+    labelforge_fields: str | None = None
+    labelforge_label_media: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -877,3 +904,51 @@ class ReconcileResponse(BaseModel):
     only_in_spoolman: list[ReconcileMissingRow]
     only_in_filamentdb: list[ReconcileMissingRow]
     ambiguous: list[AmbiguousRow]
+
+
+# ---------------------------------------------------------------------------
+# Mobile updates (phase 1)
+# ---------------------------------------------------------------------------
+
+
+class MobileSpoolDetail(BaseModel):
+    """Assembled, live spool detail for the mobile scan/update page.
+
+    Identity is the Filament DB filament id + spool id (the QR encodes these);
+    ``number`` is the Spoolman spool id (used for the human-facing label number).
+    Weights are reported in BOTH models: ``gross`` (FDB totalWeight),
+    ``net`` (SM remaining_weight), and the ``tare`` used to convert between them.
+    """
+
+    # Deep-link / identity ids
+    filamentdb_filament_id: str
+    filamentdb_spool_id: str
+    spoolman_spool_id: int
+    spoolman_filament_id: int | None = None
+    # Human-facing label number (= Spoolman spool id)
+    number: int
+    # Display fields
+    brand: str | None = None
+    color_name: str | None = None
+    color_hex: str | None = None
+    material: str | None = None
+    # Weights (grams)
+    gross: float | None = None
+    net: float | None = None
+    tare: float
+    # Location (Spoolman free-text string)
+    location: str | None = None
+    # The effective default weight-save mode the page should preselect.
+    weight_default_mode: MobileWeightMode = "direct_correction"
+
+
+class MobileSpoolUpdateRequest(BaseModel):
+    """Body for PATCH /api/mobile/spool/{fil}/{spool}.
+
+    ``gross_grams`` is a SCALE reading (gross weight). ``weight_mode`` overrides the
+    configured default for this single save. ``location`` is a free-text name.
+    """
+
+    gross_grams: float | None = Field(default=None, ge=0)
+    location: str | None = None
+    weight_mode: MobileWeightMode | None = None

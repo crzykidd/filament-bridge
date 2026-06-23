@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.engine import _log, _merge_snapshot
 from app.core.fields import OPENTAG_EXTRA_FIELDS
+from app.core.weight_ops import apply_absolute_weight
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
 from app.services.filamentdb import FilamentDBClient
@@ -728,19 +729,15 @@ async def _apply_weight(
     else:  # manual — net remaining weight in Spoolman units
         w = float(manual_value)
 
-    w = round(max(w, 0.0), 2)
-    fdb_total = round(w + float(tare), 2)
-
-    await spoolman.update_spool(sm_spool_id, {"remaining_weight": w})
-    await filamentdb.update_spool(fdb_filament_id, fdb_spool_id, {"totalWeight": fdb_total})
-
-    _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"remaining_weight": w})
-    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"totalWeight": fdb_total})
-
-    _log(
-        db, cycle_id, "conflict_apply", "update", "spool",
-        spoolman_id=sm_spool_id, fdb_filament_id=fdb_filament_id, fdb_spool_id=fdb_spool_id,
-        field_name="weight", old_value="diverged", new_value=w,
+    # Absolute true-up of both sides + dual-snapshot refresh — shared with the
+    # mobile scan-and-update path (core/weight_ops.py).  Behaviour is identical to
+    # the previous inline block (same SM/FDB writes, snapshot merges, and the
+    # old_value="diverged" sync-log entry) so the #21 resolve/converge tests hold.
+    w = await apply_absolute_weight(
+        db, spoolman, filamentdb,
+        sm_spool_id=sm_spool_id, fdb_fil_id=fdb_filament_id, fdb_spool_id=fdb_spool_id,
+        net_w=w, tare=float(tare), cycle_id=cycle_id, source="conflict_apply",
+        old_value="diverged",
     )
     _resolve_conflict_row(conflict, resolution, w, db)
     return w

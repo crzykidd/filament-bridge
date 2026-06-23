@@ -74,13 +74,31 @@ class TestIsNewer:
 
 
 def _make_client():
-    """Build a minimal TestClient for the version router only."""
+    """Build a minimal TestClient for the version router only.
+
+    The endpoint reads the mobile_labels_enabled flag from BridgeConfig, so we
+    wire a seeded in-memory SQLite session via the get_db override.
+    """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
     from app.api.version import router
+    from app.db import Base, get_db
+    from app.models.config import seed_defaults
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+    seed_defaults(session)
 
     app = FastAPI()
     app.include_router(router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: session
     return TestClient(app)
 
 
@@ -95,6 +113,15 @@ class TestVersionEndpoint:
         assert data["current"] == APP_VERSION
         assert data["update_available"] is False
         assert data["latest"] is None
+
+    def test_exposes_mobile_labels_flag(self):
+        """The public /api/version payload carries mobile_labels_enabled for the SPA."""
+        with patch("app.api.version._fetch_github", side_effect=OSError("no network")):
+            client = _make_client()
+            resp = client.get("/api/version")
+        assert resp.status_code == 200
+        # Seeded default is OFF.
+        assert resp.json()["mobile_labels_enabled"] is False
 
     def test_no_raise_on_network_error(self):
         """Endpoint must return 200 (never 500) when GitHub is unreachable."""

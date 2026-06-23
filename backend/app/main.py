@@ -36,6 +36,7 @@ from app.api import debug as debug_router
 from app.api import health as health_router
 from app.api import version as version_router
 from app.api import mappings as mappings_router
+from app.api import mobile as mobile_router
 from app.api import reconcile as reconcile_router
 from app.api import opentag as opentag_router
 from app.api import sync as sync_router
@@ -44,7 +45,7 @@ from app.api import wizard as wizard_router
 from app.api.auth import require_auth
 from app.config import settings
 from app.core.engine import run_sync_cycle
-from app.db import SessionLocal
+from app.db import SessionLocal, get_db
 from app.api.config import get_config_value, prune_sync_log, set_config_value
 from app.models.config import BridgeConfig, seed_defaults
 from app.services.filamentdb import FilamentDBClient
@@ -311,6 +312,28 @@ app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(mobile_router.router, prefix="/api", dependencies=_auth_dep)
+
+
+# QR redirect — the indirection point. The printed QR encodes /r/{fil}/{spool};
+# this 302s to the configured target so the destination can change later without
+# reprinting. Registered BEFORE the SPA catch-all below or index.html swallows it.
+# It is outside /api, so it carries its own require_auth + feature-gate dependencies.
+@app.get("/r/{fil}/{spool}", include_in_schema=False, dependencies=_auth_dep)
+async def _qr_redirect(fil: str, spool: str, db=Depends(get_db)):
+    from fastapi.responses import RedirectResponse
+
+    from app.api.config import mobile_redirect_target
+    from app.api.mobile import _require_labels_enabled
+
+    _require_labels_enabled(db)  # 403 when the feature is off
+
+    target = mobile_redirect_target(db)
+    if target == "filamentdb":
+        url = f"{settings.filamentdb_url}/filaments/{fil}"
+    else:  # "bridge" (default)
+        url = f"/scan/{fil}/{spool}"
+    return RedirectResponse(url, status_code=302)
 
 # Serve the React SPA from /static when the directory exists (built image only).
 # Guarded so `pytest` and `uvicorn --reload` work without a frontend build.

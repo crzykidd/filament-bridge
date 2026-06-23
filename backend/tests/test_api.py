@@ -836,6 +836,45 @@ def test_config_rejects_bad_enum(db):
     assert resp.status_code == 422
 
 
+def test_config_mobile_labels_keys_round_trip(db):
+    """Mobile updates & labels (phase 1) config keys read/write through /api/config."""
+    client = _client(db)
+    body = client.get("/api/config").json()
+    # Defaults: feature OFF; bridge redirect; direct_correction mode; empty LabelForge.
+    assert body["mobile_labels_enabled"] is False
+    assert body["mobile_redirect_target"] == "bridge"
+    assert body["mobile_weight_default_mode"] == "direct_correction"
+    assert body["labelforge_fields"] == ""
+
+    resp = client.put("/api/config", json={
+        "mobile_labels_enabled": True,
+        "bridge_public_url": "https://bridge.example.com",
+        "mobile_redirect_target": "filamentdb",
+        "mobile_weight_default_mode": "usage",
+        "labelforge_url": "http://labelforge:8000",
+        "labelforge_token": "secret-token",
+        "labelforge_template": "spool",
+        "labelforge_fields": "brand,color,number,qr_url",
+        "labelforge_label_media": "62mm",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mobile_labels_enabled"] is True
+    assert body["bridge_public_url"] == "https://bridge.example.com"
+    assert body["mobile_redirect_target"] == "filamentdb"
+    assert body["mobile_weight_default_mode"] == "usage"
+    assert body["labelforge_token"] == "secret-token"
+    assert body["labelforge_fields"] == "brand,color,number,qr_url"
+
+
+def test_config_rejects_bad_mobile_enum(db):
+    client = _client(db)
+    resp = client.put("/api/config", json={"mobile_redirect_target": "nope"})
+    assert resp.status_code == 422
+    resp = client.put("/api/config", json={"mobile_weight_default_mode": "nonsense"})
+    assert resp.status_code == 422
+
+
 def test_config_rejects_newest_wins_for_material_properties(db):
     """material_properties_conflict_policy=newest_wins must be rejected with HTTP 422."""
     client = _client(db)

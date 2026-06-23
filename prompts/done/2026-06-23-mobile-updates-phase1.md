@@ -1,10 +1,21 @@
 ---
 name: 2026-06-23-mobile-updates-phase1
-status: pending
+status: done
 created: 2026-06-23
 model: sonnet
-completed:
-result:
+completed: 2026-06-23
+result: >
+  Backend foundation shipped. Extracted core/weight_ops.py (apply_absolute_weight +
+  apply_usage_weight) from conflict_apply._apply_weight (no behavior change — #21
+  tests green) and core/locations.ensure_fdb_location (wizard refactored to use it).
+  Added core/mobile.py (resolve + live assemble), api/mobile.py (GET/PATCH spool,
+  GET locations; gross input; both-snapshot refresh) gated by mobile_labels_enabled
+  (403 when off), and the /r/{fil}/{spool} 302 redirect in main.py (registered before
+  the SPA catch-all; target switches bridge↔filamentdb). Added all config keys incl.
+  labelforge_* (env fallback + BridgeConfig _DEFAULTS + ConfigResponse/Update/_config_response);
+  exposed mobile_labels_enabled in GET /api/version. Full suite 1243 passed (1221
+  baseline + 22 new), ruff clean. Decisions logged. Frontend/LabelForge/docs roll-up
+  deferred to later phases as scoped.
 ---
 
 # Task: Mobile Updates & Labels — Phase 1 (backend foundation)

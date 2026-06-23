@@ -111,6 +111,28 @@ class Settings(BaseSettings):
     changes_log_enabled: bool = True
     changes_log_path: str = ""  # empty = use {data_dir}/changes.log
 
+    # Mobile updates & labels (issue: mobile/labels phase 1). Env vars are the
+    # start-up fallback; the same keys are runtime-editable via BridgeConfig (DB
+    # value wins when set, same precedence as sync_interval_seconds). The whole
+    # feature is gated by mobile_labels_enabled (default OFF) — when off, every
+    # mobile/label/redirect endpoint refuses with 403 (mirrors debug_mode).
+    mobile_labels_enabled: bool = False
+    # External base URL baked into the printed QR (e.g. https://bridge.example.com).
+    # Empty = derive from the incoming request when building absolute URLs later.
+    bridge_public_url: str = ""
+    # Where GET /r/{fil}/{spool} redirects: "bridge" → the SPA scan page;
+    # "filamentdb" → the FDB filament page.
+    mobile_redirect_target: str = "bridge"
+    # Default weight-save mode for the mobile update page (overridable per request):
+    # "direct_correction" (absolute true-up) | "usage" (log an FDB usage on a decrease).
+    mobile_weight_default_mode: str = "direct_correction"
+    # LabelForge integration (Phase 3 printing; config added now so config is touched once).
+    labelforge_url: str = ""
+    labelforge_token: str = ""  # secret — never returned in plaintext logs
+    labelforge_template: str = ""
+    labelforge_fields: str = ""  # CSV of label variable names, e.g. "brand,color,number,qr_url"
+    labelforge_label_media: str = ""  # optional media/size hint passed to LabelForge
+
     # Notifications
     discord_webhook_url: str | None = None
 

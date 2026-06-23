@@ -4375,3 +4375,67 @@ so the active `CHANGELOG.md` currently still holds the full `0.3.x`, `0.4.x`, an
 **Where.** Source standard `homelab-configs/standards/release-prep-and-cut` (README + `release-prep.md`
 template, v1.0.0 → v1.1.0, tag `release-prep-and-cut/v1.1.0`); re-adopted here via `standards.md`
 re-pin + `.claude/commands/release-prep.md` Step 3 (+ Step 0c wording).
+
+## 2026-06-23 — Mobile updates & labels (phase 1 backend foundation)
+
+**Context.** Filament DB prints spool labels only through its full app on a Brother-specific
+device. We want the bridge to (later) print labels via LabelForge and make each label carry a
+**QR code** that opens a phone-friendly page to read a scale weight and change a spool's location,
+writing back to Filament DB (Spoolman follows via normal sync). This entry records the phase-1
+backend decisions; the full user-facing docs land in a later phase.
+
+**Decisions (implemented):**
+
+- **QR identity = Filament DB filament id + spool id.** The printed QR encodes
+  `https://{bridge_public_url}/r/{fdbFilamentId}/{fdbSpoolId}`. The bridge resolves the spool via
+  its `SpoolMapping` (by `filamentdb_spool_id`). Spoolman is *not* the QR target — keeping the QR
+  on the durable FDB ids means the same physical label survives re-imports/re-mapping.
+
+- **`/r/...` redirect = indirection point.** `GET /r/{fil}/{spool}` returns a **302**
+  (`RedirectResponse`, `status_code=302`) to a target chosen at runtime by `mobile_redirect_target`:
+  `bridge` → the SPA scan page `/scan/{fil}/{spool}` (default); `filamentdb` →
+  `{FILAMENTDB_URL}/filaments/{fil}`. The indirection lets the destination change later (e.g. to a
+  future FDB mobile page) **without reprinting labels**. The route is registered **before** the SPA
+  catch-all in `main.py` (it's outside `/api`, so otherwise `index.html` would swallow it).
+
+- **Auth mirrors the app — no special public router.** The mobile router is included with the same
+  `_auth_dep` as every other protected router; the `/r/` redirect carries the same dependency. There
+  is no token-in-QR and no frontend auth exception: with auth off the flow is open; with auth on the
+  whole site (scan page included) sits behind the session. Accepted per the plan.
+
+- **Master feature gate `mobile_labels_enabled` (default OFF).** A single setting gates the whole
+  feature. Every mobile/label endpoint and the `/r/` redirect depend on `_require_labels_enabled`,
+  which returns **403** when off — copied directly from `api/debug.py:_require_debug_mode`. The flag
+  is also surfaced in the public `GET /api/version` so the SPA can hide the nav item.
+
+- **Weight save mode = setting + per-request override.** `mobile_weight_default_mode`
+  (`direct_correction` default | `usage`); a PATCH may override it for one save. **The scale input is
+  GROSS.** Tare = the FDB filament's `spoolWeight` (default `core/weight.py:DEFAULT_TARE_GRAMS`), so
+  `net = gross − tare`. `direct_correction` true-ups both sides absolutely; `usage` logs an FDB usage
+  entry on a **decrease** (preserving the audit trail; FDB reduces `totalWeight` itself) and falls
+  back to the absolute path on an **increase** (a refill is never a negative usage). After any weight
+  *or* location write, **both** snapshots are refreshed (anti-ping-pong), so the next auto-sync cycle
+  sees no fresh change.
+
+- **Shared helper extractions (reuse, don't duplicate):**
+  - **`core/weight_ops.py`** — the absolute-write + dual-snapshot-refresh core was extracted out of
+    `core/conflict_apply.py:_apply_weight` into `apply_absolute_weight(...)` (plus `apply_usage_weight(...)`
+    for usage mode). `_apply_weight` now calls the shared helper; behaviour is byte-for-byte identical
+    (same SM/FDB writes, snapshot merges, and `old_value="diverged"` sync-log entry) so the GitHub #21
+    resolve/converge tests stay green.
+  - **`core/locations.py`** — `ensure_fdb_location(filamentdb, name, cache=None)` (found-or-create of an
+    FDB location id) was extracted from the wizard's inline spool-seeding block; the wizard now calls it
+    (Spoolman stores location as a free-text string, FDB needs a `locationId`).
+  - **`core/mobile.py`** — `resolve_spool_mapping` + `assemble_spool_detail` live-fetch both upstream
+    records (fresher than the snapshot-based mapping rows) and build the page payload.
+
+- **All config keys added now (including `labelforge_*`)** so config is touched once: `mobile_labels_enabled`,
+  `bridge_public_url`, `mobile_redirect_target`, `mobile_weight_default_mode`, `labelforge_url`,
+  `labelforge_token` (secret), `labelforge_template`, `labelforge_fields` (CSV), `labelforge_label_media`.
+  They follow the `backup_*` pattern: env start-up fallback in `app/config.py`, BridgeConfig `_DEFAULTS`,
+  and `ConfigResponse`/`ConfigUpdateRequest`/`_config_response`. Frontend, LabelForge printing, and the
+  user-facing docs roll-up are deferred to later phases.
+
+**Caveat (documented, not blocking):** QR *rendering* in LabelForge exists only on its `dev` branch
+(`421caee`+, not v0.1.3). The HTTP API is identical across main/dev, so the bridge codes against the
+stable API; printing a QR requires the user to run a LabelForge build with that work.

@@ -87,6 +87,22 @@ _DEFAULTS = {
     "backup_filamentdb_enabled": "true",
     "backup_retention_days": "7",
     "backup_hour_utc": "3",
+    # Mobile updates & labels (phase 1). Master toggle defaults OFF — the feature
+    # is fully gated (403 on every mobile/label endpoint and the /r/ redirect, nav
+    # item hidden) until the user configures the connection settings and flips it on.
+    "mobile_labels_enabled": "false",
+    # External base URL baked into the printed QR. Empty = derive from request.
+    "bridge_public_url": '""',
+    # Redirect target for GET /r/{fil}/{spool}: "bridge" (the SPA scan page) | "filamentdb".
+    "mobile_redirect_target": '"bridge"',
+    # Default weight-save mode: "direct_correction" (absolute) | "usage" (FDB usage on decrease).
+    "mobile_weight_default_mode": '"direct_correction"',
+    # LabelForge connection settings (Phase 3 printing; added now so config is touched once).
+    "labelforge_url": '""',
+    "labelforge_token": '""',
+    "labelforge_template": '""',
+    "labelforge_fields": '""',
+    "labelforge_label_media": '""',
 }
 
 

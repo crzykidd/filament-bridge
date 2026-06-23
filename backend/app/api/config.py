@@ -155,6 +155,35 @@ def effective_backup_hour_utc(db: Session) -> int:
     return int(val)
 
 
+def mobile_labels_enabled(db: Session) -> bool:
+    """Return whether the mobile-updates & labels feature is enabled (DB wins, else env)."""
+    return _resolve_bool(db, "mobile_labels_enabled", _settings.mobile_labels_enabled)
+
+
+def mobile_redirect_target(db: Session) -> str:
+    """Return the configured /r/ redirect target ("bridge" | "filamentdb")."""
+    val = get_config_value(db, "mobile_redirect_target", None)
+    if val is None:
+        return _settings.mobile_redirect_target
+    return str(val)
+
+
+def mobile_weight_default_mode(db: Session) -> str:
+    """Return the default mobile weight-save mode ("direct_correction" | "usage")."""
+    val = get_config_value(db, "mobile_weight_default_mode", None)
+    if val is None:
+        return _settings.mobile_weight_default_mode
+    return str(val)
+
+
+def bridge_public_url(db: Session) -> str:
+    """Return the configured external bridge base URL (empty = derive from request)."""
+    val = get_config_value(db, "bridge_public_url", None)
+    if val is None:
+        return _settings.bridge_public_url
+    return str(val)
+
+
 _REQUIRED_SETTINGS = ["variant_parent_mode"]
 
 
@@ -220,6 +249,23 @@ def _config_response(db: Session) -> ConfigResponse:
             cfg.get("backup_retention_days", _settings.backup_retention_days)
         ),
         backup_hour_utc=int(cfg.get("backup_hour_utc", _settings.backup_hour_utc)),
+        mobile_labels_enabled=(
+            bool(cfg["mobile_labels_enabled"])
+            if "mobile_labels_enabled" in cfg
+            else _settings.mobile_labels_enabled
+        ),
+        bridge_public_url=str(cfg.get("bridge_public_url", _settings.bridge_public_url)),
+        mobile_redirect_target=cfg.get("mobile_redirect_target", _settings.mobile_redirect_target),
+        mobile_weight_default_mode=cfg.get(
+            "mobile_weight_default_mode", _settings.mobile_weight_default_mode
+        ),
+        labelforge_url=str(cfg.get("labelforge_url", _settings.labelforge_url)),
+        labelforge_token=str(cfg.get("labelforge_token", _settings.labelforge_token)),
+        labelforge_template=str(cfg.get("labelforge_template", _settings.labelforge_template)),
+        labelforge_fields=str(cfg.get("labelforge_fields", _settings.labelforge_fields)),
+        labelforge_label_media=str(
+            cfg.get("labelforge_label_media", _settings.labelforge_label_media)
+        ),
         required_settings_unset=_required_settings_unset(cfg),
     )
 
