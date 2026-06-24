@@ -263,7 +263,7 @@ filament-bridge/
 | `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MIN` | No | `openprinttag_nozzle_temp_min` | Spoolman filament **integer** extra field for OPT `nozzleTempMin` (°C). Synced ↔ FDB `temperatures.nozzleRangeMin`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MAX` | No | `openprinttag_nozzle_temp_max` | Spoolman filament **integer** extra field for OPT `nozzleTempMax` (°C). Synced ↔ FDB `temperatures.nozzleRangeMax`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TEMP` | No | `openprinttag_drying_temp` | Spoolman filament **integer** extra field for OPT `dryingTemp` (°C). Synced ↔ FDB `dryingTemperature`. |
-| `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TIME` | No | `openprinttag_drying_time` | Spoolman filament **integer** extra field for drying time in **hours**. OPT stores minutes; the OpenTag Apply flow converts ÷60. Synced ↔ FDB `dryingTime` (hours). |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TIME` | No | `openprinttag_drying_time` | Spoolman filament **integer** extra field for drying time in **minutes**. OpenPrintTag and Filament DB both store `dryingTime` in minutes (e.g. `480` = 8 h), so it passes through unchanged. Synced ↔ FDB `dryingTime` (minutes). |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_A` | No | `openprinttag_hardness_shore_a` | Spoolman filament **float** extra field for OPT `hardnessShoreA`. Synced ↔ FDB `shoreHardnessA`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_D` | No | `openprinttag_hardness_shore_d` | Spoolman filament **float** extra field for OPT `hardnessShoreD`. Synced ↔ FDB `shoreHardnessD`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_TRANSMISSION_DISTANCE` | No | `openprinttag_transmission_distance` | Spoolman filament **float** extra field for OPT `transmissionDistance` (mm). Synced ↔ FDB `transmissionDistance`. |

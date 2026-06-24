@@ -11,6 +11,14 @@ GitHub release.
 
 ### Fixed
 
+- **OpenPrintTag drying time is now stored in the right unit** — the bridge was dividing
+  the drying time by 60 and writing **hours** into Filament DB's `dryingTime` field, but
+  Filament DB stores `dryingTime` in **minutes** (`480` = 8 h). A material that should dry
+  8 h was recorded as 8 (i.e. 8 minutes) — 60× too small. Drying time now passes through in
+  minutes end-to-end (OpenPrintTag → Spoolman extra → Filament DB), all in agreement.
+  Records written under the old behavior keep the wrong value until you re-run OpenTag
+  **Apply** on them. (#27)
+
 - **Resolving a cross-system conflict now actually applies your choice** — previously,
   picking a value for a standard (weight / cost / property / multicolor / material-tags /
   field-mapping) conflict only recorded the choice and wrote nothing upstream, so the

@@ -1,5 +1,24 @@
 # Decision record
 
+## 2026-06-24 — OpenPrintTag drying time is minutes end-to-end (issue #27)
+
+**Context.** The bridge converted OpenPrintTag `dryingTime` (minutes) to **hours** (÷60) in the
+cleanup-tool Apply value-builder (`core/opentag_match.py`) via `opentag_drying_time_to_fdb_hours`,
+on the belief that Filament DB's `dryingTime` field is in hours. The ongoing material-field sync
+then mirrored the Spoolman extra to FDB **1:1**. Validating FDB releases 1.50–1.57 surfaced
+1.57.0 #809 ("corrected dryingTime units in the API docs"): FDB's `dryingTime` is in **minutes**
+(`480` = 8 h). So the bridge wrote `8` where FDB expects `480` — a 60× error. It round-tripped
+numerically (both sides held `8`), so no conflict fired, but the stored value was wrong.
+
+**Decision.** Treat `dryingTime` as **minutes everywhere** — OpenPrintTag, the Spoolman extra
+(`openprinttag_drying_time`), and FDB all agree, so the value passes through unconverted like the
+other typed OPT fields. Removed `opentag_drying_time_to_fdb_hours` and the ÷60 special-case; the
+ongoing 1:1 sync is unchanged (it was never the problem). No data migration — records written
+under the old behavior keep the wrong value until OpenTag **Apply** is re-run on them.
+
+**Note.** No breaking API changes were found in FDB 1.50–1.57 for the bridge's integration; this
+was a pre-existing unit bug that FDB's docs correction merely revealed.
+
 ## 2026-06-23 — Cross-system conflict resolution converges (writes both sides on resolve) (issue #21)
 
 **Context.** Resolving a standard (`cross_system`) conflict was record-only: it stored the
