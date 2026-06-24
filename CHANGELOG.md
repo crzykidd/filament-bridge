@@ -11,6 +11,16 @@ GitHub release.
 
 ### Fixed
 
+- **Lowering a spool's weight now actually reaches Filament DB** — the mobile "correct
+  weight" update (and the cross-system weight-conflict resolution) wrote the new weight
+  to Filament DB with a direct overwrite, but Filament DB only accepts a weight *increase*
+  that way — a *decrease* must go through its usage endpoint. So a downward correction
+  updated Spoolman + the bridge but silently left Filament DB unchanged (and the refreshed
+  snapshot then hid the miss from the next sync). Decreases now log a Filament DB usage
+  entry (the only way to lower a spool's weight there); increases stay a direct write. A
+  downward correction therefore shows up in Filament DB's usage history, labelled as a
+  correction. (#28)
+
 - **OpenPrintTag drying time is now stored in the right unit** — the bridge was dividing
   the drying time by 60 and writing **hours** into Filament DB's `dryingTime` field, but
   Filament DB stores `dryingTime` in **minutes** (`480` = 8 h). A material that should dry

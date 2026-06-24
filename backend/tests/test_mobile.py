@@ -27,7 +27,7 @@ from app.api import mobile as mobile_router
 from app.api.config import set_config_value
 from app.core.locations import ensure_fdb_location
 from app.core.mobile import assemble_spool_detail
-from app.core.weight_ops import apply_absolute_weight, apply_usage_weight
+from app.core.weight_ops import apply_absolute_weight
 from app.db import Base, get_db
 from app.models.config import seed_defaults
 from app.models.mapping import SpoolMapping
@@ -127,7 +127,35 @@ def _client(db, spoolman, filamentdb, *, with_redirect=False) -> TestClient:
 
 
 @pytest.mark.asyncio
-async def test_apply_absolute_weight_sets_both_sides_and_refreshes_snapshots():
+async def test_apply_absolute_weight_increase_writes_totalweight():
+    """An INCREASE / refill is a direct FDB totalWeight write; both snapshots refresh."""
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    _snap(db, "spoolman", "1", {"remaining_weight": 700.0})
+    _snap(db, "filamentdb", "spool-1", {"totalWeight": 900.0})
+    db.commit()
+
+    spoolman = _fake_spoolman()
+    filamentdb = _fake_filamentdb()
+
+    # net 900 → gross 1100 > current 900 → INCREASE.
+    w = await apply_absolute_weight(
+        db, spoolman, filamentdb,
+        sm_spool_id=1, fdb_fil_id="fil-1", fdb_spool_id="spool-1",
+        net_w=900.0, tare=200.0, current_fdb_gross=900.0, cycle_id="t", source="mobile-scale",
+    )
+    assert w == 900.0
+    spoolman.update_spool.assert_awaited_with(1, {"remaining_weight": 900.0})
+    filamentdb.update_spool.assert_awaited_with("fil-1", "spool-1", {"totalWeight": 1100.0})
+    filamentdb.log_usage.assert_not_awaited()
+    fdb_snap = json.loads(db.query(Snapshot).filter_by(source="filamentdb", entity_id="spool-1").first().data)
+    assert fdb_snap["totalWeight"] == 1100.0
+
+
+@pytest.mark.asyncio
+async def test_apply_absolute_weight_decrease_logs_usage_not_direct_write():
+    """A DECREASE goes through an FDB usage entry — FDB can't lower totalWeight via a
+    direct PUT (#28). Spoolman is set directly and both snapshots refresh."""
     db = _make_db()
     db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
     _snap(db, "spoolman", "1", {"remaining_weight": 800.0})
@@ -137,68 +165,26 @@ async def test_apply_absolute_weight_sets_both_sides_and_refreshes_snapshots():
     spoolman = _fake_spoolman()
     filamentdb = _fake_filamentdb()
 
-    # Scale reads 950 g GROSS; tare 200 → net 750.
+    # Scale reads 950 g GROSS; tare 200 → net 750. Current gross 1000 → DECREASE of 50.
     w = await apply_absolute_weight(
         db, spoolman, filamentdb,
         sm_spool_id=1, fdb_fil_id="fil-1", fdb_spool_id="spool-1",
-        net_w=750.0, tare=200.0, cycle_id="t", source="mobile-scale",
+        net_w=750.0, tare=200.0, current_fdb_gross=1000.0, cycle_id="t",
+        source="mobile-scale-correction", job_label="Mobile scale correction",
     )
     assert w == 750.0
     spoolman.update_spool.assert_awaited_with(1, {"remaining_weight": 750.0})
-    filamentdb.update_spool.assert_awaited_with("fil-1", "spool-1", {"totalWeight": 950.0})
+    # FDB usage entry for the consumed 50 g — NOT a direct totalWeight write.
+    filamentdb.log_usage.assert_awaited_once()
+    la = filamentdb.log_usage.await_args
+    assert la.args[0] == "fil-1" and la.args[1] == "spool-1" and la.args[2] == 50.0
+    assert la.kwargs["source"] == "mobile-scale-correction"
+    filamentdb.update_spool.assert_not_awaited()
     # Both snapshots advanced to converged values (anti-ping-pong).
     sm_snap = json.loads(db.query(Snapshot).filter_by(source="spoolman", entity_id="1").first().data)
     fdb_snap = json.loads(db.query(Snapshot).filter_by(source="filamentdb", entity_id="spool-1").first().data)
     assert sm_snap["remaining_weight"] == 750.0
     assert fdb_snap["totalWeight"] == 950.0
-
-
-# ===========================================================================
-# weight_ops — usage mode (decrease logs usage; increase falls back to absolute)
-# ===========================================================================
-
-
-@pytest.mark.asyncio
-async def test_apply_usage_weight_logs_usage_on_decrease():
-    db = _make_db()
-    spoolman = _fake_spoolman()
-    filamentdb = _fake_filamentdb()
-
-    # Current gross 1000; new gross 950 (net 750) → DECREASE of 50 g.
-    w = await apply_usage_weight(
-        db, spoolman, filamentdb,
-        sm_spool_id=1, fdb_fil_id="fil-1", fdb_spool_id="spool-1",
-        net_w=750.0, tare=200.0, current_fdb_gross=1000.0,
-        cycle_id="t", source="mobile-scale",
-    )
-    assert w == 750.0
-    # FDB usage entry for the consumed 50 g; SM remaining set directly.
-    filamentdb.log_usage.assert_awaited_once()
-    args = filamentdb.log_usage.await_args
-    assert args.args[0] == "fil-1" and args.args[1] == "spool-1" and args.args[2] == 50.0
-    assert args.kwargs["source"] == "mobile-scale"
-    # No raw FDB totalWeight overwrite on a decrease.
-    filamentdb.update_spool.assert_not_awaited()
-    spoolman.update_spool.assert_awaited_with(1, {"remaining_weight": 750.0})
-
-
-@pytest.mark.asyncio
-async def test_apply_usage_weight_increase_falls_back_to_absolute():
-    db = _make_db()
-    spoolman = _fake_spoolman()
-    filamentdb = _fake_filamentdb()
-
-    # Current gross 900; new gross 1100 (net 900) → INCREASE → absolute write.
-    w = await apply_usage_weight(
-        db, spoolman, filamentdb,
-        sm_spool_id=1, fdb_fil_id="fil-1", fdb_spool_id="spool-1",
-        net_w=900.0, tare=200.0, current_fdb_gross=900.0,
-        cycle_id="t", source="mobile-scale",
-    )
-    assert w == 900.0
-    filamentdb.log_usage.assert_not_awaited()
-    filamentdb.update_spool.assert_awaited_with("fil-1", "spool-1", {"totalWeight": 1100.0})
-    spoolman.update_spool.assert_awaited_with(1, {"remaining_weight": 900.0})
 
 
 # ===========================================================================
@@ -354,10 +340,12 @@ def test_patch_applies_weight_and_location_with_snapshot_refresh():
     )
     assert r.status_code == 200
 
-    # Weight: SM net 750, FDB gross 950.
+    # Weight DECREASE (950 < current 1000): SM net 750 set directly; FDB lowered via a
+    # usage entry, not a direct totalWeight write (#28).
     spoolman.update_spool.assert_any_await(1, {"remaining_weight": 750.0})
-    filamentdb.update_spool.assert_any_await("fil-1", "spool-1", {"totalWeight": 950.0})
-    # Location: FDB locationId + SM free-text.
+    filamentdb.log_usage.assert_awaited_once()
+    assert filamentdb.log_usage.await_args.args[2] == 50.0
+    # Location: FDB locationId + SM free-text (location DOES use update_spool).
     filamentdb.update_spool.assert_any_await("fil-1", "spool-1", {"locationId": "loc-9"})
     spoolman.update_spool.assert_any_await(1, {"location": "Bin 9"})
 

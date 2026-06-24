@@ -176,9 +176,11 @@ async def test_weight_resolve_converges_no_requeue():
     client = _client(db, spoolman, fdb)
     resp = client.post(f"/api/conflicts/{conflict.id}/resolve", json={"resolution": "spoolman"})
     assert resp.status_code == 200
-    # SM net 790 → FDB gross 990.
+    # SM net 790 set directly; FDB gross 1050 → 990 is a DECREASE, so FDB is lowered
+    # via a usage entry (it can't drop totalWeight with a direct PUT, #28).
     spoolman.update_spool.assert_awaited_with(1, {"remaining_weight": 790.0})
-    fdb.update_spool.assert_awaited_with("fil-1", "spool-1", {"totalWeight": 990.0})
+    fdb.log_usage.assert_awaited_once()
+    assert fdb.log_usage.await_args.args[2] == 60.0
 
     # Second cycle with the converged live state — must NOT re-queue.
     sm_spool.remaining_weight = 790.0

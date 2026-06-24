@@ -277,10 +277,12 @@ def test_resolve_conflict_applies_and_converges(db):
     assert body["resolution"] == "spoolman"
     assert body["resolved_value"] == 790.0  # SM net is authoritative
 
-    # Written to BOTH systems — direct absolute write, NO usage entry.
+    # Written to BOTH systems. Converging DOWN (1050 → 990 gross) lowers FDB via a
+    # usage entry — FDB can't drop totalWeight with a direct PUT (#28); Spoolman is set.
     spoolman.update_spool.assert_awaited_once_with(1, {"remaining_weight": 790.0})
-    filamentdb.update_spool.assert_awaited_once_with("fil-1", "spool-1", {"totalWeight": 990.0})
-    filamentdb.log_usage.assert_not_called()
+    filamentdb.log_usage.assert_awaited_once()
+    assert filamentdb.log_usage.await_args.args[2] == 60.0  # 1050 − 990
+    filamentdb.update_spool.assert_not_called()
 
     # Snapshots advanced to the converged values (anti-ping-pong).
     sm_snap = db.query(Snapshot).filter_by(source="spoolman", entity_id="1").first()
@@ -423,7 +425,10 @@ def test_bulk_resolve(db):
     assert body["failed"] == []
     # Converged: each conflict wrote to BOTH systems.
     assert spoolman.update_spool.await_count == 2
-    assert filamentdb.update_spool.await_count == 2
+    # Both converge DOWN (gross 1001/1002 → 901/902), so FDB lowers via usage entries,
+    # not direct totalWeight writes (#28).
+    assert filamentdb.log_usage.await_count == 2
+    assert filamentdb.update_spool.await_count == 0
     # Open queue is empty — none re-queue.
     assert client.get("/api/conflicts?status=open").json() == []
 

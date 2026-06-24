@@ -695,15 +695,15 @@ async def _apply_weight(
     conflict: Conflict, resolution: str, manual_value: Any,
     db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
 ) -> float:
-    """Converge a spool ``weight`` conflict with a DIRECT ABSOLUTE write to both
-    sides (no usage entry — this is a human-approved correction).
+    """Converge a spool ``weight`` conflict to an absolute net weight on both sides.
 
     The converged value ``W`` is the net remaining weight (Spoolman units).
       - resolution=spoolman   → W = stored SM remaining_weight (already net).
       - resolution=filamentdb → W = stored FDB totalWeight − tare.
       - resolution=manual     → manual_value interpreted as net remaining weight.
-    SM gets ``remaining_weight = W``; FDB gets ``totalWeight = W + tare``.
-    Snapshots refresh to the converged values (anti-ping-pong).
+    SM gets ``remaining_weight = W``; FDB gets ``totalWeight = W + tare`` (a direct
+    write on an increase, a usage entry on a decrease — FDB can only lower via usage;
+    see ``core/weight_ops.py``). Snapshots refresh to the converged values.
     """
     from app.config import settings as _settings  # noqa: F401  (kept for parity)
 
@@ -729,14 +729,15 @@ async def _apply_weight(
     else:  # manual — net remaining weight in Spoolman units
         w = float(manual_value)
 
-    # Absolute true-up of both sides + dual-snapshot refresh — shared with the
-    # mobile scan-and-update path (core/weight_ops.py).  Behaviour is identical to
-    # the previous inline block (same SM/FDB writes, snapshot merges, and the
-    # old_value="diverged" sync-log entry) so the #21 resolve/converge tests hold.
+    # Converge both sides + dual-snapshot refresh (shared with the mobile path,
+    # core/weight_ops.py).  Filament DB can only RAISE totalWeight directly; a LOWER
+    # target is applied via a usage entry — so pass the current FDB gross (the
+    # conflict's stored filamentdb_value) for the increase/decrease split (#28).
     w = await apply_absolute_weight(
         db, spoolman, filamentdb,
         sm_spool_id=sm_spool_id, fdb_fil_id=fdb_filament_id, fdb_spool_id=fdb_spool_id,
-        net_w=w, tare=float(tare), cycle_id=cycle_id, source="conflict_apply",
+        net_w=w, tare=float(tare), current_fdb_gross=float(fdb_gross),
+        cycle_id=cycle_id, source="conflict_apply", job_label="Conflict resolution",
         old_value="diverged",
     )
     _resolve_conflict_row(conflict, resolution, w, db)

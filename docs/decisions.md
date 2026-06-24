@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-06-24 — Lowering a spool weight always goes through an FDB usage entry (issue #28)
+
+**Context.** The mobile "correct weight" path and the #21 conflict-resolve path both used
+`core/weight_ops.py:apply_absolute_weight`, which wrote the target to Filament DB with a direct
+`PUT {totalWeight}` regardless of direction. But Filament DB only accepts a `totalWeight`
+**increase** via PUT — a **decrease** must go through the usage endpoint (FDB has no other way to
+reduce a spool's weight; a direct PUT to a lower value is silently ignored). Reported in the field:
+a mobile correction 945→931 updated Spoolman + the bridge snapshot but left FDB at 945, and because
+the snapshot was refreshed to 931 the engine then saw no discrepancy to re-push. The #21 weight path
+had the same latent no-op (it only passed because the FDB client was mocked).
+
+**Decision.** There is ONE correct FDB write rule, already used by the engine's ongoing pass:
+**increase → direct `PUT totalWeight`; decrease → `log_usage(delta)`.** Made `apply_absolute_weight`
+decrease-aware (it now takes `current_fdb_gross`) and removed the separate `apply_usage_weight`
+(redundant). The mobile "direct_correction" and "usage" modes both converge to the absolute net
+weight; on a decrease both log an FDB usage entry — the mode only flavours the entry's `source` /
+`job_label` (a scale *correction* vs a *usage* decrement). Spoolman is always an absolute set.
+
+**Consequence.** A downward "correction" necessarily creates an FDB usage entry — there is no other
+mechanism to lower a spool's weight — so it appears in the FDB usage history (labelled as a
+correction). Upward corrections / refills remain a direct write.
+
 ## 2026-06-24 — OpenPrintTag drying time is minutes end-to-end (issue #27)
 
 **Context.** The bridge converted OpenPrintTag `dryingTime` (minutes) to **hours** (÷60) in the

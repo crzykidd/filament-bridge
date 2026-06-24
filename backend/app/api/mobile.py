@@ -30,7 +30,7 @@ from app.api.errors import api_error
 from app.core.locations import ensure_fdb_location
 from app.core.mobile import assemble_spool_detail, resolve_spool_mapping
 from app.core.weight import DEFAULT_TARE_GRAMS
-from app.core.weight_ops import apply_absolute_weight, apply_usage_weight
+from app.core.weight_ops import apply_absolute_weight
 from app.db import get_db
 from app.schemas.api import MobileSpoolDetail, MobileSpoolUpdateRequest
 
@@ -123,20 +123,20 @@ async def update_mobile_spool(
     if payload.gross_grams is not None:
         mode = payload.weight_mode or mobile_weight_default_mode(db)
         net = round(max(float(payload.gross_grams) - tare, 0.0), 2)
+        # Both modes converge the spool to the absolute net weight. Filament DB can
+        # only RAISE totalWeight directly; LOWERING it always goes through a usage
+        # entry (its only mechanism), so the mode only flavours that entry's label /
+        # source — a scale "correction" vs a "usage" decrement (#28).
         if mode == "usage":
-            await apply_usage_weight(
-                db, spoolman, filamentdb,
-                sm_spool_id=sm_spool_id, fdb_fil_id=fil, fdb_spool_id=spool,
-                net_w=net, tare=tare, current_fdb_gross=current_gross,
-                cycle_id=cycle_id, source="mobile-scale",
-            )
-        else:
-            await apply_absolute_weight(
-                db, spoolman, filamentdb,
-                sm_spool_id=sm_spool_id, fdb_fil_id=fil, fdb_spool_id=spool,
-                net_w=net, tare=tare, cycle_id=cycle_id, source="mobile-scale",
-                old_value=current_gross,
-            )
+            src, label = "mobile-scale", "Mobile scale usage"
+        else:  # direct_correction
+            src, label = "mobile-scale-correction", "Mobile scale correction"
+        await apply_absolute_weight(
+            db, spoolman, filamentdb,
+            sm_spool_id=sm_spool_id, fdb_fil_id=fil, fdb_spool_id=spool,
+            net_w=net, tare=tare, current_fdb_gross=current_gross,
+            cycle_id=cycle_id, source=src, job_label=label, old_value=current_gross,
+        )
         did_write = True
 
     # --- Location ---
