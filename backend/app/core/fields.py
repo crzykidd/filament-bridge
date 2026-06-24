@@ -40,12 +40,12 @@ FDB_SYNCABLE_FIELDS: frozenset[str] = _FDB_SCALAR_FIELDS | _FDB_DOTTED_FIELDS
 # Apply flow, and synced to/from FDB by the material-properties sync pass.
 #
 # Each entry: (config attribute on Settings, default key, Spoolman field_type,
-#             OPT source key, FDB target path, normalizer name).  The config
-# attribute lets a deployment override the extra-field key via SPOOLMAN_FIELD_*
-# env vars (resolved at runtime, like every other extra-field key).
+#             OPT source key, FDB target path, label).  The config attribute lets
+# a deployment override the extra-field key via SPOOLMAN_FIELD_* env vars
+# (resolved at runtime, like every other extra-field key).
 #
-# ``opt_conversion`` is applied to the raw OPT value before it is written to the
-# Spoolman extra field (e.g. dryingTime OPT-minutes → FDB-hours, ÷60).
+# All values pass through unit-for-unit — OpenPrintTag and Filament DB agree on
+# units for every field, including dryingTime, which is in MINUTES on both sides.
 
 
 @dataclass(frozen=True)
@@ -99,21 +99,6 @@ OPENTAG_EXTRA_FIELDS: tuple[OpenTagExtraField, ...] = (
 
 # Every FDB target for the OPT extra fields must be in the writable allow-list.
 assert all(f.fdb_path in FDB_SYNCABLE_FIELDS for f in OPENTAG_EXTRA_FIELDS)
-
-
-def opentag_drying_time_to_fdb_hours(opt_minutes: float | int | None) -> int | None:
-    """Convert an OPT ``dryingTime`` (MINUTES) to the FDB ``dryingTime`` unit (HOURS).
-
-    OpenPrintTag stores drying time in minutes (sample 360 = 6 h); Filament DB's
-    ``dryingTime`` field is in hours.  Divides by 60 and rounds to the nearest
-    whole hour.  Returns ``None`` for a ``None`` input.
-    """
-    if opt_minutes is None:
-        return None
-    try:
-        return int(round(float(opt_minutes) / 60.0))
-    except (TypeError, ValueError):
-        return None
 
 
 @dataclass

@@ -33,6 +33,10 @@ VariantParentMode = Literal["unset", "promote_color", "generic_container"]
 # New-record handling policy for ongoing sync (not the wizard).
 NewRecordPolicy = Literal["manual_review", "auto_import"]
 
+# Mobile updates & labels (phase 1)
+MobileRedirectTarget = Literal["bridge", "filamentdb"]
+MobileWeightMode = Literal["direct_correction", "usage"]
+
 # Backup envelope schema version — bump when the export shape changes.
 BACKUP_SCHEMA_VERSION = 1
 
@@ -199,6 +203,9 @@ class BulkResolveRequest(BaseModel):
 class BulkResolveResponse(BaseModel):
     resolved: int
     skipped: list[int] = Field(default_factory=list)
+    # cross_system conflicts converge on resolve (write upstream); a conflict whose
+    # upstream write fails or is unsupported lands here and stays open (#21).
+    failed: list[int] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +301,10 @@ class ConfigResponse(BaseModel):
     # newest_wins is rejected (booleans aren't timestamp-eligible) — same as material_properties.
     archive_sync_direction: SyncDirection2 = "two_way"
     archive_conflict_policy: ConflictPolicy = "manual"
+    # Location sync (mirrors SM location ↔ FDB locationId-resolved name for mapped pairs).
+    # newest_wins is rejected (a location name has no comparable timestamp) — same as archive.
+    location_sync_direction: SyncDirection2 = "two_way"
+    location_sync_conflict_policy: ConflictPolicy = "manual"
     new_spool_sync_direction: SyncDirection2 = "two_way"
     # New-record handling policies
     # manual_review (default) → queue an actionable conflict; auto_import → create immediately.
@@ -316,6 +327,29 @@ class ConfigResponse(BaseModel):
     # admin_password_hash and auth_secret are NEVER included in any response.
     api_token: str | None = None
     api_token_enabled: bool = False
+    # Scheduled nightly backups (issue #5) — master enable + two sub-toggles,
+    # retention window (days), and the UTC hour the job fires at.
+    backup_schedule_enabled: bool = True
+    backup_bridge_state_enabled: bool = True
+    backup_filamentdb_enabled: bool = True
+    backup_retention_days: int = 7
+    backup_hour_utc: int = 3
+    # Mobile updates & labels (phase 1) — master toggle + connection settings.
+    # labelforge_token is the only secret; it is returned so the Settings UI can
+    # display/edit it (same treatment as api_token).
+    mobile_labels_enabled: bool = False
+    # Scan-flow auth + session lifetime (days). 0 = public scan flow (no app password
+    # on /r/, /api/mobile/*, /api/labels/*, SPA /scan/...); >= 1 = require login, with
+    # the fb_session cookie living this many days. Default 30 = unchanged behavior.
+    mobile_session_days: int = 30
+    bridge_public_url: str = ""
+    mobile_redirect_target: MobileRedirectTarget = "bridge"
+    mobile_weight_default_mode: MobileWeightMode = "direct_correction"
+    labelforge_url: str = ""
+    labelforge_token: str = ""
+    labelforge_template: str = ""
+    labelforge_fields: str = ""
+    labelforge_label_media: str = ""
     # Required settings that must be configured before the bridge is usable.
     # Frontend redirects to /settings and shows a modal when this list is non-empty.
     required_settings_unset: list[str] = Field(default_factory=list)
@@ -334,6 +368,9 @@ class ConfigUpdateRequest(BaseModel):
     # Archive/retire lifecycle sync.
     archive_sync_direction: SyncDirection2 | None = None
     archive_conflict_policy: ConflictPolicy | None = None
+    # Location sync.
+    location_sync_direction: SyncDirection2 | None = None
+    location_sync_conflict_policy: ConflictPolicy | None = None
     new_spool_sync_direction: SyncDirection2 | None = None
     # New-record handling policies
     new_filament_policy: NewRecordPolicy | None = None
@@ -351,6 +388,27 @@ class ConfigUpdateRequest(BaseModel):
     container_parent_marker: str | None = None
     # API token control (value managed via /auth/api-token/regenerate; only flag is updatable here)
     api_token_enabled: bool | None = None
+    # Scheduled nightly backups (issue #5). Range checks for hour (0..23) and
+    # retention (>= 1) are enforced in update_config with the project error envelope.
+    backup_schedule_enabled: bool | None = None
+    backup_bridge_state_enabled: bool | None = None
+    backup_filamentdb_enabled: bool | None = None
+    backup_retention_days: int | None = Field(default=None, ge=1)
+    backup_hour_utc: int | None = Field(default=None, ge=0, le=23)
+    # Mobile updates & labels (phase 1). Enum values are validated by the Literal
+    # types (bad value → 422 before update_config runs).
+    mobile_labels_enabled: bool | None = None
+    # Scan-flow auth / session lifetime in days. Must be >= 0 (validated in update_config
+    # with the project error envelope; 0 = public scan flow).
+    mobile_session_days: int | None = Field(default=None, ge=0)
+    bridge_public_url: str | None = None
+    mobile_redirect_target: MobileRedirectTarget | None = None
+    mobile_weight_default_mode: MobileWeightMode | None = None
+    labelforge_url: str | None = None
+    labelforge_token: str | None = None
+    labelforge_template: str | None = None
+    labelforge_fields: str | None = None
+    labelforge_label_media: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -860,3 +918,63 @@ class ReconcileResponse(BaseModel):
     only_in_spoolman: list[ReconcileMissingRow]
     only_in_filamentdb: list[ReconcileMissingRow]
     ambiguous: list[AmbiguousRow]
+
+
+# ---------------------------------------------------------------------------
+# Mobile updates (phase 1)
+# ---------------------------------------------------------------------------
+
+
+class MobileSpoolDetail(BaseModel):
+    """Assembled, live spool detail for the mobile scan/update page.
+
+    Identity is the Filament DB filament id + spool id (the QR encodes these);
+    ``number`` is the Spoolman spool id (used for the human-facing label number).
+    Weights are reported in BOTH models: ``gross`` (FDB totalWeight),
+    ``net`` (SM remaining_weight), and the ``tare`` used to convert between them.
+    """
+
+    # Deep-link / identity ids
+    filamentdb_filament_id: str
+    filamentdb_spool_id: str
+    spoolman_spool_id: int
+    spoolman_filament_id: int | None = None
+    # Human-facing label number (= Spoolman spool id)
+    number: int
+    # Display fields
+    brand: str | None = None
+    color_name: str | None = None
+    color_hex: str | None = None
+    material: str | None = None
+    # Weights (grams)
+    gross: float | None = None
+    net: float | None = None
+    tare: float
+    # Location (Spoolman free-text string)
+    location: str | None = None
+    # The effective default weight-save mode the page should preselect.
+    weight_default_mode: MobileWeightMode = "direct_correction"
+
+
+class MobileSpoolUpdateRequest(BaseModel):
+    """Body for PATCH /api/mobile/spool/{fil}/{spool}.
+
+    ``gross_grams`` is a SCALE reading (gross weight). ``weight_mode`` overrides the
+    configured default for this single save. ``location`` is a free-text name.
+    """
+
+    gross_grams: float | None = Field(default=None, ge=0)
+    location: str | None = None
+    weight_mode: MobileWeightMode | None = None
+
+
+class LabelPrintRequest(BaseModel):
+    """Body for POST /api/labels/print.
+
+    ``fil`` / ``spool`` are the Filament DB filament + spool ids (same identity the
+    QR encodes). ``override`` retries a print past a LabelForge media mismatch.
+    """
+
+    fil: str
+    spool: str
+    override: bool = False

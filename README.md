@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.5.1-blue)
+![version](https://img.shields.io/badge/version-0.6.0-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -37,7 +37,7 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ## What it does
 
 - **Bulk Import Wizard** — a re-runnable six-step wizard (Connectivity → Direction → Matches → Variances → Preview → Execute) that pairs the two systems: fuzzy vendor+name+color matching with bulk actions, variant grouping with per-group tare and property reconciliation, a full dry-run preview with collision rename/skip, and a per-record execute report that isolates failures so one bad record never aborts the batch
-- **Continuous sync engine** — polls both APIs on a configurable interval and diffs against last-known snapshots; syncs spool weights, material/density/diameter, spool & net filament weights, bed/nozzle temperatures, cost, structured multicolor/gradient colors, and OpenPrintTag finish tags
+- **Continuous sync engine** — polls both APIs on a configurable interval and diffs against last-known snapshots; syncs spool weights, material/density/diameter, spool & net filament weights, bed/nozzle temperatures, cost, structured multicolor/gradient colors, OpenPrintTag finish tags, spool location, and archive/retire lifecycle state
 - **Per-category direction + conflict policy** — weight, material properties, and new-spool creation each have an independently configurable sync direction (`two_way` / one-way) and conflict policy (`manual` / `spoolman_wins` / `filamentdb_wins`; `newest_wins` for weight only)
 - **Usage-logged weight sync** — Spoolman weight decrements become Filament DB usage entries (preserving the audit trail), never raw weight overwrites; net↔gross weight-model translation is automatic
 - **Conflict queue** — when both sides change the same field between cycles, the change is queued for human decision; conflicts are never silently auto-resolved. Master-divergence conflicts (a Spoolman value that would override an inherited Filament DB variant setting) get a dedicated resolve workflow: apply to the whole line, make it the variant's own setting, or ignore
@@ -45,17 +45,29 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 - **OpenPrintTag cleanup tool** — matches your Spoolman filaments against the OpenPrintTag community database, lets you review every field, applies canonical data to Spoolman, and stamps the OpenPrintTag slug/UUID into Filament DB
 - **Upstream-deletion handling** — a deletion on one side queues a conflict when a live, linked counterpart needs protecting; stale links with nothing to protect are purged from the bridge automatically
 - **Web UI** — Dashboard, Synced Records (expandable per-field side-by-side detail, conflict deep-links), Conflicts, Sync Log (per-cycle windows), Settings; every record links straight to its page in Filament DB and Spoolman; light/dark/system theme
+- **Mobile updates & label printing** — print a QR-coded spool label and scan it with your phone to open a single-purpose page that updates the spool's **weight** (read off a scale, with a live net preview) and **location** in one tap — written straight to Filament DB and Spoolman. The QR encodes a stable bridge redirect, so labels can be re-targeted later (e.g. to a future Filament DB page) **without reprinting**. Labels print through a self-hosted **[LabelForge](https://github.com/crzykidd/labelforge)** instance using a template you design; the bridge fills the brand / color / number / QR. Off by default — enable and configure in **Settings → Mobile & Labels**. (QR *rendering* needs a recent LabelForge build; text-only labels print on any version.) See [mobile updates & labels](docs/mobile-updates.md)
 - **Authentication** — single-account password login (on by default) with an optional API token for machine access; see [Security](#security)
 - **Optional pre-write backup** — a friendly (non-blocking) backup prompt before the three write actions (wizard Execute, OpenPrintTag Apply, enabling auto-sync) offers one-click Spoolman and Filament DB backups; the Settings Danger-Zone debug actions keep a stricter confirm
-- **Backup & restore** — export/import the bridge's own state (mappings, config, open conflicts) as JSON
+- **Backup & restore** — export/import the bridge's own state (mappings, config, open conflicts) as JSON, plus a **nightly scheduled backup** job (bridge state + a Filament DB snapshot, with configurable retention) — see [backups](docs/backups.md)
 - **Version badge + update check** — the sidebar shows the running version and surfaces new GitHub releases (checked server-side, cached 6 h)
 - **Debug reset tools** — a gated Danger Zone (off by default) with three reset tools for clean re-testing: clear Spoolman cross-refs, reset the bridge DB, or both at once
 
 <img src="docs/images/wizard-matches.png" alt="Bulk Import Wizard, Matches step — fuzzy vendor/name/color pairing of Spoolman and Filament DB records with per-row status and bulk actions" width="760">
 
+<img src="docs/images/mobile_updates.png" alt="Mobile updates page — scan a spool's QR label to update its weight (read off a scale, with a live net preview) and location in one tap, written straight to Filament DB and Spoolman" width="380">
+
 ---
 
 ## What's New
+
+### v0.6.0 (2026-06-24)
+
+- **Mobile updates & label printing** — print a QR-coded spool label and scan it with your phone to update the spool's **weight** (from a scale, with a live net preview) and **location** in one tap, written straight to Filament DB and Spoolman. The QR encodes a stable bridge redirect so labels can be re-targeted without reprinting; labels print through a self-hosted **[LabelForge](https://github.com/crzykidd/labelforge)** instance using a template you design. Off by default — enable in **Settings → Mobile & Labels**. See [mobile updates & labels](docs/mobile-updates.md).
+- **Configurable mobile-scan auth** — a new `mobile_session_days` setting controls whether scanning a label needs the app password and how long a scan login lasts (`0` makes the scan flow public; `>= 1` keeps it behind login with an N-day session).
+- **Spool location now syncs continuously** — moving a spool to a new shelf in either system propagates to the other (a new `location_sync` category with its own direction + conflict policy), not just at wizard import. (#29)
+- **Scheduled nightly backups** — a built-in nightly job saves the bridge's own state plus a Filament DB snapshot and prunes by a configurable retention window, all toggleable in **Settings → Scheduled backups**.
+- **Fixes** — lowering a spool's weight now actually reaches Filament DB via a usage entry (#28); OpenPrintTag drying time is stored in the correct unit (minutes, #27); resolving a cross-system conflict now writes your choice to both systems and converges instead of re-queuing (#21).
+- **Changelog housekeeping** — release notes for 0.4.0 and earlier are now condensed summaries with full detail archived under `docs/CHANGELOG-0.x.x.md`.
 
 ### v0.5.1 (2026-06-22)
 
@@ -188,7 +200,7 @@ per-system warning explaining why sync is off — so you can see and fix it. An 
 version does *not* block sync (that is treated as a connectivity issue, surfaced as `degraded`
 health, not as "too old").
 
-Latest tested upstreams: **Filament DB 1.49.0** and **Spoolman 0.23.1**.
+Latest tested upstreams: **Filament DB 1.57.0** and **Spoolman 0.23.1**.
 
 - **Filament DB** — the bridge gates version-specific features automatically.
 - **Spoolman** — the bridge creates its required extra fields (`filamentdb_id`, `filamentdb_spool_id`, etc.) automatically on startup if they are missing.
@@ -248,6 +260,15 @@ curl http://<bridge-host>:8090/api/backup/export -o bridge-backup.json
 ```
 
 Restore with `POST /api/backup/import`.
+
+### Scheduled nightly backups
+
+The bridge runs a built-in nightly job (on by default) that writes the bridge-state export
+and a Filament DB snapshot into `DATA_DIR/backups/` and prunes files past a retention
+window (default 7 days). Spoolman is intentionally excluded — the bridge can't prune
+Spoolman's own archives. Toggle the two backups, the retention window, and the UTC run hour
+(default `03:00`) in **Settings → Scheduled backups** (env fallback: `BACKUP_*`). Full
+details in [docs/backups.md](docs/backups.md).
 
 **Audit log — `changes.log`:** every write the bridge makes to Spoolman or Filament DB is appended to `{DATA_DIR}/changes.log` (default `/data/changes.log`). Each line shows a UTC timestamp, action, target system, entity id, and old → new values for updates — useful for reviewing what changed after a bad release without needing the UI or the SQLite database. The file rotates automatically at ~10 MB (keeps 3 backups). Disable with `CHANGES_LOG_ENABLED=false`. Pairs with `DEBUG_STARTUP_DUMP` (point-in-time boot snapshot) for a full before/after picture.
 
@@ -396,6 +417,11 @@ All connection configuration is via environment variables; the service refuses t
 | `FILAMENTDB_URL` | **Yes** | — | Base URL of your Filament DB instance (e.g. `http://filament-db:3000`) |
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of your Spoolman instance (e.g. `http://spoolman:7912`) |
 | `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles (runtime-editable in Settings) |
+| `BACKUP_SCHEDULE_ENABLED` | No | `true` | Master switch for the nightly scheduled backup job (runtime-editable) |
+| `BACKUP_BRIDGE_STATE_ENABLED` | No | `true` | Include the bridge-state export in the nightly backup (runtime-editable) |
+| `BACKUP_FILAMENTDB_ENABLED` | No | `true` | Include the Filament DB snapshot in the nightly backup (runtime-editable) |
+| `BACKUP_RETENTION_DAYS` | No | `7` | Delete bridge-written backups in `DATA_DIR/backups/` older than this (runtime-editable) |
+| `BACKUP_HOUR_UTC` | No | `3` | UTC hour (0–23) the nightly backup runs at, minute 0 (runtime-editable) |
 | `AUTH_ENABLED` | No | `true` | `false` fully bypasses authentication (also the lockout-recovery path) |
 | `PUID` / `PGID` | No | `1000` | UID/GID the container process runs as (see [Permissions](#permissions)) |
 | `DATA_DIR` | No | `/data` | Directory for the SQLite state database and backup files |
@@ -476,7 +502,10 @@ Both Filament DB and Spoolman continue to function independently. filament-bridg
 | [docs/conflicts.md](docs/conflicts.md) | Conflict types and what each resolution actually does |
 | [docs/variant-parent-mode.md](docs/variant-parent-mode.md) | `promote_color` vs `generic_container`, container naming |
 | [docs/opentag-cleanup.md](docs/opentag-cleanup.md) | The OpenPrintTag matcher and apply flow |
+| [docs/opentag-matching.md](docs/opentag-matching.md) | OpenPrintTag v2 scorer internals (token decomposition + mined lexicons) |
 | [docs/security.md](docs/security.md) | Auth model, API token, lockout recovery |
+| [docs/backups.md](docs/backups.md) | Manual export/import, upstream backup proxies, and the nightly scheduled backup job |
+| [docs/mobile-updates.md](docs/mobile-updates.md) | Phone scan-and-update, the QR `/r/` redirect, and LabelForge label printing |
 | [docs/spoolman-writes.md](docs/spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [docs/version-update-check.md](docs/version-update-check.md) | Version badge and GitHub update check |
 | [docs/migration-spoolman-to-filamentdb.md](docs/migration-spoolman-to-filamentdb.md) | Standalone one-time migration guide (without the bridge) |
@@ -541,4 +570,4 @@ Contributions welcome. Please open an issue to discuss before submitting PRs for
 
 ## License
 
-MIT
+[MIT](LICENSE) © crzykidd

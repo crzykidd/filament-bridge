@@ -17,35 +17,51 @@ import OpenTagCleanup from './pages/OpenTagCleanup'
 import Reconcile from './pages/Reconcile'
 import DocsViewer from './pages/DocsViewer'
 import { WizardShell } from './pages/Wizard'
+import MobileUpdates from './pages/MobileUpdates'
+import ScanTarget from './pages/ScanTarget'
 import Login from './pages/Login'
-import { getAuthStatus, register401Handler } from './api/client'
+import { getAuthStatus, getVersionInfo, register401Handler } from './api/client'
 import type { AuthStatusResponse } from './api/types'
 import { ThemeProvider } from './context/ThemeContext'
+
+// A bare phone scan opens /scan/:filId/:spoolId. When the backend reports the scan
+// flow is public (mobile_session_days == 0 → mobile_public), this route renders
+// WITHOUT the app login; every other path still shows Login. Matches the same path
+// the ScanTarget route is registered under.
+const SCAN_PATH_RE = /^\/scan\/[^/]+\/[^/]+\/?$/
 
 // Data router (createBrowserRouter) is required so pages can use `useBlocker`
 // (e.g. Settings' unsaved-changes guard). The classic <BrowserRouter> component
 // does not provide the data-router context that useBlocker needs.
 const router = createBrowserRouter(
   createRoutesFromElements(
-    <Route element={<Layout />}>
-      <Route index element={<Dashboard />} />
-      <Route path="synced-records" element={<SyncedRecords />} />
-      <Route path="conflicts" element={<Conflicts />} />
-      <Route path="sync-log" element={<SyncLog />} />
-      <Route path="settings" element={<Settings />} />
-      <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
-      <Route path="reconcile" element={<Reconcile />} />
-      <Route path="wizard/*" element={<WizardShell />} />
-      <Route path="docs" element={<DocsViewer />} />
-      <Route path="docs/:slug" element={<DocsViewer />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Route>,
+    <>
+      {/* Bare QR scan-target page — SIBLING of the Layout wrapper so it renders
+          with no side nav. Still behind the global auth gate below. */}
+      <Route path="scan/:filId/:spoolId" element={<ScanTarget />} />
+      <Route element={<Layout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="synced-records" element={<SyncedRecords />} />
+        <Route path="conflicts" element={<Conflicts />} />
+        <Route path="sync-log" element={<SyncLog />} />
+        <Route path="settings" element={<Settings />} />
+        <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
+        <Route path="reconcile" element={<Reconcile />} />
+        <Route path="mobile-updates" element={<MobileUpdates />} />
+        <Route path="wizard/*" element={<WizardShell />} />
+        <Route path="docs" element={<DocsViewer />} />
+        <Route path="docs/:slug" element={<DocsViewer />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </>,
   ),
 )
 
 export default function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  // Whether the scan flow is public (mobile_session_days == 0). Read from /api/version.
+  const [mobilePublic, setMobilePublic] = useState(false)
 
   async function checkAuth() {
     try {
@@ -65,6 +81,8 @@ export default function App() {
       void checkAuth()
     })
     void checkAuth()
+    // The /api/version flag is public, so this works even with no session.
+    getVersionInfo().then(v => setMobilePublic(v.mobile_public)).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -78,8 +96,12 @@ export default function App() {
     )
   }
 
-  // Show setup/login when auth is enabled and user is not authenticated
-  if (authStatus && authStatus.auth_enabled && !authStatus.authenticated) {
+  // Show setup/login when auth is enabled and user is not authenticated — EXCEPT on
+  // the bare scan page when the scan flow is public (mobile_public). In that case the
+  // router renders the public ScanTarget (whose API calls hit public endpoints);
+  // everything else still shows Login.
+  const onPublicScanPage = mobilePublic && SCAN_PATH_RE.test(window.location.pathname)
+  if (authStatus && authStatus.auth_enabled && !authStatus.authenticated && !onPublicScanPage) {
     return (
       <ThemeProvider>
         <Login

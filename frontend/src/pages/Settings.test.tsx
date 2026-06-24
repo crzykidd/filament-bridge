@@ -28,6 +28,12 @@ vi.mock('../api/client', () => ({
   authChangePassword: vi.fn(),
   authRegenerateToken: vi.fn(),
   getAuthStatus: vi.fn(),
+  getPrinterStatus: vi.fn(),
+  BridgeApiError: class BridgeApiError extends Error {
+    constructor(public status: number, public code: string, message: string) {
+      super(message)
+    }
+  },
 }))
 
 vi.mock('../api/hooks', () => ({
@@ -89,7 +95,7 @@ vi.mock('react-router-dom', () => ({
 // ---------------------------------------------------------------------------
 
 import Settings from './Settings'
-import { fullReset, clearSpoolmanFdbRefs, resetBridgeState, getAuthStatus } from '../api/client'
+import { fullReset, clearSpoolmanFdbRefs, resetBridgeState, getAuthStatus, getPrinterStatus, updateConfig } from '../api/client'
 import { useApi } from '../api/hooks'
 import type { ConfigResponse, FullResetResponse } from '../api/types'
 
@@ -112,6 +118,8 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     material_properties_conflict_policy: 'manual',
     archive_sync_direction: 'two_way',
     archive_conflict_policy: 'manual',
+    location_sync_direction: 'two_way',
+    location_sync_conflict_policy: 'manual',
     new_spool_sync_direction: 'two_way',
     new_filament_policy: 'manual_review',
     new_spool_policy: 'manual_review',
@@ -123,6 +131,21 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     container_parent_marker: '(Master)',
     api_token: null,
     api_token_enabled: false,
+    backup_schedule_enabled: true,
+    backup_bridge_state_enabled: true,
+    backup_filamentdb_enabled: true,
+    backup_retention_days: 7,
+    backup_hour_utc: 3,
+    mobile_labels_enabled: false,
+    mobile_session_days: 30,
+    mobile_redirect_target: 'bridge',
+    mobile_weight_default_mode: 'direct_correction',
+    bridge_public_url: '',
+    labelforge_url: '',
+    labelforge_token: '',
+    labelforge_template: '',
+    labelforge_fields: '',
+    labelforge_label_media: '',
     required_settings_unset: [],
     ...overrides,
   }
@@ -265,5 +288,199 @@ describe('Settings debug section — Full reset', () => {
     expect(screen.queryByRole('button', { name: /full reset/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /clear spoolman cross-refs/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /clear spoolman openprinttag ids/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('Settings — Scheduled backups section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(getAuthStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      auth_enabled: false,
+      password_set: false,
+      authenticated: true,
+      api_token_enabled: false,
+    })
+  })
+
+  it('renders the Scheduled backups heading and controls', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig(),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(
+      screen.getByRole('heading', { name: /^scheduled backups$/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/enable scheduled backups/i)).toBeInTheDocument()
+    expect(screen.getByText(/back up bridge state/i)).toBeInTheDocument()
+    expect(screen.getByText(/back up filament db snapshot/i)).toBeInTheDocument()
+    expect(screen.getByText(/^retention \(days\)$/i)).toBeInTheDocument()
+    expect(screen.getByText(/run at \(utc hour\)/i)).toBeInTheDocument()
+  })
+
+  it('disables the sub-toggles when the master switch is off', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ backup_schedule_enabled: false }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    const bridgeToggle = screen
+      .getByText(/back up bridge state/i)
+      .parentElement!.querySelector('button')!
+    expect(bridgeToggle).toBeDisabled()
+  })
+})
+
+describe('Settings — Mobile updates section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(getAuthStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      auth_enabled: false,
+      password_set: false,
+      authenticated: true,
+      api_token_enabled: false,
+    })
+  })
+
+  it('renders the Mobile & Labels heading and controls', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig(),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(screen.getByRole('heading', { name: /^mobile & labels$/i })).toBeInTheDocument()
+    expect(screen.getByText(/enable mobile updates/i)).toBeInTheDocument()
+    expect(screen.getByText(/qr redirect target/i)).toBeInTheDocument()
+    expect(screen.getByText(/default weight mode/i)).toBeInTheDocument()
+  })
+
+  it('renders the LabelForge connection fields and a Test printer button', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(screen.getByText(/labelforge label printing/i)).toBeInTheDocument()
+    expect(screen.getByText(/^labelforge url$/i)).toBeInTheDocument()
+    expect(screen.getByText(/^labelforge api token$/i)).toBeInTheDocument()
+    expect(screen.getByText(/^fields \(csv\)$/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /test printer/i })).toBeInTheDocument()
+  })
+
+  it('calls getPrinterStatus and shows the result when Test printer is clicked', async () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true, labelforge_url: 'http://lf.test' }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    ;(getPrinterStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ready: true,
+      model: 'QL-800',
+      loaded_media: { id: '62', display_name: '62mm Continuous', width_mm: 62, length_mm: 0, color_capable: false },
+      errors: [],
+    })
+    render(<Settings />)
+    fireEvent.click(screen.getByRole('button', { name: /test printer/i }))
+    await waitFor(() => expect(getPrinterStatus).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText(/QL-800/)).toBeInTheDocument())
+  })
+
+  it('saves the LabelForge fields via updateConfig', async () => {
+    const reload = vi.fn()
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true }),
+      loading: false,
+      error: null,
+      reload,
+    })
+    ;(updateConfig as ReturnType<typeof vi.fn>).mockResolvedValue(makeConfig({ mobile_labels_enabled: true }))
+    render(<Settings />)
+
+    const tmpl = screen
+      .getByText(/^template name$/i)
+      .parentElement!.querySelector('input')!
+    fireEvent.change(tmpl, { target: { value: 'spool' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^save$/i })[0])
+
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+    expect((updateConfig as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      labelforge_template: 'spool',
+    })
+  })
+
+  it('disables the redirect + weight selects when the feature is off', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: false }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    const redirectSelect = screen
+      .getByText(/qr redirect target/i)
+      .parentElement!.querySelector('select')!
+    expect(redirectSelect).toBeDisabled()
+  })
+
+  it('enables the selects when the feature is on', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    const redirectSelect = screen
+      .getByText(/qr redirect target/i)
+      .parentElement!.querySelector('select')!
+    expect(redirectSelect).not.toBeDisabled()
+  })
+
+  it('renders the Scan login (days) field with the configured value', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true, mobile_session_days: 0 }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(screen.getByText(/scan login \(days\)/i)).toBeInTheDocument()
+    const input = screen
+      .getByText(/scan login \(days\)/i)
+      .parentElement!.querySelector('input')! as HTMLInputElement
+    expect(input.value).toBe('0')
+  })
+
+  it('saves mobile_session_days via updateConfig', async () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true, mobile_session_days: 30 }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    ;(updateConfig as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeConfig({ mobile_labels_enabled: true, mobile_session_days: 0 }),
+    )
+    render(<Settings />)
+
+    const input = screen
+      .getByText(/scan login \(days\)/i)
+      .parentElement!.querySelector('input')!
+    fireEvent.change(input, { target: { value: '0' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^save$/i })[0])
+
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+    expect((updateConfig as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      mobile_session_days: 0,
+    })
   })
 })

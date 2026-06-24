@@ -171,8 +171,8 @@ filament-bridge/
 │   │   │   ├── compat.py                   — shared upstream-version compatibility check
 │   │   │   ├── opentag_match.py            — OPTMaterial → Spoolman field mapper + v2 scorer (structured token decomposition + mined lexicons)
 │   │   │   ├── opentag_lexicon.py          — n-gram lexicon miner (modifiers + colors from dataset); LEXICON_VERSION bump triggers cache self-heal
-│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated); stores mined lexicons
-│   │   │   └── opentag_secondary.py        — secondary-color recovery from the raw OPT tarball
+│   │   │   ├── opentag_cache.py            — local OpenTag dataset cache (JSON, TTL-gated); stores mined lexicons; secondary-color recovery folded in (was opentag_secondary.py)
+│   │   │   └── opentag_match_cache.py      — memoized OpenTag match results
 │   │   ├── schemas/                        — Pydantic models (bridge API, Filament DB, Spoolman shapes)
 │   │   ├── models/
 │   │   │   ├── mapping.py                  — SpoolMapping, FilamentMapping (cross-reference IDs)
@@ -209,6 +209,7 @@ filament-bridge/
 │   └── vite.config.ts
 ├── docs/
 │   ├── README.md                           — docs index
+│   ├── getting-started.md                  — first-run setup walkthrough
 │   ├── prd.md                              — full product requirements (READ THIS)
 │   ├── decisions.md                        — decision log (the "why" record)
 │   ├── configuration.md                    — env vars + runtime settings reference
@@ -217,10 +218,15 @@ filament-bridge/
 │   ├── conflicts.md                        — conflict types + resolution semantics
 │   ├── variant-parent-mode.md              — promote_color vs generic_container
 │   ├── opentag-cleanup.md                  — OpenTag matcher + apply flow
+│   ├── opentag-matching.md                 — OpenTag v2 scorer internals (token decomposition + mined lexicons)
 │   ├── security.md                         — auth model, API token, lockout recovery
+│   ├── backups.md                          — manual export/import, upstream proxies, nightly scheduled backups
+│   ├── mobile-updates.md                   — phone scan-and-update, QR /r/ redirect, LabelForge printing
 │   ├── version-update-check.md             — version badge + GitHub update check
 │   ├── spoolman-writes.md                  — every field the bridge writes to Spoolman, and when
-│   └── migration-spoolman-to-filamentdb.md — standalone migration guide
+│   ├── migration-spoolman-to-filamentdb.md — standalone migration guide
+│   ├── wizard-redesign.md                  — historical wizard design notes (decisions.md is authoritative)
+│   └── reconcile-backlog.md                — historical reconcile design notes (decisions.md is authoritative)
 ├── prompts/                                — handoff-prompt queue (TEMPLATE.md, done/, assets/)
 ├── standards.md                            — pinned homelab standards this repo implements
 └── private_data/                           — gitignored, user-specific test data
@@ -234,6 +240,11 @@ filament-bridge/
 | `SPOOLMAN_URL` | **Yes** | — | Base URL of Spoolman (e.g., `http://spoolman:7912`) |
 | `FILAMENTDB_API_KEY` | No | — | Bearer token for Filament DB's optional API-key auth (FDB ≥ 1.39.0, set via FDB's own `FILAMENTDB_API_KEY`). When set, the bridge sends `Authorization: Bearer <key>` on every Filament DB request. Empty = no auth header (FDB API unauthenticated). Spoolman's API has no auth. |
 | `SYNC_INTERVAL_SECONDS` | No | `120` | Seconds between auto-sync cycles (also runtime-editable via Settings) |
+| `BACKUP_SCHEDULE_ENABLED` | No | `true` | Master switch for the nightly scheduled backup job (FR-24b). Runtime-editable via Settings (DB value wins, same precedence as the interval). |
+| `BACKUP_BRIDGE_STATE_ENABLED` | No | `true` | Include the bridge-state export (`GET /backup/export` payload) in the nightly backup. Runtime-editable. |
+| `BACKUP_FILAMENTDB_ENABLED` | No | `true` | Include the Filament DB snapshot (`GET /api/snapshot`) in the nightly backup. Runtime-editable. Spoolman is deliberately NOT scheduled (the bridge can't prune Spoolman's own volume). |
+| `BACKUP_RETENTION_DAYS` | No | `7` | Delete bridge-written backups in `{DATA_DIR}/backups/` older than this (matches the `bridge-state-`/`filamentdb-snapshot-` prefixes only). Runtime-editable; min 1. |
+| `BACKUP_HOUR_UTC` | No | `3` | UTC hour (0–23) the nightly backup runs at, minute 0. Runtime-editable; rescheduled on save. |
 | `PUID` | No | `1000` | User ID the container process runs as (entrypoint chowns `/data` then drops to this UID) |
 | `PGID` | No | `1000` | Group ID the container process runs as |
 | `SPOOLMAN_FIELD_FILAMENTDB_ID` | No | `filamentdb_id` | Spoolman extra field name for Filament DB filament ID |
@@ -252,7 +263,7 @@ filament-bridge/
 | `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MIN` | No | `openprinttag_nozzle_temp_min` | Spoolman filament **integer** extra field for OPT `nozzleTempMin` (°C). Synced ↔ FDB `temperatures.nozzleRangeMin`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_TEMP_MAX` | No | `openprinttag_nozzle_temp_max` | Spoolman filament **integer** extra field for OPT `nozzleTempMax` (°C). Synced ↔ FDB `temperatures.nozzleRangeMax`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TEMP` | No | `openprinttag_drying_temp` | Spoolman filament **integer** extra field for OPT `dryingTemp` (°C). Synced ↔ FDB `dryingTemperature`. |
-| `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TIME` | No | `openprinttag_drying_time` | Spoolman filament **integer** extra field for drying time in **hours**. OPT stores minutes; the OpenTag Apply flow converts ÷60. Synced ↔ FDB `dryingTime` (hours). |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_DRYING_TIME` | No | `openprinttag_drying_time` | Spoolman filament **integer** extra field for drying time in **minutes**. OpenPrintTag and Filament DB both store `dryingTime` in minutes (e.g. `480` = 8 h), so it passes through unchanged. Synced ↔ FDB `dryingTime` (minutes). |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_A` | No | `openprinttag_hardness_shore_a` | Spoolman filament **float** extra field for OPT `hardnessShoreA`. Synced ↔ FDB `shoreHardnessA`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_D` | No | `openprinttag_hardness_shore_d` | Spoolman filament **float** extra field for OPT `hardnessShoreD`. Synced ↔ FDB `shoreHardnessD`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_TRANSMISSION_DISTANCE` | No | `openprinttag_transmission_distance` | Spoolman filament **float** extra field for OPT `transmissionDistance` (mm). Synced ↔ FDB `transmissionDistance`. |
@@ -267,6 +278,16 @@ filament-bridge/
 | `DEBUG_STARTUP_DUMP` | No | `false` | When `true`, writes a human-readable snapshot of both upstream systems at boot to `{DATA_DIR}/state-dumps/startup-state-<UTC ts>.txt`. Newest 10 dumps are kept. Never enable in production. |
 | `CHANGES_LOG_ENABLED` | No | `true` | When `false`, disables the durable changes.log file. |
 | `CHANGES_LOG_PATH` | No | `{DATA_DIR}/changes.log` | Override the path for the changes.log file. |
+| `MOBILE_LABELS_ENABLED` | No | `false` | Master switch for the mobile-updates & labels feature. When off, every `/api/mobile/*`, `/api/labels/*` endpoint and the `/r/{fil}/{spool}` redirect return 403. Start-up fallback; runtime-editable via Settings → Mobile & Labels. See `docs/mobile-updates.md`. |
+| `MOBILE_SESSION_DAYS` | No | `30` | Scan-flow auth + login-session lifetime (days, integer >= 0). `0` = the scan flow (`/r/`, `/api/mobile/*`, `/api/labels/*`, SPA `/scan/:filId/:spoolId`) is **public** (bypasses the app password; the rest of the app stays gated); `>= 1` = the scan flow requires the normal login AND the `fb_session` cookie lives this many days. Default `30` = no behavior change. Independent of `MOBILE_LABELS_ENABLED` (the 403 feature gate still applies). The mobile/labels routers + `/r/` redirect carry a conditional `mobile_auth` dep (public only at `0`) instead of the global `require_auth`; no other router changes. Surfaced to the SPA as `mobile_public` on `GET /api/version`. Runtime-editable. |
+| `BRIDGE_PUBLIC_URL` | No | — | External base URL baked into the printed QR (`{base}/r/{fil}/{spool}`). Empty = derived from the request (honoring `X-Forwarded-Proto`/`X-Forwarded-Host`). Runtime-editable. |
+| `MOBILE_REDIRECT_TARGET` | No | `bridge` | Target of the `GET /r/{fil}/{spool}` 302: `bridge` (SPA scan page `/scan/{fil}/{spool}`) or `filamentdb` (`{FILAMENTDB_URL}/filaments/{fil}`). The indirection lets labels re-point without reprinting. Runtime-editable. |
+| `MOBILE_WEIGHT_DEFAULT_MODE` | No | `direct_correction` | Default mobile weight-save mode: `direct_correction` (absolute true-up) or `usage` (FDB usage entry on decrease). Overridable per save. Runtime-editable. |
+| `LABELFORGE_URL` | No | — | Base URL of the LabelForge instance used for printing. Empty = not configured. Runtime-editable. |
+| `LABELFORGE_TOKEN` | No | — | LabelForge bearer token (secret). Empty = no auth header. Runtime-editable. |
+| `LABELFORGE_TEMPLATE` | No | — | Name of the user-created LabelForge template to print. Empty = not configured. Runtime-editable. |
+| `LABELFORGE_FIELDS` | No | — | CSV of catalog field names to send (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`). Unknown names are skipped with a warning. Runtime-editable. |
+| `LABELFORGE_LABEL_MEDIA` | No | — | Optional per-print media/size hint passed to LabelForge. Empty = the template's stored media. Runtime-editable. |
 
 ### Runtime-editable settings (BridgeConfig)
 
@@ -281,12 +302,29 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `never_import_empties` | `false` | **Import-only** (UI label: "Skip empty & archived spools on import"). Wizard + ongoing new-spool import skip spools with zero remaining weight or that are archived, at preview/execute. Does NOT affect ongoing archive/retire lifecycle mirroring for already-mapped pairs (that runs regardless). Config key unchanged. |
 | `archive_sync_direction` | `two_way` | Direction for the archive/retire lifecycle category (`two_way` / `spoolman_to_filamentdb` / `filamentdb_to_spoolman`). Mirrors SM `archived` ↔ FDB `retired` for already-mapped spool pairs. |
 | `archive_conflict_policy` | `manual` | Conflict policy for the archive/retire category (consulted only under `two_way` when both sides diverge to opposite states): `manual` / `spoolman_wins` / `filamentdb_wins`. `newest_wins` is rejected at the API (422) — the state is a boolean with no timestamp. |
+| `location_sync_direction` | `two_way` | Direction for the location category (`two_way` / `spoolman_to_filamentdb` / `filamentdb_to_spoolman`). Mirrors SM `location` (free-text name) ↔ FDB `locationId` (resolved to its name) for already-mapped spool pairs. Compared by name; FDB locations are found-or-created on a push. |
+| `location_sync_conflict_policy` | `manual` | Conflict policy for the location category (consulted only under `two_way` when both sides change to different names): `manual` / `spoolman_wins` / `filamentdb_wins`. `newest_wins` is rejected at the API (422) — a location name has no comparable timestamp. |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
+| `backup_schedule_enabled` | env fallback (`true`) | Master switch for the nightly scheduled backup job (FR-24b). When off, the `nightly_backup` cron is a no-op. |
+| `backup_bridge_state_enabled` | env fallback (`true`) | Include the bridge-state export in the nightly backup. |
+| `backup_filamentdb_enabled` | env fallback (`true`) | Include the Filament DB snapshot in the nightly backup. Spoolman is intentionally excluded (no prune control). |
+| `backup_retention_days` | env fallback (`7`) | Delete bridge-written backups (`bridge-state-`/`filamentdb-snapshot-` prefixes) in `{DATA_DIR}/backups/` older than this. Min 1; rejected with the error envelope otherwise. |
+| `backup_hour_utc` | env fallback (`3`) | UTC hour (0–23) the nightly backup fires at, minute 0. Validated 0..23; the cron is rescheduled on save. |
 | `variant_parent_mode` | `unset` | Wizard variant hierarchy mode: `unset` (must choose), `promote_color` (original behavior), or `generic_container` (colorless container parent for every cluster). See `docs/variant-parent-mode.md`. |
 | `api_token_enabled` | `false` | When `true`, requests may authenticate via `Authorization: Bearer <token>` or `X-API-Key`. Toggle in Settings → Security. |
 | `api_token` | (none) | The API token value — stored in BridgeConfig so Settings can display it. Regenerate via Settings → Security → Regenerate token. |
 | `opentag_vendor_aliases` | env fallback (`""`) | CSV of `sm=opentag` vendor alias pairs for the OpenTag matcher brand pre-filter. |
 | `container_parent_marker` | env fallback (`"(Master)"`) | String appended to generic-container parent names (e.g. "ELEGOO PLA (Master)"). Empty = no suffix. Shown in Settings when `generic_container` mode is active. |
+| `mobile_labels_enabled` | env fallback (`false`) | Master switch for mobile updates & labels (FR-29). When off, every `/api/mobile/*`, `/api/labels/*` endpoint and the `/r/{fil}/{spool}` redirect return 403 and the nav item is hidden. |
+| `mobile_session_days` | env fallback (`30`) | Scan-flow auth + login-session lifetime (days, >= 0). `0` = public scan flow (no app password on `/r/`, `/api/mobile/*`, `/api/labels/*`, SPA `/scan/:filId/:spoolId`; the rest of the app stays gated); `>= 1` = require login, `fb_session` cookie lives this many days. Default `30` = unchanged. Independent of `mobile_labels_enabled`. Resolved by the conditional `mobile_auth` dep on those routers/redirect (public only at `0`); the cookie max-age reads this value (>= 1) else 30. Surfaced as `mobile_public` (= `0`) on `GET /api/version`. |
+| `bridge_public_url` | env fallback (`""`) | External base URL baked into the printed QR (`{base}/r/{fil}/{spool}`). Empty = derived from the request. |
+| `mobile_redirect_target` | env fallback (`"bridge"`) | `GET /r/{fil}/{spool}` 302 target: `bridge` (SPA scan page) or `filamentdb` (filament page). Lets labels re-point without reprinting. |
+| `mobile_weight_default_mode` | env fallback (`"direct_correction"`) | Default mobile weight-save mode: `direct_correction` (absolute true-up) or `usage` (FDB usage entry on decrease). Overridable per save. |
+| `labelforge_url` | env fallback (`""`) | LabelForge base URL. Empty = printing not configured (`400 labelforge_not_configured`). |
+| `labelforge_token` | env fallback (`""`) | LabelForge bearer token (secret; masked in Settings). Empty = no auth header. |
+| `labelforge_template` | env fallback (`""`) | Name of the user-created LabelForge template to print. |
+| `labelforge_fields` | env fallback (`""`) | CSV of catalog fields to send (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`). Unknown names are skipped with a warning. |
+| `labelforge_label_media` | env fallback (`""`) | Optional per-print media hint; empty = the template's stored media. |
 
 ## Important technical details
 
@@ -318,6 +356,24 @@ both-sides-flip-to-opposite-states divergence queues a `cross_system` conflict
 / `archive_conflict_policy`). The wizard import gate (`never_import_empties`) still keeps
 *unmapped* archived spools out of auto-import — only mapped pairs are mirrored. After any
 lifecycle push, refresh BOTH snapshots (same anti-ping-pong rule as weight).
+
+### Location sync
+Spool storage location mirrors **bidirectionally for already-mapped spool pairs**, compared
+**by name**: Spoolman stores a free-text `location` string; Filament DB references a location
+by `locationId`. The engine fetches `GET /api/locations` once per cycle, builds an `{_id:
+name}` map, and threads it into both snapshot builders (`_sm_snapshot_dict` carries the SM
+string; `_fdb_snapshot_dict` carries the resolved FDB name) so the differ compares names. A
+dedicated location pass (modelled on the lifecycle pass, but **independent of weight — no
+ordering requirement**) routes through `resolve_sync_action`: SM→FDB calls
+`core/locations.py:ensure_fdb_location` (find-or-create) → `update_spool({locationId})`;
+FDB→SM writes `update_spool({location: name})`; both-changed-to-different-names queues a
+`cross_system` conflict (`field_name="location"`, dedup via `_has_open_conflict`). Governed by
+the `location_sync` category (`location_sync_direction` / `location_sync_conflict_policy`;
+`newest_wins` rejected — a name has no timestamp). After any push, refresh BOTH snapshot
+location names (same anti-ping-pong rule as weight/lifecycle). The #21 cross_system dispatcher
+(`core/conflict_apply.py:apply_cross_system_conflict`) has a `location` handler that writes the
+chosen name to both sides (find-or-create on FDB) and refreshes both snapshots. Reuse
+`ensure_fdb_location` — never duplicate the find-or-create.
 
 ### Filament DB API endpoints the bridge uses
 - `GET /api/filaments` — list all filaments with embedded spools

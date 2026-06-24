@@ -186,6 +186,8 @@ export interface BulkResolveRequest {
 export interface BulkResolveResponse {
   resolved: number
   skipped: number[]
+  /** cross_system conflicts whose upstream write failed/was unsupported — left open (#21). */
+  failed: number[]
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +270,8 @@ export interface ConfigResponse {
   material_properties_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
   archive_sync_direction: SyncDirection2
   archive_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
+  location_sync_direction: SyncDirection2
+  location_sync_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
   new_spool_sync_direction: SyncDirection2
   // New-record handling policies
   new_filament_policy: NewRecordPolicy
@@ -286,6 +290,27 @@ export interface ConfigResponse {
   // API token — value shown in Settings UI; null = not yet generated
   api_token: string | null
   api_token_enabled: boolean
+  // Scheduled nightly backups (issue #5)
+  backup_schedule_enabled: boolean
+  backup_bridge_state_enabled: boolean
+  backup_filamentdb_enabled: boolean
+  backup_retention_days: number
+  backup_hour_utc: number
+  // Mobile updates & labels (phase 1 backend; phase 3 surfaces the LabelForge fields).
+  mobile_labels_enabled: boolean
+  // Scan-flow auth / session lifetime in days. 0 = public scan flow (no app password
+  // on the scan page + endpoints); >= 1 = require login, cookie lives this many days.
+  mobile_session_days: number
+  mobile_redirect_target: MobileRedirectTarget
+  mobile_weight_default_mode: MobileWeightMode
+  // LabelForge connection (phase 3). labelforge_token is a secret (returned so the
+  // Settings UI can show it, like api_token).
+  bridge_public_url: string
+  labelforge_url: string
+  labelforge_token: string
+  labelforge_template: string
+  labelforge_fields: string
+  labelforge_label_media: string
   // Required settings that must be configured before the bridge is usable
   required_settings_unset: string[]
 }
@@ -301,6 +326,8 @@ export interface ConfigUpdateRequest {
   material_properties_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
   archive_sync_direction?: SyncDirection2 | null
   archive_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
+  location_sync_direction?: SyncDirection2 | null
+  location_sync_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
   new_spool_sync_direction?: SyncDirection2 | null
   // New-record handling policies
   new_filament_policy?: NewRecordPolicy | null
@@ -318,6 +345,25 @@ export interface ConfigUpdateRequest {
   container_parent_marker?: string | null
   // API token enable/disable (value is managed via /auth/api-token/regenerate)
   api_token_enabled?: boolean | null
+  // Scheduled nightly backups (issue #5)
+  backup_schedule_enabled?: boolean | null
+  backup_bridge_state_enabled?: boolean | null
+  backup_filamentdb_enabled?: boolean | null
+  backup_retention_days?: number | null
+  backup_hour_utc?: number | null
+  // Mobile updates & labels (Phase 2 toggle + redirect + weight mode; Phase 3
+  // LabelForge connection fields).
+  mobile_labels_enabled?: boolean | null
+  // Scan-flow session lifetime in days (>= 0; 0 = public scan flow).
+  mobile_session_days?: number | null
+  mobile_redirect_target?: MobileRedirectTarget | null
+  mobile_weight_default_mode?: MobileWeightMode | null
+  bridge_public_url?: string | null
+  labelforge_url?: string | null
+  labelforge_token?: string | null
+  labelforge_template?: string | null
+  labelforge_fields?: string | null
+  labelforge_label_media?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -935,6 +981,12 @@ export interface VersionInfo {
   commit: string | null
   build: string
   is_dev: boolean
+  /** Master toggle for the mobile-updates / labels feature. When false, the
+   *  "Mobile updates" nav item is hidden and the mobile/redirect endpoints 403. */
+  mobile_labels_enabled: boolean
+  /** True when mobile_session_days == 0 — the scan flow is public, so the SPA
+   *  renders the /scan/:filId/:spoolId route without forcing a login. */
+  mobile_public: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1040,79 @@ export interface ReconcileResponse {
   only_in_spoolman: ReconcileMissingRow[]
   only_in_filamentdb: ReconcileMissingRow[]
   ambiguous: AmbiguousRow[]
+}
+
+// ---------------------------------------------------------------------------
+// Mobile updates (phase 2 — matches backend schemas/api.py)
+// ---------------------------------------------------------------------------
+
+export type MobileRedirectTarget = 'bridge' | 'filamentdb'
+export type MobileWeightMode = 'direct_correction' | 'usage'
+
+/** Assembled, live spool detail for the mobile scan/update page.
+ *  Mirrors backend `MobileSpoolDetail`. Identity is the Filament DB filament id +
+ *  spool id (encoded in the QR); `number` is the Spoolman spool id. */
+export interface MobileSpoolDetail {
+  filamentdb_filament_id: string
+  filamentdb_spool_id: string
+  spoolman_spool_id: number
+  spoolman_filament_id: number | null
+  number: number
+  brand: string | null
+  color_name: string | null
+  color_hex: string | null
+  material: string | null
+  // Weights in grams: gross = FDB totalWeight, net = SM remaining_weight.
+  gross: number | null
+  net: number | null
+  tare: number
+  location: string | null
+  weight_default_mode: MobileWeightMode
+}
+
+/** Body for PATCH /api/mobile/spool/{fil}/{spool}. Mirrors backend
+ *  `MobileSpoolUpdateRequest`. `gross_grams` is a scale (gross) reading. */
+export interface MobileSpoolUpdateRequest {
+  gross_grams?: number | null
+  location?: string | null
+  weight_mode?: MobileWeightMode | null
+}
+
+// ---------------------------------------------------------------------------
+// Labels (phase 3 — LabelForge printing)
+// ---------------------------------------------------------------------------
+
+/** Body for POST /api/labels/print. `fil`/`spool` are the FDB ids (same as the
+ *  QR identity); `override` retries past a LabelForge media mismatch. */
+export interface LabelPrintRequest {
+  fil: string
+  spool: string
+  override?: boolean
+}
+
+/** LabelForge print job result (passthrough of LabelForge's response). */
+export interface LabelPrintResponse {
+  job_id?: number
+  status?: string
+  template?: string
+  label_media?: string | null
+  overflow?: boolean
+  preview_url?: string
+}
+
+/** LabelForge printer status (passthrough of GET /api/printer/status). */
+export interface PrinterStatus {
+  ready: boolean
+  model: string | null
+  loaded_media: {
+    id: string
+    display_name: string
+    width_mm: number
+    length_mm: number
+    color_capable: boolean
+  } | null
+  errors: string[]
+  source?: string
 }
 
 // ---------------------------------------------------------------------------

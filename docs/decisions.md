@@ -1,5 +1,200 @@
 # Decision record
 
+## 2026-06-24 — Sync spool location in the continuous engine, compared by name (`location_sync`, GitHub #29)
+
+**Context.** The ongoing sync engine never diffed or propagated spool **location**: a location
+change made directly in Spoolman (or Filament DB) never reached the other side. Location was only
+written at wizard import and the mobile-update path. Spoolman stores the location as a free-text
+`location` string; Filament DB references it by `locationId` — the two cannot be compared directly.
+
+**Decision.** Add a new **`location_sync`** category, modelled exactly on the existing `archive_sync`
+(lifecycle) category: two axes — `location_sync_direction` (default `two_way`) and
+`location_sync_conflict_policy` (default `manual`). `newest_wins` is **rejected (422)** because a
+location name has no comparable timestamp (same rationale as `archive_sync`'s boolean).
+
+**Compare by name.** The engine fetches `GET /api/locations` once per cycle and builds an `{_id:
+name}` map, threaded into both snapshot builders the way `field_maps` is: `_sm_snapshot_dict` carries
+the Spoolman `location` string (free from `model_dump()`); `_fdb_snapshot_dict` carries the FDB
+location **name** resolved from `locationId` (unknown/missing id → None, which compares cleanly
+against an absent Spoolman location). The differ gets `sm_location_change`/`fdb_location_change`
+(None-safe string compare against the snapshot name; a missing baseline defaults to the current value
+so first-sight is never a spurious change). A dedicated location pass routes through
+`resolve_sync_action`: SM→FDB calls the **shared** `core/locations.py:ensure_fdb_location`
+(find-or-create — never duplicated) → `update_spool({locationId})`; FDB→SM writes
+`update_spool({location: name})`; both-changed-to-different-names queues a `cross_system` conflict
+(`field_name="location"`, dedup via `_has_open_conflict`). After any push both snapshot location names
+refresh (anti-ping-pong — a second cycle on the converged state must not re-queue). The #21
+dispatcher (`apply_cross_system_conflict`) gets a `location` handler that writes the chosen name to
+both sides (find-or-create on FDB) and refreshes both snapshots.
+
+**Ordering.** Unlike the lifecycle pass (which must run *after* the weight pass so a depleted spool's
+final decrement settles first), location is **independent of weight** — it has no ordering
+requirement. It still lives inside the same per-pair block, immediately after the lifecycle pass, so
+it shares the one snapshot-refresh path. The per-cycle FDB-locations fetch is wrapped in its own
+try/except: a fetch failure degrades to an empty map (location sync becomes a no-op that cycle)
+rather than aborting the whole cycle.
+
+**Consequence.** Location now round-trips bidirectionally for mapped pairs, find-or-creating FDB
+locations as needed. No env var (DB-only config, exactly like `archive_sync`). Baseline rows lacking
+the `location` key are not mistaken for a change. Weight-pass snapshot refreshes thread the locations
+map so they preserve (not clobber) the resolved location name.
+
+## 2026-06-24 — Configurable mobile-scan auth: `mobile_session_days` (0 = public, N = login TTL)
+
+**Context.** The mobile scan flow mirrored the app's auth exactly: when a password is set, a cold
+phone scanning a QR label has no session and gets *access denied*. For a common use case (a shared
+shop scale, labels on a shelf) the friction of logging in on every phone defeats the feature; but
+making the scan flow unconditionally public would be wrong for users who *do* want it gated.
+
+**Decision.** A single runtime setting **`mobile_session_days`** (integer, default **30**) controls
+both the gate and the cookie lifetime for the scan flow, and *only* the scan flow:
+
+- **`0` → the scan flow is public.** The three surfaces a cold scan touches — the
+  `GET /r/{fil}/{spool}` redirect, the `/api/mobile/*` + `/api/labels/*` endpoints, and the SPA
+  `/scan/:filId/:spoolId` route — bypass the app password. **The rest of the app stays
+  password-protected.**
+- **`>= 1` → the scan flow requires the normal login** (session cookie OR API token OR
+  `AUTH_ENABLED=false`), AND the `fb_session` login cookie's lifetime is set to that many days. The
+  default `30` reproduces the previous behavior exactly (no change on upgrade).
+
+It is **independent of `mobile_labels_enabled`** — that master gate's 403 still fires on every
+mobile/label endpoint and the redirect regardless of `mobile_session_days` (feature-gate first, then
+auth).
+
+**Implementation (security-critical wiring).** The `mobile` and `labels` routers and the `/r/`
+redirect were previously included in `main.py` with the **global** `_auth_dep`
+(`Depends(require_auth)`). They now carry a dedicated **`mobile_auth`** dependency instead:
+`mobile_auth` returns early (public) **only** when `mobile_session_days == 0`, and otherwise runs the
+**exact same** check as `require_auth` (both delegate to a shared `_has_valid_credentials` helper, so
+the gated path can never be weaker than `require_auth`). **No other router was touched** — every
+other surface keeps `require_auth`. The `_require_labels_enabled` 403 feature gate stays on each
+mobile/label route. The cookie max-age (set on login + `setup`, and the `TimestampSigner` verify
+`max_age`) reads `mobile_session_days` days when `>= 1`, else falls back to 30. `GET /api/version`
+exposes `mobile_public` (= `mobile_session_days == 0`); the SPA `App.tsx` gate renders the
+`/scan/...` route without login only when `mobile_public` (every other path still shows Login).
+
+**Consequence.** Three surfaces become *conditionally* public; the blast radius is bounded to them by
+construction (a distinct dependency on exactly those three registrations). The default 30 is a no-op
+on upgrade. `mobile_session_days` is validated `>= 0` on write (422 otherwise).
+
+## 2026-06-24 — Lowering a spool weight always goes through an FDB usage entry (issue #28)
+
+**Context.** The mobile "correct weight" path and the #21 conflict-resolve path both used
+`core/weight_ops.py:apply_absolute_weight`, which wrote the target to Filament DB with a direct
+`PUT {totalWeight}` regardless of direction. But Filament DB only accepts a `totalWeight`
+**increase** via PUT — a **decrease** must go through the usage endpoint (FDB has no other way to
+reduce a spool's weight; a direct PUT to a lower value is silently ignored). Reported in the field:
+a mobile correction 945→931 updated Spoolman + the bridge snapshot but left FDB at 945, and because
+the snapshot was refreshed to 931 the engine then saw no discrepancy to re-push. The #21 weight path
+had the same latent no-op (it only passed because the FDB client was mocked).
+
+**Decision.** There is ONE correct FDB write rule, already used by the engine's ongoing pass:
+**increase → direct `PUT totalWeight`; decrease → `log_usage(delta)`.** Made `apply_absolute_weight`
+decrease-aware (it now takes `current_fdb_gross`) and removed the separate `apply_usage_weight`
+(redundant). The mobile "direct_correction" and "usage" modes both converge to the absolute net
+weight; on a decrease both log an FDB usage entry — the mode only flavours the entry's `source` /
+`job_label` (a scale *correction* vs a *usage* decrement). Spoolman is always an absolute set.
+
+**Consequence.** A downward "correction" necessarily creates an FDB usage entry — there is no other
+mechanism to lower a spool's weight — so it appears in the FDB usage history (labelled as a
+correction). Upward corrections / refills remain a direct write.
+
+## 2026-06-24 — OpenPrintTag drying time is minutes end-to-end (issue #27)
+
+**Context.** The bridge converted OpenPrintTag `dryingTime` (minutes) to **hours** (÷60) in the
+cleanup-tool Apply value-builder (`core/opentag_match.py`) via `opentag_drying_time_to_fdb_hours`,
+on the belief that Filament DB's `dryingTime` field is in hours. The ongoing material-field sync
+then mirrored the Spoolman extra to FDB **1:1**. Validating FDB releases 1.50–1.57 surfaced
+1.57.0 #809 ("corrected dryingTime units in the API docs"): FDB's `dryingTime` is in **minutes**
+(`480` = 8 h). So the bridge wrote `8` where FDB expects `480` — a 60× error. It round-tripped
+numerically (both sides held `8`), so no conflict fired, but the stored value was wrong.
+
+**Decision.** Treat `dryingTime` as **minutes everywhere** — OpenPrintTag, the Spoolman extra
+(`openprinttag_drying_time`), and FDB all agree, so the value passes through unconverted like the
+other typed OPT fields. Removed `opentag_drying_time_to_fdb_hours` and the ÷60 special-case; the
+ongoing 1:1 sync is unchanged (it was never the problem). No data migration — records written
+under the old behavior keep the wrong value until OpenTag **Apply** is re-run on them.
+
+**Note.** No breaking API changes were found in FDB 1.50–1.57 for the bridge's integration; this
+was a pre-existing unit bug that FDB's docs correction merely revealed.
+
+## 2026-06-23 — Cross-system conflict resolution converges (writes both sides on resolve) (issue #21)
+
+**Context.** Resolving a standard (`cross_system`) conflict was record-only: it stored the
+chosen value on the `Conflict` row but wrote nothing upstream and never advanced the snapshot
+baseline. Since the underlying divergence was untouched, the next `run_sync_cycle` re-detected
+it and queued a brand-new conflict — every cycle, forever. The user's pick had no effect on the
+data. The lifecycle (`field_name="lifecycle"`) and `master_divergence` paths already converged
+by writing both sides + refreshing snapshots; standard conflicts were the odd one out.
+
+**Decision.** Generalize the lifecycle resolve path to ALL `cross_system` field types via
+`core/conflict_apply.py:apply_cross_system_conflict(conflict, resolution, manual_value, db,
+spoolman, filamentdb)`, dispatched from `POST /conflicts/{id}/resolve`. For each field it
+(1) computes the target value from the conflict's stored values or the manual payload,
+(2) writes it to BOTH systems using the SAME client calls + conversions as the matching engine
+pass, and (3) refreshes BOTH snapshot keys to the converged value so the differ doesn't
+re-detect it. Each family mirrors its pass exactly: `weight` (spool), `cost`, `multicolor`,
+`material_tags`, the temperature/native-scalar/OpenPrintTag material-property fields (snapshot
+key `_mp_<sm_field>`, FDB temperature objects read-modify-written), and dynamic `FIELD_MAPPINGS`
+extras (snapshot baselines live on the SPOOL snapshots under `_extra_decoded` / `_field_values`,
+FDB spool id resolved from `SpoolMapping`). `lifecycle` is routed through the unchanged
+`apply_lifecycle_conflict`.
+
+**Why a direct absolute weight write (no usage entry).** Ongoing SM→FDB weight *decrements*
+log a Filament DB usage entry to preserve the audit trail. A human-approved conflict
+resolution is a *correction*, not a print, so weight converges as a direct absolute write to
+both sides (SM `remaining_weight = W`; FDB `totalWeight = W + tare`) — the same path the engine
+already uses for a weight *increase*. `spoolman` → W = stored SM net; `filamentdb` → W = stored
+FDB gross − tare; `manual` → the entered value, interpreted as net (Spoolman units).
+
+**Signature-based fields.** `multicolor` and `material_tags` conflicts store a system-agnostic
+*signature* string, not the raw value, so the write payload is re-derived from the chosen side's
+LIVE upstream state (via `core/color` / `core/material_tags`). They reject `manual` resolution
+(a multicolor/tag-set has no single scalar form) with a 422.
+
+**Failure modes.** Any upstream write failure raises → the endpoint returns 502 and the conflict
+stays open with no partial snapshot advance. A `field_name` with no known apply path raises
+`UnsupportedConflictField` → 422 (visible), never a silent record-only no-op. Deletion-marker
+conflicts (`__record_deleted__`) keep their record-only + mapping-cleanup behavior — there is
+nothing to write upstream. `bulk-resolve` was left record-only (out of scope for the per-row fix).
+
+**Proof.** Per-field-family tests queue the conflict via a real cycle, resolve via the endpoint,
+then run a SECOND `run_sync_cycle` against the post-write state and assert no re-queue + both
+sides converged (`tests/test_cross_system_resolve.py`). The old "resolve does not apply" API
+test was rewritten to assert convergence.
+
+## 2026-06-23 — Scheduled nightly backups: bridge-state + FDB snapshot only, on by default (issue #5)
+
+**Context.** The manual `POST /backup/filamentdb` button drops a
+`filamentdb-snapshot-<ts>.json` into `DATA_DIR/backups/` every time it's clicked, with no
+retention — files accumulate unbounded. Issue #5 asked for an automatic nightly backup with
+a "keep x days" retention.
+
+**Decisions.**
+
+- **Scope = bridge-state export + FDB snapshot only. Spoolman is excluded from the
+  schedule.** Spoolman writes its server-side backup into its *own* volume and the bridge
+  has no way to enumerate or prune it, so scheduling it would leak storage with no retention
+  control. The manual `POST /backup/spoolman` button stays as-is for ad-hoc use.
+- **On by default**, with a master enable plus two independent sub-toggles (bridge-state,
+  FDB snapshot), all ON. The feature runs automatically once deployed.
+- **Retention default 7 days**, applied only to the two prefixes the bridge writes
+  (`bridge-state-` / `filamentdb-snapshot-`). Spoolman archives and unrelated files in the
+  directory are never deletion-eligible. Age comes from the UTC timestamp in the filename
+  (mtime fallback).
+- **Schedule: nightly at a configurable UTC hour, default 03:00, minute 0** (APScheduler
+  `CronTrigger`). The cron reschedules on Settings save when the hour or master-enable
+  changes, mirroring the existing `sync_cycle` reschedule.
+- **No Alembic migration.** The five keys are runtime-editable `BridgeConfig` KV rows seeded
+  from `_DEFAULTS` (auto-seeded by the `seed_defaults` loop); env vars (`BACKUP_*`) are the
+  start-up fallback, DB value wins — same env→DB precedence as `sync_interval_seconds`.
+- The file-producing logic was extracted into `core/backup_job.py` so both the HTTP
+  endpoints and the scheduled job share one writer/prune path (DRY).
+
+The bridge's own `bridge.db` SQLite file still relies on a host-volume backup — the
+scheduled job protects mappings/config via the bridge-state export but does not copy the DB
+file itself. See `docs/backups.md`.
+
 ## 2026-06-21 — OpenPrintTag material settings sync as TYPED Spoolman extras → FDB first-class fields
 
 **Context.** OpenPrintTag carries standardized material settings (temps, drying,
@@ -4298,3 +4493,162 @@ so the active `CHANGELOG.md` currently still holds the full `0.3.x`, `0.4.x`, an
 **Where.** Source standard `homelab-configs/standards/release-prep-and-cut` (README + `release-prep.md`
 template, v1.0.0 → v1.1.0, tag `release-prep-and-cut/v1.1.0`); re-adopted here via `standards.md`
 re-pin + `.claude/commands/release-prep.md` Step 3 (+ Step 0c wording).
+
+## 2026-06-23 — Mobile updates & labels (phase 1 backend foundation)
+
+**Context.** Filament DB prints spool labels only through its full app on a Brother-specific
+device. We want the bridge to (later) print labels via LabelForge and make each label carry a
+**QR code** that opens a phone-friendly page to read a scale weight and change a spool's location,
+writing back to Filament DB (Spoolman follows via normal sync). This entry records the phase-1
+backend decisions; the full user-facing docs land in a later phase.
+
+**Decisions (implemented):**
+
+- **QR identity = Filament DB filament id + spool id.** The printed QR encodes
+  `https://{bridge_public_url}/r/{fdbFilamentId}/{fdbSpoolId}`. The bridge resolves the spool via
+  its `SpoolMapping` (by `filamentdb_spool_id`). Spoolman is *not* the QR target — keeping the QR
+  on the durable FDB ids means the same physical label survives re-imports/re-mapping.
+
+- **`/r/...` redirect = indirection point.** `GET /r/{fil}/{spool}` returns a **302**
+  (`RedirectResponse`, `status_code=302`) to a target chosen at runtime by `mobile_redirect_target`:
+  `bridge` → the SPA scan page `/scan/{fil}/{spool}` (default); `filamentdb` →
+  `{FILAMENTDB_URL}/filaments/{fil}`. The indirection lets the destination change later (e.g. to a
+  future FDB mobile page) **without reprinting labels**. The route is registered **before** the SPA
+  catch-all in `main.py` (it's outside `/api`, so otherwise `index.html` would swallow it).
+
+- **Auth mirrors the app — no special public router.** The mobile router is included with the same
+  `_auth_dep` as every other protected router; the `/r/` redirect carries the same dependency. There
+  is no token-in-QR and no frontend auth exception: with auth off the flow is open; with auth on the
+  whole site (scan page included) sits behind the session. Accepted per the plan.
+
+- **Master feature gate `mobile_labels_enabled` (default OFF).** A single setting gates the whole
+  feature. Every mobile/label endpoint and the `/r/` redirect depend on `_require_labels_enabled`,
+  which returns **403** when off — copied directly from `api/debug.py:_require_debug_mode`. The flag
+  is also surfaced in the public `GET /api/version` so the SPA can hide the nav item.
+
+- **Weight save mode = setting + per-request override.** `mobile_weight_default_mode`
+  (`direct_correction` default | `usage`); a PATCH may override it for one save. **The scale input is
+  GROSS.** Tare = the FDB filament's `spoolWeight` (default `core/weight.py:DEFAULT_TARE_GRAMS`), so
+  `net = gross − tare`. `direct_correction` true-ups both sides absolutely; `usage` logs an FDB usage
+  entry on a **decrease** (preserving the audit trail; FDB reduces `totalWeight` itself) and falls
+  back to the absolute path on an **increase** (a refill is never a negative usage). After any weight
+  *or* location write, **both** snapshots are refreshed (anti-ping-pong), so the next auto-sync cycle
+  sees no fresh change.
+
+- **Shared helper extractions (reuse, don't duplicate):**
+  - **`core/weight_ops.py`** — the absolute-write + dual-snapshot-refresh core was extracted out of
+    `core/conflict_apply.py:_apply_weight` into `apply_absolute_weight(...)` (plus `apply_usage_weight(...)`
+    for usage mode). `_apply_weight` now calls the shared helper; behaviour is byte-for-byte identical
+    (same SM/FDB writes, snapshot merges, and `old_value="diverged"` sync-log entry) so the GitHub #21
+    resolve/converge tests stay green.
+  - **`core/locations.py`** — `ensure_fdb_location(filamentdb, name, cache=None)` (found-or-create of an
+    FDB location id) was extracted from the wizard's inline spool-seeding block; the wizard now calls it
+    (Spoolman stores location as a free-text string, FDB needs a `locationId`).
+  - **`core/mobile.py`** — `resolve_spool_mapping` + `assemble_spool_detail` live-fetch both upstream
+    records (fresher than the snapshot-based mapping rows) and build the page payload.
+
+- **All config keys added now (including `labelforge_*`)** so config is touched once: `mobile_labels_enabled`,
+  `bridge_public_url`, `mobile_redirect_target`, `mobile_weight_default_mode`, `labelforge_url`,
+  `labelforge_token` (secret), `labelforge_template`, `labelforge_fields` (CSV), `labelforge_label_media`.
+  They follow the `backup_*` pattern: env start-up fallback in `app/config.py`, BridgeConfig `_DEFAULTS`,
+  and `ConfigResponse`/`ConfigUpdateRequest`/`_config_response`. Frontend, LabelForge printing, and the
+  user-facing docs roll-up are deferred to later phases.
+
+## 2026-06-23 — Mobile updates & labels (phase 2 frontend mobile flow)
+
+**Context.** Phase 1 shipped the backend (`/api/mobile/*`, `/r/...` redirect, config keys, the
+`mobile_labels_enabled` flag on `/api/version`). Phase 2 builds the UI: the bare QR scan page, the
+in-nav page, the shared update card, and a minimal Settings section so the feature is testable.
+LabelForge print buttons and the full LabelForge Settings fields stay Phase 3.
+
+**Decisions (implemented):**
+
+- **Nav gate reads `/api/version`, not `/api/config`.** The "Mobile updates" nav item is rendered
+  only when `mobile_labels_enabled` is true. `Layout` already had the version payload in scope (the
+  `VersionBadge` fetches it), so `Layout` does its own `getVersionInfo()` call and conditionally
+  appends `{ to: '/mobile-updates', label: 'Mobile updates' }` to a local `navItems` derived from
+  the static `NAV_ITEMS`. Using `/api/version` (public, already loaded app-wide) rather than
+  `/api/config` keeps the gate cheap and matches where the backend chose to expose the flag. When the
+  flag is off the page is also unreachable in practice (its API calls 403); a user who navigates to
+  `/mobile-updates` directly sees the inline 403 message rather than a crash.
+
+- **Scan route is a SIBLING outside `<Layout/>`; the in-nav page is inside it.** `/scan/:filId/:spoolId`
+  → `ScanTarget` renders the shared card in a full-screen frame modeled on `Login.tsx`
+  (`min-h-screen flex items-start justify-center`, `max-w-md`) with no side nav — it's the single-purpose
+  QR target. `/mobile-updates` → `MobileUpdates` lives inside the Layout wrapper with the normal `p-8`
+  shell. **No auth exception** for either — both sit behind the existing global gate in `App.tsx`, per
+  the plan decision.
+
+- **One shared `MobileSpoolUpdate` component, two entry points.** It takes `{ filId, spoolId }`,
+  fetches the detail via `useApi`, and is rendered by both `ScanTarget` (bare) and `MobileUpdates`
+  (after a search-and-select). The weight input is labelled as the **gross/scale** reading
+  (`inputMode="decimal"`) with a live `gross − tare` net preview; the weight-mode toggle defaults to
+  `detail.weight_default_mode` and is overridable; location is an `<input list>` datalist from
+  `/api/mobile/locations`. Save sends **one** PATCH and only includes `gross_grams` when a valid weight
+  was entered and `location` when it actually changed (`weight_mode` is always sent). Errors/success are
+  inline banners (red text / emerald box) — matching `Conflicts.tsx`; there is no toast system.
+
+- **In-nav search reuses the `SyncedRecords` filter over `getMappings()`.** Only `kind="spool"` rows
+  with both FDB ids are selectable (the mobile flow is per-spool); the search matches name/vendor/color
+  and the Spoolman spool id. No new search endpoint.
+
+- **Minimal Settings section, clear Phase-3 seam.** A "Mobile updates" card exposes the enable toggle,
+  QR redirect target, and default weight mode only. It folds into the existing single-Save config flow
+  (added to `isDirty` + `handleSave`), so one Save covers it. The `labelforge_*` keys exist on the
+  backend and in `ConfigResponse` but are deliberately **not** surfaced in the UI yet — that, plus the
+  Print buttons, is Phase 3.
+
+**Caveat (documented, not blocking):** QR *rendering* in LabelForge exists only on its `dev` branch
+(`421caee`+, not v0.1.3). The HTTP API is identical across main/dev, so the bridge codes against the
+stable API; printing a QR requires the user to run a LabelForge build with that work.
+
+## 2026-06-23 — Mobile updates & labels (phase 3 — LabelForge label printing)
+
+**Context.** Phases 1 (backend) + 2 (frontend mobile flow) shipped. Phase 3 wires up label printing:
+a LabelForge service client, a print endpoint, the Print-label buttons, and the LabelForge connection
+fields in Settings. The `labelforge_*` config keys + the `mobile_labels_enabled` gate already existed
+from Phase 1; this phase only *uses* and *surfaces* them. Phase 4 (user-facing docs/PRD roll-up) is
+separate.
+
+**Decisions (implemented):**
+
+- **Per-request LabelForge client; structured `LabelForgeError` (never a bare 500).**
+  `services/labelforge.py:LabelForgeClient` is a plain async context manager (built from the
+  runtime-editable `labelforge_url` + `labelforge_token`, sending `Authorization: Bearer …`). Because
+  the config is runtime-editable and print volume is low, it is constructed per request rather than
+  cached on `app.state` (unlike the always-on Spoolman/FDB clients). Every HTTP 4xx/5xx and network
+  failure is caught and re-raised as a `LabelForgeError` carrying the upstream status code + the
+  (string **or** structured-dict) `detail` — mirroring `api/backup.py`'s proxy-error style. The API
+  layer maps it: a 409 `media_mismatch` → 409 `media_mismatch` (so the UI can offer an override
+  retry), other 4xx pass through, everything else → 502. Never a bare 500.
+
+- **The bridge owns a fixed field *catalog*; the CSV chooses which to send.** `api/labels.py` computes
+  the six fields it can supply — `brand` (vendor), `color` (name), `color_hex`, `number` (= Spoolman
+  spool id), `material`, `qr_url` — from the *same* `core/mobile.assemble_spool_detail` the mobile page
+  uses (one resolve path, live-fetched). It then sends **only** the names listed in `labelforge_fields`
+  (trim/split); an unknown/uncomputable name is **skipped with a warning**, never a hard failure — the
+  template author controls the label, so a typo shouldn't block a print. `labelforge_url` +
+  `labelforge_template` unset → a clear **400 `labelforge_not_configured`** (not a confusing upstream
+  error). The named template itself is **user-created in LabelForge**; the bridge only fills values.
+
+- **`qr_url` = `bridge_public_url` if set, else request-derived.** The QR payload is the absolute
+  redirect `{base}/r/{fil}/{spool}` — the same indirection the redirect endpoint serves. `base` prefers
+  the configured `bridge_public_url` (trailing slash stripped); when blank it is derived from the
+  request, honoring `X-Forwarded-Proto`/`X-Forwarded-Host` so it's correct behind a reverse proxy.
+
+- **One shared `PrintLabelButton`, two placements.** A `block` variant sits below Save on
+  `MobileSpoolUpdate`; a `compact` variant is a row action on `SyncedRecords` (spool rows only, shown
+  only when `mobile_labels_enabled` — read from `/api/version`, matching the nav gate). Success shows
+  "Printed — job #N"; a 409 `media_mismatch` surfaces the detail **plus** a "Print anyway" button that
+  retries with `override=true`. Inline banners, no toast — matching `Conflicts.tsx`.
+
+- **Settings section renamed "Mobile updates" → "Mobile & Labels".** It gains the LabelForge fields:
+  `bridge_public_url`, `labelforge_url`, `labelforge_token` (password input with show/hide, mirroring
+  `api_token`), `labelforge_template`, `labelforge_fields` (CSV), `labelforge_label_media`, and a
+  **Test printer** button (`GET /api/labels/printer-status`). All fold into the existing single
+  `isDirty`/`handleSave` config flow and are greyed when the feature toggle is off.
+
+**Caveat (unchanged from Phase 1, restated):** the QR *element* renders only on LabelForge `dev`
+(>v0.1.3). The bridge codes against the stable API and prints the QR text into `qr_url` regardless; a
+scannable QR simply needs the user to deploy a LabelForge build with that work. The text fields print
+on any LabelForge version.

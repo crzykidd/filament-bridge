@@ -1,11 +1,12 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getMappings } from '../api/client'
+import { getMappings, getVersionInfo } from '../api/client'
 import { useApi } from '../api/hooks'
 import { StatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
 import { ColorDisplay } from '../components/ColorDisplay'
 import { HelpTip } from '../components/HelpTip'
+import { PrintLabelButton } from '../components/PrintLabelButton'
 import type { MappingDetailField, MappingRow, MappingStatus } from '../api/types'
 import { formatLocal } from '../utils/datetime'
 
@@ -68,6 +69,12 @@ export default function SyncedRecords() {
   const [search, setSearch] = useState('')
   const [hideEmpty, setHideEmpty] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
+  // The Print-label action only appears when the mobile/labels feature is enabled.
+  const [labelsEnabled, setLabelsEnabled] = useState(false)
+
+  useEffect(() => {
+    getVersionInfo().then(v => setLabelsEnabled(v.mobile_labels_enabled)).catch(() => {})
+  }, [])
 
   const toggleExpand = (id: number) =>
     setExpandedIds(prev => {
@@ -90,6 +97,8 @@ export default function SyncedRecords() {
   }
 
   const emptyMessage = EMPTY_MESSAGES[statusFilter] ?? 'No records'
+  // Base table has 9 columns (chevron + 8 headers); +1 for the Labels action column.
+  const colCount = labelsEnabled ? 10 : 9
 
   return (
     <div className="p-8 space-y-4">
@@ -164,12 +173,17 @@ export default function SyncedRecords() {
                       ) : h}
                     </th>
                   ))}
+                  {labelsEnabled && (
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                      Labels
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">{emptyMessage}</td>
+                    <td colSpan={colCount} className="px-4 py-6 text-center text-gray-400 dark:text-gray-500">{emptyMessage}</td>
                   </tr>
                 )}
                 {rows.map(row => {
@@ -230,10 +244,23 @@ export default function SyncedRecords() {
                             spoolmanFilamentId={row.spoolman_filament_id ?? undefined}
                           />
                         </td>
+                        {labelsEnabled && (
+                          <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                            {!filamentOnly && row.filamentdb_spool_id ? (
+                              <PrintLabelButton
+                                filId={row.filamentdb_filament_id}
+                                spoolId={row.filamentdb_spool_id}
+                                variant="compact"
+                              />
+                            ) : (
+                              <span className="text-gray-300 dark:text-gray-600">—</span>
+                            )}
+                          </td>
+                        )}
                       </tr>
                       {expanded && (
                         <tr className="bg-gray-50/60 dark:bg-gray-900/30">
-                          <td colSpan={9} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700">
+                          <td colSpan={colCount} className="px-6 py-3 border-t border-gray-100 dark:border-gray-700">
                             {filamentOnly ? (
                               <p className="text-xs text-gray-500 dark:text-gray-400 italic">
                                 Filament only — no spool in Spoolman. This filament was imported but has no spool records.

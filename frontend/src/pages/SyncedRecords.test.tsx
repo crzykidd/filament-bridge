@@ -24,6 +24,13 @@ vi.mock('react-router-dom', () => ({
 
 vi.mock('../api/client', () => ({
   getMappings: vi.fn(),
+  getVersionInfo: vi.fn(() => Promise.resolve({ mobile_labels_enabled: false })),
+  printLabel: vi.fn(),
+  BridgeApiError: class BridgeApiError extends Error {
+    constructor(public status: number, public code: string, message: string) {
+      super(message)
+    }
+  },
 }))
 
 vi.mock('../components/DeepLinkContext', () => ({

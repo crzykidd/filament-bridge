@@ -68,6 +68,8 @@ function makeVersionInfo(overrides: Partial<VersionInfo> = {}): VersionInfo {
     commit: null,
     build: 'v0.2.0',
     is_dev: false,
+    mobile_labels_enabled: false,
+    mobile_public: false,
     ...overrides,
   }
 }

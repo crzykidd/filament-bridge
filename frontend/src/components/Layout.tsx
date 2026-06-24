@@ -355,12 +355,20 @@ export function Layout() {
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [authEnabled, setAuthEnabled] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  // Mobile-updates feature flag — read from the same /api/version payload the app
+  // already loads (the VersionBadge fetches it too). Gates the "Mobile updates" nav item.
+  const [mobileLabelsEnabled, setMobileLabelsEnabled] = useState(false)
   const navigate = useNavigate()
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setHealth(null))
     getAuthStatus().then(s => setAuthEnabled(s.auth_enabled)).catch(() => {})
+    getVersionInfo().then(v => setMobileLabelsEnabled(v.mobile_labels_enabled)).catch(() => {})
   }, [])
+
+  const navItems = mobileLabelsEnabled
+    ? [...NAV_ITEMS, { to: '/mobile-updates', label: 'Mobile updates', exact: false }]
+    : NAV_ITEMS
 
   const statusDot = health
     ? health.status === 'ok'
@@ -397,7 +405,7 @@ export function Layout() {
           </div>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
-          {NAV_ITEMS.map(item => (
+          {navItems.map(item => (
             <NavLink
               key={item.to}
               to={item.to}

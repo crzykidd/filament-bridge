@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     # Sync
     sync_interval_seconds: int = 120
 
+    # Scheduled nightly backups (issue #5). Env vars are the start-up fallback;
+    # the same keys are runtime-editable via BridgeConfig (DB value wins when set),
+    # same precedence as sync_interval_seconds. The job writes the bridge's own
+    # state export and the FDB snapshot into {data_dir}/backups/ and prunes old
+    # files. Spoolman's server-side backup is deliberately NOT scheduled (the
+    # bridge cannot prune Spoolman's own volume).
+    backup_schedule_enabled: bool = True
+    backup_bridge_state_enabled: bool = True
+    backup_filamentdb_enabled: bool = True
+    backup_retention_days: int = 7
+    backup_hour_utc: int = 3
+
     # Spoolman extra field keys for cross-reference IDs
     spoolman_field_filamentdb_id: str = "filamentdb_id"
     spoolman_field_filamentdb_parent_id: str = "filamentdb_parent_id"
@@ -98,6 +110,37 @@ class Settings(BaseSettings):
     # CHANGES_LOG_PATH: override the file path (default: {data_dir}/changes.log).
     changes_log_enabled: bool = True
     changes_log_path: str = ""  # empty = use {data_dir}/changes.log
+
+    # Mobile updates & labels (issue: mobile/labels phase 1). Env vars are the
+    # start-up fallback; the same keys are runtime-editable via BridgeConfig (DB
+    # value wins when set, same precedence as sync_interval_seconds). The whole
+    # feature is gated by mobile_labels_enabled (default OFF) — when off, every
+    # mobile/label/redirect endpoint refuses with 403 (mirrors debug_mode).
+    mobile_labels_enabled: bool = False
+    # Auth lifetime + gating for the mobile scan flow (the /r/ redirect, /api/mobile/*,
+    # /api/labels/*, and the SPA /scan/:filId/:spoolId route). Integer days, default 30:
+    #   0    → the scan flow is PUBLIC (bypasses the app password); the rest of the app
+    #          stays password-protected.
+    #   >= 1 → the scan flow requires the normal app login, AND the fb_session login
+    #          cookie's lifetime is set to this many days.
+    # Default 30 = no behavior change from before this setting existed. Independent of
+    # mobile_labels_enabled (the 403 feature gate still applies regardless of this value).
+    mobile_session_days: int = 30
+    # External base URL baked into the printed QR (e.g. https://bridge.example.com).
+    # Empty = derive from the incoming request when building absolute URLs later.
+    bridge_public_url: str = ""
+    # Where GET /r/{fil}/{spool} redirects: "bridge" → the SPA scan page;
+    # "filamentdb" → the FDB filament page.
+    mobile_redirect_target: str = "bridge"
+    # Default weight-save mode for the mobile update page (overridable per request):
+    # "direct_correction" (absolute true-up) | "usage" (log an FDB usage on a decrease).
+    mobile_weight_default_mode: str = "direct_correction"
+    # LabelForge integration (Phase 3 printing; config added now so config is touched once).
+    labelforge_url: str = ""
+    labelforge_token: str = ""  # secret — never returned in plaintext logs
+    labelforge_template: str = ""
+    labelforge_fields: str = ""  # CSV of label variable names, e.g. "brand,color,number,qr_url"
+    labelforge_label_media: str = ""  # optional media/size hint passed to LabelForge
 
     # Notifications
     discord_webhook_url: str | None = None

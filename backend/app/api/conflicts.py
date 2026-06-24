@@ -306,22 +306,37 @@ async def resolve_conflict(
     if payload.resolution == "manual" and payload.value is None:
         raise api_error(422, "manual_value_required", "A manual resolution requires a value")
 
-    # Lifecycle (archive/retire) conflicts converge by WRITING the chosen boolean state
-    # to both systems (human-approved, not silent auto-apply), then refreshing snapshots
-    # so the conflict does not re-queue. All other cross_system conflicts stay record-only.
-    if c.field_name == "lifecycle":
-        from app.core.conflict_apply import apply_lifecycle_conflict
-        # Pre-record the manual boolean so the apply helper can read it.
-        if payload.resolution == "manual":
-            c.resolved_value = json.dumps(bool(payload.value))
+    # cross_system conflicts (except orphaned-deletion markers) CONVERGE on resolve:
+    # the chosen value is written to BOTH systems and both snapshots are refreshed so
+    # the conflict does not re-queue next cycle (GitHub #21). This is human-approved
+    # reconciliation, not silent auto-apply. Deletion-marker conflicts have nothing to
+    # write upstream and keep their record-only + mapping-cleanup behavior below.
+    if conflict_type == "cross_system" and c.field_name != DELETION_FIELD:
+        from app.core.conflict_apply import (
+            UnsupportedConflictField,
+            apply_cross_system_conflict,
+        )
         spoolman = request.app.state.spoolman
         filamentdb = request.app.state.filamentdb
         try:
-            await apply_lifecycle_conflict(c, payload.resolution, db, spoolman, filamentdb)
+            await apply_cross_system_conflict(
+                c, payload.resolution, payload.value, db, spoolman, filamentdb
+            )
+        except UnsupportedConflictField as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Unsupported cross_system field for apply, conflict %s: %s",
+                _scrub(conflict_id),
+                _scrub(exc),
+            )
+            raise api_error(
+                422, "unsupported_conflict_field",
+                f"This conflict cannot be applied automatically: {exc}",
+            )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(
-                "apply_lifecycle_conflict failed for conflict %s: %s",
+                "apply_cross_system_conflict failed for conflict %s: %s",
                 _scrub(conflict_id),
                 _scrub(exc),
             )
@@ -333,7 +348,7 @@ async def resolve_conflict(
         db.refresh(c)
         return _to_response(c, db)
 
-    # All other conflict types: record-only resolution (no upstream writes).
+    # Deletion markers + any other non-cross_system type: record-only resolution.
     c.resolution = payload.resolution
     c.resolved_value = json.dumps(_resolved_value(c, payload.resolution, payload.value))
     c.resolved_at = datetime.datetime.now(datetime.timezone.utc)
@@ -806,23 +821,57 @@ async def get_divergence_context(
 
 
 @router.post("/conflicts/bulk-resolve", response_model=BulkResolveResponse)
-def bulk_resolve(payload: BulkResolveRequest, db: Session = Depends(get_db)) -> BulkResolveResponse:
+async def bulk_resolve(
+    payload: BulkResolveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> BulkResolveResponse:
     if payload.resolution == "manual" and payload.value is None:
         raise api_error(422, "manual_value_required", "A manual resolution requires a value")
 
+    from app.core.conflict_apply import apply_cross_system_conflict
+    import logging
+
+    spoolman = request.app.state.spoolman
+    filamentdb = request.app.state.filamentdb
     now = datetime.datetime.now(datetime.timezone.utc)
     resolved = 0
     skipped: list[int] = []
+    failed: list[int] = []
+    # Commit per conflict so one upstream-write failure isolates to that conflict
+    # (failure-isolation), leaving already-converged conflicts committed.
     for cid in payload.ids:
         c = db.query(Conflict).filter_by(id=cid).first()
         if c is None or c.resolved_at is not None:
             skipped.append(cid)
             continue
-        c.resolution = payload.resolution
-        c.resolved_value = json.dumps(_resolved_value(c, payload.resolution, payload.value))
-        c.resolved_at = now
-        if c.field_name == DELETION_FIELD:
-            _cleanup_orphaned_mapping(db, c)
-        resolved += 1
-    db.commit()
-    return BulkResolveResponse(resolved=resolved, skipped=skipped)
+        conflict_type = getattr(c, "conflict_type", "cross_system") or "cross_system"
+        try:
+            if conflict_type == "cross_system" and c.field_name != DELETION_FIELD:
+                # Converge: write the chosen value to BOTH systems + refresh snapshots
+                # (same path as the per-row resolve endpoint, #21).
+                await apply_cross_system_conflict(
+                    c, payload.resolution, payload.value, db, spoolman, filamentdb
+                )
+            else:
+                # Deletion markers + master_divergence + others: record-only resolution
+                # (unchanged — master_divergence needs a per-row action; nothing to
+                # write upstream for a deletion marker).
+                c.resolution = payload.resolution
+                c.resolved_value = json.dumps(_resolved_value(c, payload.resolution, payload.value))
+                c.resolved_at = now
+                if c.field_name == DELETION_FIELD:
+                    _cleanup_orphaned_mapping(db, c)
+            db.commit()
+            resolved += 1
+        except Exception as exc:  # noqa: BLE001
+            # Upstream write failed or field unsupported → isolate to this conflict,
+            # leave it open, keep going. (Partial upstream writes have the same
+            # inherent risk as the per-row resolve path.)
+            db.rollback()
+            failed.append(cid)
+            logging.getLogger(__name__).warning(
+                "bulk-resolve: conflict %s not converged (left open): %s",
+                _scrub(cid), _scrub(exc),
+            )
+    return BulkResolveResponse(resolved=resolved, skipped=skipped, failed=failed)

@@ -40,7 +40,7 @@ material-properties sync pass (same direction + conflict policy as the other mat
 | `openprinttag_nozzle_temp_min` | integer | `temperatures.nozzleRangeMin` | OPT `nozzleTempMin` (°C) |
 | `openprinttag_nozzle_temp_max` | integer | `temperatures.nozzleRangeMax` | OPT `nozzleTempMax` (°C) |
 | `openprinttag_drying_temp` | integer | `dryingTemperature` | OPT `dryingTemp` (°C) |
-| `openprinttag_drying_time` | integer | `dryingTime` | Drying time in **hours** (OPT minutes ÷60 at Apply time) |
+| `openprinttag_drying_time` | integer | `dryingTime` | Drying time in **minutes** (OpenPrintTag and Filament DB both use minutes — passes through unchanged) |
 | `openprinttag_hardness_shore_a` | float | `shoreHardnessA` | OPT `hardnessShoreA` |
 | `openprinttag_hardness_shore_d` | float | `shoreHardnessD` | OPT `hardnessShoreD` |
 | `openprinttag_transmission_distance` | float | `transmissionDistance` | OPT `transmissionDistance` (mm) |
@@ -140,7 +140,7 @@ Only the fields the user confirmed (not marked "keep mine") are written.
 | Filament | update | `name` | User confirmed the reviewable name field (defaults to the OpenTag material name) |
 | Filament | update | `vendor` → `vendor_id` | User confirmed the Manufacturer field; the Manufacturer row surfaces whenever SM vendor and OpenTag brand differ by any visible character (including case-only). Resolved via find-or-create (`_ensure_vendor`): exact trimmed name match against existing vendors; creates a new vendor if no exact match. Re-points THIS filament only — existing vendor never renamed, other filaments never touched. A case-only diff intentionally creates a near-duplicate vendor (accepted trade-off). **This is the only OpenTag path that may CREATE a new Spoolman vendor.** |
 | Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes`, `multi_color_direction` (any subset) | User confirmed in the review/confirm UI |
-| Filament | update | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` (any subset) | User confirmed; the seven typed OpenPrintTag material-setting extras. Only emitted as review rows when the OPT material carries the value; `drying_time` is OPT minutes ÷60 → hours |
+| Filament | update | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` (any subset) | User confirmed; the seven typed OpenPrintTag material-setting extras. Only emitted as review rows when the OPT material carries the value; `drying_time` is in minutes (no conversion — FDB `dryingTime` is also minutes) |
 | Filament | update | `spool_weight`, `weight` (native) | User confirmed; weight-model bonus from the OPT material→package→container lookup — container `emptyWeight` → `spool_weight` (tare), package `nominalNettoFullWeight` → `weight`. Only surfaced when the dataset has package/container data for the matched material |
 | Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
 | Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |

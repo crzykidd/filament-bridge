@@ -635,14 +635,15 @@ def test_opt_to_spoolman_fields_material_tags_encodes_to_json_string():
 
 def test_opt_to_spoolman_fields_emits_material_setting_extras():
     """The seven typed openprinttag_* extras are emitted when the OPT value is present,
-    keyed by the configured Spoolman extra-field name, with dryingTime ÷60 (min→h)."""
+    keyed by the configured Spoolman extra-field name. dryingTime passes through as
+    MINUTES (FDB `dryingTime` is also minutes — no ÷60 conversion)."""
     from app.config import settings as _s
     opt = {
         **_OPT_PLA_SILK,
         "nozzleTempMin": 200,
         "nozzleTempMax": 230,
         "dryingTemp": 55,
-        "dryingTime": 360,  # OPT minutes → 6 hours
+        "dryingTime": 360,  # minutes — passes through unchanged
         "hardnessShoreA": 95.5,
         "hardnessShoreD": 80.0,
         "transmissionDistance": 3.2,
@@ -651,8 +652,8 @@ def test_opt_to_spoolman_fields_emits_material_setting_extras():
     assert fields[f"extra.{_s.spoolman_field_openprinttag_nozzle_temp_min}"] == 200
     assert fields[f"extra.{_s.spoolman_field_openprinttag_nozzle_temp_max}"] == 230
     assert fields[f"extra.{_s.spoolman_field_openprinttag_drying_temp}"] == 55
-    # dryingTime: 360 OPT minutes → 6 FDB hours
-    assert fields[f"extra.{_s.spoolman_field_openprinttag_drying_time}"] == 6
+    # dryingTime: 360 minutes — stored as-is (FDB dryingTime is minutes too)
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_drying_time}"] == 360
     assert fields[f"extra.{_s.spoolman_field_openprinttag_hardness_shore_a}"] == 95.5
     assert fields[f"extra.{_s.spoolman_field_openprinttag_hardness_shore_d}"] == 80.0
     assert fields[f"extra.{_s.spoolman_field_openprinttag_transmission_distance}"] == 3.2
@@ -684,13 +685,16 @@ def test_opt_to_spoolman_fields_omits_absent_material_setting_extras():
         assert f"extra.{getattr(_s, attr)}" not in fields
 
 
-def test_opentag_drying_time_to_fdb_hours():
-    """OPT dryingTime (minutes) → FDB hours, ÷60, rounded; None passthrough."""
-    from app.core.fields import opentag_drying_time_to_fdb_hours
-    assert opentag_drying_time_to_fdb_hours(360) == 6
-    assert opentag_drying_time_to_fdb_hours(480) == 8
-    assert opentag_drying_time_to_fdb_hours(90) == 2  # 1.5h → 2 (rounded)
-    assert opentag_drying_time_to_fdb_hours(None) is None
+def test_opentag_drying_time_passes_through_as_minutes():
+    """dryingTime is MINUTES on both OpenPrintTag and Filament DB — the Apply flow
+    stores the OPT value unchanged (regression for the old ÷60 hours bug, #27)."""
+    from app.config import settings as _s
+    for minutes in (360, 480, 90, 0):
+        fields = opt_to_spoolman_fields({**_OPT_PLA_SILK, "dryingTime": minutes})
+        assert fields[f"extra.{_s.spoolman_field_openprinttag_drying_time}"] == minutes
+    # absent → not emitted
+    fields = opt_to_spoolman_fields({**_OPT_PLA_SILK, "dryingTime": None})
+    assert f"extra.{_s.spoolman_field_openprinttag_drying_time}" not in fields
 
 
 def test_opt_to_spoolman_fields_weight_bonus_from_package_container():

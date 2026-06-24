@@ -111,6 +111,132 @@ def _effective_sync_interval(db: Session) -> int:
     return _settings.sync_interval_seconds
 
 
+def _resolve_bool(db: Session, key: str, env_default: bool) -> bool:
+    """Return a boolean config value: DB override wins, else the env start-up default."""
+    val = get_config_value(db, key, None)
+    if val is None:
+        return env_default
+    return bool(val)
+
+
+class _EffectiveBackupConfig:
+    """Resolved scheduled-backup config (DB override wins over env), passed to the job.
+
+    Mirrors the env→DB precedence used for ``sync_interval_seconds``.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.backup_schedule_enabled = _resolve_bool(
+            db, "backup_schedule_enabled", _settings.backup_schedule_enabled
+        )
+        self.backup_bridge_state_enabled = _resolve_bool(
+            db, "backup_bridge_state_enabled", _settings.backup_bridge_state_enabled
+        )
+        self.backup_filamentdb_enabled = _resolve_bool(
+            db, "backup_filamentdb_enabled", _settings.backup_filamentdb_enabled
+        )
+        retention = get_config_value(db, "backup_retention_days", None)
+        self.backup_retention_days = (
+            int(retention) if retention is not None else _settings.backup_retention_days
+        )
+        self.data_dir = _settings.data_dir
+
+
+def effective_backup_config(db: Session) -> _EffectiveBackupConfig:
+    """Public accessor for the resolved scheduled-backup config."""
+    return _EffectiveBackupConfig(db)
+
+
+def effective_backup_hour_utc(db: Session) -> int:
+    """Return the active backup hour (0..23): DB override wins over the env default."""
+    val = get_config_value(db, "backup_hour_utc", None)
+    if val is None:
+        return _settings.backup_hour_utc
+    return int(val)
+
+
+def mobile_labels_enabled(db: Session) -> bool:
+    """Return whether the mobile-updates & labels feature is enabled (DB wins, else env)."""
+    return _resolve_bool(db, "mobile_labels_enabled", _settings.mobile_labels_enabled)
+
+
+def mobile_session_days(db: Session) -> int:
+    """Return the mobile scan-flow session lifetime in days (DB wins, else env).
+
+    0  → the scan flow is public (no app password); the rest of the app stays gated.
+    >= 1 → the scan flow requires the normal login, and the fb_session cookie lives
+    this many days. Never negative (the API rejects < 0 on write).
+    """
+    val = get_config_value(db, "mobile_session_days", None)
+    if val is None:
+        return int(_settings.mobile_session_days)
+    return int(val)
+
+
+def mobile_redirect_target(db: Session) -> str:
+    """Return the configured /r/ redirect target ("bridge" | "filamentdb")."""
+    val = get_config_value(db, "mobile_redirect_target", None)
+    if val is None:
+        return _settings.mobile_redirect_target
+    return str(val)
+
+
+def mobile_weight_default_mode(db: Session) -> str:
+    """Return the default mobile weight-save mode ("direct_correction" | "usage")."""
+    val = get_config_value(db, "mobile_weight_default_mode", None)
+    if val is None:
+        return _settings.mobile_weight_default_mode
+    return str(val)
+
+
+def bridge_public_url(db: Session) -> str:
+    """Return the configured external bridge base URL (empty = derive from request)."""
+    val = get_config_value(db, "bridge_public_url", None)
+    if val is None:
+        return _settings.bridge_public_url
+    return str(val)
+
+
+def labelforge_url(db: Session) -> str:
+    """Return the configured LabelForge base URL (empty = not configured)."""
+    val = get_config_value(db, "labelforge_url", None)
+    if val is None:
+        return _settings.labelforge_url
+    return str(val)
+
+
+def labelforge_token(db: Session) -> str:
+    """Return the configured LabelForge API token (empty = no auth header)."""
+    val = get_config_value(db, "labelforge_token", None)
+    if val is None:
+        return _settings.labelforge_token
+    return str(val)
+
+
+def labelforge_template(db: Session) -> str:
+    """Return the configured LabelForge template name (empty = not configured)."""
+    val = get_config_value(db, "labelforge_template", None)
+    if val is None:
+        return _settings.labelforge_template
+    return str(val)
+
+
+def labelforge_fields(db: Session) -> str:
+    """Return the configured CSV of label field names to send (empty = none)."""
+    val = get_config_value(db, "labelforge_fields", None)
+    if val is None:
+        return _settings.labelforge_fields
+    return str(val)
+
+
+def labelforge_label_media(db: Session) -> str:
+    """Return the configured optional label-media hint (empty = template default)."""
+    val = get_config_value(db, "labelforge_label_media", None)
+    if val is None:
+        return _settings.labelforge_label_media
+    return str(val)
+
+
 _REQUIRED_SETTINGS = ["variant_parent_mode"]
 
 
@@ -146,6 +272,8 @@ def _config_response(db: Session) -> ConfigResponse:
         material_properties_conflict_policy=cfg.get("material_properties_conflict_policy", "manual"),
         archive_sync_direction=cfg.get("archive_sync_direction", "two_way"),
         archive_conflict_policy=cfg.get("archive_conflict_policy", "manual"),
+        location_sync_direction=cfg.get("location_sync_direction", "two_way"),
+        location_sync_conflict_policy=cfg.get("location_sync_conflict_policy", "manual"),
         new_spool_sync_direction=cfg.get("new_spool_sync_direction", "two_way"),
         new_filament_policy=cfg.get("new_filament_policy", "manual_review") or "manual_review",
         new_spool_policy=cfg.get("new_spool_policy", "manual_review") or "manual_review",
@@ -157,6 +285,43 @@ def _config_response(db: Session) -> ConfigResponse:
         container_parent_marker=str(cfg.get("container_parent_marker", _settings.container_parent_marker)),
         api_token=api_token,
         api_token_enabled=bool(cfg.get("api_token_enabled", False)),
+        backup_schedule_enabled=(
+            bool(cfg["backup_schedule_enabled"])
+            if "backup_schedule_enabled" in cfg
+            else _settings.backup_schedule_enabled
+        ),
+        backup_bridge_state_enabled=(
+            bool(cfg["backup_bridge_state_enabled"])
+            if "backup_bridge_state_enabled" in cfg
+            else _settings.backup_bridge_state_enabled
+        ),
+        backup_filamentdb_enabled=(
+            bool(cfg["backup_filamentdb_enabled"])
+            if "backup_filamentdb_enabled" in cfg
+            else _settings.backup_filamentdb_enabled
+        ),
+        backup_retention_days=int(
+            cfg.get("backup_retention_days", _settings.backup_retention_days)
+        ),
+        backup_hour_utc=int(cfg.get("backup_hour_utc", _settings.backup_hour_utc)),
+        mobile_labels_enabled=(
+            bool(cfg["mobile_labels_enabled"])
+            if "mobile_labels_enabled" in cfg
+            else _settings.mobile_labels_enabled
+        ),
+        mobile_session_days=int(cfg.get("mobile_session_days", _settings.mobile_session_days)),
+        bridge_public_url=str(cfg.get("bridge_public_url", _settings.bridge_public_url)),
+        mobile_redirect_target=cfg.get("mobile_redirect_target", _settings.mobile_redirect_target),
+        mobile_weight_default_mode=cfg.get(
+            "mobile_weight_default_mode", _settings.mobile_weight_default_mode
+        ),
+        labelforge_url=str(cfg.get("labelforge_url", _settings.labelforge_url)),
+        labelforge_token=str(cfg.get("labelforge_token", _settings.labelforge_token)),
+        labelforge_template=str(cfg.get("labelforge_template", _settings.labelforge_template)),
+        labelforge_fields=str(cfg.get("labelforge_fields", _settings.labelforge_fields)),
+        labelforge_label_media=str(
+            cfg.get("labelforge_label_media", _settings.labelforge_label_media)
+        ),
         required_settings_unset=_required_settings_unset(cfg),
     )
 
@@ -203,7 +368,55 @@ def update_config(
             },
         )
 
+    # newest_wins is likewise meaningless for location — a location name is a free-text
+    # value with no comparable timestamp, so there is no "newer" side to pick.
+    if payload.location_sync_conflict_policy == "newest_wins":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_conflict_policy",
+                "message": (
+                    "newest_wins is not supported for location_sync — a location name "
+                    "has no comparable timestamp."
+                ),
+            },
+        )
+
+    # Validate scheduled-backup numeric ranges with the project's error envelope.
+    if payload.backup_hour_utc is not None and not (0 <= payload.backup_hour_utc <= 23):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_backup_hour",
+                "message": "backup_hour_utc must be between 0 and 23 (UTC hour of day).",
+            },
+        )
+    if payload.backup_retention_days is not None and payload.backup_retention_days < 1:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_backup_retention",
+                "message": "backup_retention_days must be at least 1.",
+            },
+        )
+
+    # Mobile scan-flow session lifetime — must be >= 0 (0 = public scan flow).
+    if payload.mobile_session_days is not None and payload.mobile_session_days < 0:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_mobile_session_days",
+                "message": "mobile_session_days must be 0 or greater (0 = public scan flow).",
+            },
+        )
+
     updates = payload.model_dump(exclude_unset=True)
+
+    # Note whether the backup schedule (hour or master-enable) changed so we can
+    # reschedule the nightly_backup cron after persisting.
+    backup_schedule_changed = (
+        "backup_hour_utc" in updates or "backup_schedule_enabled" in updates
+    )
 
     # Extract sync_interval_seconds before persisting so we can reschedule.
     new_interval: int | None = None
@@ -231,5 +444,24 @@ def update_config(
                 logger.info("Sync interval rescheduled to %ds", new_interval)
             except Exception as exc:
                 logger.warning("Could not reschedule sync_cycle job: %s", exc)
+
+    # Reschedule the nightly_backup cron when the hour or master-enable changed.
+    # The job itself re-reads backup_schedule_enabled and early-returns when off,
+    # so changing the hour while disabled still keeps the next fire time correct.
+    if backup_schedule_changed:
+        scheduler = getattr(getattr(request, "app", None), "state", None)
+        scheduler = getattr(scheduler, "scheduler", None) if scheduler is not None else None
+        if scheduler is not None:
+            try:
+                from apscheduler.triggers.cron import CronTrigger
+
+                hour = effective_backup_hour_utc(db)
+                scheduler.reschedule_job(
+                    "nightly_backup",
+                    trigger=CronTrigger(hour=hour, minute=0),
+                )
+                logger.info("Nightly backup rescheduled to %02d:00 UTC", hour)
+            except Exception as exc:
+                logger.warning("Could not reschedule nightly_backup job: %s", exc)
 
     return _config_response(db)

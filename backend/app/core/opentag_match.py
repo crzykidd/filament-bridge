@@ -591,15 +591,17 @@ def opt_to_spoolman_fields(
     # OpenPrintTag material-setting extras (typed) — only emit a key when the OPT
     # value is present.  Keys are config-overridable (resolved from Settings).
     from app.config import settings as _settings
-    from app.core.fields import OPENTAG_EXTRA_FIELDS, opentag_drying_time_to_fdb_hours
+    from app.core.fields import OPENTAG_EXTRA_FIELDS
 
     for ef in OPENTAG_EXTRA_FIELDS:
         raw = opt.get(ef.opt_key)
         if raw is None:
             continue
-        if ef.opt_key == "dryingTime":
-            value: Any = opentag_drying_time_to_fdb_hours(raw)
-        elif ef.field_type == "integer":
+        value: Any
+        # dryingTime is in MINUTES on both OpenPrintTag AND Filament DB
+        # (FDB `dryingTime` is minutes, e.g. 480 = 8 h), so it passes through as a
+        # plain integer like the other integer fields — no unit conversion.
+        if ef.field_type == "integer":
             try:
                 value = int(round(float(raw)))
             except (TypeError, ValueError):

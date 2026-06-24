@@ -2,7 +2,7 @@
 
 Security model:
 - Stateless signed session cookie ``fb_session`` via itsdangerous
-  (TimestampSigner, max-age 30 days).
+  (TimestampSigner, max-age = mobile_session_days days when >= 1, else 30 days).
 - Server secret auto-generated once and persisted in BridgeConfig ``auth_secret``.
 - Password stored as bcrypt hash in BridgeConfig ``admin_password_hash``.
 - Single optional API token: Bearer / X-API-Key header (constant-time compare).
@@ -37,9 +37,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Session cookie name and max-age (30 days in seconds)
+# Session cookie name and default max-age (30 days in seconds). The effective
+# max-age is configurable via mobile_session_days (>= 1 sets it; 0 falls back to
+# this 30-day default) — see _session_max_age below.
 _COOKIE_NAME = "fb_session"
-_COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
+_DEFAULT_COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
 _SESSION_PAYLOAD = "admin"  # constant payload; the signature is the secret
 
 
@@ -65,16 +67,32 @@ def _make_signer(db: Session) -> TimestampSigner:
     return TimestampSigner(secret, digest_method=hashlib.sha256)
 
 
-def _verify_session_cookie(cookie_value: str, signer: TimestampSigner) -> bool:
-    """Return True iff the signed cookie is valid and not expired."""
+def _session_max_age(db: Session) -> int:
+    """Return the fb_session cookie max-age in seconds.
+
+    Reads mobile_session_days: when >= 1 the cookie lives that many days; 0 (the
+    public-scan-flow setting) falls back to the 30-day default for any normal login.
+    """
+    from app.api.config import mobile_session_days
+
+    days = mobile_session_days(db)
+    if days >= 1:
+        return days * 24 * 3600
+    return _DEFAULT_COOKIE_MAX_AGE
+
+
+def _verify_session_cookie(cookie_value: str, signer: TimestampSigner, max_age: int) -> bool:
+    """Return True iff the signed cookie is valid and not older than max_age seconds."""
     try:
-        payload = signer.unsign(cookie_value, max_age=_COOKIE_MAX_AGE).decode()
+        payload = signer.unsign(cookie_value, max_age=max_age).decode()
         return payload == _SESSION_PAYLOAD
     except (SignatureExpired, BadSignature, Exception):
         return False
 
 
-def _set_session_cookie(response: Response, signer: TimestampSigner, *, secure: bool) -> None:
+def _set_session_cookie(
+    response: Response, signer: TimestampSigner, *, secure: bool, max_age: int
+) -> None:
     signed = signer.sign(_SESSION_PAYLOAD).decode()
     response.set_cookie(
         key=_COOKIE_NAME,
@@ -82,7 +100,7 @@ def _set_session_cookie(response: Response, signer: TimestampSigner, *, secure: 
         httponly=True,
         samesite="lax",
         secure=secure,
-        max_age=_COOKIE_MAX_AGE,
+        max_age=max_age,
         path="/",
     )
 
@@ -100,27 +118,27 @@ def _is_https(request: Request) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def require_auth(
+def _has_valid_credentials(
     request: Request,
-    fb_session: str | None = Cookie(default=None),
-    db: Session = Depends(get_db),
-) -> None:
-    """FastAPI dependency: enforces authentication on protected routes.
+    fb_session: str | None,
+    db: Session,
+) -> bool:
+    """Return True iff the request carries valid auth (or auth is disabled).
 
-    Passes when any of:
-    - AUTH_ENABLED is false (app is fully open)
-    - A valid fb_session cookie is present
-    - api_token_enabled is true AND a matching Bearer/X-API-Key header is present
-    Otherwise raises 401.
+    Shared by require_auth and the mobile-flow _mobile_auth dependency so both apply
+    EXACTLY the same check:
+    - AUTH_ENABLED is false (app is fully open), OR
+    - a valid fb_session cookie is present, OR
+    - api_token_enabled is true AND a matching Bearer/X-API-Key header is present.
     """
     if not _settings.auth_enabled:
-        return
+        return True
 
     # --- Check session cookie ---
     if fb_session:
         signer = _make_signer(db)
-        if _verify_session_cookie(fb_session, signer):
-            return
+        if _verify_session_cookie(fb_session, signer, _session_max_age(db)):
+            return True
 
     # --- Check API token ---
     token_enabled = bool(get_config_value(db, "api_token_enabled", False))
@@ -134,8 +152,49 @@ def require_auth(
             else:
                 incoming = request.headers.get("X-API-Key")
             if incoming and secrets.compare_digest(incoming, stored_token):
-                return
+                return True
 
+    return False
+
+
+def require_auth(
+    request: Request,
+    fb_session: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
+) -> None:
+    """FastAPI dependency: enforces authentication on protected routes.
+
+    Passes when _has_valid_credentials is true; otherwise raises 401.
+    """
+    if _has_valid_credentials(request, fb_session, db):
+        return
+    raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Authentication required"})
+
+
+def mobile_auth(
+    request: Request,
+    fb_session: str | None = Cookie(default=None),
+    db: Session = Depends(get_db),
+) -> None:
+    """Conditional auth dependency for the mobile scan flow.
+
+    Used ONLY by the mobile + labels routers and the /r/ redirect (the three surfaces
+    a cold phone scan touches). It is a strict SUBSET-OR-EQUAL of require_auth:
+
+    - mobile_session_days == 0 → PUBLIC: return immediately, no credentials needed.
+      (Just these three surfaces open up; every other router still carries require_auth.)
+    - mobile_session_days >= 1 → enforce the SAME check as require_auth (session cookie
+      OR API token OR AUTH_ENABLED=false), raising 401 otherwise.
+
+    This is auth only — the separate _require_labels_enabled 403 feature gate still
+    runs on every mobile/label route regardless of this value.
+    """
+    from app.api.config import mobile_session_days
+
+    if mobile_session_days(db) == 0:
+        return  # public scan flow
+    if _has_valid_credentials(request, fb_session, db):
+        return
     raise HTTPException(status_code=401, detail={"code": "unauthorized", "message": "Authentication required"})
 
 
@@ -190,7 +249,7 @@ def auth_status(
         authenticated = True
     elif fb_session:
         signer = _make_signer(db)
-        authenticated = _verify_session_cookie(fb_session, signer)
+        authenticated = _verify_session_cookie(fb_session, signer, _session_max_age(db))
 
     return AuthStatusResponse(
         auth_enabled=_settings.auth_enabled,
@@ -229,7 +288,9 @@ def auth_setup(
 
     # Set session cookie so the user is immediately logged in after setup
     signer = _make_signer(db)
-    _set_session_cookie(response, signer, secure=_is_https(request))
+    _set_session_cookie(
+        response, signer, secure=_is_https(request), max_age=_session_max_age(db)
+    )
 
     return AuthStatusResponse(
         auth_enabled=_settings.auth_enabled,
@@ -262,7 +323,9 @@ def auth_login(
         )
 
     signer = _make_signer(db)
-    _set_session_cookie(response, signer, secure=_is_https(request))
+    _set_session_cookie(
+        response, signer, secure=_is_https(request), max_age=_session_max_age(db)
+    )
 
     return AuthStatusResponse(
         auth_enabled=_settings.auth_enabled,

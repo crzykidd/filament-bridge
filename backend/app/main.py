@@ -34,17 +34,19 @@ from app.api import config as config_router
 from app.api import conflicts as conflicts_router
 from app.api import debug as debug_router
 from app.api import health as health_router
+from app.api import labels as labels_router
 from app.api import version as version_router
 from app.api import mappings as mappings_router
+from app.api import mobile as mobile_router
 from app.api import reconcile as reconcile_router
 from app.api import opentag as opentag_router
 from app.api import sync as sync_router
 from app.api import sync_log as sync_log_router
 from app.api import wizard as wizard_router
-from app.api.auth import require_auth
+from app.api.auth import mobile_auth, require_auth
 from app.config import settings
 from app.core.engine import run_sync_cycle
-from app.db import SessionLocal
+from app.db import SessionLocal, get_db
 from app.api.config import get_config_value, prune_sync_log, set_config_value
 from app.models.config import BridgeConfig, seed_defaults
 from app.services.filamentdb import FilamentDBClient
@@ -199,11 +201,35 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             finally:
                 db.close()
 
+        async def _backup_job() -> None:
+            """Nightly scheduled backup (issue #5).
+
+            Re-reads the live config each fire, early-returns when the master
+            switch is off (mirrors _sync_job's gating), then writes whichever
+            backups are enabled and prunes old files. Any failure is logged, never
+            raised, so a bad backup can't crash the scheduler.
+            """
+            from app.api.config import effective_backup_config
+            from app.core.backup_job import run_scheduled_backup
+
+            db = SessionLocal()
+            try:
+                cfg = effective_backup_config(db)
+                if not cfg.backup_schedule_enabled:
+                    logger.debug("Scheduled backups disabled — skipping nightly run")
+                    return
+                await run_scheduled_backup(db, app.state.filamentdb, settings=cfg)
+            except Exception as exc:
+                logger.error("Unhandled error in backup job: %s", exc, exc_info=True)
+            finally:
+                db.close()
+
         # Determine the effective interval: DB override takes precedence over env default.
-        from app.api.config import _effective_sync_interval
+        from app.api.config import _effective_sync_interval, effective_backup_hour_utc
         db_for_interval = SessionLocal()
         try:
             initial_interval = _effective_sync_interval(db_for_interval)
+            initial_backup_hour = effective_backup_hour_utc(db_for_interval)
         finally:
             db_for_interval.close()
 
@@ -213,13 +239,38 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             seconds=initial_interval,
             id="sync_cycle",
         )
+
+        from apscheduler.triggers.cron import CronTrigger
+
+        _scheduler.add_job(
+            _backup_job,
+            CronTrigger(hour=initial_backup_hour, minute=0),
+            id="nightly_backup",
+        )
         _scheduler.start()
         # Store scheduler on app.state so the config endpoint can reschedule it.
         app.state.scheduler = _scheduler
         logger.info(
-            "Scheduler started — interval=%ds, auto-sync gated by BridgeConfig.auto_sync_enabled",
+            "Scheduler started — interval=%ds, auto-sync gated by BridgeConfig.auto_sync_enabled; "
+            "nightly backup at %02d:00 UTC (gated by backup_schedule_enabled)",
             initial_interval,
+            initial_backup_hour,
         )
+
+        # One-shot prune at startup so stale backups clear even if the nightly
+        # hour hasn't been reached yet. Cheap and failure-tolerant.
+        try:
+            from app.api.config import effective_backup_config
+            from app.core.backup_job import backups_dir, prune_backups
+
+            _prune_db = SessionLocal()
+            try:
+                _bcfg = effective_backup_config(_prune_db)
+            finally:
+                _prune_db.close()
+            prune_backups(backups_dir(_bcfg.data_dir), _bcfg.backup_retention_days)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Startup backup prune failed: %s", exc)
         try:
             yield
         finally:
@@ -250,7 +301,7 @@ app.include_router(health_router.router, prefix="/api")
 app.include_router(auth_router.router, prefix="/api")
 app.include_router(version_router.router, prefix="/api")
 
-# Protected: all remaining API routers require authentication
+# Protected: all remaining API routers require authentication (global require_auth).
 _auth_dep = [Depends(require_auth)]
 app.include_router(sync_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(conflicts_router.router, prefix="/api", dependencies=_auth_dep)
@@ -262,6 +313,38 @@ app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
+
+# Conditional auth: the mobile + labels routers (and the /r/ redirect below) carry
+# `mobile_auth` INSTEAD of the global `require_auth`. mobile_auth bypasses auth ONLY
+# when mobile_session_days == 0 (public scan flow) and otherwise enforces the exact
+# same check as require_auth. These are the ONLY three surfaces that become
+# conditionally public — every other router above keeps require_auth unchanged. The
+# `_require_labels_enabled` 403 feature gate still runs on each mobile/label route.
+_mobile_auth_dep = [Depends(mobile_auth)]
+app.include_router(mobile_router.router, prefix="/api", dependencies=_mobile_auth_dep)
+app.include_router(labels_router.router, prefix="/api", dependencies=_mobile_auth_dep)
+
+
+# QR redirect — the indirection point. The printed QR encodes /r/{fil}/{spool};
+# this 302s to the configured target so the destination can change later without
+# reprinting. Registered BEFORE the SPA catch-all below or index.html swallows it.
+# It is outside /api, so it carries its own auth + feature-gate dependencies. Auth is
+# the conditional mobile_auth (public when mobile_session_days == 0), matching the
+# /api/mobile + /api/labels routers — a cold phone scan lands here first.
+@app.get("/r/{fil}/{spool}", include_in_schema=False, dependencies=_mobile_auth_dep)
+async def _qr_redirect(fil: str, spool: str, db=Depends(get_db)):
+    from fastapi.responses import RedirectResponse
+
+    from app.api.config import mobile_redirect_target
+    from app.api.mobile import _require_labels_enabled, qr_redirect_url
+
+    _require_labels_enabled(db)  # 403 when the feature is off
+
+    target = mobile_redirect_target(db)
+    # qr_redirect_url validates fil/spool against an id allowlist before building the
+    # target, closing the open-redirect / path-injection vector (CWE-601 / CWE-22).
+    url = qr_redirect_url(target, fil, spool, filamentdb_url=settings.filamentdb_url)
+    return RedirectResponse(url, status_code=302)
 
 # Serve the React SPA from /static when the directory exists (built image only).
 # Guarded so `pytest` and `uvicorn --reload` work without a frontend build.

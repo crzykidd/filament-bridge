@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBlocker, Link } from 'react-router-dom'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus, getPrinterStatus, BridgeApiError } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DebugConfirmDialog } from '../components/DebugConfirmDialog'
-import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy } from '../api/types'
+import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy, MobileRedirectTarget, MobileWeightMode } from '../api/types'
 import { useTheme } from '../context/ThemeContext'
 import type { ThemeMode } from '../context/ThemeContext'
 import { HelpTip } from '../components/HelpTip'
@@ -196,6 +196,8 @@ export default function Settings() {
   const [matPolicy, setMatPolicy] = useState<MatConflictPolicy | null>(null)
   const [archiveDir, setArchiveDir] = useState<SyncDirection2 | null>(null)
   const [archivePolicy, setArchivePolicy] = useState<MatConflictPolicy | null>(null)
+  const [locationDir, setLocationDir] = useState<SyncDirection2 | null>(null)
+  const [locationPolicy, setLocationPolicy] = useState<MatConflictPolicy | null>(null)
   const [newSpoolDir, setNewSpoolDir] = useState<SyncDirection2 | null>(null)
 
   // New-record handling policies
@@ -214,6 +216,13 @@ export default function Settings() {
   const [togglingAutoSync, setTogglingAutoSync] = useState(false)
   const [autoSyncMsg, setAutoSyncMsg] = useState('')
   const [showAutoSyncBackupDialog, setShowAutoSyncBackupDialog] = useState(false)
+
+  // Scheduled backups state (issue #5)
+  const [backupScheduleEnabled, setBackupScheduleEnabled] = useState<boolean | null>(null)
+  const [backupBridgeStateEnabled, setBackupBridgeStateEnabled] = useState<boolean | null>(null)
+  const [backupFilamentdbEnabled, setBackupFilamentdbEnabled] = useState<boolean | null>(null)
+  const [backupRetentionDays, setBackupRetentionDays] = useState<number | null>(null)
+  const [backupHourUtc, setBackupHourUtc] = useState<number | null>(null)
 
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -255,6 +264,23 @@ export default function Settings() {
   const [togglingToken, setTogglingToken] = useState(false)
   const [tokenToggleMsg, setTokenToggleMsg] = useState('')
 
+  // --- Mobile updates (phase 2) -----------------------------------------
+  const [mobileLabelsEnabled, setMobileLabelsEnabled] = useState<boolean | null>(null)
+  const [mobileSessionDays, setMobileSessionDays] = useState<number | null>(null)
+  const [mobileRedirectTarget, setMobileRedirectTarget] = useState<MobileRedirectTarget | null>(null)
+  const [mobileWeightDefaultMode, setMobileWeightDefaultMode] = useState<MobileWeightMode | null>(null)
+
+  // --- LabelForge connection (phase 3) ----------------------------------
+  const [bridgePublicUrl, setBridgePublicUrl] = useState<string | null>(null)
+  const [labelforgeUrl, setLabelforgeUrl] = useState<string | null>(null)
+  const [labelforgeToken, setLabelforgeToken] = useState<string | null>(null)
+  const [labelforgeTemplate, setLabelforgeTemplate] = useState<string | null>(null)
+  const [labelforgeFields, setLabelforgeFields] = useState<string | null>(null)
+  const [labelforgeLabelMedia, setLabelforgeLabelMedia] = useState<string | null>(null)
+  const [lfTokenVisible, setLfTokenVisible] = useState(false)
+  const [testingPrinter, setTestingPrinter] = useState(false)
+  const [printerTestMsg, setPrinterTestMsg] = useState('')
+
   // --- Unsaved-changes guard ---------------------------------------------
   const isDirty = !!data && (
     (weightDir != null && weightDir !== data.weight_sync_direction) ||
@@ -263,6 +289,8 @@ export default function Settings() {
     (matPolicy != null && matPolicy !== data.material_properties_conflict_policy) ||
     (archiveDir != null && archiveDir !== data.archive_sync_direction) ||
     (archivePolicy != null && archivePolicy !== data.archive_conflict_policy) ||
+    (locationDir != null && locationDir !== data.location_sync_direction) ||
+    (locationPolicy != null && locationPolicy !== data.location_sync_conflict_policy) ||
     (newSpoolDir != null && newSpoolDir !== data.new_spool_sync_direction) ||
     (newFilamentPolicy != null && newFilamentPolicy !== data.new_filament_policy) ||
     (newSpoolPolicy != null && newSpoolPolicy !== data.new_spool_policy) ||
@@ -273,10 +301,25 @@ export default function Settings() {
     (neverImportEmpties != null && neverImportEmpties !== data.never_import_empties) ||
     (syncIntervalMinutes != null && syncIntervalMinutes !== Math.round(data.sync_interval_seconds / 60)) ||
     (syncLogRetentionDays != null && syncLogRetentionDays !== data.sync_log_retention_days) ||
+    (backupScheduleEnabled != null && backupScheduleEnabled !== data.backup_schedule_enabled) ||
+    (backupBridgeStateEnabled != null && backupBridgeStateEnabled !== data.backup_bridge_state_enabled) ||
+    (backupFilamentdbEnabled != null && backupFilamentdbEnabled !== data.backup_filamentdb_enabled) ||
+    (backupRetentionDays != null && backupRetentionDays !== data.backup_retention_days) ||
+    (backupHourUtc != null && backupHourUtc !== data.backup_hour_utc) ||
     (variantParentMode != null && variantParentMode !== data.variant_parent_mode) ||
     (containerMarkerEnabled != null && containerMarkerEnabled !== (data.container_parent_marker !== '')) ||
     (containerMarkerText != null && containerMarkerEnabled !== false &&
-      containerMarkerText !== data.container_parent_marker)
+      containerMarkerText !== data.container_parent_marker) ||
+    (mobileLabelsEnabled != null && mobileLabelsEnabled !== data.mobile_labels_enabled) ||
+    (mobileSessionDays != null && mobileSessionDays !== data.mobile_session_days) ||
+    (mobileRedirectTarget != null && mobileRedirectTarget !== data.mobile_redirect_target) ||
+    (mobileWeightDefaultMode != null && mobileWeightDefaultMode !== data.mobile_weight_default_mode) ||
+    (bridgePublicUrl != null && bridgePublicUrl !== data.bridge_public_url) ||
+    (labelforgeUrl != null && labelforgeUrl !== data.labelforge_url) ||
+    (labelforgeToken != null && labelforgeToken !== data.labelforge_token) ||
+    (labelforgeTemplate != null && labelforgeTemplate !== data.labelforge_template) ||
+    (labelforgeFields != null && labelforgeFields !== data.labelforge_fields) ||
+    (labelforgeLabelMedia != null && labelforgeLabelMedia !== data.labelforge_label_media)
   )
 
   const blocker = useBlocker(
@@ -317,6 +360,8 @@ export default function Settings() {
   const mPol = (matPolicy ?? data.material_properties_conflict_policy) as MatConflictPolicy
   const aDir = archiveDir ?? data.archive_sync_direction
   const aPol = (archivePolicy ?? data.archive_conflict_policy) as MatConflictPolicy
+  const lDir = locationDir ?? data.location_sync_direction
+  const lPol = (locationPolicy ?? data.location_sync_conflict_policy) as MatConflictPolicy
   const nsDir = newSpoolDir ?? data.new_spool_sync_direction
   const nfPol = newFilamentPolicy ?? data.new_filament_policy
   const nsPol = newSpoolPolicy ?? data.new_spool_policy
@@ -330,8 +375,26 @@ export default function Settings() {
   const effectiveRetentionDays = syncLogRetentionDays ?? data.sync_log_retention_days
   const showIntervalWarning = effectiveIntervalMinutes > 5
 
+  const effBackupEnabled = backupScheduleEnabled ?? data.backup_schedule_enabled
+  const effBackupBridgeState = backupBridgeStateEnabled ?? data.backup_bridge_state_enabled
+  const effBackupFilamentdb = backupFilamentdbEnabled ?? data.backup_filamentdb_enabled
+  const effBackupRetention = backupRetentionDays ?? data.backup_retention_days
+  const effBackupHour = backupHourUtc ?? data.backup_hour_utc
+
   const effectiveVariantParentMode = variantParentMode ?? data.variant_parent_mode
   const effectiveDebugMode = debugMode ?? data.debug_mode
+
+  const effMobileEnabled = mobileLabelsEnabled ?? data.mobile_labels_enabled
+  const effMobileSessionDays = mobileSessionDays ?? data.mobile_session_days
+  const effMobileRedirect = mobileRedirectTarget ?? data.mobile_redirect_target
+  const effMobileWeightMode = mobileWeightDefaultMode ?? data.mobile_weight_default_mode
+
+  const effBridgePublicUrl = bridgePublicUrl ?? data.bridge_public_url
+  const effLabelforgeUrl = labelforgeUrl ?? data.labelforge_url
+  const effLabelforgeToken = labelforgeToken ?? data.labelforge_token
+  const effLabelforgeTemplate = labelforgeTemplate ?? data.labelforge_template
+  const effLabelforgeFields = labelforgeFields ?? data.labelforge_fields
+  const effLabelforgeLabelMedia = labelforgeLabelMedia ?? data.labelforge_label_media
 
   const savedMarker = data.container_parent_marker
   const effectiveMarkerEnabled = containerMarkerEnabled ?? (savedMarker !== '')
@@ -523,6 +586,8 @@ export default function Settings() {
         material_properties_conflict_policy: mPol,
         archive_sync_direction: aDir,
         archive_conflict_policy: aPol,
+        location_sync_direction: lDir,
+        location_sync_conflict_policy: lPol,
         new_spool_sync_direction: nsDir,
         new_filament_policy: newFilamentPolicy ?? undefined,
         new_spool_policy: newSpoolPolicy ?? undefined,
@@ -532,11 +597,26 @@ export default function Settings() {
         opentag_vendor_aliases: vendorAliases ?? undefined,
         sync_interval_seconds: syncIntervalMinutes != null ? syncIntervalMinutes * 60 : undefined,
         sync_log_retention_days: syncLogRetentionDays ?? undefined,
+        backup_schedule_enabled: backupScheduleEnabled ?? undefined,
+        backup_bridge_state_enabled: backupBridgeStateEnabled ?? undefined,
+        backup_filamentdb_enabled: backupFilamentdbEnabled ?? undefined,
+        backup_retention_days: backupRetentionDays ?? undefined,
+        backup_hour_utc: backupHourUtc ?? undefined,
         never_import_empties: neverImportEmpties ?? undefined,
         variant_parent_mode: variantParentMode ?? undefined,
         container_parent_marker: (containerMarkerEnabled != null || containerMarkerText != null)
           ? effectiveMarkerValue
           : undefined,
+        mobile_labels_enabled: mobileLabelsEnabled ?? undefined,
+        mobile_session_days: mobileSessionDays ?? undefined,
+        mobile_redirect_target: mobileRedirectTarget ?? undefined,
+        mobile_weight_default_mode: mobileWeightDefaultMode ?? undefined,
+        bridge_public_url: bridgePublicUrl ?? undefined,
+        labelforge_url: labelforgeUrl ?? undefined,
+        labelforge_token: labelforgeToken ?? undefined,
+        labelforge_template: labelforgeTemplate ?? undefined,
+        labelforge_fields: labelforgeFields ?? undefined,
+        labelforge_label_media: labelforgeLabelMedia ?? undefined,
       })
       setSaveMsg('Saved.')
       void reload()
@@ -544,6 +624,23 @@ export default function Settings() {
       setSaveMsg(e instanceof Error ? e.message : 'Error saving.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleTestPrinter() {
+    setTestingPrinter(true)
+    setPrinterTestMsg('')
+    try {
+      const status = await getPrinterStatus()
+      const media = status.loaded_media ? status.loaded_media.display_name : 'none'
+      const errs = status.errors?.length ? ` — errors: ${status.errors.join(', ')}` : ''
+      setPrinterTestMsg(
+        `${status.ready ? 'Ready' : 'Not ready'} · ${status.model ?? 'unknown model'} · media: ${media}${errs}`,
+      )
+    } catch (e) {
+      setPrinterTestMsg(e instanceof BridgeApiError ? e.message : String(e))
+    } finally {
+      setTestingPrinter(false)
     }
   }
 
@@ -853,6 +950,32 @@ export default function Settings() {
           />
         </div>
 
+        {/* Location sync card — full width */}
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-1">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Location sync</h3>
+          <p className={`${subTextCls} mb-2`}>
+            Keeps a spool&apos;s storage location in sync for already-paired spools. Spoolman stores
+            the location as a free-text name; Filament DB references it by id, so the bridge compares
+            by name and finds-or-creates the matching Filament DB location on a push. Two-way mirrors
+            both directions and queues a conflict only when both sides change to different names.
+          </p>
+          <DirectionSelect
+            label="Direction"
+            value={lDir}
+            onChange={v => {
+              setLocationDir(v)
+              if (v !== 'two_way') setLocationPolicy('manual')
+            }}
+            tip="Which side's location changes get mirrored to the other. Two-way mirrors both directions and queues a conflict only when both sides change to different locations."
+            tipHref="/docs/sync-model"
+          />
+          <MatPropConflictSelect
+            value={lPol}
+            direction={lDir}
+            onChange={v => setLocationPolicy(v)}
+          />
+        </div>
+
         {/* New records card — full width under the 2-column pair */}
         <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-2">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">New records</h3>
@@ -1089,6 +1212,206 @@ export default function Settings() {
           </span>
         </div>
 
+        {/* ---------------------------------------------------------------- */}
+        {/* Mobile & Labels (phase 2 mobile flow + phase 3 LabelForge printing) */}
+        {/* ---------------------------------------------------------------- */}
+        <div className={`rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3 mt-2`}>
+          <div className="flex items-center gap-1">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Mobile &amp; Labels</h3>
+            <HelpTip text="Phone-friendly spool update page reached by scanning a label QR (or via the Mobile updates nav item), plus LabelForge label printing. When enabled, the nav item appears, the scan/redirect endpoints respond, and the Print-label buttons show." />
+          </div>
+
+          {/* Enable toggle */}
+          <div className="flex items-start justify-between py-1">
+            <div>
+              <span className={labelCls}>Enable mobile updates</span>
+              <p className={`${subTextCls} mt-0.5`}>
+                Master switch. When off, the &quot;Mobile updates&quot; nav item is hidden and the
+                mobile/scan/redirect endpoints refuse (403).
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileLabelsEnabled(!effMobileEnabled)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ml-4 mt-0.5 ${
+                effMobileEnabled ? toggleOnCls : toggleOffCls
+              }`}
+              aria-pressed={effMobileEnabled}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  effMobileEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Redirect target + default weight mode (disabled when off) */}
+          <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1 ${effMobileEnabled ? '' : 'opacity-50'}`}>
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>QR redirect target</span>
+              <select
+                value={effMobileRedirect}
+                disabled={!effMobileEnabled}
+                onChange={e => setMobileRedirectTarget(e.target.value as MobileRedirectTarget)}
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              >
+                <option value="bridge">Bridge scan page</option>
+                <option value="filamentdb">Filament DB filament page</option>
+              </select>
+              <span className={subTextCls}>Where the QR&apos;s /r redirect sends the phone.</span>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>Default weight mode</span>
+              <select
+                value={effMobileWeightMode}
+                disabled={!effMobileEnabled}
+                onChange={e => setMobileWeightDefaultMode(e.target.value as MobileWeightMode)}
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              >
+                <option value="direct_correction">Correct weight (direct)</option>
+                <option value="usage">Log as usage</option>
+              </select>
+              <span className={subTextCls}>Preselected save mode on the update page (overridable per save).</span>
+            </label>
+          </div>
+
+          {/* Scan-flow auth + session lifetime */}
+          <div className={`pt-1 ${effMobileEnabled ? '' : 'opacity-50'}`}>
+            <label className="flex flex-col gap-1 max-w-xs">
+              <span className={labelCls}>Scan login (days)</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={effMobileSessionDays}
+                disabled={!effMobileEnabled}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10)
+                  setMobileSessionDays(Number.isNaN(n) ? 0 : Math.max(0, n))
+                }}
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+              <span className={subTextCls}>
+                Days a scan login stays signed in. <strong>0</strong> = scanned labels need no login
+                (the scan page &amp; its endpoints are public); the rest of the app still requires the
+                password.
+              </span>
+            </label>
+          </div>
+
+          {/* LabelForge connection (phase 3) — greyed when the feature is off */}
+          <div className={`space-y-3 pt-3 border-t border-gray-100 dark:border-gray-700 ${effMobileEnabled ? '' : 'opacity-50'}`}>
+            <div className="flex items-center gap-1">
+              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300">LabelForge label printing</h4>
+              <HelpTip text="Connection to a LabelForge instance (a self-hosted Brother QL print server). The template is created in LabelForge; the bridge only fills its placeholder values. A QR ({qr_url}) element needs a LabelForge dev build (>v0.1.3)." />
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>Bridge public URL</span>
+              <input
+                type="text"
+                value={effBridgePublicUrl}
+                disabled={!effMobileEnabled}
+                onChange={e => setBridgePublicUrl(e.target.value)}
+                placeholder="https://bridge.example.com (blank = derive from request)"
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+              <span className={subTextCls}>External base URL baked into the label QR. Leave blank to derive it from each request.</span>
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>LabelForge URL</span>
+              <input
+                type="text"
+                value={effLabelforgeUrl}
+                disabled={!effMobileEnabled}
+                onChange={e => setLabelforgeUrl(e.target.value)}
+                placeholder="http://labelforge:8000"
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>LabelForge API token</span>
+              <div className="flex gap-2">
+                <input
+                  type={lfTokenVisible ? 'text' : 'password'}
+                  value={effLabelforgeToken}
+                  disabled={!effMobileEnabled}
+                  onChange={e => setLabelforgeToken(e.target.value)}
+                  placeholder="Bearer token"
+                  className={`flex-1 ${inputCls} disabled:cursor-not-allowed`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setLfTokenVisible(v => !v)}
+                  className="px-3 py-1 text-xs font-medium rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                >
+                  {lfTokenVisible ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <span className={subTextCls}>Sent as <code>Authorization: Bearer …</code> on every LabelForge call.</span>
+            </label>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <label className="flex flex-col gap-1">
+                <span className={labelCls}>Template name</span>
+                <input
+                  type="text"
+                  value={effLabelforgeTemplate}
+                  disabled={!effMobileEnabled}
+                  onChange={e => setLabelforgeTemplate(e.target.value)}
+                  placeholder="spool"
+                  className={`${inputCls} disabled:cursor-not-allowed`}
+                />
+                <span className={subTextCls}>Created in LabelForge with {'{placeholder}'} text.</span>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className={labelCls}>Label media (optional)</span>
+                <input
+                  type="text"
+                  value={effLabelforgeLabelMedia}
+                  disabled={!effMobileEnabled}
+                  onChange={e => setLabelforgeLabelMedia(e.target.value)}
+                  placeholder="(template default)"
+                  className={`${inputCls} disabled:cursor-not-allowed`}
+                />
+                <span className={subTextCls}>Override the template&apos;s media, e.g. <code>62</code>.</span>
+              </label>
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className={labelCls}>Fields (CSV)</span>
+              <input
+                type="text"
+                value={effLabelforgeFields}
+                disabled={!effMobileEnabled}
+                onChange={e => setLabelforgeFields(e.target.value)}
+                placeholder="brand,color,number,qr_url"
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+              <span className={subTextCls}>
+                Which fields to send. Available: <code>brand</code>, <code>color</code>, <code>color_hex</code>, <code>number</code>, <code>material</code>, <code>qr_url</code>. Unknown names are skipped.
+              </span>
+            </label>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                type="button"
+                onClick={handleTestPrinter}
+                disabled={!effMobileEnabled || testingPrinter}
+                className="px-3 py-1.5 text-sm font-medium rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {testingPrinter ? 'Testing…' : 'Test printer'}
+              </button>
+              {printerTestMsg && (
+                <span className="text-xs text-gray-600 dark:text-gray-300">{printerTestMsg}</span>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Save button */}
         <div className={`pt-3 ${dividerCls} flex items-center gap-3`}>
           <button
@@ -1129,6 +1452,92 @@ export default function Settings() {
           </label>
         </div>
         {importMsg && <p className="text-sm text-gray-600 dark:text-gray-300">{importMsg}</p>}
+      </div>
+
+      {/* Scheduled backups (issue #5) */}
+      <div className={`${cardCls} space-y-3`}>
+        <div className="flex items-center">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Scheduled backups</h2>
+          <HelpTip
+            text="Writes the bridge's own state export and a Filament DB snapshot into the data volume each night, then prunes old files. Spoolman is not included — the bridge can't prune Spoolman's own backups."
+            learnMoreHref="/docs/backups"
+          />
+        </div>
+        <p className={subTextCls}>
+          A nightly job saves backups into <code className="bg-gray-100 dark:bg-gray-700 px-1 rounded">{'<DATA_DIR>'}/backups/</code> and
+          deletes anything past the retention window. Restore via Import backup above (bridge state),
+          or by copying a Filament DB snapshot into Filament DB.
+        </p>
+
+        {/* Master enable */}
+        <div className={`flex items-center justify-between py-2 ${dividerCls}`}>
+          <span className={labelCls}>Enable scheduled backups</span>
+          <button
+            type="button"
+            onClick={() => setBackupScheduleEnabled(!effBackupEnabled)}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 ${effBackupEnabled ? toggleOnCls : toggleOffCls}`}
+            aria-pressed={effBackupEnabled}
+          >
+            <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${effBackupEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {/* Sub-toggles — greyed out when master is off */}
+        <div className={`space-y-1 ${effBackupEnabled ? '' : 'opacity-50'}`}>
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Back up bridge state</span>
+            <button
+              type="button"
+              disabled={!effBackupEnabled}
+              onClick={() => setBackupBridgeStateEnabled(!effBackupBridgeState)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:cursor-not-allowed ${effBackupBridgeState ? toggleOnCls : toggleOffCls}`}
+              aria-pressed={effBackupBridgeState}
+            >
+              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${effBackupBridgeState ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Back up Filament DB snapshot</span>
+            <button
+              type="button"
+              disabled={!effBackupEnabled}
+              onClick={() => setBackupFilamentdbEnabled(!effBackupFilamentdb)}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:cursor-not-allowed ${effBackupFilamentdb ? toggleOnCls : toggleOffCls}`}
+              aria-pressed={effBackupFilamentdb}
+            >
+              <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${effBackupFilamentdb ? 'translate-x-5' : 'translate-x-0'}`} />
+            </button>
+          </div>
+
+          {/* Retention (days) */}
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Retention (days)</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              disabled={!effBackupEnabled}
+              value={effBackupRetention}
+              onChange={e => setBackupRetentionDays(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              className={`w-24 ${inputCls} text-right disabled:opacity-60`}
+            />
+          </div>
+
+          {/* Run hour (UTC) */}
+          <div className="flex items-center justify-between py-2">
+            <span className={labelCls}>Run at (UTC hour)</span>
+            <select
+              disabled={!effBackupEnabled}
+              value={effBackupHour}
+              onChange={e => setBackupHourUtc(parseInt(e.target.value, 10))}
+              className={`w-24 ${inputCls} text-right disabled:opacity-60`}
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
 
       {/* Wizard status */}

@@ -8,7 +8,7 @@ answer differs by type.
 
 | Badge | When it fires |
 |---|---|
-| **Weight / Property / Multicolor** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). |
+| **Weight / Property / Multicolor / Lifecycle / Location** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). Lifecycle fires on opposite archive/retire states; Location fires when both sides move to different location names. |
 | **Master divergence** | A Spoolman value would override a Filament DB variant's *inherited* setting (the variant currently gets the value from its parent). Writing it silently would detach the field from the parent, so the bridge asks first. |
 | **Deleted record** | A previously-synced spool was deleted on one side, and the surviving side is still linked to it. The bridge protects the survivor and asks what you want. |
 | **New filament** | An unmapped filament appeared on one side and `new_filament_policy` is `manual_review`. Actionable — use the "Add" button to create it on the other side and map it. Once a filament is mapped, any held spools belonging to it are released for normal new-spool handling. |
@@ -35,13 +35,47 @@ Expanding a conflict row shows:
 
 ## What resolving does, per type
 
-### Cross-system (weight / property / multicolor) — record-only
+### Cross-system (weight / property / multicolor) — converges on resolve
 
 The expanded card shows the conflicting values side-by-side. Pick **Use Spoolman**,
-**Use Filament DB**, or enter a **Manual value**. This records your choice and removes
-the conflict from the queue — **it does not write the value upstream.** Make the actual
-edit in whichever system you chose against, and the next sync cycle propagates it
-normally. (Bulk-resolve works the same way for many rows at once.)
+**Use Filament DB**, or enter a **Manual value**. Resolving **writes the chosen value to
+BOTH systems and refreshes both snapshots**, then removes the conflict from the queue — so
+the next sync cycle re-reads the agreed value and does not re-queue it (GitHub #21). This
+is human-approved reconciliation, not silent auto-apply: choosing a side *is* the approval.
+
+Each field family reuses its sync pass's exact write + conversion + snapshot key:
+
+- **Weight** — a **direct absolute write** to both sides: Spoolman `remaining_weight = W`,
+  Filament DB `totalWeight = W + tare`. **No usage entry is logged** — a human-approved
+  reconciliation is a correction (the same path as a weight *increase*), so the usage-delta
+  audit trail is intentionally bypassed. `W` is the net remaining weight in Spoolman units:
+  *Use Spoolman* → the stored SM value; *Use Filament DB* → stored FDB `totalWeight − tare`;
+  *Manual* → the value you entered (net).
+- **Multicolor / material-tags** — these conflicts store a system-agnostic *signature*, so
+  the write payload is re-derived from the chosen side's **live** state (via the same
+  `core/color` / `core/material_tags` converters the engine uses) and written to both sides.
+  Manual entry is not supported for these (no single scalar represents the state) — pick a side.
+- **Cost, temperatures, native scalars, OpenPrintTag material-setting fields, and dynamic
+  `FIELD_MAPPINGS` extras** — the chosen value is written to the native field on each system
+  (Filament DB temperature objects are read-modify-written so sibling temps survive; the
+  `material ↔ type` / `weight ↔ netFilamentWeight` name remaps are honored).
+- **Lifecycle** (`field_name="lifecycle"`) — the chosen archive/retire **boolean** is written
+  to both sides (Spoolman `archived`, Filament DB `retired`). Fires only when both sides flip
+  to *opposite* states; *Manual* records an explicit boolean.
+- **Location** (`field_name="location"`) — the chosen location **name** is written to both
+  sides: Spoolman `location` (the string) and Filament DB `locationId` (found-or-created from
+  the name via `ensure_fdb_location`). Fires only when both sides change to *different* names;
+  *Manual* lets you type a name (or clear it). Both snapshot location names refresh on resolve.
+
+If an upstream write fails, the resolve returns an error and **leaves the conflict open**
+(no partial snapshot advance). A conflict whose field has no known apply path is rejected
+visibly rather than silently recorded.
+
+**Bulk-resolve converges too.** `POST /conflicts/bulk-resolve` routes each `cross_system`
+conflict through the same converge path, committing per conflict so a single upstream-write
+failure isolates to that conflict: it is returned in the response `failed[]` list and left
+open, while the rest of the batch still converges. Deletion-marker and master-divergence
+conflicts keep their record-only / per-row-action behavior in bulk.
 
 ### Master divergence — applies upstream on resolve
 

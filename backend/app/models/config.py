@@ -24,6 +24,13 @@ _DEFAULTS = {
     # NOT applicable (booleans aren't timestamp-eligible) and is rejected at the API.
     "archive_sync_direction": '"two_way"',
     "archive_conflict_policy": '"manual"',
+    # Location sync for already-mapped spool pairs. Compares by NAME (Spoolman stores a
+    # free-text location string; Filament DB stores a locationId resolved to its name).
+    # two_way mirrors a one-sided location change to the other system; a genuine both-sides
+    # change queues a manual cross_system conflict. newest_wins is NOT applicable (a location
+    # name has no comparable timestamp) and is rejected at the API.
+    "location_sync_direction": '"two_way"',
+    "location_sync_conflict_policy": '"manual"',
     # New spool creation direction: two_way = bidirectional (= today's behavior).
     "new_spool_sync_direction": '"two_way"',
     # New-record handling policies (ongoing sync, not wizard).
@@ -75,6 +82,41 @@ _DEFAULTS = {
     "api_token": "null",
     # When true, requests may authenticate via Authorization: Bearer <token> or X-API-Key.
     "api_token_enabled": "false",
+    # Scheduled nightly backups (issue #5). Env vars are the start-up fallback;
+    # these DB values win when set (same precedence as sync_interval_seconds).
+    # Master enable + two independent sub-toggles (bridge-state export, FDB
+    # snapshot), all ON by default so the feature runs once deployed. Spoolman's
+    # server-side backup is intentionally excluded (no prune control). Files land
+    # in {data_dir}/backups/ and are pruned to backup_retention_days. The job runs
+    # nightly at backup_hour_utc:00 UTC.
+    "backup_schedule_enabled": "true",
+    "backup_bridge_state_enabled": "true",
+    "backup_filamentdb_enabled": "true",
+    "backup_retention_days": "7",
+    "backup_hour_utc": "3",
+    # Mobile updates & labels (phase 1). Master toggle defaults OFF — the feature
+    # is fully gated (403 on every mobile/label endpoint and the /r/ redirect, nav
+    # item hidden) until the user configures the connection settings and flips it on.
+    "mobile_labels_enabled": "false",
+    # Mobile scan-flow auth + session lifetime (days). Default 30 = unchanged behavior.
+    #   0    → the scan flow (/r/, /api/mobile/*, /api/labels/*, SPA /scan/...) is PUBLIC
+    #          (bypasses the app password); the rest of the app stays protected.
+    #   >= 1 → the scan flow requires the normal app login, and the fb_session cookie
+    #          lives this many days. Independent of mobile_labels_enabled (the 403 gate
+    #          still applies).
+    "mobile_session_days": "30",
+    # External base URL baked into the printed QR. Empty = derive from request.
+    "bridge_public_url": '""',
+    # Redirect target for GET /r/{fil}/{spool}: "bridge" (the SPA scan page) | "filamentdb".
+    "mobile_redirect_target": '"bridge"',
+    # Default weight-save mode: "direct_correction" (absolute) | "usage" (FDB usage on decrease).
+    "mobile_weight_default_mode": '"direct_correction"',
+    # LabelForge connection settings (Phase 3 printing; added now so config is touched once).
+    "labelforge_url": '""',
+    "labelforge_token": '""',
+    "labelforge_template": '""',
+    "labelforge_fields": '""',
+    "labelforge_label_media": '""',
 }
 
 

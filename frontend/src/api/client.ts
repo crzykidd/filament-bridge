@@ -22,6 +22,10 @@ import type {
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
+  MobileSpoolDetail,
+  MobileSpoolUpdateRequest,
+  LabelPrintResponse,
+  PrinterStatus,
   OpenTagApplyRequest,
   OpenTagApplyResponse,
   OpenTagCacheStatus,
@@ -159,6 +163,27 @@ export const updateMapping = (id: number, body: MappingUpdateRequest) =>
   json<MappingRow>(`/mappings/${id}`, 'PUT', body)
 export const deleteMapping = (id: number) =>
   request<void>(`/mappings/${id}`, { method: 'DELETE' })
+
+// ---------------------------------------------------------------------------
+// Mobile updates (phase 2 — scan/update page + in-nav page)
+// ---------------------------------------------------------------------------
+
+export const getMobileSpool = (fil: string, spool: string) =>
+  request<MobileSpoolDetail>(`/mobile/spool/${fil}/${spool}`)
+
+export const updateMobileSpool = (fil: string, spool: string, body: MobileSpoolUpdateRequest) =>
+  json<MobileSpoolDetail>(`/mobile/spool/${fil}/${spool}`, 'PATCH', body)
+
+export const getMobileLocations = () => request<string[]>('/mobile/locations')
+
+// ---------------------------------------------------------------------------
+// Labels (phase 3 — LabelForge printing)
+// ---------------------------------------------------------------------------
+
+export const printLabel = (fil: string, spool: string, override = false) =>
+  json<LabelPrintResponse>('/labels/print', 'POST', { fil, spool, override })
+
+export const getPrinterStatus = () => request<PrinterStatus>('/labels/printer-status')
 
 // ---------------------------------------------------------------------------
 // Config

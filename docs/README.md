@@ -14,6 +14,8 @@ Start with the top-level [README](../README.md) for what the bridge is and how t
 | [opentag-cleanup.md](opentag-cleanup.md) | The OpenPrintTag matcher, review flow, and apply semantics |
 | [opentag-matching.md](opentag-matching.md) | OpenPrintTag v2 scorer internals: token decomposition, mined lexicons, scoring weights, worked examples |
 | [security.md](security.md) | Auth model, API token, lockout recovery |
+| [backups.md](backups.md) | Manual export/import, upstream backup proxies, and the nightly scheduled backup job |
+| [mobile-updates.md](mobile-updates.md) | Scan-and-update from a phone, the QR `/r/` redirect, and label printing via LabelForge |
 | [migration-spoolman-to-filamentdb.md](migration-spoolman-to-filamentdb.md) | One-time manual migration guide (CSV-based, without the bridge) |
 
 ## How it works / reference

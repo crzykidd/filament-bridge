@@ -72,7 +72,7 @@ def _fake_spoolman(spools=None, filaments=None, field_defs=None) -> AsyncMock:
     return client
 
 
-def _fake_filamentdb(filaments=None, detail=None, version="1.33.0") -> AsyncMock:
+def _fake_filamentdb(filaments=None, detail=None, version="1.33.0", locations=None) -> AsyncMock:
     client = AsyncMock()
     client.get_filaments = AsyncMock(return_value=filaments or [])
     client.get_filament = AsyncMock(return_value=detail)
@@ -81,6 +81,9 @@ def _fake_filamentdb(filaments=None, detail=None, version="1.33.0") -> AsyncMock
     client.update_spool = AsyncMock(return_value={})
     client.update_filament = AsyncMock(return_value={})
     client.create_spool = AsyncMock(return_value={"_id": "new-spool-id"})
+    # Locations list ({_id, name}) for the per-cycle id→name resolution map.
+    client.get_locations = AsyncMock(return_value=locations or [])
+    client.create_location = AsyncMock(return_value={"_id": "new-loc-id", "name": "New"})
     return client
 
 
@@ -135,6 +138,37 @@ def _fdb_filament_ret(fid: str, spool_id: str, total_weight: float, retired: boo
         "vendor": "elegoo",
         "spoolWeight": tare,
         "spools": [{"_id": spool_id, "totalWeight": total_weight, "retired": retired}],
+    })
+
+
+def _seed_location_config(db, direction: str = "two_way", policy: str = "manual"):
+    """Set location sync direction and conflict policy in BridgeConfig."""
+    from app.models.config import BridgeConfig
+    db.merge(BridgeConfig(key="location_sync_direction", value=json.dumps(direction)))
+    db.merge(BridgeConfig(key="location_sync_conflict_policy", value=json.dumps(policy)))
+    db.commit()
+
+
+def _sm_spool_loc(spool_id: int, remaining: float, location: str | None) -> SpoolmanSpool:
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        remaining_weight=remaining,
+        archived=False,
+        location=location,
+        extra={},
+    )
+
+
+def _fdb_filament_loc(
+    fid: str, spool_id: str, total_weight: float, location_id: str | None, tare: float = 200.0
+) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": fid,
+        "name": "PLA",
+        "vendor": "elegoo",
+        "spoolWeight": tare,
+        "spools": [{"_id": spool_id, "totalWeight": total_weight, "retired": False, "locationId": location_id}],
     })
 
 
@@ -3315,3 +3349,254 @@ async def test_lifecycle_unmapped_archived_spool_not_imported(db):
     # the active-only new-spool detection set).
     fdb_client.create_spool.assert_not_called()
     assert r.created == 0
+
+
+# ---------------------------------------------------------------------------
+# Location sync (compare-by-name, mirrors archive/retire lifecycle pass) — #29
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_location_sm_change_pushes_fdb_location(db):
+    """SM-only location change → engine find-or-creates the FDB location and writes
+    locationId; both snapshots converge to the SM name; no conflict; no ping-pong."""
+    sm = _sm_spool_loc(1, 800.0, location="Shelf B")
+    # FDB spool currently at "Shelf A" (loc-a); a new location "Shelf B" must be created.
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-a")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Shelf A"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Shelf A"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb], locations=[{"_id": "loc-a", "name": "Shelf A"}])
+    fdb_client.create_location = AsyncMock(return_value={"_id": "loc-b", "name": "Shelf B"})
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-1")
+
+    assert r1.conflicts == 0
+    assert r1.updated == 1
+    # Find-or-create: "Shelf B" did not exist → created, then locationId written.
+    fdb_client.create_location.assert_called_once_with("Shelf B")
+    loc_calls = [c for c in fdb_client.update_spool.call_args_list if c.args[2] == {"locationId": "loc-b"}]
+    assert len(loc_calls) == 1
+    spoolman.update_spool.assert_not_called()
+    # Both snapshots converged to the new name.
+    assert _snap_value(db, "spoolman", "spool", "1", "location") == "Shelf B"
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Shelf B"
+
+    # No ping-pong: FDB now at loc-b ("Shelf B"), SM at "Shelf B", snapshots converged.
+    fdb_after = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-b")
+    fdb_client2 = _fake_filamentdb(
+        filaments=[fdb_after],
+        locations=[{"_id": "loc-a", "name": "Shelf A"}, {"_id": "loc-b", "name": "Shelf B"}],
+    )
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman, fdb_client2, dry_run=False, cycle_id="loc-1b")
+    assert r2.updated == 0
+    assert r2.conflicts == 0
+    fdb_client2.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_location_fdb_change_pushes_sm_location(db):
+    """FDB-only location change (locationId now resolves to a different name) → engine
+    writes the resolved name to SM.location; converges; no ping-pong."""
+    sm = _sm_spool_loc(1, 800.0, location="Shelf A")
+    # FDB moved to loc-b which resolves to "Shelf B".
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-b")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Shelf A"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Shelf A"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(
+        filaments=[fdb],
+        locations=[{"_id": "loc-a", "name": "Shelf A"}, {"_id": "loc-b", "name": "Shelf B"}],
+    )
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-2")
+
+    assert r1.conflicts == 0
+    assert r1.updated == 1
+    assert spoolman.update_spool.call_count == 1
+    assert spoolman.update_spool.call_args.args[1] == {"location": "Shelf B"}
+    fdb_client.update_spool.assert_not_called()
+    assert _snap_value(db, "spoolman", "spool", "1", "location") == "Shelf B"
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Shelf B"
+
+    # No ping-pong next cycle.
+    sm_after = _sm_spool_loc(1, 800.0, location="Shelf B")
+    spoolman2 = _fake_spoolman(spools=[sm_after])
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman2, fdb_client, dry_run=False, cycle_id="loc-2b")
+    assert r2.updated == 0
+    assert r2.conflicts == 0
+    spoolman2.update_spool.assert_not_called()
+    fdb_client.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_location_divergence_queues_cross_system_conflict(db):
+    """Both sides change location to DIFFERENT names (two_way + manual) → exactly one
+    cross_system 'location' conflict; no writes; not re-queued next cycle."""
+    sm = _sm_spool_loc(1, 800.0, location="Shelf B")     # SM moved A→B
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-c")  # FDB moved A→C
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Shelf A"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Shelf A"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(
+        filaments=[fdb],
+        locations=[
+            {"_id": "loc-a", "name": "Shelf A"},
+            {"_id": "loc-b", "name": "Shelf B"},
+            {"_id": "loc-c", "name": "Shelf C"},
+        ],
+    )
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-conf")
+
+    assert r1.conflicts == 1
+    assert r1.updated == 0
+    # No upstream location writes on a conflict.
+    fdb_client.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    conflict = db.query(Conflict).filter_by(entity_type="spool", field_name="location").first()
+    assert conflict is not None
+    assert conflict.conflict_type == "cross_system"
+    assert json.loads(conflict.spoolman_value) == "Shelf B"
+    assert json.loads(conflict.filamentdb_value) == "Shelf C"
+
+    # Dedup: a second cycle on the same divergence must NOT queue a second conflict.
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-conf-b")
+    assert db.query(Conflict).filter_by(entity_type="spool", field_name="location").count() == 1
+
+
+@pytest.mark.asyncio
+async def test_location_conflict_resolve_converges_no_requeue(db):
+    """Resolve a location cross_system conflict (filamentdb wins) → both sides converge
+    to the chosen name and a subsequent cycle does NOT re-queue (anti-ping-pong)."""
+    from app.core.conflict_apply import apply_cross_system_conflict
+
+    sm = _sm_spool_loc(1, 800.0, location="Shelf B")
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-c")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Shelf A"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Shelf A"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    locations = [
+        {"_id": "loc-a", "name": "Shelf A"},
+        {"_id": "loc-b", "name": "Shelf B"},
+        {"_id": "loc-c", "name": "Shelf C"},
+    ]
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb], locations=locations)
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-r1")
+
+    conflict = db.query(Conflict).filter_by(entity_type="spool", field_name="location").first()
+    assert conflict is not None
+
+    # Resolve: filamentdb wins → "Shelf C" written to BOTH sides + snapshots refreshed.
+    resolve_spoolman = _fake_spoolman(spools=[sm])
+    resolve_fdb = _fake_filamentdb(filaments=[fdb], locations=locations)
+    result = await apply_cross_system_conflict(
+        conflict, "filamentdb", None, db, resolve_spoolman, resolve_fdb,
+    )
+    assert result == "Shelf C"
+    resolve_spoolman.update_spool.assert_awaited_once()
+    assert resolve_spoolman.update_spool.call_args.args[1] == {"location": "Shelf C"}
+    # FDB locationId written (loc-c already exists → no create needed).
+    loc_calls = [c for c in resolve_fdb.update_spool.call_args_list if c.args[2] == {"locationId": "loc-c"}]
+    assert len(loc_calls) == 1
+    assert conflict.resolved_at is not None
+    assert _snap_value(db, "spoolman", "spool", "1", "location") == "Shelf C"
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Shelf C"
+    db.commit()
+
+    # Second cycle on the converged state: SM now "Shelf C", FDB now loc-c ("Shelf C").
+    sm_after = _sm_spool_loc(1, 800.0, location="Shelf C")
+    spoolman2 = _fake_spoolman(spools=[sm_after])
+    fdb_client2 = _fake_filamentdb(filaments=[fdb], locations=locations)
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman2, fdb_client2, dry_run=False, cycle_id="loc-r2")
+    assert r2.conflicts == 0
+    assert r2.updated == 0
+    spoolman2.update_spool.assert_not_called()
+    fdb_client2.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_location_one_way_sm_to_fdb_ignores_fdb_drift(db):
+    """direction=spoolman_to_filamentdb: an FDB-only location drift is a NOOP (locked
+    destination) — no write, snapshot converged so it isn't re-detected."""
+    sm = _sm_spool_loc(1, 800.0, location="Shelf A")
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-b")  # FDB drifted A→B
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Shelf A"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Shelf A"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(
+        filaments=[fdb],
+        locations=[{"_id": "loc-a", "name": "Shelf A"}, {"_id": "loc-b", "name": "Shelf B"}],
+    )
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-1way")
+
+    assert r.conflicts == 0
+    assert r.updated == 0
+    fdb_client.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    # FDB snapshot converged to the drifted name so it doesn't re-fire next cycle.
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Shelf B"
+
+
+def test_fdb_snapshot_dict_resolves_location_name():
+    """_fdb_snapshot_dict embeds the location NAME resolved from locationId.
+
+    Known id → its name; unknown/missing id (or absent map) → None.
+    """
+    from app.core.engine import _fdb_snapshot_dict
+    from app.schemas.filamentdb import FDBSpool
+
+    names = {"loc-a": "Shelf A", "loc-b": "Shelf B"}
+
+    known = FDBSpool(**{"_id": "s1", "totalWeight": 1000.0, "locationId": "loc-a"})
+    assert _fdb_snapshot_dict(known, fdb_location_names=names)["location"] == "Shelf A"
+
+    unknown = FDBSpool(**{"_id": "s2", "totalWeight": 1000.0, "locationId": "loc-zzz"})
+    assert _fdb_snapshot_dict(unknown, fdb_location_names=names)["location"] is None
+
+    no_loc = FDBSpool(**{"_id": "s3", "totalWeight": 1000.0})
+    assert _fdb_snapshot_dict(no_loc, fdb_location_names=names)["location"] is None
+
+    # Absent map (e.g. locations fetch failed) → None, never raises.
+    assert _fdb_snapshot_dict(known)["location"] is None
