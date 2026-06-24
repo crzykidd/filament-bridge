@@ -1,6 +1,6 @@
 # filament-bridge
 
-![version](https://img.shields.io/badge/version-0.5.1-blue)
+![version](https://img.shields.io/badge/version-0.6.0-blue)
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -59,6 +59,15 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.0 (2026-06-24)
+
+- **Mobile updates & label printing** — print a QR-coded spool label and scan it with your phone to update the spool's **weight** (from a scale, with a live net preview) and **location** in one tap, written straight to Filament DB and Spoolman. The QR encodes a stable bridge redirect so labels can be re-targeted without reprinting; labels print through a self-hosted **[LabelForge](https://github.com/crzykidd/labelforge)** instance using a template you design. Off by default — enable in **Settings → Mobile & Labels**. See [mobile updates & labels](docs/mobile-updates.md).
+- **Configurable mobile-scan auth** — a new `mobile_session_days` setting controls whether scanning a label needs the app password and how long a scan login lasts (`0` makes the scan flow public; `>= 1` keeps it behind login with an N-day session).
+- **Spool location now syncs continuously** — moving a spool to a new shelf in either system propagates to the other (a new `location_sync` category with its own direction + conflict policy), not just at wizard import. (#29)
+- **Scheduled nightly backups** — a built-in nightly job saves the bridge's own state plus a Filament DB snapshot and prunes by a configurable retention window, all toggleable in **Settings → Scheduled backups**.
+- **Fixes** — lowering a spool's weight now actually reaches Filament DB via a usage entry (#28); OpenPrintTag drying time is stored in the correct unit (minutes, #27); resolving a cross-system conflict now writes your choice to both systems and converges instead of re-queuing (#21).
+- **Changelog housekeeping** — release notes for 0.4.0 and earlier are now condensed summaries with full detail archived under `docs/CHANGELOG-0.x.x.md`.
 
 ### v0.5.1 (2026-06-22)
 
