@@ -21,7 +21,7 @@ Every cycle (scheduled, or via **Sync now**):
 3. **Mapped-pair processing.** For every `SpoolMapping`, the pair's current values are
    diffed against the last stored snapshots. First sight of a pair just stores a baseline
    (no writes). Then the weight pass, the **lifecycle (archive/retire) pass** (after
-   weight — see below), and the field-mapping pass run per pair.
+   weight — see below), the **location pass**, and the field-mapping pass run per pair.
 4. **Stale-link handling.** A mapped record missing upstream either queues a deletion
    conflict (a live, still-linked counterpart exists) or purges the bridge-local mapping
    (nothing left to protect). See [conflicts.md](conflicts.md).
@@ -48,8 +48,8 @@ policy)`:
 | Both sides changed | push (source wins by definition) | — | apply the conflict policy: `manual` → queue, `spoolman_wins`/`filamentdb_wins` → push, `newest_wins` → compare timestamps (weight only; indeterminate → queue) |
 
 Weight uses the `weight` category settings; the lifecycle pass uses the `archive_sync`
-category; every other pass uses `material_properties`. New-spool creation has a direction
-but no policy.
+category; the location pass uses the `location_sync` category; every other pass uses
+`material_properties`. New-spool creation has a direction but no policy.
 
 ### Why the lifecycle pass runs after the weight pass
 
@@ -71,6 +71,7 @@ writes nothing but still refreshes both snapshots so it doesn't re-fire next cyc
 |---|---|---|
 | **Weight** | SM `remaining_weight` ↔ FDB spool `totalWeight` | SM→FDB decrements are logged as **usage entries** (audit trail preserved); increases update `totalWeight` directly. FDB→SM writes `remaining_weight = totalWeight − tare`. Changes below `sync_weight_threshold_grams` (default 2 g) are ignored. |
 | **Lifecycle (archive/retire)** | SM spool `archived` ↔ FDB spool `retired` | Boolean mirror for **mapped pairs only**, runs **after** the weight pass. A one-sided flip (either direction, archive or un-archive) is a clean push; both sides flipping to the *same* state converges silently; only a both-sides-flip-to-*opposite*-states divergence queues a `cross_system` conflict with `field_name="lifecycle"`. Uses the `archive_sync` category (`archive_sync_direction` / `archive_conflict_policy`); `newest_wins` is not applicable to a boolean. |
+| **Location** | SM spool `location` (free-text name) ↔ FDB spool `locationId` (resolved to its **name**) | Compared **by name** for **mapped pairs only**. Spoolman stores the location as a string; Filament DB references a location by id, so the bridge resolves `locationId` → name (one `GET /api/locations` per cycle) to diff and **finds-or-creates** the matching FDB location on a SM→FDB push (`core/locations.py:ensure_fdb_location`). A one-sided change is a clean push; both sides changing to the *same* name converges silently; both changing to *different* names queues a `cross_system` conflict with `field_name="location"`. Uses the `location_sync` category (`location_sync_direction` / `location_sync_conflict_policy`); `newest_wins` is not applicable (a name has no timestamp). Independent of weight — no ordering requirement. |
 | **Field mapping** | configured/auto-matched Spoolman *extra* fields ↔ FDB fields | `FIELD_MAPPINGS` / exact-name auto-match; inherited FDB variant fields are skipped (writing them would detach the variant from its parent). |
 | **Cost** | SM effective price ↔ FDB `cost` | SM side uses the first spool with a price, falling back to the filament price; FDB→SM writes the *filament* price only — never per-spool prices. |
 | **Temperatures** | SM `settings_bed_temp` / `settings_extruder_temp` ↔ FDB `temperatures.bed` / `.nozzle` | FDB writes read-modify-write the `temperatures` object so sibling temps survive. |

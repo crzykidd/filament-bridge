@@ -1,5 +1,44 @@
 # Decision record
 
+## 2026-06-24 — Sync spool location in the continuous engine, compared by name (`location_sync`, GitHub #29)
+
+**Context.** The ongoing sync engine never diffed or propagated spool **location**: a location
+change made directly in Spoolman (or Filament DB) never reached the other side. Location was only
+written at wizard import and the mobile-update path. Spoolman stores the location as a free-text
+`location` string; Filament DB references it by `locationId` — the two cannot be compared directly.
+
+**Decision.** Add a new **`location_sync`** category, modelled exactly on the existing `archive_sync`
+(lifecycle) category: two axes — `location_sync_direction` (default `two_way`) and
+`location_sync_conflict_policy` (default `manual`). `newest_wins` is **rejected (422)** because a
+location name has no comparable timestamp (same rationale as `archive_sync`'s boolean).
+
+**Compare by name.** The engine fetches `GET /api/locations` once per cycle and builds an `{_id:
+name}` map, threaded into both snapshot builders the way `field_maps` is: `_sm_snapshot_dict` carries
+the Spoolman `location` string (free from `model_dump()`); `_fdb_snapshot_dict` carries the FDB
+location **name** resolved from `locationId` (unknown/missing id → None, which compares cleanly
+against an absent Spoolman location). The differ gets `sm_location_change`/`fdb_location_change`
+(None-safe string compare against the snapshot name; a missing baseline defaults to the current value
+so first-sight is never a spurious change). A dedicated location pass routes through
+`resolve_sync_action`: SM→FDB calls the **shared** `core/locations.py:ensure_fdb_location`
+(find-or-create — never duplicated) → `update_spool({locationId})`; FDB→SM writes
+`update_spool({location: name})`; both-changed-to-different-names queues a `cross_system` conflict
+(`field_name="location"`, dedup via `_has_open_conflict`). After any push both snapshot location names
+refresh (anti-ping-pong — a second cycle on the converged state must not re-queue). The #21
+dispatcher (`apply_cross_system_conflict`) gets a `location` handler that writes the chosen name to
+both sides (find-or-create on FDB) and refreshes both snapshots.
+
+**Ordering.** Unlike the lifecycle pass (which must run *after* the weight pass so a depleted spool's
+final decrement settles first), location is **independent of weight** — it has no ordering
+requirement. It still lives inside the same per-pair block, immediately after the lifecycle pass, so
+it shares the one snapshot-refresh path. The per-cycle FDB-locations fetch is wrapped in its own
+try/except: a fetch failure degrades to an empty map (location sync becomes a no-op that cycle)
+rather than aborting the whole cycle.
+
+**Consequence.** Location now round-trips bidirectionally for mapped pairs, find-or-creating FDB
+locations as needed. No env var (DB-only config, exactly like `archive_sync`). Baseline rows lacking
+the `location` key are not mistaken for a change. Weight-pass snapshot refreshes thread the locations
+map so they preserve (not clobber) the resolved location name.
+
 ## 2026-06-24 — Configurable mobile-scan auth: `mobile_session_days` (0 = public, N = login TTL)
 
 **Context.** The mobile scan flow mirrored the app's auth exactly: when a password is set, a cold

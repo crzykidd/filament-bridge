@@ -302,6 +302,8 @@ Several settings can be changed at runtime via the Settings UI (stored in SQLite
 | `never_import_empties` | `false` | **Import-only** (UI label: "Skip empty & archived spools on import"). Wizard + ongoing new-spool import skip spools with zero remaining weight or that are archived, at preview/execute. Does NOT affect ongoing archive/retire lifecycle mirroring for already-mapped pairs (that runs regardless). Config key unchanged. |
 | `archive_sync_direction` | `two_way` | Direction for the archive/retire lifecycle category (`two_way` / `spoolman_to_filamentdb` / `filamentdb_to_spoolman`). Mirrors SM `archived` ↔ FDB `retired` for already-mapped spool pairs. |
 | `archive_conflict_policy` | `manual` | Conflict policy for the archive/retire category (consulted only under `two_way` when both sides diverge to opposite states): `manual` / `spoolman_wins` / `filamentdb_wins`. `newest_wins` is rejected at the API (422) — the state is a boolean with no timestamp. |
+| `location_sync_direction` | `two_way` | Direction for the location category (`two_way` / `spoolman_to_filamentdb` / `filamentdb_to_spoolman`). Mirrors SM `location` (free-text name) ↔ FDB `locationId` (resolved to its name) for already-mapped spool pairs. Compared by name; FDB locations are found-or-created on a push. |
+| `location_sync_conflict_policy` | `manual` | Conflict policy for the location category (consulted only under `two_way` when both sides change to different names): `manual` / `spoolman_wins` / `filamentdb_wins`. `newest_wins` is rejected at the API (422) — a location name has no comparable timestamp. |
 | `sync_log_retention_days` | `30` | Sync log entries older than this are pruned automatically |
 | `backup_schedule_enabled` | env fallback (`true`) | Master switch for the nightly scheduled backup job (FR-24b). When off, the `nightly_backup` cron is a no-op. |
 | `backup_bridge_state_enabled` | env fallback (`true`) | Include the bridge-state export in the nightly backup. |
@@ -354,6 +356,24 @@ both-sides-flip-to-opposite-states divergence queues a `cross_system` conflict
 / `archive_conflict_policy`). The wizard import gate (`never_import_empties`) still keeps
 *unmapped* archived spools out of auto-import — only mapped pairs are mirrored. After any
 lifecycle push, refresh BOTH snapshots (same anti-ping-pong rule as weight).
+
+### Location sync
+Spool storage location mirrors **bidirectionally for already-mapped spool pairs**, compared
+**by name**: Spoolman stores a free-text `location` string; Filament DB references a location
+by `locationId`. The engine fetches `GET /api/locations` once per cycle, builds an `{_id:
+name}` map, and threads it into both snapshot builders (`_sm_snapshot_dict` carries the SM
+string; `_fdb_snapshot_dict` carries the resolved FDB name) so the differ compares names. A
+dedicated location pass (modelled on the lifecycle pass, but **independent of weight — no
+ordering requirement**) routes through `resolve_sync_action`: SM→FDB calls
+`core/locations.py:ensure_fdb_location` (find-or-create) → `update_spool({locationId})`;
+FDB→SM writes `update_spool({location: name})`; both-changed-to-different-names queues a
+`cross_system` conflict (`field_name="location"`, dedup via `_has_open_conflict`). Governed by
+the `location_sync` category (`location_sync_direction` / `location_sync_conflict_policy`;
+`newest_wins` rejected — a name has no timestamp). After any push, refresh BOTH snapshot
+location names (same anti-ping-pong rule as weight/lifecycle). The #21 cross_system dispatcher
+(`core/conflict_apply.py:apply_cross_system_conflict`) has a `location` handler that writes the
+chosen name to both sides (find-or-create on FDB) and refreshes both snapshots. Reuse
+`ensure_fdb_location` — never duplicate the find-or-create.
 
 ### Filament DB API endpoints the bridge uses
 - `GET /api/filaments` — list all filaments with embedded spools

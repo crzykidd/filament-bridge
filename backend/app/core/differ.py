@@ -50,6 +50,13 @@ class SpoolPairChangeset:
     fdb_retire_change: FieldChange | None = None   # FDB spool.retired flipped
     archive_conflict: bool = False                 # both sides flipped
 
+    # Location — free-text name diff, compared by name (None-safe string compare).
+    # The Spoolman side is the spool's `location` string; the Filament DB side is the
+    # location NAME resolved from the spool's `locationId` (threaded in by the engine).
+    sm_location_change: FieldChange | None = None  # SM spool.location changed
+    fdb_location_change: FieldChange | None = None  # FDB spool location name changed
+    location_conflict: bool = False                 # both sides changed
+
 
 def diff_spool_pair(
     sm_spool: "SpoolmanSpool",
@@ -61,6 +68,7 @@ def diff_spool_pair(
     field_maps: list["FieldMapping"] | None = None,
     sm_extra_decoded: dict | None = None,   # {sm_key: decoded Python value}
     fdb_field_values: dict | None = None,   # {fdb_path: Python value}
+    fdb_location_name: str | None = None,   # FDB spool location NAME (resolved from locationId)
 ) -> SpoolPairChangeset:
     """Classify changes for one spool pair against its last snapshots.
 
@@ -111,6 +119,25 @@ def diff_spool_pair(
         cs.fdb_retire_change = FieldChange("retired", fdb_ret_snap, fdb_ret_now)
     if sm_ac and fdb_rc:
         cs.archive_conflict = True
+
+    # ---- Location diff ----
+    # Free-text name on both sides (the FDB side already resolved from locationId).
+    # When a snapshot lacks the key (legacy rows), default to the current value so a
+    # missing baseline is NOT mistaken for a change (no spurious push on first sight).
+    sm_loc_now = sm_spool.location
+    sm_loc_snap = sm_snapshot.get("location", sm_loc_now)
+    fdb_loc_now = fdb_location_name
+    fdb_loc_snap = fdb_snapshot.get("location", fdb_loc_now)
+
+    sm_lc = sm_loc_snap != sm_loc_now
+    fdb_lc = fdb_loc_snap != fdb_loc_now
+
+    if sm_lc:
+        cs.sm_location_change = FieldChange("location", sm_loc_snap, sm_loc_now)
+    if fdb_lc:
+        cs.fdb_location_change = FieldChange("location", fdb_loc_snap, fdb_loc_now)
+    if sm_lc and fdb_lc:
+        cs.location_conflict = True
 
     # ---- Field mapping diff ----
     if field_maps and sm_extra_decoded is not None and fdb_field_values is not None:

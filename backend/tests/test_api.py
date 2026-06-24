@@ -914,6 +914,37 @@ def test_config_sync_direction_fields_round_trip(db):
     assert body["material_properties_conflict_policy"] == "filamentdb_wins"
 
 
+def test_config_location_sync_defaults(db):
+    """location_sync_* defaults: two_way direction, manual conflict policy."""
+    client = _client(db)
+    body = client.get("/api/config").json()
+    assert body["location_sync_direction"] == "two_way"
+    assert body["location_sync_conflict_policy"] == "manual"
+
+
+def test_config_location_sync_round_trip(db):
+    """location_sync_* fields read back correctly after update."""
+    client = _client(db)
+    resp = client.put("/api/config", json={
+        "location_sync_direction": "filamentdb_to_spoolman",
+        "location_sync_conflict_policy": "spoolman_wins",
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["location_sync_direction"] == "filamentdb_to_spoolman"
+    assert body["location_sync_conflict_policy"] == "spoolman_wins"
+
+
+def test_config_rejects_newest_wins_for_location(db):
+    """location_sync_conflict_policy=newest_wins must be rejected with HTTP 422
+    (a location name has no comparable timestamp)."""
+    client = _client(db)
+    resp = client.put("/api/config", json={"location_sync_conflict_policy": "newest_wins"})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["code"] == "invalid_conflict_policy"
+
+
 # ---------------------------------------------------------------------------
 # never_import_empties — config round-trip + wizard execute behaviour
 # ---------------------------------------------------------------------------

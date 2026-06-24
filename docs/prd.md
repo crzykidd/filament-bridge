@@ -446,6 +446,13 @@ Field names are configurable via environment variables.
 - **Weight settles before the archive bit:** the lifecycle pass runs after the weight pass, so a depleted-and-archived spool propagates its final decrement and FDB usage-log entry (and refreshes both snapshots) before the archive/retire bit mirrors — never retired/archived with a stale weight or missing its final usage entry
 - A one-sided flip is a clean push (not a conflict). Only genuine divergence (both sides flipped to opposite states since the last snapshot) queues a `cross_system` conflict with `field_name="lifecycle"`; resolving it writes the chosen boolean to both systems and refreshes both snapshots. Both sides flipping to the same state converges silently
 
+#### FR-21b: Spool location sync *(GitHub #29)*
+- Spool storage **location** mirrors **bidirectionally for already-mapped spool pairs** in the continuous engine: changing a spool's location in Spoolman (free-text `location` string) updates the Filament DB spool's `locationId`, and a Filament DB location change writes the resolved name back to Spoolman
+- **Compared by name.** Spoolman stores the location as a string; Filament DB references it by `locationId`. The engine resolves each `locationId` to its name (one `GET /api/locations` per cycle, building an `{_id: name}` map threaded into both snapshot builders) so the diff is name-vs-name, and **finds-or-creates** the matching Filament DB location on a Spoolman→Filament DB push (shared `core/locations.py:ensure_fdb_location`, never duplicated)
+- A dedicated `location_sync` policy category governs it: `location_sync_direction` (default `two_way`) and `location_sync_conflict_policy` (default `manual`). `newest_wins` is rejected (a location name has no comparable timestamp)
+- The location pass is **independent of weight** (no ordering requirement) but runs inside the same per-pair block (alongside the lifecycle pass) for one snapshot-refresh path. After any push, both snapshot location names refresh (anti-ping-pong)
+- A one-sided change is a clean push (not a conflict). Only genuine divergence (both sides changed to different names since the last snapshot) queues a `cross_system` conflict with `field_name="location"`; resolving it writes the chosen name to both systems (find-or-create on Filament DB) and refreshes both snapshots. Both sides changing to the same name converges silently
+
 #### FR-22: Print history enrichment *(Not implemented)*
 - Planned: when a weight decrement is synced from Spoolman, optionally create a `POST /api/print-history` record in Filament DB
 - Would require OctoPrint job metadata (filename, duration) — may need an OctoPrint API call or Spoolman webhook

@@ -1,10 +1,20 @@
 ---
 name: 2026-06-24-location-sync
-status: pending
+status: done
 created: 2026-06-24
 model: sonnet
-completed:
-result:
+completed: 2026-06-24
+result: >
+  Shipped the location_sync category in the continuous engine (GitHub #29). Compare-by-name:
+  FDB locations fetched once per cycle into an {_id: name} map threaded into both snapshot
+  builders; differ gained sm_location_change/fdb_location_change; a dedicated location pass
+  (after the lifecycle pass, independent of weight) routes through resolve_sync_action —
+  SM→FDB find-or-creates via ensure_fdb_location, FDB→SM writes the name, both-changed→one
+  cross_system "location" conflict; both snapshots refresh after any push. #21 dispatcher
+  got a location handler. Config (DB-only, mirrors archive_sync): location_sync_direction
+  (two_way) + location_sync_conflict_policy (manual), newest_wins rejected 422. Settings.tsx
+  gained a Location sync card. Backend 1304 passed (baseline 1285, +19), ruff clean; frontend
+  tsc clean, 129 vitest passed, build OK.
 ---
 
 # Task: Sync spool location in the continuous engine (GitHub #29)

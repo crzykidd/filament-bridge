@@ -11,6 +11,17 @@ GitHub release.
 
 ### Added
 
+- **Spool location now syncs continuously** — a `location_sync` category mirrors a mapped spool's
+  storage location between Spoolman (the free-text `location`) and Filament DB (its `locationId`).
+  Move a spool to a new shelf in either system and the bridge propagates it to the other; the
+  matching Filament DB location is found-or-created automatically. Compared **by name** (Spoolman
+  stores a string, Filament DB a reference). Two axes in **Settings → Location sync**:
+  `location_sync_direction` (default `two_way`) and `location_sync_conflict_policy` (default
+  `manual`); `newest_wins` is rejected (a location name has no timestamp). Both sides moving the
+  same spool to different locations queues one `cross_system` "location" conflict you resolve in the
+  queue. Previously location was only set at wizard import and the mobile update — an in-place move
+  never reached the other system. (#29)
+
 - **Configurable mobile-scan auth — `mobile_session_days`** (integer, default `30`). Controls
   whether scanning a QR label needs the app password and how long a scan login lasts. `0` makes the
   scan flow **public** — the `/r/` redirect, the `/api/mobile/*` and `/api/labels/*` endpoints, and

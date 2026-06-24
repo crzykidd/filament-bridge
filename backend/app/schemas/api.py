@@ -301,6 +301,10 @@ class ConfigResponse(BaseModel):
     # newest_wins is rejected (booleans aren't timestamp-eligible) — same as material_properties.
     archive_sync_direction: SyncDirection2 = "two_way"
     archive_conflict_policy: ConflictPolicy = "manual"
+    # Location sync (mirrors SM location ↔ FDB locationId-resolved name for mapped pairs).
+    # newest_wins is rejected (a location name has no comparable timestamp) — same as archive.
+    location_sync_direction: SyncDirection2 = "two_way"
+    location_sync_conflict_policy: ConflictPolicy = "manual"
     new_spool_sync_direction: SyncDirection2 = "two_way"
     # New-record handling policies
     # manual_review (default) → queue an actionable conflict; auto_import → create immediately.
@@ -364,6 +368,9 @@ class ConfigUpdateRequest(BaseModel):
     # Archive/retire lifecycle sync.
     archive_sync_direction: SyncDirection2 | None = None
     archive_conflict_policy: ConflictPolicy | None = None
+    # Location sync.
+    location_sync_direction: SyncDirection2 | None = None
+    location_sync_conflict_policy: ConflictPolicy | None = None
     new_spool_sync_direction: SyncDirection2 | None = None
     # New-record handling policies
     new_filament_policy: NewRecordPolicy | None = None

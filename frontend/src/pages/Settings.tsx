@@ -196,6 +196,8 @@ export default function Settings() {
   const [matPolicy, setMatPolicy] = useState<MatConflictPolicy | null>(null)
   const [archiveDir, setArchiveDir] = useState<SyncDirection2 | null>(null)
   const [archivePolicy, setArchivePolicy] = useState<MatConflictPolicy | null>(null)
+  const [locationDir, setLocationDir] = useState<SyncDirection2 | null>(null)
+  const [locationPolicy, setLocationPolicy] = useState<MatConflictPolicy | null>(null)
   const [newSpoolDir, setNewSpoolDir] = useState<SyncDirection2 | null>(null)
 
   // New-record handling policies
@@ -287,6 +289,8 @@ export default function Settings() {
     (matPolicy != null && matPolicy !== data.material_properties_conflict_policy) ||
     (archiveDir != null && archiveDir !== data.archive_sync_direction) ||
     (archivePolicy != null && archivePolicy !== data.archive_conflict_policy) ||
+    (locationDir != null && locationDir !== data.location_sync_direction) ||
+    (locationPolicy != null && locationPolicy !== data.location_sync_conflict_policy) ||
     (newSpoolDir != null && newSpoolDir !== data.new_spool_sync_direction) ||
     (newFilamentPolicy != null && newFilamentPolicy !== data.new_filament_policy) ||
     (newSpoolPolicy != null && newSpoolPolicy !== data.new_spool_policy) ||
@@ -356,6 +360,8 @@ export default function Settings() {
   const mPol = (matPolicy ?? data.material_properties_conflict_policy) as MatConflictPolicy
   const aDir = archiveDir ?? data.archive_sync_direction
   const aPol = (archivePolicy ?? data.archive_conflict_policy) as MatConflictPolicy
+  const lDir = locationDir ?? data.location_sync_direction
+  const lPol = (locationPolicy ?? data.location_sync_conflict_policy) as MatConflictPolicy
   const nsDir = newSpoolDir ?? data.new_spool_sync_direction
   const nfPol = newFilamentPolicy ?? data.new_filament_policy
   const nsPol = newSpoolPolicy ?? data.new_spool_policy
@@ -580,6 +586,8 @@ export default function Settings() {
         material_properties_conflict_policy: mPol,
         archive_sync_direction: aDir,
         archive_conflict_policy: aPol,
+        location_sync_direction: lDir,
+        location_sync_conflict_policy: lPol,
         new_spool_sync_direction: nsDir,
         new_filament_policy: newFilamentPolicy ?? undefined,
         new_spool_policy: newSpoolPolicy ?? undefined,
@@ -939,6 +947,32 @@ export default function Settings() {
             value={aPol}
             direction={aDir}
             onChange={v => setArchivePolicy(v)}
+          />
+        </div>
+
+        {/* Location sync card — full width */}
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-1">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Location sync</h3>
+          <p className={`${subTextCls} mb-2`}>
+            Keeps a spool&apos;s storage location in sync for already-paired spools. Spoolman stores
+            the location as a free-text name; Filament DB references it by id, so the bridge compares
+            by name and finds-or-creates the matching Filament DB location on a push. Two-way mirrors
+            both directions and queues a conflict only when both sides change to different names.
+          </p>
+          <DirectionSelect
+            label="Direction"
+            value={lDir}
+            onChange={v => {
+              setLocationDir(v)
+              if (v !== 'two_way') setLocationPolicy('manual')
+            }}
+            tip="Which side's location changes get mirrored to the other. Two-way mirrors both directions and queues a conflict only when both sides change to different locations."
+            tipHref="/docs/sync-model"
+          />
+          <MatPropConflictSelect
+            value={lPol}
+            direction={lDir}
+            onChange={v => setLocationPolicy(v)}
           />
         </div>
 

@@ -24,6 +24,13 @@ _DEFAULTS = {
     # NOT applicable (booleans aren't timestamp-eligible) and is rejected at the API.
     "archive_sync_direction": '"two_way"',
     "archive_conflict_policy": '"manual"',
+    # Location sync for already-mapped spool pairs. Compares by NAME (Spoolman stores a
+    # free-text location string; Filament DB stores a locationId resolved to its name).
+    # two_way mirrors a one-sided location change to the other system; a genuine both-sides
+    # change queues a manual cross_system conflict. newest_wins is NOT applicable (a location
+    # name has no comparable timestamp) and is rejected at the API.
+    "location_sync_direction": '"two_way"',
+    "location_sync_conflict_policy": '"manual"',
     # New spool creation direction: two_way = bidirectional (= today's behavior).
     "new_spool_sync_direction": '"two_way"',
     # New-record handling policies (ongoing sync, not wizard).

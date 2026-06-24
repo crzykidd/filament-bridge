@@ -270,6 +270,8 @@ export interface ConfigResponse {
   material_properties_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
   archive_sync_direction: SyncDirection2
   archive_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
+  location_sync_direction: SyncDirection2
+  location_sync_conflict_policy: Exclude<ConflictPolicy, 'newest_wins'>
   new_spool_sync_direction: SyncDirection2
   // New-record handling policies
   new_filament_policy: NewRecordPolicy
@@ -324,6 +326,8 @@ export interface ConfigUpdateRequest {
   material_properties_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
   archive_sync_direction?: SyncDirection2 | null
   archive_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
+  location_sync_direction?: SyncDirection2 | null
+  location_sync_conflict_policy?: Exclude<ConflictPolicy, 'newest_wins'> | null
   new_spool_sync_direction?: SyncDirection2 | null
   // New-record handling policies
   new_filament_policy?: NewRecordPolicy | null

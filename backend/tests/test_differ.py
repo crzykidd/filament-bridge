@@ -332,3 +332,93 @@ class TestLifecycleDiff:
         assert cs.sm_archive_change is None
         assert cs.fdb_retire_change is None
         assert not cs.archive_conflict
+
+
+def _sm_spool_loc(spool_id: int, remaining: float, location: str | None) -> SpoolmanSpool:
+    return SpoolmanSpool(
+        id=spool_id,
+        filament=SpoolmanFilament(id=1, name="PLA"),
+        remaining_weight=remaining,
+        location=location,
+    )
+
+
+class TestLocationDiff:
+    def test_no_location_change(self):
+        cs = diff_spool_pair(
+            _sm_spool_loc(1, 800.0, "Shelf A"), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "location": "Shelf A"},
+            fdb_snapshot={"totalWeight": 1000.0, "location": "Shelf A"},
+            threshold=THRESHOLD,
+            fdb_location_name="Shelf A",
+        )
+        assert cs.sm_location_change is None
+        assert cs.fdb_location_change is None
+        assert not cs.location_conflict
+
+    def test_sm_location_change_detected(self):
+        cs = diff_spool_pair(
+            _sm_spool_loc(1, 800.0, "Shelf B"), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "location": "Shelf A"},
+            fdb_snapshot={"totalWeight": 1000.0, "location": "Shelf A"},
+            threshold=THRESHOLD,
+            fdb_location_name="Shelf A",
+        )
+        assert cs.sm_location_change is not None
+        assert cs.sm_location_change.old_value == "Shelf A"
+        assert cs.sm_location_change.new_value == "Shelf B"
+        assert cs.fdb_location_change is None
+        assert not cs.location_conflict
+
+    def test_fdb_location_change_detected(self):
+        cs = diff_spool_pair(
+            _sm_spool_loc(1, 800.0, "Shelf A"), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "location": "Shelf A"},
+            fdb_snapshot={"totalWeight": 1000.0, "location": "Shelf A"},
+            threshold=THRESHOLD,
+            fdb_location_name="Shelf B",
+        )
+        assert cs.fdb_location_change is not None
+        assert cs.fdb_location_change.old_value == "Shelf A"
+        assert cs.fdb_location_change.new_value == "Shelf B"
+        assert cs.sm_location_change is None
+        assert not cs.location_conflict
+
+    def test_both_change_is_location_conflict(self):
+        cs = diff_spool_pair(
+            _sm_spool_loc(1, 800.0, "Shelf B"), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "location": "Shelf A"},
+            fdb_snapshot={"totalWeight": 1000.0, "location": "Shelf A"},
+            threshold=THRESHOLD,
+            fdb_location_name="Shelf C",
+        )
+        assert cs.location_conflict is True
+        assert cs.sm_location_change is not None
+        assert cs.fdb_location_change is not None
+
+    def test_none_to_value_detected(self):
+        # A spool that gains a location (None → "Shelf A") is a real change.
+        cs = diff_spool_pair(
+            _sm_spool_loc(1, 800.0, "Shelf A"), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0, "location": None},
+            fdb_snapshot={"totalWeight": 1000.0, "location": None},
+            threshold=THRESHOLD,
+            fdb_location_name=None,
+        )
+        assert cs.sm_location_change is not None
+        assert cs.sm_location_change.old_value is None
+        assert cs.sm_location_change.new_value == "Shelf A"
+        assert cs.fdb_location_change is None
+
+    def test_missing_baseline_not_treated_as_change(self):
+        # Legacy snapshot with no location key → defaults to current → no change.
+        cs = diff_spool_pair(
+            _sm_spool_loc(1, 800.0, "Shelf A"), _fdb_spool("a", 1000.0), "fdb-fil-1",
+            sm_snapshot={"remaining_weight": 800.0},
+            fdb_snapshot={"totalWeight": 1000.0},
+            threshold=THRESHOLD,
+            fdb_location_name="Shelf B",
+        )
+        assert cs.sm_location_change is None
+        assert cs.fdb_location_change is None
+        assert not cs.location_conflict

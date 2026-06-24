@@ -234,6 +234,58 @@ async def apply_lifecycle_conflict(
     conflict.resolved_at = datetime.datetime.now(datetime.timezone.utc)
 
 
+async def _apply_location(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+) -> Any:
+    """Converge a spool ``location`` cross_system conflict to a single location NAME.
+
+    Compare-by-name model (mirrors engine's location pass): Spoolman stores the
+    location as a free-text string; Filament DB stores a ``locationId`` resolved
+    (or created) from the name via ``ensure_fdb_location``.
+
+    ``resolution``:
+      - "spoolman"   → adopt the Spoolman location name on both sides.
+      - "filamentdb" → adopt the Filament DB location name on both sides.
+      - "manual"     → adopt ``manual_value`` (a location name string, or None/"" to clear).
+
+    Writes the chosen name to BOTH systems (idempotent — one side may already match),
+    then refreshes both spool snapshot ``location`` keys so the engine does not re-queue
+    the conflict next cycle.  Raises on upstream failure (caller leaves the conflict open).
+    """
+    from app.core.locations import ensure_fdb_location
+
+    name = _resolve_value(conflict, resolution, manual_value)
+    # Normalise an empty string to None so a cleared location compares cleanly.
+    target = name if (name is not None and str(name).strip() != "") else None
+
+    sm_spool_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_filament_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    fdb_spool_id: str = conflict.filamentdb_spool_id  # type: ignore[assignment]
+
+    # FDB: find-or-create the location id for the chosen name (None clears it).
+    loc_id = await ensure_fdb_location(filamentdb, target) if target else None
+    await filamentdb.update_spool(fdb_filament_id, fdb_spool_id, {"locationId": loc_id})
+    await spoolman.update_spool(sm_spool_id, {"location": target})
+
+    # Refresh both snapshot location names to the converged value (anti-ping-pong).
+    _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"location": target})
+    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"location": target})
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "spool",
+        spoolman_id=sm_spool_id,
+        fdb_filament_id=fdb_filament_id,
+        fdb_spool_id=fdb_spool_id,
+        field_name="location",
+        old_value="diverged",
+        new_value=target,
+    )
+
+    _resolve_conflict_row(conflict, resolution, target, db)
+    return target
+
+
 async def apply_master_divergence(
     conflict: Conflict,
     action: str,
@@ -614,6 +666,9 @@ async def apply_cross_system_conflict(
             conflict.resolved_value = json.dumps(bool(manual_value))
         await apply_lifecycle_conflict(conflict, resolution, db, spoolman, filamentdb)
         return _decode(conflict.resolved_value)
+
+    if field == "location":
+        return await _apply_location(conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id)
 
     if field == "weight":
         return await _apply_weight(conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id)

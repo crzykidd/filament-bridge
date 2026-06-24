@@ -79,6 +79,16 @@ timestamp; use `manual` (default), `spoolman_wins`, or `filamentdb_wins`. A one-
 is a clean push; only a both-sides-diverge-to-opposite-states case consults the policy.
 This is independent of `never_import_empties` (below), which only governs *import*.
 
+The **location** category (`location_sync_direction` / `location_sync_conflict_policy`)
+mirrors a *mapped* spool's storage location between Spoolman (free-text `location` string)
+and Filament DB (`locationId` reference) — see [sync-model.md](sync-model.md) for the pass.
+Locations are compared **by name**: the bridge resolves each FDB `locationId` to its name
+(one `GET /api/locations` per cycle) and **finds-or-creates** the matching FDB location on a
+Spoolman→Filament DB push. A location name has no comparable timestamp, so `newest_wins` is
+**rejected** (422) for `location_sync_conflict_policy` — use `manual` (default),
+`spoolman_wins`, or `filamentdb_wins`. A one-sided change is a clean push; only a
+both-sides-change-to-different-names case consults the policy.
+
 ## Cross-reference fields
 
 These control which fields the bridge uses to store cross-reference IDs. Change them only
@@ -181,6 +191,8 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | Weight / material-properties / archive-retire / new-record direction + policy | see above | Sync → category cards | The two-axis model. |
 | `archive_sync_direction` | `two_way` | Sync → Archive / retire sync | Which side's archive/retire flip is mirrored: `two_way` (default), `spoolman_to_filamentdb`, or `filamentdb_to_spoolman`. Applies to mapped pairs only. |
 | `archive_conflict_policy` | `manual` | Sync → Archive / retire sync | Consulted only under `two_way` when both sides diverge to opposite states: `manual` (default — queue a `cross_system` lifecycle conflict), `spoolman_wins`, or `filamentdb_wins`. `newest_wins` is **rejected** (422) — the state is a boolean with no timestamp. |
+| `location_sync_direction` | `two_way` | Sync → Location sync | Which side's location change is mirrored: `two_way` (default), `spoolman_to_filamentdb`, or `filamentdb_to_spoolman`. Applies to mapped pairs only. Compared by name; FDB locations are found-or-created on a push. |
+| `location_sync_conflict_policy` | `manual` | Sync → Location sync | Consulted only under `two_way` when both sides change to different names: `manual` (default — queue a `cross_system` location conflict), `spoolman_wins`, or `filamentdb_wins`. `newest_wins` is **rejected** (422) — a location name has no comparable timestamp. |
 | `sync_weight_threshold_grams` | `2.0` | Sync → Weight sync | Weight changes smaller than this are ignored (suppresses net/gross rounding churn). |
 | `weight_precision_decimals` | `2` | Sync → Weight sync | Decimal places used when comparing/writing weights. |
 | `new_filament_policy` | `manual_review` | Sync → New records | What the engine does when it detects an unmapped filament: `manual_review` queues a `new_filament` conflict (actionable — the Conflicts page "Add" button imports it); `auto_import` creates the filament automatically and writes the cross-reference. Defaults to `manual_review` for both fresh and existing installs. When `variant_parent_mode` is `unset` and the filament looks like a variant-cluster member, auto-import falls back to `manual_review` regardless of this setting (can't group variants without a mode). |

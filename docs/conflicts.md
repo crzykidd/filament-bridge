@@ -8,7 +8,7 @@ answer differs by type.
 
 | Badge | When it fires |
 |---|---|
-| **Weight / Property / Multicolor** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). |
+| **Weight / Property / Multicolor / Lifecycle / Location** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). Lifecycle fires on opposite archive/retire states; Location fires when both sides move to different location names. |
 | **Master divergence** | A Spoolman value would override a Filament DB variant's *inherited* setting (the variant currently gets the value from its parent). Writing it silently would detach the field from the parent, so the bridge asks first. |
 | **Deleted record** | A previously-synced spool was deleted on one side, and the surviving side is still linked to it. The bridge protects the survivor and asks what you want. |
 | **New filament** | An unmapped filament appeared on one side and `new_filament_policy` is `manual_review`. Actionable — use the "Add" button to create it on the other side and map it. Once a filament is mapped, any held spools belonging to it are released for normal new-spool handling. |
@@ -59,6 +59,13 @@ Each field family reuses its sync pass's exact write + conversion + snapshot key
   `FIELD_MAPPINGS` extras** — the chosen value is written to the native field on each system
   (Filament DB temperature objects are read-modify-written so sibling temps survive; the
   `material ↔ type` / `weight ↔ netFilamentWeight` name remaps are honored).
+- **Lifecycle** (`field_name="lifecycle"`) — the chosen archive/retire **boolean** is written
+  to both sides (Spoolman `archived`, Filament DB `retired`). Fires only when both sides flip
+  to *opposite* states; *Manual* records an explicit boolean.
+- **Location** (`field_name="location"`) — the chosen location **name** is written to both
+  sides: Spoolman `location` (the string) and Filament DB `locationId` (found-or-created from
+  the name via `ensure_fdb_location`). Fires only when both sides change to *different* names;
+  *Manual* lets you type a name (or clear it). Both snapshot location names refresh on resolve.
 
 If an upstream write fails, the resolve returns an error and **leaves the conflict open**
 (no partial snapshot advance). A conflict whose field has no known apply path is rejected

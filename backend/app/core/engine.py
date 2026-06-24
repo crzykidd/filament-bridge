@@ -43,6 +43,7 @@ from app.core.fields import (
     resolve_field_map,
     should_skip_inherited,
 )
+from app.core.locations import ensure_fdb_location
 from app.core.material_tags import MANAGED_FINISH_IDS, finish_ids_from_text, parse_material_tags, serialize_material_tags
 from app.core.sync_policy import SyncAction, resolve_sync_action
 from app.core.version import MULTICOLOR_MIN_FDB, incompatibilities, version_gte
@@ -458,12 +459,49 @@ def _refresh_lifecycle_snapshots(
     _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"retired": fdb_retired})
 
 
-def _fdb_snapshot_dict(spool: FDBSpool, filament_detail=None, field_maps: list[FieldMapping] | None = None) -> dict:
+def _refresh_location_snapshots(
+    db: Session, sm_spool_id: int, fdb_spool_id: str, sm_location: str | None, fdb_location: str | None
+) -> None:
+    """Converge BOTH location NAMES to the agreed value (anti-ping-pong).
+
+    Merges (not full upsert) so the weight / lifecycle / field baselines other passes
+    already wrote in this cycle are preserved.  Same both-sides-refresh rule the weight
+    and lifecycle passes use.
+    """
+    _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"location": sm_location})
+    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"location": fdb_location})
+
+
+def _fdb_location_name(spool: FDBSpool, fdb_location_names: dict[str, str] | None) -> str | None:
+    """Resolve a FDB spool's location NAME from its locationId via the id→name map.
+
+    Returns None when the spool has no locationId, the map is absent, or the id is
+    unknown (e.g. a location deleted upstream) — None compares cleanly against an
+    absent Spoolman location.
+    """
+    if fdb_location_names is None:
+        return None
+    loc_id = getattr(spool, "locationId", None)
+    if not loc_id:
+        return None
+    return fdb_location_names.get(loc_id)
+
+
+def _fdb_snapshot_dict(
+    spool: FDBSpool,
+    filament_detail=None,
+    field_maps: list[FieldMapping] | None = None,
+    fdb_location_names: dict[str, str] | None = None,
+) -> dict:
     """Build the snapshot dict for a FDB spool.  If filament_detail and field_maps
     are provided the mapped FDB field values are embedded under _field_values so the
     differ can compare them next cycle without re-fetching the detail view.
+
+    ``location`` carries the resolved location NAME (from locationId via the per-cycle
+    id→name map) so the differ can compare it against the Spoolman location string.
     """
     d = spool.model_dump()
+    d["location"] = _fdb_location_name(spool, fdb_location_names)
     if filament_detail and field_maps:
         d["_field_values"] = {
             fm.fdb_path: get_fdb_field_value(filament_detail, fm.fdb_path)
@@ -2787,6 +2825,8 @@ async def run_sync_cycle(
     matprop_policy: str = config.get("material_properties_conflict_policy", "manual")
     archive_direction: str = config.get("archive_sync_direction", "two_way")
     archive_policy: str = config.get("archive_conflict_policy", "manual")
+    location_direction: str = config.get("location_sync_direction", "two_way")
+    location_policy: str = config.get("location_sync_conflict_policy", "manual")
     new_spool_direction: str = config.get("new_spool_sync_direction", "two_way")
     # New-record handling policies.
     new_filament_policy: str = config.get("new_filament_policy", "manual_review") or "manual_review"
@@ -2851,6 +2891,19 @@ async def run_sync_cycle(
     sm_all_ids: set[int] = {s.id for s in sm_spools_all}  # includes archived
     sm_filaments: dict[int, Any] = {f.id: f for f in sm_filaments_all}
     fdb_filaments: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments_all}
+
+    # FDB location id→name map (fetched once per cycle) so spool snapshots can carry the
+    # resolved location NAME for the location pass.  A fetch failure degrades to an empty
+    # map (location sync becomes a no-op this cycle) rather than aborting the whole cycle.
+    fdb_location_names: dict[str, str] = {}
+    try:
+        for _loc in await filamentdb.get_locations():
+            _lid = _loc.get("_id")
+            _lname = _loc.get("name")
+            if _lid and _lname:
+                fdb_location_names[_lid] = _lname
+    except Exception as exc:
+        logger.warning("Cycle %s: could not fetch FDB locations (location sync skipped): %s", cycle_id, exc)
 
     # Build FDB spool lookup: fdb_spool_id → (fdb_filament_id, FDBSpool)
     fdb_spool_index: dict[str, tuple[str, FDBSpool]] = {}
@@ -3155,18 +3208,21 @@ async def run_sync_cycle(
                 if field_maps:
                     try:
                         _fdb_baseline_detail = await filamentdb.get_filament(fdb_filament_id)
-                        _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, _fdb_baseline_detail, field_maps))
+                        _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, _fdb_baseline_detail, field_maps, fdb_location_names))
                     except Exception as _exc:
                         logger.warning("Cycle %s: could not fetch FDB detail for baseline %s: %s", cycle_id, fdb_filament_id, _exc)
-                        _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                        _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, fdb_location_names=fdb_location_names))
                 else:
-                    _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                    _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, fdb_location_names=fdb_location_names))
             result.skipped += 1
             continue
 
         # Track preview length before weight + field passes so we can detect
         # whether this pair emitted anything (dry-run only).
         _preview_len_before_pair = len(result.preview)
+
+        # Resolved FDB location NAME for this pair (from locationId via the per-cycle map).
+        fdb_loc_name = _fdb_location_name(fdb_spool, fdb_location_names)
 
         # ---- Diff ----
         cs = diff_spool_pair(
@@ -3176,6 +3232,7 @@ async def run_sync_cycle(
             sm_snapshot=sm_snap,
             fdb_snapshot=fdb_snap,
             threshold=threshold,
+            fdb_location_name=fdb_loc_name,
         )
 
         # ---- Weight sync ----
@@ -3278,7 +3335,7 @@ async def run_sync_cycle(
                     # (now-decremented) FDB totalWeight looked like a fresh FDB-side
                     # change and got pushed back to SM → the weight ping-pong loop.
                     _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
-                    fdb_snap_after = _fdb_snapshot_dict(fdb_spool)
+                    fdb_snap_after = _fdb_snapshot_dict(fdb_spool, fdb_location_names=fdb_location_names)
                     fdb_snap_after["totalWeight"] = round(new_fdb_total, precision)
                     _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, fdb_snap_after)
                     _log(
@@ -3328,7 +3385,7 @@ async def run_sync_cycle(
                     # Refresh BOTH snapshots to the post-write agreed state so the
                     # value we just wrote to SM is not re-detected as an SM-side
                     # change next cycle (other half of the weight ping-pong loop).
-                    _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                    _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, fdb_location_names=fdb_location_names))
                     sm_snap_after = _sm_snapshot_dict(sm_spool, field_maps)
                     sm_snap_after["remaining_weight"] = net
                     _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), sm_snap_after)
@@ -3366,7 +3423,7 @@ async def run_sync_cycle(
             # NOOP — refresh snapshots so they stay current
             if not dry_run:
                 _upsert_snapshot(db, "spoolman", "spool", str(sm_spool.id), _sm_snapshot_dict(sm_spool, field_maps))
-                _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool))
+                _upsert_snapshot(db, "filamentdb", "spool", fdb_spool.id, _fdb_snapshot_dict(fdb_spool, fdb_location_names=fdb_location_names))
 
         # ---- Lifecycle (archive/retire) sync ----
         # Runs AFTER the weight pass on purpose. A spool is usually archived/retired
@@ -3529,6 +3586,158 @@ async def run_sync_cycle(
             # Both sides flipped to the same state in one cycle — no write needed, just
             # converge the snapshot lifecycle bits so it doesn't re-fire next cycle.
             _refresh_lifecycle_snapshots(db, sm_spool.id, fdb_spool.id, sm_archived_now, fdb_retired_now)
+
+        # ---- Location sync ----
+        # Mirrors the lifecycle pass: compare by NAME (Spoolman stores a free-text
+        # location string; Filament DB stores a locationId, resolved to its name above).
+        # The change flags come from the changeset computed against the pre-cycle snapshot,
+        # so the weight/lifecycle passes rebuilding the snapshot dicts (which carry the
+        # CURRENT location name) do NOT clobber detection — we already captured it in cs.
+        # Location is independent of weight, so it has no weight-settles-first ordering
+        # requirement; it lives inside the same per-pair block for one snapshot refresh path.
+        location_sm_changed = cs.sm_location_change is not None
+        location_fdb_changed = cs.fdb_location_change is not None
+
+        sm_location_now = sm_spool.location
+        fdb_location_now = fdb_loc_name
+
+        # Both sides changed to the SAME name → no real divergence, converge silently.
+        location_both_converged = (
+            location_sm_changed and location_fdb_changed
+            and sm_location_now == fdb_location_now
+        )
+
+        if (location_sm_changed or location_fdb_changed) and not location_both_converged:
+            # Free-text names → never timestamp-eligible (sm_ts/fdb_ts stay None).
+            location_action = resolve_sync_action(
+                sm_changed=location_sm_changed,
+                fdb_changed=location_fdb_changed,
+                direction=location_direction,
+                policy=location_policy,
+            )
+
+            if location_action == SyncAction.QUEUE_CONFLICT:
+                if not dry_run:
+                    if not _has_open_conflict(
+                        db, "spool", "location",
+                        spoolman_id=sm_spool.id,
+                        fdb_spool_id=fdb_spool.id,
+                        conflict_type="cross_system",
+                    ):
+                        _queue_conflict(
+                            db, cycle_id, "spool", "location",
+                            spoolman_id=sm_spool.id,
+                            fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id,
+                            spoolman_value=sm_location_now,
+                            filamentdb_value=fdb_location_now,
+                            conflict_type="cross_system",
+                        )
+                        result.conflicts += 1
+                else:
+                    result.preview.append({
+                        "action": "conflict",
+                        "entity_type": "spool",
+                        "direction": None,
+                        "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                        "field": "location",
+                        "old": sm_location_now,
+                        "new": fdb_location_now,
+                        "reason": "both sides changed location (old=SM location, new=FDB location)",
+                        "spoolman_id": sm_spool.id,
+                        "fdb_filament_id": fdb_filament_id,
+                        "fdb_spool_id": fdb_spool.id,
+                    })
+                    result.conflicts += 1
+
+            elif location_action == SyncAction.PUSH_SM_TO_FDB:
+                # SM location is authoritative → find-or-create the FDB location and set it.
+                target = sm_location_now
+                try:
+                    if not dry_run:
+                        loc_id = await ensure_fdb_location(filamentdb, target) if target else None
+                        await filamentdb.update_spool(fdb_filament_id, fdb_spool.id, {"locationId": loc_id})
+                        # If we created a new location, keep the per-cycle map current so a
+                        # later pair (or next reference) resolves the same name → id.
+                        if loc_id and target:
+                            fdb_location_names[loc_id] = target
+                        _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, target, target)
+                        _log(
+                            db, cycle_id, "spoolman_to_filamentdb", "update", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, field_name="location",
+                            old_value=fdb_location_now, new_value=target,
+                        )
+                    else:
+                        result.preview.append({
+                            "action": "update",
+                            "entity_type": "spool",
+                            "direction": "spoolman_to_filamentdb",
+                            "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                            "field": "location",
+                            "old": fdb_location_now, "new": target,
+                            "reason": None,
+                            "spoolman_id": sm_spool.id,
+                            "fdb_filament_id": fdb_filament_id,
+                            "fdb_spool_id": fdb_spool.id,
+                        })
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: SM→FDB location sync failed spool %s: %s", cycle_id, sm_spool.id, exc)
+                    if not dry_run:
+                        _log(
+                            db, cycle_id, "spoolman_to_filamentdb", "error", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, error_message=str(exc),
+                        )
+                    result.errors += 1
+
+            elif location_action == SyncAction.PUSH_FDB_TO_SM:
+                # FDB location is authoritative → write the resolved name to SM.
+                target = fdb_location_now
+                try:
+                    if not dry_run:
+                        await spoolman.update_spool(sm_spool.id, {"location": target})
+                        _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, target, target)
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "update", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, field_name="location",
+                            old_value=sm_location_now, new_value=target,
+                        )
+                    else:
+                        result.preview.append({
+                            "action": "update",
+                            "entity_type": "spool",
+                            "direction": "filamentdb_to_spoolman",
+                            "label": _preview_label(sm_spool=sm_spool, fdb_filament=fdb_filaments.get(fdb_filament_id)),
+                            "field": "location",
+                            "old": sm_location_now, "new": target,
+                            "reason": None,
+                            "spoolman_id": sm_spool.id,
+                            "fdb_filament_id": fdb_filament_id,
+                            "fdb_spool_id": fdb_spool.id,
+                        })
+                    result.updated += 1
+                except Exception as exc:
+                    logger.error("Cycle %s: FDB→SM location sync failed spool %s: %s", cycle_id, sm_spool.id, exc)
+                    if not dry_run:
+                        _log(
+                            db, cycle_id, "filamentdb_to_spoolman", "error", "spool",
+                            spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
+                            fdb_spool_id=fdb_spool.id, error_message=str(exc),
+                        )
+                    result.errors += 1
+
+            else:
+                # NOOP (e.g. a locked one-way destination drifted) — converge both snapshot
+                # location names so the change is not re-detected next cycle.
+                if not dry_run:
+                    _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, sm_location_now, fdb_location_now)
+
+        elif location_both_converged and not dry_run:
+            # Both sides changed to the same name in one cycle — no write, just converge.
+            _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, sm_location_now, fdb_location_now)
 
         # ---- Field mapping sync (FR-11) ----
         if field_maps:

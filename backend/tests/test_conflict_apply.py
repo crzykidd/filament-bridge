@@ -851,3 +851,118 @@ async def test_apply_lifecycle_conflict_filamentdb_resolution():
     spoolman.update_spool.assert_awaited_once_with(8, {"archived": False})
     filamentdb.update_spool.assert_awaited_once_with("fil-8", "spool-8", {"retired": False})
     assert json.loads(c.resolved_value) is False
+
+
+# ---------------------------------------------------------------------------
+# Location cross_system conflict apply (#29) — compare/converge by name.
+# ---------------------------------------------------------------------------
+
+
+def _location_conflict(db) -> Conflict:
+    """Seed a diverged location conflict (SM 'Shelf B', FDB 'Shelf C') + snapshots."""
+    c = Conflict(
+        entity_type="spool", field_name="location", conflict_type="cross_system",
+        spoolman_id=9, filamentdb_filament_id="fil-9", filamentdb_spool_id="spool-9",
+        spoolman_value=json.dumps("Shelf B"), filamentdb_value=json.dumps("Shelf C"),
+    )
+    db.add(c)
+    db.add(Snapshot(source="spoolman", entity_type="spool", entity_id="9",
+                    data=json.dumps({"location": "Shelf A"})))
+    db.add(Snapshot(source="filamentdb", entity_type="spool", entity_id="spool-9",
+                    data=json.dumps({"location": "Shelf A"})))
+    db.commit()
+    return c
+
+
+def _location_clients(existing_locations):
+    spoolman = AsyncMock()
+    spoolman.update_spool = AsyncMock(return_value=MagicMock())
+    filamentdb = AsyncMock()
+    filamentdb.update_spool = AsyncMock(return_value={})
+    filamentdb.get_locations = AsyncMock(return_value=existing_locations)
+    filamentdb.create_location = AsyncMock(return_value={"_id": "loc-new", "name": "New"})
+    return spoolman, filamentdb
+
+
+@pytest.mark.asyncio
+async def test_apply_location_conflict_spoolman_wins():
+    """Resolution 'spoolman' adopts the SM location name on both sides (find-or-create FDB)."""
+    from app.core.conflict_apply import apply_cross_system_conflict
+
+    db = _make_db()
+    c = _location_conflict(db)
+    # "Shelf B" does not exist in FDB → ensure_fdb_location creates it.
+    spoolman, filamentdb = _location_clients([{"_id": "loc-a", "name": "Shelf A"}])
+    filamentdb.create_location = AsyncMock(return_value={"_id": "loc-b", "name": "Shelf B"})
+
+    result = await apply_cross_system_conflict(c, "spoolman", None, db, spoolman, filamentdb)
+    db.commit()
+
+    assert result == "Shelf B"
+    spoolman.update_spool.assert_awaited_once_with(9, {"location": "Shelf B"})
+    filamentdb.create_location.assert_awaited_once_with("Shelf B")
+    filamentdb.update_spool.assert_awaited_once_with("fil-9", "spool-9", {"locationId": "loc-b"})
+    assert c.resolved_at is not None
+    sm_snap = db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="9").first()
+    fdb_snap = db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-9").first()
+    assert json.loads(sm_snap.data)["location"] == "Shelf B"
+    assert json.loads(fdb_snap.data)["location"] == "Shelf B"
+
+
+@pytest.mark.asyncio
+async def test_apply_location_conflict_filamentdb_wins():
+    """Resolution 'filamentdb' adopts the FDB location name; existing id reused (no create)."""
+    from app.core.conflict_apply import apply_cross_system_conflict
+
+    db = _make_db()
+    c = _location_conflict(db)
+    spoolman, filamentdb = _location_clients(
+        [{"_id": "loc-a", "name": "Shelf A"}, {"_id": "loc-c", "name": "Shelf C"}]
+    )
+
+    result = await apply_cross_system_conflict(c, "filamentdb", None, db, spoolman, filamentdb)
+    db.commit()
+
+    assert result == "Shelf C"
+    spoolman.update_spool.assert_awaited_once_with(9, {"location": "Shelf C"})
+    filamentdb.create_location.assert_not_awaited()
+    filamentdb.update_spool.assert_awaited_once_with("fil-9", "spool-9", {"locationId": "loc-c"})
+    assert json.loads(
+        db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-9").first().data
+    )["location"] == "Shelf C"
+
+
+@pytest.mark.asyncio
+async def test_apply_location_conflict_manual():
+    """Resolution 'manual' adopts the supplied name on both sides."""
+    from app.core.conflict_apply import apply_cross_system_conflict
+
+    db = _make_db()
+    c = _location_conflict(db)
+    spoolman, filamentdb = _location_clients([{"_id": "loc-a", "name": "Shelf A"}])
+    filamentdb.create_location = AsyncMock(return_value={"_id": "loc-d", "name": "Drawer D"})
+
+    result = await apply_cross_system_conflict(c, "manual", "Drawer D", db, spoolman, filamentdb)
+    db.commit()
+
+    assert result == "Drawer D"
+    spoolman.update_spool.assert_awaited_once_with(9, {"location": "Drawer D"})
+    filamentdb.update_spool.assert_awaited_once_with("fil-9", "spool-9", {"locationId": "loc-d"})
+
+
+@pytest.mark.asyncio
+async def test_apply_location_conflict_manual_clear():
+    """Manual resolution to an empty value clears the location on both sides (locationId=None)."""
+    from app.core.conflict_apply import apply_cross_system_conflict
+
+    db = _make_db()
+    c = _location_conflict(db)
+    spoolman, filamentdb = _location_clients([{"_id": "loc-a", "name": "Shelf A"}])
+
+    result = await apply_cross_system_conflict(c, "manual", "", db, spoolman, filamentdb)
+    db.commit()
+
+    assert result is None
+    spoolman.update_spool.assert_awaited_once_with(9, {"location": None})
+    filamentdb.update_spool.assert_awaited_once_with("fil-9", "spool-9", {"locationId": None})
+    filamentdb.create_location.assert_not_awaited()

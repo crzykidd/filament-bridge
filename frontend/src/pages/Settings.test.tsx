@@ -118,6 +118,8 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     material_properties_conflict_policy: 'manual',
     archive_sync_direction: 'two_way',
     archive_conflict_policy: 'manual',
+    location_sync_direction: 'two_way',
+    location_sync_conflict_policy: 'manual',
     new_spool_sync_direction: 'two_way',
     new_filament_policy: 'manual_review',
     new_spool_policy: 'manual_review',
