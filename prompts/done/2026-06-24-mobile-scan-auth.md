@@ -1,10 +1,20 @@
 ---
 name: 2026-06-24-mobile-scan-auth
-status: pending
+status: done
 created: 2026-06-24
 model: sonnet
-completed:
-result:
+completed: 2026-06-24
+result: >
+  Added the runtime setting mobile_session_days (int, default 30). 0 = the scan
+  flow (/r/ redirect, /api/mobile/*, /api/labels/*, SPA /scan/:filId/:spoolId) is
+  public; >= 1 = it requires the normal login and the fb_session cookie lives that
+  many days. Re-wired the mobile + labels routers and the /r/ redirect off the
+  global require_auth onto a new conditional mobile_auth dep (public only at days==0,
+  else the exact same check as require_auth via a shared _has_valid_credentials
+  helper); no other router changed. Cookie max-age now reads the setting. Exposed
+  mobile_public on GET /api/version; App.tsx renders /scan without login only when
+  mobile_public. Settings gained a "Scan login (days)" field. Backend 1262 → 1285,
+  frontend 124 → 129; ruff + tsc + build clean.
 ---
 
 # Task: Configurable mobile-scan auth (`mobile_session_days`)

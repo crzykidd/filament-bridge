@@ -43,7 +43,7 @@ from app.api import opentag as opentag_router
 from app.api import sync as sync_router
 from app.api import sync_log as sync_log_router
 from app.api import wizard as wizard_router
-from app.api.auth import require_auth
+from app.api.auth import mobile_auth, require_auth
 from app.config import settings
 from app.core.engine import run_sync_cycle
 from app.db import SessionLocal, get_db
@@ -301,7 +301,7 @@ app.include_router(health_router.router, prefix="/api")
 app.include_router(auth_router.router, prefix="/api")
 app.include_router(version_router.router, prefix="/api")
 
-# Protected: all remaining API routers require authentication
+# Protected: all remaining API routers require authentication (global require_auth).
 _auth_dep = [Depends(require_auth)]
 app.include_router(sync_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(conflicts_router.router, prefix="/api", dependencies=_auth_dep)
@@ -313,15 +313,25 @@ app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
-app.include_router(mobile_router.router, prefix="/api", dependencies=_auth_dep)
-app.include_router(labels_router.router, prefix="/api", dependencies=_auth_dep)
+
+# Conditional auth: the mobile + labels routers (and the /r/ redirect below) carry
+# `mobile_auth` INSTEAD of the global `require_auth`. mobile_auth bypasses auth ONLY
+# when mobile_session_days == 0 (public scan flow) and otherwise enforces the exact
+# same check as require_auth. These are the ONLY three surfaces that become
+# conditionally public — every other router above keeps require_auth unchanged. The
+# `_require_labels_enabled` 403 feature gate still runs on each mobile/label route.
+_mobile_auth_dep = [Depends(mobile_auth)]
+app.include_router(mobile_router.router, prefix="/api", dependencies=_mobile_auth_dep)
+app.include_router(labels_router.router, prefix="/api", dependencies=_mobile_auth_dep)
 
 
 # QR redirect — the indirection point. The printed QR encodes /r/{fil}/{spool};
 # this 302s to the configured target so the destination can change later without
 # reprinting. Registered BEFORE the SPA catch-all below or index.html swallows it.
-# It is outside /api, so it carries its own require_auth + feature-gate dependencies.
-@app.get("/r/{fil}/{spool}", include_in_schema=False, dependencies=_auth_dep)
+# It is outside /api, so it carries its own auth + feature-gate dependencies. Auth is
+# the conditional mobile_auth (public when mobile_session_days == 0), matching the
+# /api/mobile + /api/labels routers — a cold phone scan lands here first.
+@app.get("/r/{fil}/{spool}", include_in_schema=False, dependencies=_mobile_auth_dep)
 async def _qr_redirect(fil: str, spool: str, db=Depends(get_db)):
     from fastapi.responses import RedirectResponse
 

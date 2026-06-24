@@ -82,15 +82,35 @@ The point of the extra hop is that you can **change where every existing label p
 without reprinting a single one**. Print today against the bridge scan page; later, switch
 the target (e.g. to a future Filament DB mobile page) and every label follows.
 
-The redirect carries the same auth dependency and the same `mobile_labels_enabled` gate as
-the rest of the app (403 when the feature is off).
+The redirect carries the conditional `mobile_auth` dependency (see below) and the same
+`mobile_labels_enabled` gate as the rest of the mobile flow (403 when the feature is off).
 
 ## Authentication
 
-There is no token baked into the QR and no auth exception for the scan page. The mobile
-flow **mirrors the rest of the app**: with auth disabled (`AUTH_ENABLED=false`) the flow is
-open; with auth enabled, the scan page sits behind the normal session, same as every other
-page. Scanning a label on a fresh phone will prompt for login first.
+The scan flow's auth is controlled by **`mobile_session_days`** (integer, default **30**).
+It governs three surfaces only — the `GET /r/{fil}/{spool}` redirect, the `/api/mobile/*`
+and `/api/labels/*` endpoints, and the frontend `/scan/:filId/:spoolId` route — and is
+**independent of** the `mobile_labels_enabled` master gate (that 403 still fires regardless).
+
+- **`mobile_session_days = 0` → the scan flow is public.** Those three surfaces bypass the
+  app password; a cold phone with no session can scan a label and update a spool. The rest
+  of the app stays password-protected — every other route still requires login.
+- **`mobile_session_days >= 1` → the scan flow requires the normal login** (session cookie
+  or API token, exactly like the rest of the app), AND the login session cookie's lifetime
+  is set to that many days. The default `30` is unchanged from before this setting existed:
+  the scan page sits behind the normal session and scanning on a fresh phone prompts for
+  login first.
+
+Mechanically, the `mobile`/`labels` routers and the `/r/` redirect carry a dedicated
+`mobile_auth` dependency instead of the global `require_auth`: it returns early (public)
+only when `mobile_session_days == 0`, and otherwise runs the *exact same* check as
+`require_auth`. No other router is affected. The cookie max-age (set on login and the
+`TimestampSigner` verify) reads `mobile_session_days` days when `>= 1`, else falls back to
+30 days. The public flag is surfaced to the SPA as `mobile_public` on `GET /api/version`,
+which the frontend uses to render the `/scan/...` route without a login.
+
+Set `mobile_session_days` in **Settings → Mobile & Labels** ("Scan login (days)") or via
+the `MOBILE_SESSION_DAYS` env var (start-up fallback).
 
 ## Label printing (LabelForge)
 
@@ -164,6 +184,7 @@ env vars are the start-up fallback. Full table in
 | Setting | Default | Meaning |
 |---|---|---|
 | `mobile_labels_enabled` | `false` | Master switch for the whole feature (403 on every endpoint when off) |
+| `mobile_session_days` | `30` | Scan-flow auth + login-session lifetime (days). `0` = public scan flow (no app password on the scan page/endpoints; rest of app still gated); `>= 1` = require login, cookie lives this many days. Independent of `mobile_labels_enabled`. |
 | `bridge_public_url` | `""` (derive from request) | External base URL baked into the printed QR |
 | `mobile_redirect_target` | `bridge` | `/r/` 302 target: `bridge` (scan page) or `filamentdb` |
 | `mobile_weight_default_mode` | `direct_correction` | Default weight-save mode: `direct_correction` or `usage` (overridable per save) |

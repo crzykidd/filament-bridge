@@ -117,6 +117,15 @@ class Settings(BaseSettings):
     # feature is gated by mobile_labels_enabled (default OFF) — when off, every
     # mobile/label/redirect endpoint refuses with 403 (mirrors debug_mode).
     mobile_labels_enabled: bool = False
+    # Auth lifetime + gating for the mobile scan flow (the /r/ redirect, /api/mobile/*,
+    # /api/labels/*, and the SPA /scan/:filId/:spoolId route). Integer days, default 30:
+    #   0    → the scan flow is PUBLIC (bypasses the app password); the rest of the app
+    #          stays password-protected.
+    #   >= 1 → the scan flow requires the normal app login, AND the fb_session login
+    #          cookie's lifetime is set to this many days.
+    # Default 30 = no behavior change from before this setting existed. Independent of
+    # mobile_labels_enabled (the 403 feature gate still applies regardless of this value).
+    mobile_session_days: int = 30
     # External base URL baked into the printed QR (e.g. https://bridge.example.com).
     # Empty = derive from the incoming request when building absolute URLs later.
     bridge_public_url: str = ""

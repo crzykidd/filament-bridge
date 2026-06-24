@@ -1,5 +1,43 @@
 # Decision record
 
+## 2026-06-24 — Configurable mobile-scan auth: `mobile_session_days` (0 = public, N = login TTL)
+
+**Context.** The mobile scan flow mirrored the app's auth exactly: when a password is set, a cold
+phone scanning a QR label has no session and gets *access denied*. For a common use case (a shared
+shop scale, labels on a shelf) the friction of logging in on every phone defeats the feature; but
+making the scan flow unconditionally public would be wrong for users who *do* want it gated.
+
+**Decision.** A single runtime setting **`mobile_session_days`** (integer, default **30**) controls
+both the gate and the cookie lifetime for the scan flow, and *only* the scan flow:
+
+- **`0` → the scan flow is public.** The three surfaces a cold scan touches — the
+  `GET /r/{fil}/{spool}` redirect, the `/api/mobile/*` + `/api/labels/*` endpoints, and the SPA
+  `/scan/:filId/:spoolId` route — bypass the app password. **The rest of the app stays
+  password-protected.**
+- **`>= 1` → the scan flow requires the normal login** (session cookie OR API token OR
+  `AUTH_ENABLED=false`), AND the `fb_session` login cookie's lifetime is set to that many days. The
+  default `30` reproduces the previous behavior exactly (no change on upgrade).
+
+It is **independent of `mobile_labels_enabled`** — that master gate's 403 still fires on every
+mobile/label endpoint and the redirect regardless of `mobile_session_days` (feature-gate first, then
+auth).
+
+**Implementation (security-critical wiring).** The `mobile` and `labels` routers and the `/r/`
+redirect were previously included in `main.py` with the **global** `_auth_dep`
+(`Depends(require_auth)`). They now carry a dedicated **`mobile_auth`** dependency instead:
+`mobile_auth` returns early (public) **only** when `mobile_session_days == 0`, and otherwise runs the
+**exact same** check as `require_auth` (both delegate to a shared `_has_valid_credentials` helper, so
+the gated path can never be weaker than `require_auth`). **No other router was touched** — every
+other surface keeps `require_auth`. The `_require_labels_enabled` 403 feature gate stays on each
+mobile/label route. The cookie max-age (set on login + `setup`, and the `TimestampSigner` verify
+`max_age`) reads `mobile_session_days` days when `>= 1`, else falls back to 30. `GET /api/version`
+exposes `mobile_public` (= `mobile_session_days == 0`); the SPA `App.tsx` gate renders the
+`/scan/...` route without login only when `mobile_public` (every other path still shows Login).
+
+**Consequence.** Three surfaces become *conditionally* public; the blast radius is bounded to them by
+construction (a distinct dependency on exactly those three registrations). The default 30 is a no-op
+on upgrade. `mobile_session_days` is validated `>= 0` on write (422 otherwise).
+
 ## 2026-06-24 — Lowering a spool weight always goes through an FDB usage entry (issue #28)
 
 **Context.** The mobile "correct weight" path and the #21 conflict-resolve path both used

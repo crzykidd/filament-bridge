@@ -135,6 +135,7 @@ function makeConfig(overrides?: Partial<ConfigResponse>): ConfigResponse {
     backup_retention_days: 7,
     backup_hour_utc: 3,
     mobile_labels_enabled: false,
+    mobile_session_days: 30,
     mobile_redirect_target: 'bridge',
     mobile_weight_default_mode: 'direct_correction',
     bridge_public_url: '',
@@ -440,5 +441,44 @@ describe('Settings — Mobile updates section', () => {
       .getByText(/qr redirect target/i)
       .parentElement!.querySelector('select')!
     expect(redirectSelect).not.toBeDisabled()
+  })
+
+  it('renders the Scan login (days) field with the configured value', () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true, mobile_session_days: 0 }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    render(<Settings />)
+    expect(screen.getByText(/scan login \(days\)/i)).toBeInTheDocument()
+    const input = screen
+      .getByText(/scan login \(days\)/i)
+      .parentElement!.querySelector('input')! as HTMLInputElement
+    expect(input.value).toBe('0')
+  })
+
+  it('saves mobile_session_days via updateConfig', async () => {
+    ;(useApi as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: makeConfig({ mobile_labels_enabled: true, mobile_session_days: 30 }),
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    })
+    ;(updateConfig as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeConfig({ mobile_labels_enabled: true, mobile_session_days: 0 }),
+    )
+    render(<Settings />)
+
+    const input = screen
+      .getByText(/scan login \(days\)/i)
+      .parentElement!.querySelector('input')!
+    fireEvent.change(input, { target: { value: '0' } })
+    fireEvent.click(screen.getAllByRole('button', { name: /^save$/i })[0])
+
+    await waitFor(() => expect(updateConfig).toHaveBeenCalledTimes(1))
+    expect((updateConfig as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      mobile_session_days: 0,
+    })
   })
 })

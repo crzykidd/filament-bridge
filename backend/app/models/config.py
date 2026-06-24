@@ -91,6 +91,13 @@ _DEFAULTS = {
     # is fully gated (403 on every mobile/label endpoint and the /r/ redirect, nav
     # item hidden) until the user configures the connection settings and flips it on.
     "mobile_labels_enabled": "false",
+    # Mobile scan-flow auth + session lifetime (days). Default 30 = unchanged behavior.
+    #   0    → the scan flow (/r/, /api/mobile/*, /api/labels/*, SPA /scan/...) is PUBLIC
+    #          (bypasses the app password); the rest of the app stays protected.
+    #   >= 1 → the scan flow requires the normal app login, and the fb_session cookie
+    #          lives this many days. Independent of mobile_labels_enabled (the 403 gate
+    #          still applies).
+    "mobile_session_days": "30",
     # External base URL baked into the printed QR. Empty = derive from request.
     "bridge_public_url": '""',
     # Redirect target for GET /r/{fil}/{spool}: "bridge" (the SPA scan page) | "filamentdb".

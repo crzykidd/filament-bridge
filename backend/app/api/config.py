@@ -160,6 +160,19 @@ def mobile_labels_enabled(db: Session) -> bool:
     return _resolve_bool(db, "mobile_labels_enabled", _settings.mobile_labels_enabled)
 
 
+def mobile_session_days(db: Session) -> int:
+    """Return the mobile scan-flow session lifetime in days (DB wins, else env).
+
+    0  → the scan flow is public (no app password); the rest of the app stays gated.
+    >= 1 → the scan flow requires the normal login, and the fb_session cookie lives
+    this many days. Never negative (the API rejects < 0 on write).
+    """
+    val = get_config_value(db, "mobile_session_days", None)
+    if val is None:
+        return int(_settings.mobile_session_days)
+    return int(val)
+
+
 def mobile_redirect_target(db: Session) -> str:
     """Return the configured /r/ redirect target ("bridge" | "filamentdb")."""
     val = get_config_value(db, "mobile_redirect_target", None)
@@ -294,6 +307,7 @@ def _config_response(db: Session) -> ConfigResponse:
             if "mobile_labels_enabled" in cfg
             else _settings.mobile_labels_enabled
         ),
+        mobile_session_days=int(cfg.get("mobile_session_days", _settings.mobile_session_days)),
         bridge_public_url=str(cfg.get("bridge_public_url", _settings.bridge_public_url)),
         mobile_redirect_target=cfg.get("mobile_redirect_target", _settings.mobile_redirect_target),
         mobile_weight_default_mode=cfg.get(
@@ -367,6 +381,16 @@ def update_config(
             detail={
                 "code": "invalid_backup_retention",
                 "message": "backup_retention_days must be at least 1.",
+            },
+        )
+
+    # Mobile scan-flow session lifetime — must be >= 0 (0 = public scan flow).
+    if payload.mobile_session_days is not None and payload.mobile_session_days < 0:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_mobile_session_days",
+                "message": "mobile_session_days must be 0 or greater (0 = public scan flow).",
             },
         )
 

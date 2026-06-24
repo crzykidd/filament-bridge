@@ -152,6 +152,7 @@ vars are the start-up fallback — the matching runtime setting wins when set. S
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `MOBILE_LABELS_ENABLED` | No | `false` | Master switch for the mobile-updates & labels feature. Start-up fallback; runtime-editable in Settings → Mobile & Labels (DB value wins). |
+| `MOBILE_SESSION_DAYS` | No | `30` | Scan-flow auth + login-session lifetime (days, integer >= 0). `0` = the scan flow (`/r/`, `/api/mobile/*`, `/api/labels/*`, SPA `/scan/...`) is **public** (bypasses the app password; the rest of the app stays gated); `>= 1` = the scan flow requires the normal login AND the `fb_session` cookie lives this many days. Default `30` = unchanged behavior. Independent of `MOBILE_LABELS_ENABLED` (that 403 gate still applies). Start-up fallback; runtime-editable. |
 | `BRIDGE_PUBLIC_URL` | No | — | External base URL baked into the printed QR (`{base}/r/{fil}/{spool}`). Blank = derive from the request (honoring `X-Forwarded-Proto`/`X-Forwarded-Host` behind a proxy). Runtime-editable. |
 | `MOBILE_REDIRECT_TARGET` | No | `bridge` | Where `GET /r/{fil}/{spool}` 302-redirects: `bridge` (the SPA scan page `/scan/{fil}/{spool}`) or `filamentdb` (`{FILAMENTDB_URL}/filaments/{fil}`). Runtime-editable. |
 | `MOBILE_WEIGHT_DEFAULT_MODE` | No | `direct_correction` | Default weight-save mode on the update page: `direct_correction` (absolute true-up) or `usage` (log an FDB usage entry on a decrease). Overridable per save. Runtime-editable. |
@@ -193,6 +194,7 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | `api_token` | (none) | Security | The token value; generate/regenerate in Settings (displayed masked). |
 | `debug_mode` | `false` | Debug mode | Reveals the Danger Zone and enables the four `/api/debug/*` reset endpoints (403 when off). Never enable in production. |
 | `mobile_labels_enabled` | env (`false`) | Mobile & Labels | Master switch for mobile updates & labels. When off, every mobile/label endpoint and the `/r/` redirect return 403 and the nav item is hidden. |
+| `mobile_session_days` | env (`30`) | Mobile & Labels | Scan-flow auth + login-session lifetime (days, >= 0). `0` = public scan flow (no app password on `/r/`, `/api/mobile/*`, `/api/labels/*`, SPA `/scan/...`; rest of app still gated); `>= 1` = require login, `fb_session` cookie lives this many days. Default `30` = unchanged. Independent of `mobile_labels_enabled`. Surfaced to the SPA as `mobile_public` (= `0`) on `GET /api/version`. |
 | `bridge_public_url` | env (`""`) | Mobile & Labels | External base URL baked into the printed QR. Blank = derive from the request. |
 | `mobile_redirect_target` | env (`bridge`) | Mobile & Labels | `/r/` 302 target: `bridge` (scan page) or `filamentdb` (filament page). Lets every existing label re-point without reprinting. |
 | `mobile_weight_default_mode` | env (`direct_correction`) | Mobile & Labels | Default weight-save mode: `direct_correction` or `usage`. Overridable per save on the update card. |

@@ -123,6 +123,15 @@ class TestVersionEndpoint:
         # Seeded default is OFF.
         assert resp.json()["mobile_labels_enabled"] is False
 
+    def test_exposes_mobile_public_flag(self):
+        """mobile_public reflects mobile_session_days == 0 (seeded default 30 → False)."""
+        with patch("app.api.version._fetch_github", side_effect=OSError("no network")):
+            client = _make_client()
+            resp = client.get("/api/version")
+        assert resp.status_code == 200
+        # Seeded default mobile_session_days is 30 → scan flow is NOT public.
+        assert resp.json()["mobile_public"] is False
+
     def test_no_raise_on_network_error(self):
         """Endpoint must return 200 (never 500) when GitHub is unreachable."""
         import urllib.error

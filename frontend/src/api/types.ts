@@ -296,6 +296,9 @@ export interface ConfigResponse {
   backup_hour_utc: number
   // Mobile updates & labels (phase 1 backend; phase 3 surfaces the LabelForge fields).
   mobile_labels_enabled: boolean
+  // Scan-flow auth / session lifetime in days. 0 = public scan flow (no app password
+  // on the scan page + endpoints); >= 1 = require login, cookie lives this many days.
+  mobile_session_days: number
   mobile_redirect_target: MobileRedirectTarget
   mobile_weight_default_mode: MobileWeightMode
   // LabelForge connection (phase 3). labelforge_token is a secret (returned so the
@@ -347,6 +350,8 @@ export interface ConfigUpdateRequest {
   // Mobile updates & labels (Phase 2 toggle + redirect + weight mode; Phase 3
   // LabelForge connection fields).
   mobile_labels_enabled?: boolean | null
+  // Scan-flow session lifetime in days (>= 0; 0 = public scan flow).
+  mobile_session_days?: number | null
   mobile_redirect_target?: MobileRedirectTarget | null
   mobile_weight_default_mode?: MobileWeightMode | null
   bridge_public_url?: string | null
@@ -975,6 +980,9 @@ export interface VersionInfo {
   /** Master toggle for the mobile-updates / labels feature. When false, the
    *  "Mobile updates" nav item is hidden and the mobile/redirect endpoints 403. */
   mobile_labels_enabled: boolean
+  /** True when mobile_session_days == 0 — the scan flow is public, so the SPA
+   *  renders the /scan/:filId/:spoolId route without forcing a login. */
+  mobile_public: boolean
 }
 
 // ---------------------------------------------------------------------------

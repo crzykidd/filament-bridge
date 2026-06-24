@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app import __channel__, __commit__, __version__
-from app.api.config import mobile_labels_enabled
+from app.api.config import mobile_labels_enabled, mobile_session_days
 from app.db import get_db
 
 router = APIRouter()
@@ -216,4 +216,7 @@ async def get_version(db: Session = Depends(get_db)) -> dict:
         # Feature flag exposed publicly so the SPA can hide the "Mobile updates"
         # nav item when the feature is off (the app already loads /api/version).
         "mobile_labels_enabled": mobile_labels_enabled(db),
+        # True when mobile_session_days == 0 — the scan flow is public, so the SPA
+        # renders the /scan/:filId/:spoolId route without forcing a login.
+        "mobile_public": mobile_session_days(db) == 0,
     }

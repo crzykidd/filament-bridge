@@ -9,6 +9,17 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Configurable mobile-scan auth — `mobile_session_days`** (integer, default `30`). Controls
+  whether scanning a QR label needs the app password and how long a scan login lasts. `0` makes the
+  scan flow **public** — the `/r/` redirect, the `/api/mobile/*` and `/api/labels/*` endpoints, and
+  the `/scan/:filId/:spoolId` page bypass the app password (the rest of the app stays
+  password-protected); `>= 1` keeps the scan flow behind the normal login and sets the login session
+  cookie to live that many days. Default `30` is unchanged from before. Independent of the
+  `mobile_labels_enabled` master switch (the feature's 403 still applies). Set it in
+  **Settings → Mobile & Labels** ("Scan login (days)") or via `MOBILE_SESSION_DAYS`.
+
 ### Fixed
 
 - **Lowering a spool's weight now actually reaches Filament DB** — the mobile "correct

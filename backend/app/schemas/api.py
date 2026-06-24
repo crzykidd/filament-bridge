@@ -334,6 +334,10 @@ class ConfigResponse(BaseModel):
     # labelforge_token is the only secret; it is returned so the Settings UI can
     # display/edit it (same treatment as api_token).
     mobile_labels_enabled: bool = False
+    # Scan-flow auth + session lifetime (days). 0 = public scan flow (no app password
+    # on /r/, /api/mobile/*, /api/labels/*, SPA /scan/...); >= 1 = require login, with
+    # the fb_session cookie living this many days. Default 30 = unchanged behavior.
+    mobile_session_days: int = 30
     bridge_public_url: str = ""
     mobile_redirect_target: MobileRedirectTarget = "bridge"
     mobile_weight_default_mode: MobileWeightMode = "direct_correction"
@@ -387,6 +391,9 @@ class ConfigUpdateRequest(BaseModel):
     # Mobile updates & labels (phase 1). Enum values are validated by the Literal
     # types (bad value → 422 before update_config runs).
     mobile_labels_enabled: bool | None = None
+    # Scan-flow auth / session lifetime in days. Must be >= 0 (validated in update_config
+    # with the project error envelope; 0 = public scan flow).
+    mobile_session_days: int | None = Field(default=None, ge=0)
     bridge_public_url: str | None = None
     mobile_redirect_target: MobileRedirectTarget | None = None
     mobile_weight_default_mode: MobileWeightMode | None = None

@@ -264,6 +264,7 @@ export default function Settings() {
 
   // --- Mobile updates (phase 2) -----------------------------------------
   const [mobileLabelsEnabled, setMobileLabelsEnabled] = useState<boolean | null>(null)
+  const [mobileSessionDays, setMobileSessionDays] = useState<number | null>(null)
   const [mobileRedirectTarget, setMobileRedirectTarget] = useState<MobileRedirectTarget | null>(null)
   const [mobileWeightDefaultMode, setMobileWeightDefaultMode] = useState<MobileWeightMode | null>(null)
 
@@ -306,6 +307,7 @@ export default function Settings() {
     (containerMarkerText != null && containerMarkerEnabled !== false &&
       containerMarkerText !== data.container_parent_marker) ||
     (mobileLabelsEnabled != null && mobileLabelsEnabled !== data.mobile_labels_enabled) ||
+    (mobileSessionDays != null && mobileSessionDays !== data.mobile_session_days) ||
     (mobileRedirectTarget != null && mobileRedirectTarget !== data.mobile_redirect_target) ||
     (mobileWeightDefaultMode != null && mobileWeightDefaultMode !== data.mobile_weight_default_mode) ||
     (bridgePublicUrl != null && bridgePublicUrl !== data.bridge_public_url) ||
@@ -377,6 +379,7 @@ export default function Settings() {
   const effectiveDebugMode = debugMode ?? data.debug_mode
 
   const effMobileEnabled = mobileLabelsEnabled ?? data.mobile_labels_enabled
+  const effMobileSessionDays = mobileSessionDays ?? data.mobile_session_days
   const effMobileRedirect = mobileRedirectTarget ?? data.mobile_redirect_target
   const effMobileWeightMode = mobileWeightDefaultMode ?? data.mobile_weight_default_mode
 
@@ -597,6 +600,7 @@ export default function Settings() {
           ? effectiveMarkerValue
           : undefined,
         mobile_labels_enabled: mobileLabelsEnabled ?? undefined,
+        mobile_session_days: mobileSessionDays ?? undefined,
         mobile_redirect_target: mobileRedirectTarget ?? undefined,
         mobile_weight_default_mode: mobileWeightDefaultMode ?? undefined,
         bridge_public_url: bridgePublicUrl ?? undefined,
@@ -1235,6 +1239,30 @@ export default function Settings() {
                 <option value="usage">Log as usage</option>
               </select>
               <span className={subTextCls}>Preselected save mode on the update page (overridable per save).</span>
+            </label>
+          </div>
+
+          {/* Scan-flow auth + session lifetime */}
+          <div className={`pt-1 ${effMobileEnabled ? '' : 'opacity-50'}`}>
+            <label className="flex flex-col gap-1 max-w-xs">
+              <span className={labelCls}>Scan login (days)</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={effMobileSessionDays}
+                disabled={!effMobileEnabled}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10)
+                  setMobileSessionDays(Number.isNaN(n) ? 0 : Math.max(0, n))
+                }}
+                className={`${inputCls} disabled:cursor-not-allowed`}
+              />
+              <span className={subTextCls}>
+                Days a scan login stays signed in. <strong>0</strong> = scanned labels need no login
+                (the scan page &amp; its endpoints are public); the rest of the app still requires the
+                password.
+              </span>
             </label>
           </div>
 
