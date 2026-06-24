@@ -134,6 +134,38 @@ describe('MobileSpoolUpdate', () => {
     })
   })
 
+  it('offers every known location in the dropdown, not just the current one', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail({ location: 'Shelf A' }))
+    ;(getMobileLocations as ReturnType<typeof vi.fn>).mockResolvedValue(['Shelf A', 'Dry box B', 'Bin C'])
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    const select = screen.getByLabelText(/^location$/i) as HTMLSelectElement
+    const optionValues = Array.from(select.options).map(o => o.value)
+    // Every Filament DB / Spoolman location is selectable — not only the current bin.
+    expect(optionValues).toContain('Shelf A')
+    expect(optionValues).toContain('Dry box B')
+    expect(optionValues).toContain('Bin C')
+  })
+
+  it('lets the user type a brand-new location via the dropdown escape hatch', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail({ location: 'Shelf A' }))
+    ;(updateMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    // Choosing the "New location…" sentinel swaps the select for a text input.
+    fireEvent.change(screen.getByLabelText(/^location$/i), { target: { value: '__new_location__' } })
+    fireEvent.change(screen.getByLabelText(/^location$/i), { target: { value: 'Custom shelf' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updateMobileSpool).toHaveBeenCalledTimes(1))
+    expect(updateMobileSpool).toHaveBeenCalledWith('fil-001', 'spool-001', {
+      location: 'Custom shelf',
+      weight_mode: 'direct_correction',
+    })
+  })
+
   it('shows an error banner when the detail fetch fails (e.g. feature disabled 403)', async () => {
     ;(getMobileSpool as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Mobile updates are disabled'))
     render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)

@@ -48,6 +48,7 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
   // --- Form state (initialized lazily from the loaded detail) ---------------
   const [grossInput, setGrossInput] = useState('')
   const [location, setLocation] = useState<string | null>(null)
+  const [addingNewLocation, setAddingNewLocation] = useState(false)
   const [weightMode, setWeightMode] = useState<MobileWeightMode | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -71,6 +72,15 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
   const netPreview = grossValid ? grossNum - detail.tare : null
 
   const locationChanged = effectiveLocation !== (detail.location ?? '')
+
+  // Location dropdown options: every known location (from Filament DB + Spoolman),
+  // with the current value guaranteed present so it shows as selected.
+  const NEW_LOCATION = '__new_location__'
+  const knownLocations = locations ?? []
+  const locationOptions =
+    effectiveLocation && !knownLocations.includes(effectiveLocation)
+      ? [effectiveLocation, ...knownLocations]
+      : knownLocations
   const hasWeight = grossInput.trim() !== ''
   // Save is allowed when a valid weight is entered OR the location changed.
   // A weight that's been typed but is invalid blocks the save.
@@ -90,6 +100,7 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
       // Refresh from the server (post-write agreed values) and reset the inputs.
       setGrossInput('')
       setLocation(null)
+      setAddingNewLocation(false)
       setSavedMsg('Saved.')
       await reload()
     } catch (e) {
@@ -201,27 +212,52 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
         <label htmlFor="location" className={labelCls}>
           Location
         </label>
-        <input
-          id="location"
-          type="text"
-          list="mobile-locations"
-          value={effectiveLocation}
-          onChange={e => setLocation(e.target.value)}
-          placeholder="e.g. Dry box A"
-          className={inputCls}
-          // Stop browser/password-manager autofill on this free-text field.
-          // autoComplete="off" alone is ignored by most managers, so opt each out explicitly.
-          autoComplete="off"
-          data-1p-ignore="true"
-          data-lpignore="true"
-          data-bwignore="true"
-          data-form-type="other"
-        />
-        <datalist id="mobile-locations">
-          {(locations ?? []).map(loc => (
-            <option key={loc} value={loc} />
-          ))}
-        </datalist>
+        {!addingNewLocation ? (
+          <select
+            id="location"
+            value={effectiveLocation}
+            onChange={e => {
+              const v = e.target.value
+              if (v === NEW_LOCATION) {
+                setAddingNewLocation(true)
+                setLocation('')
+              } else {
+                setLocation(v)
+              }
+            }}
+            className={inputCls}
+          >
+            <option value="">— Select location —</option>
+            {locationOptions.map(loc => (
+              <option key={loc} value={loc}>{loc}</option>
+            ))}
+            <option value={NEW_LOCATION}>➕ New location…</option>
+          </select>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              id="location"
+              type="text"
+              value={effectiveLocation}
+              onChange={e => setLocation(e.target.value)}
+              placeholder="New location name"
+              className={inputCls}
+              autoFocus
+              autoComplete="off"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
+              data-form-type="other"
+            />
+            <button
+              type="button"
+              onClick={() => { setAddingNewLocation(false); setLocation(null) }}
+              className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 whitespace-nowrap"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Save + inline banners */}
