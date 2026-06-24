@@ -20,6 +20,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, Request
@@ -48,6 +49,29 @@ def _require_labels_enabled(db: Session = Depends(get_db)) -> None:
             "The mobile updates & labels feature is disabled. Enable it via "
             "PUT /api/config with mobile_labels_enabled=true.",
         )
+
+
+# A scanned QR id is an opaque record id (a Filament DB ObjectId in practice). It is
+# constrained to this allowlist before it is ever interpolated into a redirect URL.
+_QR_ID_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+
+def qr_redirect_url(target: str, fil: str, spool: str, *, filamentdb_url: str) -> str:
+    """Build the ``/r/{fil}/{spool}`` 302 target, validating the path ids first.
+
+    ``fil``/``spool`` arrive straight off the URL path (a scanned QR label), so they
+    are constrained to an id-shaped allowlist (``[A-Za-z0-9_-]``) before being
+    interpolated into the redirect URL — anything else 404s. The allowlist excludes
+    every character needed to break out of the intended destination (``/``, ``\\``,
+    ``:``, ``.``, ``%``), so no protocol-relative ``//host``, absolute ``scheme:`` URL,
+    or ``..`` path escape is constructible (open redirect / path injection,
+    CWE-601 / CWE-22).
+    """
+    if not _QR_ID_RE.match(fil) or not _QR_ID_RE.match(spool):
+        raise api_error(404, "not_found", "Unknown spool.")
+    if target == "filamentdb":
+        return f"{filamentdb_url}/filaments/{fil}"
+    return f"/scan/{fil}/{spool}"
 
 
 @router.get(

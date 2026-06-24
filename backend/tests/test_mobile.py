@@ -104,15 +104,12 @@ def _client(db, spoolman, filamentdb, *, with_redirect=False) -> TestClient:
             from fastapi.responses import RedirectResponse
 
             from app.api.config import mobile_redirect_target
-            from app.api.mobile import _require_labels_enabled
+            from app.api.mobile import _require_labels_enabled, qr_redirect_url
             from app.config import settings as _settings
 
             _require_labels_enabled(db_)
             target = mobile_redirect_target(db_)
-            if target == "filamentdb":
-                url = f"{_settings.filamentdb_url}/filaments/{fil}"
-            else:
-                url = f"/scan/{fil}/{spool}"
+            url = qr_redirect_url(target, fil, spool, filamentdb_url=_settings.filamentdb_url)
             return RedirectResponse(url, status_code=302)
 
     app.dependency_overrides[get_db] = lambda: db
@@ -433,3 +430,17 @@ def test_redirect_403_when_feature_disabled():
     r = client.get("/r/fil-1/spool-1", follow_redirects=False)
     assert r.status_code == 403
     assert r.json()["detail"]["code"] == "mobile_labels_disabled"
+
+
+def test_redirect_rejects_malformed_id():
+    # A scanned id outside the [A-Za-z0-9_-] allowlist (e.g. one carrying a '.') 404s
+    # rather than being interpolated into the redirect URL — closes the open-redirect /
+    # path-injection vector (CWE-601 / CWE-22).
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    set_config_value(db, "mobile_redirect_target", "bridge")
+    db.commit()
+    client = _client(db, _fake_spoolman(), _fake_filamentdb(), with_redirect=True)
+    r = client.get("/r/fil.1/spool-1", follow_redirects=False)
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "not_found"

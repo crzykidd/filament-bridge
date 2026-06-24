@@ -33,7 +33,7 @@ from app.api import mobile as mobile_module
 from app.api import version as version_module
 from app.api.auth import mobile_auth, require_auth
 from app.api.config import mobile_redirect_target, set_config_value
-from app.api.mobile import _require_labels_enabled
+from app.api.mobile import _require_labels_enabled, qr_redirect_url
 from app.db import Base, get_db
 from app.models.config import seed_defaults
 from app.models.mapping import SpoolMapping
@@ -141,10 +141,7 @@ def make_client(db, *, auth_enabled: bool = True):
 
             _require_labels_enabled(db_)
             target = mobile_redirect_target(db_)
-            if target == "filamentdb":
-                url = f"{ms.filamentdb_url}/filaments/{fil}"
-            else:
-                url = f"/scan/{fil}/{spool}"
+            url = qr_redirect_url(target, fil, spool, filamentdb_url=ms.filamentdb_url)
             return RedirectResponse(url, status_code=302)
 
         with TestClient(app, raise_server_exceptions=True) as client:

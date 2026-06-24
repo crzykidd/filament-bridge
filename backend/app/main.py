@@ -336,15 +336,14 @@ async def _qr_redirect(fil: str, spool: str, db=Depends(get_db)):
     from fastapi.responses import RedirectResponse
 
     from app.api.config import mobile_redirect_target
-    from app.api.mobile import _require_labels_enabled
+    from app.api.mobile import _require_labels_enabled, qr_redirect_url
 
     _require_labels_enabled(db)  # 403 when the feature is off
 
     target = mobile_redirect_target(db)
-    if target == "filamentdb":
-        url = f"{settings.filamentdb_url}/filaments/{fil}"
-    else:  # "bridge" (default)
-        url = f"/scan/{fil}/{spool}"
+    # qr_redirect_url validates fil/spool against an id allowlist before building the
+    # target, closing the open-redirect / path-injection vector (CWE-601 / CWE-22).
+    url = qr_redirect_url(target, fil, spool, filamentdb_url=settings.filamentdb_url)
     return RedirectResponse(url, status_code=302)
 
 # Serve the React SPA from /static when the directory exists (built image only).
