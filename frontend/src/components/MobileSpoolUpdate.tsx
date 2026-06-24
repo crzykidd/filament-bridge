@@ -154,6 +154,11 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
           onChange={e => setGrossInput(e.target.value)}
           placeholder={`e.g. ${detail.gross != null ? detail.gross.toFixed(0) : '1000'}`}
           className={inputCls}
+          autoComplete="off"
+          data-1p-ignore="true"
+          data-lpignore="true"
+          data-bwignore="true"
+          data-form-type="other"
         />
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
           {hasWeight && !grossValid ? (
@@ -204,6 +209,13 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
           onChange={e => setLocation(e.target.value)}
           placeholder="e.g. Dry box A"
           className={inputCls}
+          // Stop browser/password-manager autofill on this free-text field.
+          // autoComplete="off" alone is ignored by most managers, so opt each out explicitly.
+          autoComplete="off"
+          data-1p-ignore="true"
+          data-lpignore="true"
+          data-bwignore="true"
+          data-form-type="other"
         />
         <datalist id="mobile-locations">
           {(locations ?? []).map(loc => (
