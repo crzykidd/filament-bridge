@@ -54,6 +54,8 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 
 <img src="docs/images/wizard-matches.png" alt="Bulk Import Wizard, Matches step — fuzzy vendor/name/color pairing of Spoolman and Filament DB records with per-row status and bulk actions" width="760">
 
+<img src="docs/images/mobile_updates.png" alt="Mobile updates page — scan a spool's QR label to update its weight (read off a scale, with a live net preview) and location in one tap, written straight to Filament DB and Spoolman" width="380">
+
 ---
 
 ## What's New
