@@ -11,6 +11,25 @@ GitHub release.
 
 ### Added
 
+- **Mobile updates & label printing** — print a QR-coded label for each spool and update it
+  from your phone. Scanning a label opens a phone-friendly page (or search for the spool from
+  the new **Mobile updates** nav item) where you enter a gross scale weight — with a live net
+  preview — and change the spool's location; one Save writes both Filament DB and Spoolman.
+  The QR encodes a stable bridge URL (`/r/{fil}/{spool}`) that 302-redirects to a configurable
+  target, so you can re-point every printed label without reprinting. Labels print through a
+  self-hosted **LabelForge** instance using a template you design, with the bridge supplying
+  the field values (brand, color, number, QR, …). The whole feature is **off by default**
+  behind a single switch, and configured in **Settings → Mobile & Labels**. (QR *rendering*
+  needs a LabelForge `dev` build; text fields print on any version.) See
+  [docs/mobile-updates.md](docs/mobile-updates.md).
+- **Scheduled nightly backups** — the bridge now runs a built-in nightly job (on by
+  default) that saves a backup of its own state (mappings, config, open conflicts) and a
+  Filament DB snapshot into `DATA_DIR/backups/`, then prunes files past a configurable
+  retention window (default 7 days). Spoolman is deliberately left out of the schedule
+  because the bridge can't prune Spoolman's own archives. The master switch, the two
+  backups, the retention window, and the UTC run hour (default 03:00) are all toggleable in
+  **Settings → Scheduled backups**. This resolves the previously-unbounded accumulation of
+  manual Filament DB snapshots.
 - **Spool location now syncs continuously** — a `location_sync` category mirrors a mapped spool's
   storage location between Spoolman (the free-text `location`) and Filament DB (its `locationId`).
   Move a spool to a new shelf in either system and the bridge propagates it to the other; the
@@ -60,28 +79,6 @@ GitHub release.
   Weight conflicts apply as a direct absolute write to both sides (no usage entry).
   **Bulk-resolve converges the same way**, isolating any single failed write (returned in a
   `failed` list, left open) so the rest of the batch still resolves. (#21)
-
-### Added
-
-- **Mobile updates & label printing** — print a QR-coded label for each spool and update it
-  from your phone. Scanning a label opens a phone-friendly page (or search for the spool from
-  the new **Mobile updates** nav item) where you enter a gross scale weight — with a live net
-  preview — and change the spool's location; one Save writes both Filament DB and Spoolman.
-  The QR encodes a stable bridge URL (`/r/{fil}/{spool}`) that 302-redirects to a configurable
-  target, so you can re-point every printed label without reprinting. Labels print through a
-  self-hosted **LabelForge** instance using a template you design, with the bridge supplying
-  the field values (brand, color, number, QR, …). The whole feature is **off by default**
-  behind a single switch, and configured in **Settings → Mobile & Labels**. (QR *rendering*
-  needs a LabelForge `dev` build; text fields print on any version.) See
-  [docs/mobile-updates.md](docs/mobile-updates.md).
-- **Scheduled nightly backups** — the bridge now runs a built-in nightly job (on by
-  default) that saves a backup of its own state (mappings, config, open conflicts) and a
-  Filament DB snapshot into `DATA_DIR/backups/`, then prunes files past a configurable
-  retention window (default 7 days). Spoolman is deliberately left out of the schedule
-  because the bridge can't prune Spoolman's own archives. The master switch, the two
-  backups, the retention window, and the UTC run hour (default 03:00) are all toggleable in
-  **Settings → Scheduled backups**. This resolves the previously-unbounded accumulation of
-  manual Filament DB snapshots.
 
 ## [0.5.1] — 2026-06-22
 
