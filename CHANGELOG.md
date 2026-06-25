@@ -9,6 +9,13 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Collapsible navigation on mobile** — on narrow/phone screens the nav sidebar now hides
+  off-canvas behind a hamburger button in a slim top bar. Tap it to slide the menu in over a
+  dimmed backdrop; tap the backdrop, the ✕, or any nav link to dismiss it (it also closes
+  automatically on navigation). The desktop layout is unchanged.
+
 ## [0.6.0] — 2026-06-24
 
 ### Added
