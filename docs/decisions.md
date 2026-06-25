@@ -4676,12 +4676,19 @@ through `resolve_sync_action` / the configured `material_properties_sync_directi
 governs passive drift, not an explicit edit. Bulk apply commits **per row** so a later row's
 failure can't roll back earlier successes (they share one session).
 
-**Variants are read-only (issue #26 decision).** A variant inherits tare from its parent in
-FDB; editing it would create a per-variant override that the engine then flags as
-`master_divergence`. So the editor surfaces variants with their *resolved* (inherited) value
-read-only and only lets you edit standalone + master/parent filaments. Editing a master
-propagates to its variants through FDB inheritance, and the scalar pass mirrors that to the
-variants' SM counterparts on the next cycle — no need to fan the write out here.
+**Every mapped filament is editable; the list is grouped by variant family (revised
+2026-06-25).** The original #26 design made variants read-only (edit the parent/standalone
+only), reasoning that a per-variant override would diverge from the master. In practice a
+library organised into variant clusters (generic-container or promoted-colour parents) then had
+**no editable rows at all** — every mapped filament is a variant, the synthetic parents are
+skipped, so the editor showed no checkboxes and nothing could be set. So variants are now
+editable: `apply_tare` writes the chosen tare to **both** sides of that variant (an explicit
+override) and refreshes both `_mp_spool_weight` snapshots, which keeps the engine from
+re-detecting it as drift or flagging `master_divergence` (both sides agree). To keep the UI
+legible, rows are **grouped by variant family**: `build_tare_rows` adds `group_key`
+(`parentId` for a variant, else the filament's own id, so a master and its variants share one
+key) and `group_name`, and the frontend renders a per-family header with a select-all checkbox.
+Setting one value across a whole line is therefore select-family → set → Save.
 
 **Listing uses list projections, not N detail fetches.** `build_tare_rows` reads SM
 `get_filaments()` + FDB `get_filaments()` once each and resolves a variant's effective tare

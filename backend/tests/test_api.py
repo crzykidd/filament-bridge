@@ -4604,9 +4604,15 @@ def test_tare_list_resolves_variant_inherited_value(db):
 
     rows = {r["filamentdb_id"]: r for r in client.get("/api/tare").json()["rows"]}
     assert rows["parent"]["role"] == "master" and rows["parent"]["editable"] is True
-    assert rows["variant"]["role"] == "variant" and rows["variant"]["editable"] is False
+    # Variants are now editable too (write an explicit override).
+    assert rows["variant"]["role"] == "variant" and rows["variant"]["editable"] is True
     assert rows["variant"]["effective_tare"] == 180.0  # inherited from parent
     assert rows["variant"]["parent_name"] == "Master"
+    # Family grouping: the variant clusters under the parent; the master groups
+    # under its own id — same key, same group name.
+    assert rows["variant"]["group_key"] == "parent"
+    assert rows["parent"]["group_key"] == "parent"
+    assert rows["variant"]["group_name"] == rows["parent"]["group_name"] == "Master"
 
 
 def test_tare_list_skips_synthetic_parents(db):
@@ -4645,8 +4651,8 @@ def test_tare_bulk_writes_both_sides_and_refreshes_snapshots(db):
     assert db.query(SyncLog).filter(SyncLog.field_name == "spool_weight").count() == 1
 
 
-def test_tare_bulk_rejects_variant(db):
-    """Editing a variant is refused (read-only — edit its parent instead)."""
+def test_tare_bulk_allows_variant(db):
+    """A variant is now editable — writing it sets an explicit override on both sides."""
     db.add(FilamentMapping(spoolman_filament_id=21, filamentdb_id="variant", filamentdb_parent_id="parent"))
     db.commit()
     spoolman = _fake_spoolman(filaments=[_sm_fil(21, "Red", None)])
@@ -4655,9 +4661,9 @@ def test_tare_bulk_rejects_variant(db):
 
     resp = client.post("/api/tare/bulk", json={"updates": [{"filament_mapping_id": 1, "tare_grams": 200.0}]})
     body = resp.json()
-    assert body["updated"] == 0
-    assert len(body["failed"]) == 1 and "variant" in body["failed"][0]["error"]
-    filamentdb.update_filament.assert_not_called()
+    assert body == {"updated": 1, "failed": []}
+    filamentdb.update_filament.assert_awaited_once_with("variant", {"spoolWeight": 200.0})
+    spoolman.update_filament.assert_awaited_once_with(21, {"spool_weight": 200.0})
 
 
 def test_tare_bulk_per_row_isolation(db):

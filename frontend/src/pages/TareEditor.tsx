@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { getTareRows, bulkSetTare } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
@@ -56,6 +56,18 @@ export default function TareEditor() {
     return r
   }, [allRows, needsOnly, search])
 
+  // Cluster rows into variant families (the backend already sorts so a family's
+  // rows are contiguous): one group per group_key, preserving order.
+  const families = useMemo(() => {
+    const map = new Map<string, TareRow[]>()
+    for (const r of rows) {
+      const arr = map.get(r.group_key)
+      if (arr) arr.push(r)
+      else map.set(r.group_key, [r])
+    }
+    return Array.from(map, ([key, rs]) => ({ key, name: rs[0].group_name, rows: rs }))
+  }, [rows])
+
   const dirtyUpdates = useMemo(
     () =>
       allRows
@@ -86,6 +98,18 @@ export default function TareEditor() {
   function toggleSelectAll() {
     if (allSelected) setSelected(new Set())
     else setSelected(new Set(editableVisible.map(r => r.filament_mapping_id)))
+  }
+
+  function toggleFamily(famRows: TareRow[]) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      const all = famRows.every(r => next.has(r.filament_mapping_id))
+      for (const r of famRows) {
+        if (all) next.delete(r.filament_mapping_id)
+        else next.add(r.filament_mapping_id)
+      }
+      return next
+    })
   }
 
   function applyBulkToSelected() {
@@ -132,10 +156,10 @@ export default function TareEditor() {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Tare Editor</h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-3xl">
           Edit the empty-reel tare weight (Filament DB <code>spoolWeight</code> / Spoolman{' '}
-          <code>spool_weight</code>) for mapped filaments. Tare is shared by every spool of a
-          filament and drives the net↔gross weight conversion, so a correct value matters. Saving
-          writes both systems at once. Variants inherit their tare from the parent — edit the
-          parent or a standalone filament.
+          <code>spool_weight</code>) for mapped filaments, grouped by variant family. Tare is
+          shared by every spool of a filament and drives the net↔gross weight conversion, so a
+          correct value matters. Tick a family header to select all its colors, set one value,
+          and Save — both systems are written at once.
         </p>
       </div>
 
@@ -236,66 +260,86 @@ export default function TareEditor() {
                   </td>
                 </tr>
               )}
-              {rows.map(row => {
-                const id = row.filament_mapping_id
-                const raw = edits[id]
-                const dirty = isDirty(row, raw)
-                const failed = failedIds.has(id)
+              {families.map(fam => {
+                const someSel = fam.rows.some(r => selected.has(r.filament_mapping_id))
+                const allSel = fam.rows.every(r => selected.has(r.filament_mapping_id))
+                // Only filaments that are part of a real variant cluster get a group
+                // header; a lone standalone filament renders as a plain row.
+                const grouped = fam.rows.length > 1
                 return (
-                  <tr key={id} className={`hover:bg-gray-50 dark:hover:bg-gray-750 ${failed ? 'bg-red-50/60 dark:bg-red-900/10' : ''}`}>
-                    <td className="w-8 px-2 py-3 text-center">
-                      {row.editable && (
-                        <input
-                          type="checkbox"
-                          checked={selected.has(id)}
-                          onChange={() => toggleSelect(id)}
-                          className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-400"
-                          aria-label={`Select ${row.name ?? id}`}
-                        />
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{row.name ?? '—'}</td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.vendor ?? '—'}</td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
-                      {ROLE_LABEL[row.role]}
-                      {row.role === 'variant' && row.parent_name && (
-                        <span className="block text-xs text-gray-400 dark:text-gray-500">
-                          ← {row.parent_name}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtTare(row.spoolman_tare)}</td>
-                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtTare(row.filamentdb_tare)}</td>
-                    <td className="px-4 py-3">
-                      {row.editable ? (
-                        <input
-                          type="number"
-                          min={0}
-                          step="0.1"
-                          value={raw ?? (row.effective_tare != null ? String(row.effective_tare) : '')}
-                          onChange={e => setEdit(id, e.target.value)}
-                          className={`border rounded px-2 py-1 text-sm w-24 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${
-                            dirty ? 'border-indigo-400 ring-1 ring-indigo-300' : 'border-gray-300 dark:border-gray-600'
-                          }`}
-                        />
-                      ) : (
-                        <span className="text-gray-400 dark:text-gray-500 italic" title="Inherited from parent — edit the parent">
-                          {fmtTare(row.effective_tare)} (inherited)
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[row.status]}`}>
-                        {STATUS_LABEL[row.status]}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <DeepLinks
-                        filamentdbFilamentId={row.filamentdb_id}
-                        spoolmanFilamentId={row.spoolman_filament_id}
-                      />
-                    </td>
-                  </tr>
+                  <Fragment key={fam.key}>
+                    {grouped && (
+                      <tr className="bg-gray-100 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-700">
+                        <td className="w-8 px-2 py-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={allSel}
+                            ref={el => { if (el) el.indeterminate = someSel && !allSel }}
+                            onChange={() => toggleFamily(fam.rows)}
+                            className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-400"
+                            aria-label={`Select all in ${fam.name}`}
+                          />
+                        </td>
+                        <td colSpan={8} className="px-4 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200">
+                          {fam.name}
+                          <span className="ml-2 font-normal text-gray-400 dark:text-gray-500">
+                            {fam.rows.length} variants
+                          </span>
+                        </td>
+                      </tr>
+                    )}
+                    {fam.rows.map(row => {
+                      const id = row.filament_mapping_id
+                      const raw = edits[id]
+                      const dirty = isDirty(row, raw)
+                      const failed = failedIds.has(id)
+                      const indent = grouped && row.role === 'variant'
+                      return (
+                        <tr key={id} className={`hover:bg-gray-50 dark:hover:bg-gray-750 ${failed ? 'bg-red-50/60 dark:bg-red-900/10' : ''}`}>
+                          <td className="w-8 px-2 py-3 text-center">
+                            <input
+                              type="checkbox"
+                              checked={selected.has(id)}
+                              onChange={() => toggleSelect(id)}
+                              className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-400"
+                              aria-label={`Select ${row.name ?? id}`}
+                            />
+                          </td>
+                          <td className={`px-4 py-3 font-medium text-gray-900 dark:text-gray-100 ${indent ? 'pl-8' : ''}`}>
+                            {indent && <span className="text-gray-300 dark:text-gray-600 mr-1">└</span>}
+                            {row.name ?? '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.vendor ?? '—'}</td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{ROLE_LABEL[row.role]}</td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtTare(row.spoolman_tare)}</td>
+                          <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{fmtTare(row.filamentdb_tare)}</td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.1"
+                              value={raw ?? (row.effective_tare != null ? String(row.effective_tare) : '')}
+                              onChange={e => setEdit(id, e.target.value)}
+                              className={`border rounded px-2 py-1 text-sm w-24 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${
+                                dirty ? 'border-indigo-400 ring-1 ring-indigo-300' : 'border-gray-300 dark:border-gray-600'
+                              }`}
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${STATUS_STYLES[row.status]}`}>
+                              {STATUS_LABEL[row.status]}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <DeepLinks
+                              filamentdbFilamentId={row.filamentdb_id}
+                              spoolmanFilamentId={row.spoolman_filament_id}
+                            />
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </Fragment>
                 )
               })}
             </tbody>

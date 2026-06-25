@@ -245,7 +245,10 @@ export interface TareRow {
   filamentdb_tare: number | null
   effective_tare: number | null
   is_overridden: boolean
+  parent_id: string | null
   parent_name: string | null
+  group_key: string
+  group_name: string
   status: TareStatus
 }
 

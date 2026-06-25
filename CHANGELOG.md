@@ -17,6 +17,12 @@ GitHub release.
   app. The sidebar gained a CSS `transform` (for the slide-in drawer), which makes it the
   containing block for `position: fixed` descendants and trapped the modal. The modal is now
   rendered through a portal to `<body>` so it overlays the full viewport again.
+- **Tare Editor: every filament is now selectable, and the list is grouped by variant family** —
+  the editor previously made variant filaments read-only, so a library organised into variant
+  clusters (e.g. generic-container or promoted-colour parents) showed no checkboxes at all and
+  nothing could be edited. Variants are now editable (each writes an explicit tare to both
+  systems), and the list is grouped by variant family with a per-family header you can tick to
+  select all of a line's colours at once.
 
 ## [0.6.1] — 2026-06-25
 

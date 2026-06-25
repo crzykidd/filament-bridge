@@ -33,7 +33,10 @@ class TareRow(BaseModel):
     filamentdb_tare: float | None = None
     effective_tare: float | None = None
     is_overridden: bool = False
+    parent_id: str | None = None
     parent_name: str | None = None
+    group_key: str
+    group_name: str
     status: str
 
 
