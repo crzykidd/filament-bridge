@@ -23,6 +23,9 @@ import type {
   MappingRow,
   MappingUpdateRequest,
   MobileSpoolDetail,
+  TareBulkResponse,
+  TareListResponse,
+  TareUpdate,
   MobileSpoolUpdateRequest,
   LabelPrintResponse,
   PrinterStatus,
@@ -163,6 +166,14 @@ export const updateMapping = (id: number, body: MappingUpdateRequest) =>
   json<MappingRow>(`/mappings/${id}`, 'PUT', body)
 export const deleteMapping = (id: number) =>
   request<void>(`/mappings/${id}`, { method: 'DELETE' })
+
+// ---------------------------------------------------------------------------
+// Bulk tare editor (FR-23 / #26)
+// ---------------------------------------------------------------------------
+
+export const getTareRows = () => request<TareListResponse>('/tare')
+export const bulkSetTare = (updates: TareUpdate[]) =>
+  json<TareBulkResponse>('/tare/bulk', 'POST', { updates })
 
 // ---------------------------------------------------------------------------
 // Mobile updates (phase 2 — scan/update page + in-nav page)

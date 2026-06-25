@@ -42,6 +42,7 @@ from app.api import reconcile as reconcile_router
 from app.api import opentag as opentag_router
 from app.api import sync as sync_router
 from app.api import sync_log as sync_log_router
+from app.api import tare as tare_router
 from app.api import wizard as wizard_router
 from app.api.auth import mobile_auth, require_auth
 from app.config import settings
@@ -328,6 +329,7 @@ app.include_router(wizard_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(tare_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
 
 # Conditional auth: the mobile + labels routers (and the /r/ redirect below) carry

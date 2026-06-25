@@ -227,6 +227,48 @@ export interface MappingRow {
 }
 
 // ---------------------------------------------------------------------------
+// Bulk tare editor (FR-23 / #26)
+// ---------------------------------------------------------------------------
+
+export type TareRole = 'standalone' | 'master' | 'variant'
+export type TareStatus = 'set' | 'missing' | 'mismatch'
+
+export interface TareRow {
+  filament_mapping_id: number
+  spoolman_filament_id: number
+  filamentdb_id: string
+  name: string | null
+  vendor: string | null
+  role: TareRole
+  editable: boolean
+  spoolman_tare: number | null
+  filamentdb_tare: number | null
+  effective_tare: number | null
+  is_overridden: boolean
+  parent_name: string | null
+  status: TareStatus
+}
+
+export interface TareListResponse {
+  rows: TareRow[]
+}
+
+export interface TareUpdate {
+  filament_mapping_id: number
+  tare_grams: number
+}
+
+export interface TareFailure {
+  filament_mapping_id: number | null
+  error: string
+}
+
+export interface TareBulkResponse {
+  updated: number
+  failed: TareFailure[]
+}
+
+// ---------------------------------------------------------------------------
 // Filament suggestions (conflict Add "link" UX)
 // ---------------------------------------------------------------------------
 

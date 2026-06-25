@@ -23,6 +23,7 @@ from app.api import (
     mappings,
     sync,
     sync_log,
+    tare,
     wizard,
 )
 from app.api.config import get_config_value, set_config_value
@@ -35,7 +36,7 @@ from app.models.sync_log import SyncLog
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
 
-_ROUTERS = (health, sync, conflicts, mappings, config, wizard, backup, sync_log)
+_ROUTERS = (health, sync, conflicts, mappings, config, wizard, backup, sync_log, tare)
 
 
 # ---------------------------------------------------------------------------
@@ -4537,3 +4538,144 @@ def test_update_config_no_reschedule_when_scheduler_absent(db):
     resp = client.put("/api/config", json={"sync_interval_seconds": 60})
     assert resp.status_code == 200
     assert resp.json()["sync_interval_seconds"] == 60
+
+
+# ---------------------------------------------------------------------------
+# Bulk tare editor (FR-23 / #26)
+# ---------------------------------------------------------------------------
+
+
+def _sm_fil(fid: int, name: str, tare: float | None, vendor="ELEGOO") -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=fid, name=name, spool_weight=tare,
+        vendor=SpoolmanVendor(id=1, name=vendor),
+    )
+
+
+def _fdb_fil(fid: str, name: str, tare: float | None, *, parent=None, has_variants=False) -> FDBFilament:
+    return FDBFilament.model_validate({
+        "_id": fid, "name": name, "vendor": "Elegoo", "spoolWeight": tare,
+        "parentId": parent, "hasVariants": has_variants,
+    })
+
+
+def test_tare_list_returns_mapped_filaments_with_status(db):
+    """GET /tare lists mapped filaments with both-side tare and a status flag."""
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-set"))
+    db.add(FilamentMapping(spoolman_filament_id=11, filamentdb_id="fil-missing"))
+    db.add(FilamentMapping(spoolman_filament_id=12, filamentdb_id="fil-mismatch"))
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=[
+        _sm_fil(10, "PLA Set", 250.0),
+        _sm_fil(11, "PLA Missing", None),
+        _sm_fil(12, "PLA Mismatch", 200.0),
+    ])
+    filamentdb = _fake_filamentdb(filaments=[
+        _fdb_fil("fil-set", "PLA Set", 250.0),
+        _fdb_fil("fil-missing", "PLA Missing", None),
+        _fdb_fil("fil-mismatch", "PLA Mismatch", 300.0),
+    ])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.get("/api/tare")
+    assert resp.status_code == 200
+    rows = {r["filamentdb_id"]: r for r in resp.json()["rows"]}
+    assert rows["fil-set"]["status"] == "set"
+    assert rows["fil-set"]["effective_tare"] == 250.0
+    assert rows["fil-set"]["editable"] is True
+    assert rows["fil-set"]["role"] == "standalone"
+    assert rows["fil-missing"]["status"] == "missing"
+    assert rows["fil-mismatch"]["status"] == "mismatch"
+
+
+def test_tare_list_resolves_variant_inherited_value(db):
+    """A variant with no own tare inherits the parent's effective value and is read-only."""
+    db.add(FilamentMapping(spoolman_filament_id=20, filamentdb_id="parent", filamentdb_parent_id=None))
+    db.add(FilamentMapping(spoolman_filament_id=21, filamentdb_id="variant", filamentdb_parent_id="parent"))
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=[_sm_fil(20, "Master", 180.0), _sm_fil(21, "Red", None)])
+    filamentdb = _fake_filamentdb(filaments=[
+        _fdb_fil("parent", "Master", 180.0, has_variants=True),
+        _fdb_fil("variant", "Red", None, parent="parent"),
+    ])
+    client = _client(db, spoolman, filamentdb)
+
+    rows = {r["filamentdb_id"]: r for r in client.get("/api/tare").json()["rows"]}
+    assert rows["parent"]["role"] == "master" and rows["parent"]["editable"] is True
+    assert rows["variant"]["role"] == "variant" and rows["variant"]["editable"] is False
+    assert rows["variant"]["effective_tare"] == 180.0  # inherited from parent
+    assert rows["variant"]["parent_name"] == "Master"
+
+
+def test_tare_list_skips_synthetic_parents(db):
+    """Synthetic container parents (no Spoolman side) are excluded from the list."""
+    db.add(FilamentMapping(spoolman_filament_id=None, filamentdb_id="synthetic", is_synthetic_parent=True))
+    db.add(FilamentMapping(spoolman_filament_id=30, filamentdb_id="real"))
+    db.commit()
+    spoolman = _fake_spoolman(filaments=[_sm_fil(30, "Real", 200.0)])
+    filamentdb = _fake_filamentdb(filaments=[_fdb_fil("real", "Real", 200.0)])
+
+    rows = _client(db, spoolman, filamentdb).get("/api/tare").json()["rows"]
+    assert [r["filamentdb_id"] for r in rows] == ["real"]
+
+
+def test_tare_bulk_writes_both_sides_and_refreshes_snapshots(db):
+    """POST /tare/bulk writes FDB + SM and baselines both _mp_spool_weight snapshots."""
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
+    db.commit()
+    spoolman = _fake_spoolman(filaments=[_sm_fil(10, "PLA", 200.0)])
+    filamentdb = _fake_filamentdb(filaments=[_fdb_fil("fil-1", "PLA", 200.0)])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/tare/bulk", json={
+        "updates": [{"filament_mapping_id": 1, "tare_grams": 245.0}],
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"updated": 1, "failed": []}
+
+    filamentdb.update_filament.assert_awaited_once_with("fil-1", {"spoolWeight": 245.0})
+    spoolman.update_filament.assert_awaited_once_with(10, {"spool_weight": 245.0})
+
+    from app.core.engine import _get_snapshot
+    db.expire_all()
+    assert _get_snapshot(db, "spoolman", "filament", "10")["_mp_spool_weight"] == 245.0
+    assert _get_snapshot(db, "filamentdb", "filament", "fil-1")["_mp_spool_weight"] == 245.0
+    assert db.query(SyncLog).filter(SyncLog.field_name == "spool_weight").count() == 1
+
+
+def test_tare_bulk_rejects_variant(db):
+    """Editing a variant is refused (read-only — edit its parent instead)."""
+    db.add(FilamentMapping(spoolman_filament_id=21, filamentdb_id="variant", filamentdb_parent_id="parent"))
+    db.commit()
+    spoolman = _fake_spoolman(filaments=[_sm_fil(21, "Red", None)])
+    filamentdb = _fake_filamentdb(filaments=[_fdb_fil("variant", "Red", None, parent="parent")])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/tare/bulk", json={"updates": [{"filament_mapping_id": 1, "tare_grams": 200.0}]})
+    body = resp.json()
+    assert body["updated"] == 0
+    assert len(body["failed"]) == 1 and "variant" in body["failed"][0]["error"]
+    filamentdb.update_filament.assert_not_called()
+
+
+def test_tare_bulk_per_row_isolation(db):
+    """One good + one bad row: the good one commits, the bad one is reported."""
+    db.add(FilamentMapping(spoolman_filament_id=10, filamentdb_id="fil-1"))
+    db.commit()
+    spoolman = _fake_spoolman(filaments=[_sm_fil(10, "PLA", 200.0)])
+    filamentdb = _fake_filamentdb(filaments=[_fdb_fil("fil-1", "PLA", 200.0)])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/tare/bulk", json={"updates": [
+        {"filament_mapping_id": 1, "tare_grams": 245.0},
+        {"filament_mapping_id": 999, "tare_grams": 245.0},  # unknown mapping
+    ]})
+    body = resp.json()
+    assert body["updated"] == 1
+    assert [f["filament_mapping_id"] for f in body["failed"]] == [999]
+    # The successful row is durably committed despite the later failure.
+    from app.core.engine import _get_snapshot
+    db.expire_all()
+    assert _get_snapshot(db, "filamentdb", "filament", "fil-1")["_mp_spool_weight"] == 245.0

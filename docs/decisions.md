@@ -4660,3 +4660,35 @@ separate.
 (>v0.1.3). The bridge codes against the stable API and prints the QR text into `qr_url` regardless; a
 scannable QR simply needs the user to deploy a LabelForge build with that work. The text fields print
 on any LabelForge version.
+
+### Standalone Tare Editor (FR-23 / #26)
+
+Tare (FDB `spoolWeight` ↔ SM `spool_weight`) is a **filament-level** field already synced
+bidirectionally by the engine's material-scalar pass (`_sync_material_scalars`, category
+`material_properties`, baseline key `_mp_spool_weight`). The Tare Editor is therefore a thin
+UI + endpoint over the *existing* write path, not new sync logic.
+
+**Write model — both sides, not "pick a side".** A tare edit is a deliberate, authoritative
+user choice, so `core/tare.py:apply_tare` writes **both** systems directly and refreshes
+**both** `_mp_spool_weight` snapshots in one step (the same anti-ping-pong pattern as the
+engine's `_store` closure and `apply_cross_system_conflict`). It deliberately does NOT route
+through `resolve_sync_action` / the configured `material_properties_sync_direction` — that axis
+governs passive drift, not an explicit edit. Bulk apply commits **per row** so a later row's
+failure can't roll back earlier successes (they share one session).
+
+**Variants are read-only (issue #26 decision).** A variant inherits tare from its parent in
+FDB; editing it would create a per-variant override that the engine then flags as
+`master_divergence`. So the editor surfaces variants with their *resolved* (inherited) value
+read-only and only lets you edit standalone + master/parent filaments. Editing a master
+propagates to its variants through FDB inheritance, and the scalar pass mirrors that to the
+variants' SM counterparts on the next cycle — no need to fan the write out here.
+
+**Listing uses list projections, not N detail fetches.** `build_tare_rows` reads SM
+`get_filaments()` + FDB `get_filaments()` once each and resolves a variant's effective tare
+client-side from its parent's stored value (the list view doesn't resolve inheritance). The
+authoritative write only targets standalone/master rows, where the list-view value is the real
+stored value, so this shortcut is safe.
+
+Endpoints: `GET /api/tare` (list) and `POST /api/tare/bulk` (gated on upstream compatibility,
+like the sync trigger / wizard execute, since it writes upstream). Frontend: `TareEditor.tsx`
+nav page.

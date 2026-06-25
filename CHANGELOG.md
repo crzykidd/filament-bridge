@@ -11,6 +11,15 @@ GitHub release.
 
 ### Added
 
+- **Tare Editor** — a new page for fixing the empty-reel tare weight (Filament DB `spoolWeight`
+  / Spoolman `spool_weight`) across many filaments at once, without re-running the Bulk Import
+  Wizard. It lists every mapped filament with its current tare on both sides, flags ones that
+  are missing or where the two systems disagree, and lets you set a value per row or apply one
+  value to a multi-selected batch. Saving writes both systems together (and refreshes the
+  bridge's baselines so the change isn't re-detected as drift). Tare is shared by every spool of
+  a filament, so a correct value matters for the net↔gross weight conversion. Variants are shown
+  read-only because they inherit tare from their parent — edit the parent or a standalone
+  filament. ([#26](https://github.com/crzykidd/filament-bridge/issues/26))
 - **Collapsible navigation on mobile** — on narrow/phone screens the nav sidebar now hides
   off-canvas behind a hamburger button in a slim top bar. Tap it to slide the menu in over a
   dimmed backdrop; tap the backdrop, the ✕, or any nav link to dismiss it (it also closes
