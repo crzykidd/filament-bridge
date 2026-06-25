@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-06-25
+
 ### Fixed
 
 - **Release-notes / update modal no longer appears trapped inside the sidebar** — after the
