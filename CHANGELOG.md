@@ -9,8 +9,13 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-25
+
 ### Added
 
+- **Logo & favicon** — filament-bridge now has a logo, shown in the sidebar header, on the
+  login page, and at the top of the README, plus a browser favicon (theme-aware: it adapts to
+  light vs. dark browser chrome).
 - **Tare Editor** — a new page for fixing the empty-reel tare weight (Filament DB `spoolWeight`
   / Spoolman `spool_weight`) across many filaments at once, without re-running the Bulk Import
   Wizard. It lists every mapped filament with its current tare on both sides, flags ones that
