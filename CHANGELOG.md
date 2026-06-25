@@ -9,6 +9,46 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-25
+
+### Added
+
+- **Logo & favicon** — filament-bridge now has a logo, shown in the sidebar header, on the
+  login page, and at the top of the README, plus a browser favicon (theme-aware: it adapts to
+  light vs. dark browser chrome).
+- **Tare Editor** — a new page for fixing the empty-reel tare weight (Filament DB `spoolWeight`
+  / Spoolman `spool_weight`) across many filaments at once, without re-running the Bulk Import
+  Wizard. It lists every mapped filament with its current tare on both sides, flags ones that
+  are missing or where the two systems disagree, and lets you set a value per row or apply one
+  value to a multi-selected batch. Saving writes both systems together (and refreshes the
+  bridge's baselines so the change isn't re-detected as drift). Tare is shared by every spool of
+  a filament, so a correct value matters for the net↔gross weight conversion. Variants are shown
+  read-only because they inherit tare from their parent — edit the parent or a standalone
+  filament. ([#26](https://github.com/crzykidd/filament-bridge/issues/26))
+- **Collapsible navigation on mobile** — on narrow/phone screens the nav sidebar now hides
+  off-canvas behind a hamburger button in a slim top bar. Tap it to slide the menu in over a
+  dimmed backdrop; tap the backdrop, the ✕, or any nav link to dismiss it (it also closes
+  automatically on navigation). The desktop layout is unchanged.
+
+### Fixed
+
+- **OpenPrintTag Cleanup phantom updates** — after a dataset refresh, filaments whose
+  data already fully matched OpenPrintTag were incorrectly shown as having pending
+  updates; opening the review showed "0 fields changed". Root cause: Python
+  `str(200.0)` produces `"200.0"`, but JavaScript stringifies the same JSON number as
+  `"200"` (JSON numbers without a fractional part become integers in JS). Spoolman
+  returns spool weight and filament weight as floats (Pydantic coerces the API
+  response), while `opt_to_spoolman_fields` emits those same values as integers —
+  so the backend `_data_differs()` check saw `"200.0" ≠ "200"` and flagged the
+  filament as changed, while the frontend comparison saw `"200" == "200"` and showed
+  zero changed fields. Fixed by normalising whole-number floats to int before
+  stringification in `_normalize_field_value()`. (#31)
+- **Sync-log retention now applies when auto-sync is off** — pruning of sync-log entries
+  older than `sync_log_retention_days` previously ran only on auto-sync ticks, so installs
+  that rely on manual sync (auto-sync is off by default) never pruned and the log grew
+  unbounded. Pruning now also runs on every manual sync trigger, the nightly backup job, and
+  once at startup. ([#22](https://github.com/crzykidd/filament-bridge/issues/22))
+
 ## [0.6.0] — 2026-06-24
 
 ### Added

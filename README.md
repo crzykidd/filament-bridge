@@ -1,6 +1,13 @@
-# filament-bridge
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
+    <img src="docs/images/logo-light.png" alt="filament-bridge" width="480">
+  </picture>
+</p>
 
-![version](https://img.shields.io/badge/version-0.6.0-blue)
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.6.1-blue" alt="version">
+</p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
@@ -59,6 +66,13 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.1 (2026-06-25)
+
+- **Tare Editor** — a new page to fix the empty-reel tare weight (Filament DB `spoolWeight` / Spoolman `spool_weight`) for many filaments at once, without re-running the Bulk Import Wizard. Lists every mapped filament with its tare on both sides, flags missing/mismatched ones, and lets you set a value per row or apply one to a multi-selected batch; saving writes both systems and keeps them from drifting. Variants are read-only (they inherit tare from their parent). (#26)
+- **Collapsible navigation on mobile** — on phone-width screens the side nav now tucks away behind a hamburger in a slim top bar and slides in over a dimmed backdrop, so the content gets the full width.
+- **Logo & favicon** — a proper logo now appears in the sidebar, on the login page, and in the README, with a theme-aware browser favicon.
+- **Fixes** — OpenPrintTag Cleanup no longer shows filaments as changed when nothing actually differs ("0 fields changed", #31); sync-log retention now prunes even when auto-sync is off — via manual syncs, the nightly backup, and at startup (#22).
 
 ### v0.6.0 (2026-06-24)
 

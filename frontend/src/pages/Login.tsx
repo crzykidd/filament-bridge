@@ -46,7 +46,12 @@ export default function Login({ passwordSet, onAuthenticated }: LoginProps) {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm p-8 w-full max-w-sm space-y-5">
         <div>
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">filament-bridge</h1>
+          {/* Dark-ink lockup on light theme, light-ink on dark — swapped via the
+              app's class-based dark mode (not prefers-color-scheme). h1 kept as
+              visually-hidden text for accessibility. */}
+          <h1 className="sr-only">filament-bridge</h1>
+          <img src="/logo-lockup-light.png" alt="" className="block dark:hidden h-9 w-auto mb-2" />
+          <img src="/logo-lockup-dark.png" alt="" className="hidden dark:block h-9 w-auto mb-2" />
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
             {isSetup ? 'Set an admin password to get started.' : 'Sign in to continue.'}
           </p>

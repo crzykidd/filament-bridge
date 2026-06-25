@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -339,6 +339,7 @@ const NAV_ITEMS = [
   { to: '/conflicts', label: 'Conflicts', exact: false },
   { to: '/sync-log', label: 'Sync Log', exact: false },
   { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
+  { to: '/tare-editor', label: 'Tare Editor', exact: false },
   { to: '/opentag-cleanup', label: 'OpenPrintTag Cleanup', exact: false },
 ]
 
@@ -358,13 +359,23 @@ export function Layout() {
   // Mobile-updates feature flag — read from the same /api/version payload the app
   // already loads (the VersionBadge fetches it too). Gates the "Mobile updates" nav item.
   const [mobileLabelsEnabled, setMobileLabelsEnabled] = useState(false)
+  // Off-canvas sidebar state — only relevant below the `md` breakpoint. On
+  // desktop the sidebar is always static/visible regardless of this flag.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setHealth(null))
     getAuthStatus().then(s => setAuthEnabled(s.auth_enabled)).catch(() => {})
     getVersionInfo().then(v => setMobileLabelsEnabled(v.mobile_labels_enabled)).catch(() => {})
   }, [])
+
+  // Auto-close the mobile drawer whenever the route changes (e.g. tapping a nav
+  // link), so the drawer doesn't linger over the freshly-navigated page.
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [location.pathname])
 
   const navItems = mobileLabelsEnabled
     ? [...NAV_ITEMS, { to: '/mobile-updates', label: 'Mobile updates', exact: false }]
@@ -391,18 +402,50 @@ export function Layout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50 dark:bg-gray-900">
-      {/* Sidebar */}
-      <aside className="w-52 bg-indigo-800 dark:bg-indigo-950 flex flex-col shrink-0">
-        <div className="px-4 py-4 border-b border-indigo-700 dark:border-indigo-800">
-          <button
-            onClick={() => navigate('/')}
-            className="text-white font-bold text-sm leading-tight text-left w-full"
-          >
-            filament-bridge
-          </button>
-          <div className="mt-1">
-            <VersionBadge />
+      {/* Mobile backdrop — only rendered (and only visible) below `md` while the
+          drawer is open. Tapping it closes the drawer. */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/50 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar — static on desktop (`md:` and up), an off-canvas slide-in
+          drawer below `md` driven by `sidebarOpen`. */}
+      <aside
+        className={[
+          'w-52 bg-indigo-800 dark:bg-indigo-950 flex flex-col shrink-0',
+          'fixed inset-y-0 left-0 z-40 transform transition-transform duration-200 ease-in-out',
+          'md:static md:z-auto md:translate-x-0',
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+        ].join(' ')}
+      >
+        <div className="px-4 py-4 border-b border-indigo-700 dark:border-indigo-800 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <button
+              onClick={() => navigate('/')}
+              className="flex items-center gap-2 text-white font-bold text-sm leading-tight text-left w-full"
+            >
+              <img src="/logo-mark.png" alt="" className="h-7 w-7 shrink-0" />
+              filament-bridge
+            </button>
+            <div className="mt-1">
+              <VersionBadge />
+            </div>
           </div>
+          {/* Close button — mobile only */}
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="md:hidden -mr-1 -mt-1 p-1 rounded text-indigo-200 hover:bg-indigo-700 hover:text-white"
+            aria-label="Close navigation menu"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
         <nav className="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
           {navItems.map(item => (
@@ -452,9 +495,27 @@ export function Layout() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-y-auto">
-        <Outlet />
-      </main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Mobile top bar — holds the hamburger that re-opens the drawer.
+            Hidden at `md` and up where the sidebar is always visible. */}
+        <div className="md:hidden flex items-center gap-2 bg-indigo-800 dark:bg-indigo-950 px-3 py-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="p-1 rounded text-indigo-100 hover:bg-indigo-700 hover:text-white"
+            aria-label="Open navigation menu"
+          >
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <img src="/logo-mark.png" alt="" className="h-6 w-6 shrink-0" />
+          <span className="text-white font-bold text-sm">filament-bridge</span>
+        </div>
+        <main className="flex-1 overflow-y-auto">
+          <Outlet />
+        </main>
+      </div>
 
       {/* Required settings gate (overlays the whole app when needed) */}
       <RequiredSettingsGate />

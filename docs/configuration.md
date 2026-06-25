@@ -182,7 +182,7 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 |---|---|---|---|
 | Auto-sync enabled | `false` | Sync | Master switch for scheduled sync. Enabling requires a completed wizard and shows a friendly backup prompt (optional — you can proceed immediately). |
 | `sync_interval_seconds` | env (`120`) | Sync | Auto-sync interval; rescheduled immediately on save (min 30 s). |
-| `sync_log_retention_days` | `30` | Sync | Sync-log rows older than this are pruned at the start of each auto-sync tick. `0` = keep forever. |
+| `sync_log_retention_days` | `30` | Sync | Sync-log rows older than this are pruned. Pruning runs on each auto-sync tick **and** — so it still applies when auto-sync is off — on every manual sync trigger, the nightly backup job, and once at startup. `0` = keep forever. |
 | `backup_schedule_enabled` | env (`true`) | Scheduled backups | Master switch for the nightly backup job. When off, the `nightly_backup` cron is a no-op. |
 | `backup_bridge_state_enabled` | env (`true`) | Scheduled backups | Include the bridge-state export in the nightly backup (sub-toggle, greyed out when master off). |
 | `backup_filamentdb_enabled` | env (`true`) | Scheduled backups | Include the Filament DB snapshot in the nightly backup (sub-toggle). Spoolman is intentionally excluded. |

@@ -365,9 +365,23 @@ _IDENTITY_FIELDS = frozenset(["extra.openprinttag_slug", "extra.openprinttag_uui
 
 
 def _normalize_field_value(v: Any) -> str:
-    """Normalize a field value for comparison (mirrors frontend normalizeFieldValue)."""
+    """Normalize a field value for comparison (mirrors frontend normalizeFieldValue).
+
+    Numeric coercion: floats whose value is a whole number are converted to int
+    before stringification so that ``200.0`` and ``200`` both normalise to ``"200"``.
+    This matches the JavaScript ``String(JSON.parse("200.0"))`` behaviour — JS
+    ``JSON.parse`` treats ``200.0`` as the integer ``200``, so ``String(200) = "200"``,
+    whereas Python ``str(200.0) = "200.0"``.  Without this alignment a field whose
+    Spoolman value is a whole-number float (e.g. ``spool_weight = 200.0``) and whose
+    OpenTag value is the equivalent integer (e.g. ``int(round(float(200))) = 200``)
+    would be falsely flagged as changed by the backend while the frontend shows ``0
+    fields changed``, producing the "0 fields changed" phantom-update bug (#31).
+    """
     if v is None:
         return ""
+    # Coerce whole-number floats to int so Python str() matches JS String() for JSON numbers.
+    if isinstance(v, float) and v == int(v):
+        v = int(v)
     s = str(v).strip().lower()
     if s in ("", "—"):
         return ""

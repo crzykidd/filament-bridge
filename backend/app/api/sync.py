@@ -12,7 +12,12 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
 
-from app.api.config import _effective_sync_interval, get_config_value, set_config_value
+from app.api.config import (
+    _effective_sync_interval,
+    get_config_value,
+    prune_sync_log_now,
+    set_config_value,
+)
 from app.api.errors import api_error
 from app.api.health import _check_filamentdb, _check_spoolman
 from app.api.mappings import build_mapping_rows
@@ -72,6 +77,9 @@ async def trigger_sync(request: Request, db: Session = Depends(get_db)) -> Cycle
     result = await run_sync_cycle(
         db, request.app.state.spoolman, request.app.state.filamentdb, dry_run=False
     )
+    # Apply sync-log retention here too — auto-sync (which also prunes) is off by
+    # default, so a manual-trigger user would otherwise never prune the log (#22).
+    prune_sync_log_now(db)
     return _to_response(result)
 
 

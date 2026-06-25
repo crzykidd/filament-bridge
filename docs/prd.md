@@ -415,7 +415,8 @@ Field names are configurable via environment variables.
   recent cycles without deleting entries; window mode groups rows under per-cycle headers
 - **Clear log** action permanently deletes all log entries from SQLite (confirmation required)
 - Entries older than `sync_log_retention_days` (default 30; 0 = forever) are pruned
-  automatically at the start of each auto-sync tick
+  automatically — on each auto-sync tick, and (since auto-sync is off by default) also on
+  every manual sync trigger, the nightly backup job, and once at startup
 - **Each log entry includes text-badge links** ("FDB"/"SM") to the affected record in both systems where applicable
 - Useful for debugging unexpected changes
 
@@ -459,8 +460,14 @@ Field names are configurable via environment variables.
 
 #### FR-23: Bulk operations
 - Bulk resolve conflicts (e.g., "accept all from Spoolman")
-- Bulk assign variants
-- Bulk update tare weights
+- Bulk assign variants _(deferred — wizard-only for now)_
+- Bulk update tare weights — **implemented** as a standalone **Tare Editor** page (nav item).
+  Lists every mapped filament with its current tare on both sides (FDB `spoolWeight` ↔
+  Spoolman `spool_weight`), flags missing/mismatched ones, and lets the user set tare per-row
+  or for a multi-selected batch. Saving writes **both** systems at once and refreshes both
+  `_mp_spool_weight` snapshots (anti-ping-pong), reusing the engine's material-scalar tare
+  path. Variants are read-only (their tare is inherited from the parent); only standalone and
+  master/parent filaments are editable. (`GET /api/tare`, `POST /api/tare/bulk`.)
 
 #### FR-23b: OpenTag (OpenPrintTag) Cleanup tool
 A standalone on-demand tool to match Spoolman filaments against the OpenPrintTag community dataset and apply corrections.

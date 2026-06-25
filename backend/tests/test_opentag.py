@@ -6125,6 +6125,100 @@ def test_data_differs_false_when_no_fields():
     assert _data_differs(candidate) is False
 
 
+def test_data_differs_false_when_float_equals_int_whole_number():
+    """_data_differs must return False when a field's Spoolman value is a whole-number
+    float (e.g. spool_weight=200.0) and the OpenTag value is the same integer (200).
+
+    This is the phantom-update bug (#31): Python ``str(200.0) == '200.0'`` while
+    ``str(200) == '200'``, so a naive str() comparison says they differ even though
+    the logical values are equal.  JavaScript JSON.parse treats 200.0 as the integer
+    200, so the frontend's normalizeFieldValue sees '200' == '200' and shows 0 fields
+    changed — while the backend falsely set has_update=True.  The fix coerces
+    whole-number floats to int before stringification so both sides produce '200'.
+    """
+    from app.api.opentag import _data_differs, OpenTagCandidate, OpenTagFieldRow
+
+    candidate = OpenTagCandidate(
+        opt_uuid="uuid-1",
+        opt_slug="slug-1",
+        opt_brand="TestBrand",
+        opt_name="Test PLA",
+        opt_color_hex=None,
+        confidence=1.0,
+        fields=[
+            # spool_weight: SM returns 200.0 (Pydantic float), OPT supplies int 200
+            OpenTagFieldRow(
+                field="spool_weight",
+                spoolman_value=200.0,
+                opentag_value=200,
+                suggested_value=200,
+            ),
+            # weight: SM returns 1000.0 (float), OPT supplies int 1000
+            OpenTagFieldRow(
+                field="weight",
+                spoolman_value=1000.0,
+                opentag_value=1000,
+                suggested_value=1000,
+            ),
+            # Identity fields also present but excluded from diff
+            OpenTagFieldRow(
+                field="extra.openprinttag_uuid",
+                spoolman_value="uuid-1",
+                opentag_value="uuid-1",
+                suggested_value="uuid-1",
+            ),
+        ],
+    )
+    assert _data_differs(candidate) is False, (
+        "whole-number float vs int with same value should NOT be flagged as changed"
+    )
+
+
+def test_data_differs_true_when_float_values_genuinely_differ():
+    """_data_differs must still return True when float values are actually different.
+
+    The float-vs-int coercion fix must not suppress real data differences."""
+    from app.api.opentag import _data_differs, OpenTagCandidate, OpenTagFieldRow
+
+    candidate = OpenTagCandidate(
+        opt_uuid="uuid-1",
+        opt_slug="slug-1",
+        opt_brand=None,
+        opt_name=None,
+        opt_color_hex=None,
+        confidence=1.0,
+        fields=[
+            OpenTagFieldRow(
+                field="spool_weight",
+                spoolman_value=150.0,  # 150 g current vs OPT 200 g
+                opentag_value=200,
+                suggested_value=200,
+            ),
+        ],
+    )
+    assert _data_differs(candidate) is True, (
+        "genuinely different float vs int should still be flagged as changed"
+    )
+
+
+def test_normalize_field_value_whole_float_equals_int():
+    """_normalize_field_value should return the same string for 200.0 and 200."""
+    from app.api.opentag import _normalize_field_value
+
+    assert _normalize_field_value(200.0) == _normalize_field_value(200) == "200"
+    assert _normalize_field_value(1.0) == _normalize_field_value(1) == "1"
+    assert _normalize_field_value(0.0) == _normalize_field_value(0) == "0"
+
+
+def test_normalize_field_value_non_whole_float_preserved():
+    """_normalize_field_value must preserve non-whole-number floats unchanged."""
+    from app.api.opentag import _normalize_field_value
+
+    assert _normalize_field_value(1.75) == "1.75"
+    assert _normalize_field_value(1.24) == "1.24"
+    assert _normalize_field_value(0.5) == "0.5"
+
+
 @pytest.mark.asyncio
 async def test_matches_sets_has_update_for_drifted_tagged_filament(tmp_path):
     """A filament already carrying openprinttag_uuid whose OPT data has drifted
@@ -6218,6 +6312,109 @@ async def test_matches_excludes_ignored_filament_from_updates_count(tmp_path):
             match = data["matches"][0]
             assert match["has_update"] is False
             assert match["ignored_updates"] is True
+    finally:
+        _ot_mod._settings.data_dir = original_data_dir
+
+
+@pytest.mark.asyncio
+async def test_matches_no_has_update_when_all_fields_match_despite_float_int_types(tmp_path):
+    """A tagged filament where ALL fields already match OPT must have has_update=False
+    even when Spoolman returns spool_weight as a whole-number float (e.g. 200.0) and
+    OPT supplies the same value as an integer (200).
+
+    Regression test for bug #31: without the float-vs-int normalisation fix,
+    Python str(200.0)='200.0' != str(200)='200' would falsely flag the filament as
+    changed, while the frontend (where JSON 200.0 → JS integer 200 → '200') would show
+    0 fields changed — the phantom-update symptom reported in the issue.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api.opentag import router
+    from app.schemas.spoolman import encode_extra_value
+
+    import app.api.opentag as _ot_mod
+    original_data_dir = _ot_mod._settings.data_dir
+    _ot_mod._settings.data_dir = str(tmp_path)
+
+    uuid_key = _ot_mod._settings.spoolman_field_openprinttag_uuid
+
+    # Build an OPT material that includes package data so spool_weight/weight get emitted
+    opt_with_package = dict(_OPT_PLA_SILK)  # copy base material
+
+    # Packages/containers data: emptyWeight and nominalNettoFullWeight as integers (as OPT JSON)
+    packages_by_material = {
+        opt_with_package["slug"]: [
+            {"containerSlug": "standard-spool-200g", "nominalNettoFullWeight": 1000}
+        ]
+    }
+    containers_by_slug = {
+        "standard-spool-200g": {"emptyWeight": 200}  # int in OPT JSON → float(200) = 200.0 in bridge
+    }
+
+    # SM filament that is ALREADY fully synced: spool_weight=200.0 (Pydantic float from SM API)
+    # and weight=1000.0 (Pydantic float). The key: these are whole-number floats.
+    slug_key = _ot_mod._settings.spoolman_field_openprinttag_slug
+    # Nozzle temp extra field keys (defaults "openprinttag_nozzle_temp_min" / "..._max").
+    # OPT emits these as int (int(round(float(200))) = 200).  Spoolman stores and returns
+    # them as JSON-encoded strings → encode_extra_value(200) matches how the real SM API works.
+    nozzle_min_key = _ot_mod._settings.spoolman_field_openprinttag_nozzle_temp_min
+    nozzle_max_key = _ot_mod._settings.spoolman_field_openprinttag_nozzle_temp_max
+    fake_sm = AsyncMock()
+    fake_sm.get_filaments = AsyncMock(return_value=[
+        SpoolmanFilament(
+            id=1,
+            name=_OPT_PLA_SILK["name"],
+            vendor=SpoolmanVendor(id=10, name=_OPT_PLA_SILK["brandName"]),
+            material="PLA",           # matches OPT type (after finish-strip)
+            color_hex="B87333",       # matches OPT color (without #)
+            density=1.24,             # matches OPT density
+            diameter=1.75,            # matches OPT diameter (always 1.75)
+            settings_extruder_temp=_OPT_PLA_SILK["nozzleTempMax"],
+            settings_bed_temp=_OPT_PLA_SILK["bedTempMax"],
+            spool_weight=200.0,       # Pydantic float, same logical value as OPT int 200
+            weight=1000.0,            # Pydantic float, same logical value as OPT int 1000
+            extra={
+                uuid_key: encode_extra_value(_OPT_PLA_SILK["uuid"]),
+                slug_key: encode_extra_value(_OPT_PLA_SILK["slug"]),
+                "filamentdb_material_tags": encode_extra_value("17"),  # silk tag
+                # Nozzle temps: already synced from OPT (int values, JSON-encoded by SM).
+                # Without these the fields would be absent (None) on the SM side while OPT
+                # proposes 200 / 230 → genuine diff → has_update=True (correct, but not the
+                # scenario we are testing).  Here we pre-populate them to simulate a filament
+                # that has already been fully updated.
+                nozzle_min_key: encode_extra_value(_OPT_PLA_SILK["nozzleTempMin"]),
+                nozzle_max_key: encode_extra_value(_OPT_PLA_SILK["nozzleTempMax"]),
+            },
+        )
+    ])
+
+    test_app = FastAPI()
+    test_app.include_router(router, prefix="/api")
+    test_app.state.spoolman = fake_sm
+    test_app.state.filamentdb = AsyncMock()
+
+    try:
+        fetch_result = {
+            "materials": [opt_with_package],
+            "packages_by_material": packages_by_material,
+            "containers_by_slug": containers_by_slug,
+        }
+        with patch("app.core.opentag_cache._fetch_from_tarball", AsyncMock(return_value=fetch_result)), \
+             patch("app.api.opentag._record_last_count"):
+            client = TestClient(test_app)
+            # No ?recompute — fresh tmp_path means no cache, so compute runs anyway
+            resp = client.get("/api/openprinttag/matches")
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["updates_count"] == 0, (
+                f"Fully-synced filament must not appear as having updates; "
+                f"got updates_count={data['updates_count']}, match has_update={data['matches'][0]['has_update']}"
+            )
+            match = data["matches"][0]
+            assert match["has_update"] is False, (
+                "Whole-number float fields (spool_weight=200.0 vs OPT int 200) must NOT "
+                "be flagged as changed when the logical values are equal"
+            )
     finally:
         _ot_mod._settings.data_dir = original_data_dir
 

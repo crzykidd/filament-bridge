@@ -8,12 +8,12 @@ Work top-to-bottom. Within a tier, issues are roughly independent unless a depen
 ## Tier 1 — Bugs (do first)
 
 1. ~~**[#21](https://github.com/crzykidd/filament-bridge/issues/21)** — `cross_system` conflict resolve re-queues next cycle.~~ ✅ **Fixed on `dev`** (`af9028d` per-row + `5fd1283` bulk-resolve): `apply_cross_system_conflict` writes the chosen value to both sides + refreshes both snapshots for every field family; weight is a direct absolute write; bulk-resolve converges with per-conflict failure isolation. Closes on the next release PR (`Fixes #21`).
-2. **[#22](https://github.com/crzykidd/filament-bridge/issues/22)** — sync-log retention only prunes on auto-sync ticks; never prunes when auto-sync is off. Prune on manual trigger and/or the nightly backup job. ← **next**
+2. ~~**[#22](https://github.com/crzykidd/filament-bridge/issues/22)** — sync-log retention only prunes on auto-sync ticks; never prunes when auto-sync is off.~~ ✅ **Fixed on `dev`**: new `prune_sync_log_now(db)` wrapper (reads retention, prunes, commits, error-tolerant) is called from the manual sync trigger (`POST /sync/trigger`), the nightly backup job (before its master-switch gate), and once at startup — so retention applies regardless of auto-sync state. Closes on the next release PR (`Fixes #22`).
 
 ## Tier 2 — Wizard UX behavior changes
 
 3. **[#13](https://github.com/crzykidd/filament-bridge/issues/13)** — require tare entry when unknown (drop the 200 g default; blank required field, block Execute).
-4. **[#26](https://github.com/crzykidd/filament-bridge/issues/26)** — standalone bulk tare editor. _Depends on / pairs with #13 — do after._
+4. ~~**[#26](https://github.com/crzykidd/filament-bridge/issues/26)** — standalone bulk tare editor.~~ ✅ **Done on `dev`**: new **Tare Editor** page + `GET /api/tare` / `POST /api/tare/bulk`. Lists mapped filaments with both-side tare, flags missing/mismatch, per-row + multi-select bulk set; writes both sides and refreshes both `_mp_spool_weight` snapshots (reuses `core/tare.py`, no duplicated weight logic). Variants read-only (inherited). Closes on the next release PR (`Fixes #26`).
 5. **[#14](https://github.com/crzykidd/filament-bridge/issues/14)** — partial-success completion + persistent Failure Report (don't block on per-record failures).
 
 ## Tier 3 — Docs (PRD-sync — one PR closing all six)

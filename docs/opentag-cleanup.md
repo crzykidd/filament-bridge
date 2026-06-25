@@ -156,6 +156,16 @@ When the matches are loaded, a banner appears at the top if any already-tagged f
 OpenPrintTag dataset. The count excludes filaments the user has suppressed via **Ignore future
 updates** (see below).
 
+### Numeric comparison and float normalisation
+
+Field values are compared as strings after normalisation (lowercase, trimmed). Whole-number
+floats are normalised to integers before stringification so that Spoolman's `200.0` (a
+Pydantic `float`) and OpenPrintTag's `200` (an integer) are treated as equal. This matches
+the behaviour of the frontend, where the JSON number `200` is parsed by JavaScript as an
+integer and `String(200) = "200"` (not `"200.0"`). Without this alignment, fields like
+`spool_weight` and `weight` could show as "changed" in the backend diff while the frontend
+review showed "0 fields changed".
+
 Click **Review updates** to switch to the focused updates view.
 
 ## Updates review view
