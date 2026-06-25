@@ -2264,8 +2264,16 @@ update) and the UI converts minutes ↔ seconds: value stored in seconds, displa
 
 `BridgeConfig.sync_log_retention_days` (default 30; 0 = keep forever).  `prune_sync_log(db,
 retention_days)` in `backend/app/api/config.py` issues a single `DELETE` for rows older than
-`now - retention_days`.  Called at the start of each auto-sync tick (in `main.py`'s scheduled
-job) and returns the deleted count for logging.  No-op when `retention_days == 0`.
+`now - retention_days` and returns the deleted count for logging.  No-op when
+`retention_days == 0`.
+
+Pruning runs at the start of each auto-sync tick, but auto-sync is **off by default** — so a
+user on manual sync triggers would otherwise never prune (#22, fixed 2026-06-25). The
+auto-sync-independent call sites all go through the wrapper `prune_sync_log_now(db)` (reads
+the retention config, prunes, commits, swallows errors): the manual sync trigger
+(`POST /sync/trigger`), the nightly backup job (before its master-switch gate, so it prunes
+even when scheduled backups are off), and a one-shot at startup (mirrors the backup startup
+prune). The original auto-sync-tick prune stays as-is.
 
 ### No in-app log-file rotation
 

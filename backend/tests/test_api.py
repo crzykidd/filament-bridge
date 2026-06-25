@@ -4440,6 +4440,73 @@ def test_prune_sync_log_all_within_cutoff_deletes_nothing(db):
     assert db.query(SyncLog).count() == 1
 
 
+def _add_old_sync_log(db, cycle_id="old", days=40):
+    import datetime
+    db.add(SyncLog(cycle_id=cycle_id, direction="spoolman_to_filamentdb",
+                   action="update", entity_type="spool", spoolman_id=1,
+                   timestamp=datetime.datetime.utcnow() - datetime.timedelta(days=days)))
+    db.commit()
+
+
+def test_prune_sync_log_now_reads_config_and_commits(db):
+    """prune_sync_log_now reads sync_log_retention_days, prunes, and commits (#22)."""
+    from app.api.config import prune_sync_log_now, set_config_value
+
+    set_config_value(db, "sync_log_retention_days", 30)
+    db.commit()
+    _add_old_sync_log(db)
+
+    deleted = prune_sync_log_now(db)
+
+    assert deleted == 1
+    # Committed — a fresh query in a new session-less expire sees it gone.
+    db.expire_all()
+    assert db.query(SyncLog).count() == 0
+
+
+def test_prune_sync_log_now_defaults_to_30_when_unset(db):
+    """With no config row, prune_sync_log_now falls back to the 30-day default."""
+    from app.api.config import prune_sync_log_now
+
+    _add_old_sync_log(db, days=40)  # older than the 30-day default → pruned
+
+    assert prune_sync_log_now(db) == 1
+
+
+def test_prune_sync_log_now_noop_when_retention_zero(db):
+    """retention=0 (keep forever) means prune_sync_log_now deletes nothing."""
+    from app.api.config import prune_sync_log_now, set_config_value
+
+    set_config_value(db, "sync_log_retention_days", 0)
+    db.commit()
+    _add_old_sync_log(db, days=365)
+
+    assert prune_sync_log_now(db) == 0
+    assert db.query(SyncLog).count() == 1
+
+
+def test_sync_trigger_prunes_old_sync_log(db):
+    """POST /sync/trigger applies retention even with auto-sync off (#22)."""
+    from app.api.config import set_config_value
+
+    set_config_value(db, "sync_log_retention_days", 30)
+    db.commit()
+    _add_old_sync_log(db)
+
+    app = FastAPI()
+    for mod in _ROUTERS:
+        app.include_router(mod.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = _fake_spoolman()
+    app.state.filamentdb = _fake_filamentdb()
+    client = TestClient(app)
+
+    resp = client.post("/api/sync/trigger")
+    assert resp.status_code == 200
+    db.expire_all()
+    assert db.query(SyncLog).filter(SyncLog.cycle_id == "old").count() == 0
+
+
 def test_update_config_reschedules_when_scheduler_present(db):
     """update_config calls scheduler.reschedule_job when app.state.scheduler is set."""
     from unittest.mock import MagicMock

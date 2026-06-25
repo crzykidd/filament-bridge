@@ -415,7 +415,8 @@ Field names are configurable via environment variables.
   recent cycles without deleting entries; window mode groups rows under per-cycle headers
 - **Clear log** action permanently deletes all log entries from SQLite (confirmation required)
 - Entries older than `sync_log_retention_days` (default 30; 0 = forever) are pruned
-  automatically at the start of each auto-sync tick
+  automatically — on each auto-sync tick, and (since auto-sync is off by default) also on
+  every manual sync trigger, the nightly backup job, and once at startup
 - **Each log entry includes text-badge links** ("FDB"/"SM") to the affected record in both systems where applicable
 - Useful for debugging unexpected changes
 

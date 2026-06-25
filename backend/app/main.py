@@ -209,11 +209,14 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             backups are enabled and prunes old files. Any failure is logged, never
             raised, so a bad backup can't crash the scheduler.
             """
-            from app.api.config import effective_backup_config
+            from app.api.config import effective_backup_config, prune_sync_log_now
             from app.core.backup_job import run_scheduled_backup
 
             db = SessionLocal()
             try:
+                # Prune the sync log daily, independent of both auto-sync and the
+                # backup master switch, so retention always applies (#22).
+                prune_sync_log_now(db)
                 cfg = effective_backup_config(db)
                 if not cfg.backup_schedule_enabled:
                     logger.debug("Scheduled backups disabled — skipping nightly run")
@@ -271,6 +274,19 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             prune_backups(backups_dir(_bcfg.data_dir), _bcfg.backup_retention_days)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Startup backup prune failed: %s", exc)
+
+        # One-shot sync-log prune at startup so retention applies even for users
+        # who never enable auto-sync (whose tick is the only other prune) (#22).
+        try:
+            from app.api.config import prune_sync_log_now
+
+            _slog_db = SessionLocal()
+            try:
+                prune_sync_log_now(_slog_db)
+            finally:
+                _slog_db.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Startup sync-log prune failed: %s", exc)
         try:
             yield
         finally:

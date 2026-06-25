@@ -94,6 +94,26 @@ def prune_sync_log(db: Session, retention_days: int) -> int:
     return deleted
 
 
+def prune_sync_log_now(db: Session) -> int:
+    """Read the configured retention window, prune, and commit if anything was deleted.
+
+    Self-contained convenience wrapper for the auto-sync-independent call sites
+    (manual sync trigger, nightly backup job, startup) so sync-log retention
+    applies even when auto-sync is never enabled (#22). Failure-tolerant: errors
+    are logged and swallowed, never propagated to the caller.
+    """
+    try:
+        retention_days = int(get_config_value(db, "sync_log_retention_days", 30))
+        pruned = prune_sync_log(db, retention_days)
+        if pruned:
+            db.commit()
+        return pruned
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sync-log prune failed: %s", exc)
+        db.rollback()
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Response assembly
 # ---------------------------------------------------------------------------

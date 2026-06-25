@@ -16,6 +16,14 @@ GitHub release.
   dimmed backdrop; tap the backdrop, the ✕, or any nav link to dismiss it (it also closes
   automatically on navigation). The desktop layout is unchanged.
 
+### Fixed
+
+- **Sync-log retention now applies when auto-sync is off** — pruning of sync-log entries
+  older than `sync_log_retention_days` previously ran only on auto-sync ticks, so installs
+  that rely on manual sync (auto-sync is off by default) never pruned and the log grew
+  unbounded. Pruning now also runs on every manual sync trigger, the nightly backup job, and
+  once at startup. ([#22](https://github.com/crzykidd/filament-bridge/issues/22))
+
 ## [0.6.0] — 2026-06-24
 
 ### Added
