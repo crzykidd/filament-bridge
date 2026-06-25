@@ -27,6 +27,7 @@ vi.mock('react-router-dom', () => ({
   NavLink: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
   Outlet: () => <div data-testid="outlet" />,
   useNavigate: () => vi.fn(),
+  useLocation: () => ({ pathname: '/' }),
 }))
 
 vi.mock('./RequiredSettingsGate', () => ({
