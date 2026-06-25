@@ -1,6 +1,13 @@
-# filament-bridge
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
+    <img src="docs/images/logo-light.png" alt="filament-bridge" width="480">
+  </picture>
+</p>
 
-![version](https://img.shields.io/badge/version-0.6.0-blue)
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.6.0-blue" alt="version">
+</p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
