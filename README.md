@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.1-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.2-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,11 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.2 (2026-06-25)
+
+- **Tare Editor now works for variant-organised libraries** — if your filaments are grouped into variant clusters, the editor showed no checkboxes and nothing could be edited. Every filament is now selectable, and the list is **grouped by variant family** with a per-family header you can tick to set one tare across all of a line's colours at once. (#34)
+- **Update / release-notes pop-up no longer appears stuck inside the sidebar** — after the 0.6.1 mobile-nav change, the post-upgrade and "update available" modals rendered as a small box pinned in the nav sidebar instead of centered over the app. They overlay the full window again. (#33)
 
 ### v0.6.1 (2026-06-25)
 

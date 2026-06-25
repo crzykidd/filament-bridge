@@ -93,6 +93,7 @@ async def build_tare_rows(
 
         has_variants = bool(getattr(fdb, "hasVariants", False))
         role = _role(fdb, has_variants)
+        parent_id = getattr(fdb, "parentId", None) or None
 
         sm_tare = _round2(getattr(sm, "spool_weight", None))
         fdb_stored = _round2(getattr(fdb, "spoolWeight", None))
@@ -100,8 +101,8 @@ async def build_tare_rows(
         # Effective FDB tare: a variant with no own value inherits the parent's.
         effective = fdb_stored
         parent_name = None
-        if role == "variant":
-            parent = fdb_by_id.get(getattr(fdb, "parentId", None))
+        if role == "variant" and parent_id:
+            parent = fdb_by_id.get(parent_id)
             if parent is not None:
                 parent_name = parent.name
                 if effective is None:
@@ -114,6 +115,12 @@ async def build_tare_rows(
         else:
             status = "set"
 
+        # Group key clusters a variant family together: variants group under their
+        # FDB parent id; masters/standalone group under their own id (so a master
+        # and its variants share one key). group_name labels the cluster.
+        group_key = parent_id or m.filamentdb_id
+        group_name = parent_name if (role == "variant" and parent_name) else (sm.name or fdb.name)
+
         rows.append({
             "filament_mapping_id": m.id,
             "spoolman_filament_id": m.spoolman_filament_id,
@@ -121,16 +128,33 @@ async def build_tare_rows(
             "name": sm.name or fdb.name,
             "vendor": (getattr(sm.vendor, "name", None) if getattr(sm, "vendor", None) else None) or fdb.vendor,
             "role": role,
-            "editable": role != "variant",
+            # Every mapped filament is editable: each has both an FDB and a Spoolman
+            # record, so apply_tare can write both sides directly. Editing a variant
+            # writes an explicit (override) tare on it — that is exactly the point of
+            # this tool, and writing both sides + refreshing snapshots keeps the engine
+            # from re-detecting it as drift.
+            "editable": True,
             "spoolman_tare": sm_tare,
             "filamentdb_tare": fdb_stored,
             "effective_tare": effective,
             "is_overridden": role == "variant" and fdb_stored is not None,
+            "parent_id": parent_id,
             "parent_name": parent_name,
+            "group_key": group_key,
+            "group_name": group_name,
             "status": status,
         })
 
-    rows.sort(key=lambda r: ((r["name"] or "").lower(), r["filament_mapping_id"]))
+    # Sort so families cluster together (by group name, then role with the master
+    # first, then member name) — the frontend renders in this order.
+    _role_rank = {"master": 0, "standalone": 0, "variant": 1}
+    rows.sort(key=lambda r: (
+        (r["group_name"] or "").lower(),
+        r["group_key"],
+        _role_rank.get(r["role"], 2),
+        (r["name"] or "").lower(),
+        r["filament_mapping_id"],
+    ))
     return rows
 
 
@@ -146,9 +170,13 @@ async def apply_tare(
 ) -> None:
     """Write one filament's tare to BOTH sides and refresh both snapshots.
 
-    Raises ValueError on a bad target (unknown/synthetic mapping, missing upstream
-    record, or a variant — which is read-only here). Upstream write errors propagate
-    to the caller for per-row failure isolation.
+    Works for any mapped filament — standalone, master, or variant. Editing a
+    variant writes an explicit (override) tare on it; writing both sides and
+    refreshing both snapshots keeps the engine from re-detecting it as drift.
+
+    Raises ValueError on a bad target (unknown/synthetic mapping or a missing
+    upstream record). Upstream write errors propagate to the caller for per-row
+    failure isolation.
     """
     m = db.query(FilamentMapping).filter_by(id=filament_mapping_id).first()
     if m is None or m.is_synthetic_parent or m.spoolman_filament_id is None:
@@ -157,8 +185,6 @@ async def apply_tare(
     fdb = fdb_by_id.get(m.filamentdb_id)
     if fdb is None:
         raise ValueError("Filament DB record not found")
-    if _role(fdb, bool(getattr(fdb, "hasVariants", False))) == "variant":
-        raise ValueError("variant tare is inherited — edit its parent instead")
 
     tare = _round2(tare_grams)
     if tare is None or tare < 0 or tare > MAX_TARE_GRAMS:

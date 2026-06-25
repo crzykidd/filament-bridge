@@ -141,6 +141,25 @@ describe('VersionBadge — post-upgrade modal', () => {
     expect(screen.getByText('What is new in 0.2.0')).toBeInTheDocument()
   })
 
+  it('portals the modal out of the sidebar <aside> (transformed ancestor would trap a fixed overlay)', async () => {
+    vi.mocked(getVersionInfo).mockResolvedValue(makeVersionInfo())
+    localStorage.setItem(LS_RUNNING_KEY, '0.1.0')
+
+    const { container } = renderLayout()
+
+    await waitFor(() => {
+      expect(screen.getByText(/You're now running filament-bridge v0\.2\.0/)).toBeInTheDocument()
+    })
+    // The modal must NOT be a descendant of the sidebar <aside>: that element carries
+    // a transform for the mobile drawer, which becomes the containing block for any
+    // `position: fixed` child and would trap the overlay inside the 208px sidebar.
+    const dismiss = screen.getByRole('button', { name: 'Got it' })
+    expect(dismiss.closest('aside')).toBeNull()
+    // It is portaled to <body>, outside the React render container.
+    expect(container.contains(dismiss)).toBe(false)
+    expect(document.body.contains(dismiss)).toBe(true)
+  })
+
   it('does not show post-upgrade modal on first run (key absent)', async () => {
     vi.mocked(getVersionInfo).mockResolvedValue(makeVersionInfo())
     // No LS_RUNNING_KEY set — first ever run
