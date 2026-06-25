@@ -27,6 +27,17 @@ GitHub release.
 
 ### Fixed
 
+- **OpenPrintTag Cleanup phantom updates** — after a dataset refresh, filaments whose
+  data already fully matched OpenPrintTag were incorrectly shown as having pending
+  updates; opening the review showed "0 fields changed". Root cause: Python
+  `str(200.0)` produces `"200.0"`, but JavaScript stringifies the same JSON number as
+  `"200"` (JSON numbers without a fractional part become integers in JS). Spoolman
+  returns spool weight and filament weight as floats (Pydantic coerces the API
+  response), while `opt_to_spoolman_fields` emits those same values as integers —
+  so the backend `_data_differs()` check saw `"200.0" ≠ "200"` and flagged the
+  filament as changed, while the frontend comparison saw `"200" == "200"` and showed
+  zero changed fields. Fixed by normalising whole-number floats to int before
+  stringification in `_normalize_field_value()`. (#31)
 - **Sync-log retention now applies when auto-sync is off** — pruning of sync-log entries
   older than `sync_log_retention_days` previously ran only on auto-sync ticks, so installs
   that rely on manual sync (auto-sync is off by default) never pruned and the log grew
