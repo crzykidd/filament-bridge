@@ -426,8 +426,9 @@ export function Layout() {
           <div className="min-w-0">
             <button
               onClick={() => navigate('/')}
-              className="text-white font-bold text-sm leading-tight text-left w-full"
+              className="flex items-center gap-2 text-white font-bold text-sm leading-tight text-left w-full"
             >
+              <img src="/logo-mark.png" alt="" className="h-7 w-7 shrink-0" />
               filament-bridge
             </button>
             <div className="mt-1">
@@ -508,6 +509,7 @@ export function Layout() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
+          <img src="/logo-mark.png" alt="" className="h-6 w-6 shrink-0" />
           <span className="text-white font-bold text-sm">filament-bridge</span>
         </div>
         <main className="flex-1 overflow-y-auto">
