@@ -9,6 +9,15 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release-notes / update modal no longer appears trapped inside the sidebar** — after the
+  mobile collapsible-sidebar change in 0.6.1, the post-upgrade and "update available" pop-ups
+  rendered as a small box pinned inside the nav sidebar instead of centered over the whole
+  app. The sidebar gained a CSS `transform` (for the slide-in drawer), which makes it the
+  containing block for `position: fixed` descendants and trapped the modal. The modal is now
+  rendered through a portal to `<body>` so it overlays the full viewport again.
+
 ## [0.6.1] — 2026-06-25
 
 ### Added

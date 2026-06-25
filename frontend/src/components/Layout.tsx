@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
@@ -131,7 +132,12 @@ function ReleaseNotesModal({ releaseName, releaseNotes, releaseUrl, subtitle, on
     if (e.target === overlayRef.current) onDismiss()
   }
 
-  return (
+  // Portal to <body>: this modal is rendered inside VersionBadge, which lives in
+  // the sidebar <aside>. That <aside> carries a `transform` (for the mobile slide-in
+  // drawer), and a transformed ancestor becomes the containing block for `position:
+  // fixed` descendants — which would otherwise trap this overlay inside the 208px
+  // sidebar instead of covering the viewport. Rendering into <body> escapes it.
+  return createPortal(
     <div
       ref={overlayRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
@@ -186,7 +192,8 @@ function ReleaseNotesModal({ releaseName, releaseNotes, releaseUrl, subtitle, on
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
