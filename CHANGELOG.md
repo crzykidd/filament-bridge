@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Scan page search box** — the `/scan/:filId/:spoolId` QR-target page now shows a
+  search box at the top. Typing a query calls the new `GET /api/mobile/spools?q=…`
+  endpoint (mobile-gated, so it works under both the normal-login and public-scan auth
+  contexts). Selecting a result navigates to that spool's scan page (`/scan/<fil>/<spool>`)
+  so the update card reloads for the chosen spool — no re-scanning required. Filtering is
+  case-insensitive across name, vendor, color hex, and Spoolman spool number; an empty
+  query returns all mapped spools (capped at 200). Closes #36.
+
 ### Fixed
 
 - **Wizard no longer silently writes 200 g as a default tare when Spoolman has no

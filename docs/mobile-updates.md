@@ -44,6 +44,16 @@ upstream systems, plus two editable fields:
   knows about (Filament DB locations + Spoolman spool locations, from
   `GET /api/mobile/locations`).
 
+### Scan-page search box
+
+The `/scan/:filId/:spoolId` page includes a **search box** at the top. After updating one
+spool, you can type a name, vendor, color, or spool number to jump directly to any other
+mapped spool — without scanning a new label. The search queries
+`GET /api/mobile/spools?q=…` (case-insensitive substring, filtered server-side across
+name/vendor/color hex/spool number). Selecting a result reloads the same page for the
+chosen spool. The endpoint carries the same auth context as the rest of the scan flow
+(public when `mobile_session_days == 0`, normal session otherwise).
+
 **Save** sends a single `PATCH /api/mobile/spool/{fil}/{spool}`. The bridge writes the new
 weight and/or location to **both** Filament DB and Spoolman, then **refreshes both
 snapshots** to the agreed values so the next auto-sync cycle doesn't re-detect your change

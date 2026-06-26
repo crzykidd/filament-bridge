@@ -444,3 +444,122 @@ def test_redirect_rejects_malformed_id():
     r = client.get("/r/fil.1/spool-1", follow_redirects=False)
     assert r.status_code == 404
     assert r.json()["detail"]["code"] == "not_found"
+
+
+# ===========================================================================
+# GET /api/mobile/spools — spool search endpoint
+# ===========================================================================
+
+
+def _make_db_with_mapping_and_snapshot(name="Galaxy Black", vendor="ELEGOO", color_hex="111111"):
+    """Helper: db with a mapped spool + a Spoolman snapshot carrying filament fields."""
+    from app.models.mapping import FilamentMapping
+
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    fm = FilamentMapping(
+        spoolman_filament_id=10,
+        filamentdb_id="fil-1",
+        filamentdb_parent_id=None,
+    )
+    db.add(fm)
+    db.flush()
+    db.add(SpoolMapping(
+        spoolman_spool_id=1,
+        filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1",
+        filament_mapping_id=fm.id,
+    ))
+    # Snapshot with nested filament dict (mirrors real engine output).
+    sm_data = {
+        "remaining_weight": 800.0,
+        "filament": {
+            "id": 10,
+            "name": name,
+            "material": "PLA",
+            "color_hex": color_hex,
+            "vendor": {"id": 2, "name": vendor},
+        },
+    }
+    _snap(db, "spoolman", "1", sm_data)
+    _snap(db, "filamentdb", "spool-1", {"totalWeight": 1000.0})
+    db.commit()
+    return db
+
+
+def test_search_spools_403_when_feature_disabled():
+    db = _make_db()  # mobile_labels_enabled defaults to false
+    client = _client(db, _fake_spoolman(), _fake_filamentdb())
+    r = client.get("/api/mobile/spools")
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "mobile_labels_disabled"
+
+
+def test_search_spools_empty_q_returns_all():
+    db = _make_db_with_mapping_and_snapshot()
+    client = _client(db, _fake_spoolman(), _fake_filamentdb())
+
+    r = client.get("/api/mobile/spools")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    row = body[0]
+    assert row["filamentdb_filament_id"] == "fil-1"
+    assert row["filamentdb_spool_id"] == "spool-1"
+    assert row["spoolman_spool_id"] == 1
+    assert row["name"] == "Galaxy Black"
+    assert row["vendor"] == "ELEGOO"
+    assert row["color"] == "111111"
+
+
+def test_search_spools_filters_by_name():
+    db = _make_db_with_mapping_and_snapshot(name="Galaxy Black", vendor="ELEGOO")
+    client = _client(db, _fake_spoolman(), _fake_filamentdb())
+
+    r = client.get("/api/mobile/spools?q=galaxy")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+    r2 = client.get("/api/mobile/spools?q=nomatch")
+    assert r2.status_code == 200
+    assert len(r2.json()) == 0
+
+
+def test_search_spools_filters_by_vendor():
+    db = _make_db_with_mapping_and_snapshot(vendor="ELEGOO")
+    client = _client(db, _fake_spoolman(), _fake_filamentdb())
+
+    r = client.get("/api/mobile/spools?q=elegoo")
+    assert r.status_code == 200
+    assert len(r.json()) == 1
+
+
+def test_search_spools_filters_by_spool_id():
+    db = _make_db_with_mapping_and_snapshot()
+    client = _client(db, _fake_spoolman(), _fake_filamentdb())
+
+    r = client.get("/api/mobile/spools?q=1")
+    assert r.status_code == 200
+    # spoolman_spool_id=1 contains "1"
+    assert len(r.json()) == 1
+
+
+def test_search_spools_only_returns_spool_rows():
+    """Filament-only rows (kind='filament') are not returned by the search endpoint."""
+    from app.models.mapping import FilamentMapping
+
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    # Add a filament mapping with no child SpoolMapping — this becomes a kind="filament" row.
+    db.add(FilamentMapping(
+        spoolman_filament_id=99,
+        filamentdb_id="fil-99",
+        filamentdb_parent_id=None,
+    ))
+    db.commit()
+    client = _client(db, _fake_spoolman(), _fake_filamentdb())
+
+    r = client.get("/api/mobile/spools")
+    assert r.status_code == 200
+    # No spool rows exist — the filament-only row must not be returned.
+    assert len(r.json()) == 0

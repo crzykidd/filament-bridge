@@ -971,6 +971,23 @@ class MobileSpoolUpdateRequest(BaseModel):
     weight_mode: MobileWeightMode | None = None
 
 
+class MobileSpoolSearchResult(BaseModel):
+    """One search result for GET /api/mobile/spools?q=…
+
+    Carries the minimum fields needed to display a result row and navigate to
+    ``/scan/{filamentdb_filament_id}/{filamentdb_spool_id}`` on selection.
+    """
+
+    filamentdb_filament_id: str
+    filamentdb_spool_id: str
+    spoolman_spool_id: int
+    name: str | None = None
+    vendor: str | None = None
+    color: str | None = None                 # bare hex (no #), from Spoolman snapshot
+    multi_color_hexes: str | None = None     # comma-separated when multi-color
+    multi_color_direction: str | None = None
+
+
 class LabelPrintRequest(BaseModel):
     """Body for POST /api/labels/print.
 

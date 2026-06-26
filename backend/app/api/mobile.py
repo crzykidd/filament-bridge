@@ -23,17 +23,18 @@ import logging
 import re
 import uuid
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.config import mobile_labels_enabled, mobile_weight_default_mode
+from app.api.mappings import build_mapping_rows
 from app.api.errors import api_error
 from app.core.locations import ensure_fdb_location
 from app.core.mobile import assemble_spool_detail, resolve_spool_mapping
 from app.core.weight import DEFAULT_TARE_GRAMS
 from app.core.weight_ops import apply_absolute_weight
 from app.db import get_db
-from app.schemas.api import MobileSpoolDetail, MobileSpoolUpdateRequest
+from app.schemas.api import MobileSpoolDetail, MobileSpoolSearchResult, MobileSpoolUpdateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,53 @@ async def update_mobile_spool(
     if detail is None:  # pragma: no cover - mapping existed above
         raise api_error(404, "spool_not_mapped", f"No bridge mapping found for spool {spool}.")
     return detail
+
+
+@router.get(
+    "/mobile/spools",
+    response_model=list[MobileSpoolSearchResult],
+    dependencies=[Depends(_require_labels_enabled)],
+)
+async def search_mobile_spools(
+    q: str = Query(default="", description="Case-insensitive substring filter (name/vendor/color/spool #)."),
+    db: Session = Depends(get_db),
+) -> list[MobileSpoolSearchResult]:
+    """Search mapped spools for the scan-page search box.
+
+    Returns only spool rows (kind="spool") that have both FDB ids set — the same
+    rows the mobile update card can handle.  Filtering is done server-side by a
+    case-insensitive substring match across name, vendor, color hex, and Spoolman
+    spool id.  An empty ``q`` returns all matched spools (capped at 200 to keep
+    the response lightweight for homelab-scale libraries).
+    """
+    rows = build_mapping_rows(db)
+    # Only spool rows with both FDB ids are navigable.
+    selectable = [
+        r for r in rows
+        if r.kind == "spool" and r.filamentdb_filament_id and r.filamentdb_spool_id
+    ]
+    if q.strip():
+        needle = q.strip().lower()
+        selectable = [
+            r for r in selectable
+            if (r.name or "").lower().find(needle) != -1
+            or (r.vendor or "").lower().find(needle) != -1
+            or (r.color or "").lower().find(needle) != -1
+            or str(r.spoolman_spool_id or "").find(needle) != -1
+        ]
+    return [
+        MobileSpoolSearchResult(
+            filamentdb_filament_id=r.filamentdb_filament_id,
+            filamentdb_spool_id=r.filamentdb_spool_id,  # type: ignore[arg-type]
+            spoolman_spool_id=r.spoolman_spool_id,  # type: ignore[arg-type]
+            name=r.name,
+            vendor=r.vendor,
+            color=r.color,
+            multi_color_hexes=r.multi_color_hexes,
+            multi_color_direction=r.multi_color_direction,
+        )
+        for r in selectable[:200]
+    ]
 
 
 @router.get(

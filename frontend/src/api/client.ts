@@ -23,6 +23,7 @@ import type {
   MappingRow,
   MappingUpdateRequest,
   MobileSpoolDetail,
+  MobileSpoolSearchResult,
   TareBulkResponse,
   TareListResponse,
   TareUpdate,
@@ -186,6 +187,9 @@ export const updateMobileSpool = (fil: string, spool: string, body: MobileSpoolU
   json<MobileSpoolDetail>(`/mobile/spool/${fil}/${spool}`, 'PATCH', body)
 
 export const getMobileLocations = () => request<string[]>('/mobile/locations')
+
+export const getMobileSpools = (q: string) =>
+  request<MobileSpoolSearchResult[]>(`/mobile/spools?q=${encodeURIComponent(q)}`)
 
 // ---------------------------------------------------------------------------
 // Labels (phase 3 — LabelForge printing)

@@ -1122,6 +1122,20 @@ export interface MobileSpoolUpdateRequest {
   weight_mode?: MobileWeightMode | null
 }
 
+/** One result from GET /api/mobile/spools?q=…
+ *  Mirrors backend `MobileSpoolSearchResult`.
+ *  Carries the ids needed to navigate to `/scan/{fil}/{spool}` on selection. */
+export interface MobileSpoolSearchResult {
+  filamentdb_filament_id: string
+  filamentdb_spool_id: string
+  spoolman_spool_id: number
+  name: string | null
+  vendor: string | null
+  color: string | null
+  multi_color_hexes: string | null
+  multi_color_direction: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Labels (phase 3 — LabelForge printing)
 // ---------------------------------------------------------------------------
