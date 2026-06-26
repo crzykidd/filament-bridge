@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getSyncStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/client'
+import { getSyncStatus, getBackupStatus, triggerSync, triggerDryRun, setAutoSync } from '../api/client'
 import { usePoll } from '../api/hooks'
 import { SystemStatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
@@ -52,6 +52,7 @@ function PreviewRow({ entry, muted = false }: { entry: SyncPreviewEntry; muted?:
 
 export default function Dashboard() {
   const { data, loading, error, reload } = usePoll(getSyncStatus, 15_000)
+  const { data: backupStatus } = usePoll(getBackupStatus, 60_000)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<CycleResultResponse | null>(null)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -233,6 +234,47 @@ export default function Dashboard() {
             <p className="font-medium text-gray-900 dark:text-gray-100">{formatLocal(data?.next_sync_at)}</p>
           </div>
         </div>
+
+        {/* Backup timing — compact row shown when backup status is available */}
+        {backupStatus?.retained && (
+          <div className="border-t border-gray-100 dark:border-gray-700 pt-3 grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <span className="flex items-center text-gray-500 dark:text-gray-400">
+                Last backup
+                {backupStatus.last_run && !backupStatus.last_run.ok && (
+                  <span className="ml-1.5 text-red-500 dark:text-red-400" title={backupStatus.last_run.error ?? undefined}>&#x26A0;</span>
+                )}
+              </span>
+              {backupStatus.last_run ? (
+                <p className={`font-medium ${backupStatus.last_run.ok ? 'text-gray-900 dark:text-gray-100' : 'text-red-600 dark:text-red-400'}`}>
+                  {formatLocal(backupStatus.last_run.at)}
+                  {backupStatus.last_run.ok && (
+                    <span className="ml-1 text-xs text-green-600 dark:text-green-400">&#x2713;</span>
+                  )}
+                </p>
+              ) : (
+                <p className="font-medium text-gray-400 dark:text-gray-500">Never</p>
+              )}
+            </div>
+            <div>
+              <span className="flex items-center text-gray-500 dark:text-gray-400">
+                Next backup
+                <HelpTip text={
+                  backupStatus.schedule_enabled
+                    ? `Nightly scheduled backup. Retention: ${backupStatus.retention_days} day${backupStatus.retention_days !== 1 ? 's' : ''}. ${backupStatus.retained.count} file${backupStatus.retained.count !== 1 ? 's' : ''} retained.`
+                    : 'Scheduled backups are disabled. Enable in Settings → Scheduled backups.'
+                } />
+              </span>
+              {backupStatus.schedule_enabled ? (
+                <p className="font-medium text-gray-900 dark:text-gray-100">
+                  {backupStatus.next_run_at ? formatLocal(backupStatus.next_run_at) : '—'}
+                </p>
+              ) : (
+                <p className="font-medium text-gray-400 dark:text-gray-500">Disabled</p>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-3 flex-wrap">
           <span className="inline-flex items-center">

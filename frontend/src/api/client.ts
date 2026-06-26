@@ -7,6 +7,7 @@ import type {
   BackupFilamentDbResponse,
   BackupImportResponse,
   BackupSpoolmanResponse,
+  BackupStatusResponse,
   BulkResolveRequest,
   BulkResolveResponse,
   ClearRefsResponse,
@@ -243,6 +244,7 @@ export const backupSpoolman = () =>
   request<BackupSpoolmanResponse>('/backup/spoolman', { method: 'POST' })
 export const backupFilamentDb = () =>
   request<BackupFilamentDbResponse>('/backup/filamentdb', { method: 'POST' })
+export const getBackupStatus = () => request<BackupStatusResponse>('/backup/status')
 
 // ---------------------------------------------------------------------------
 // Wizard

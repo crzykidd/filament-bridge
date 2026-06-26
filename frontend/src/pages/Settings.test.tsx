@@ -29,6 +29,13 @@ vi.mock('../api/client', () => ({
   authRegenerateToken: vi.fn(),
   getAuthStatus: vi.fn(),
   getPrinterStatus: vi.fn(),
+  getBackupStatus: vi.fn().mockResolvedValue({
+    last_run: null,
+    next_run_at: null,
+    schedule_enabled: true,
+    retention_days: 7,
+    retained: { count: 0, total_bytes: 0 },
+  }),
   BridgeApiError: class BridgeApiError extends Error {
     constructor(public status: number, public code: string, message: string) {
       super(message)

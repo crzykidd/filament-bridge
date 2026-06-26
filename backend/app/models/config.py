@@ -117,6 +117,12 @@ _DEFAULTS = {
     "labelforge_template": '""',
     "labelforge_fields": '""',
     "labelforge_label_media": '""',
+    # Last scheduled-backup run summary (issue #20). Written by _backup_job in main.py;
+    # never user-editable. Null until the first nightly run completes (or fails).
+    # Shape: {"at": <UTC iso>, "ok": bool, "bridge_state": <path|null>,
+    #         "filamentdb": <path|null>, "pruned": [...names]} on success,
+    # or {"at": <UTC iso>, "ok": false, "error": <str>} on failure.
+    "backup_last_run": "null",
 }
 
 

@@ -412,6 +412,39 @@ class ConfigUpdateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Backup status (issue #20)
+# ---------------------------------------------------------------------------
+
+
+class BackupLastRun(BaseModel):
+    """Last scheduled-backup run summary, as stored in BridgeConfig."""
+
+    at: datetime.datetime
+    ok: bool
+    bridge_state: str | None = None
+    filamentdb: str | None = None
+    pruned: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class BackupRetained(BaseModel):
+    """Count and total size of retained backup files in DATA_DIR/backups/."""
+
+    count: int
+    total_bytes: int
+
+
+class BackupStatusResponse(BaseModel):
+    """GET /api/backup/status — backup schedule observability (issue #20)."""
+
+    last_run: BackupLastRun | None = None
+    next_run_at: datetime.datetime | None = None
+    schedule_enabled: bool
+    retention_days: int
+    retained: BackupRetained
+
+
+# ---------------------------------------------------------------------------
 # Wizard (FR-1 … FR-6)
 # ---------------------------------------------------------------------------
 

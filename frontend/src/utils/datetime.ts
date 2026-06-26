@@ -64,3 +64,25 @@ export function formatLocal(
 export function parseUtc(value: string): Date {
   return new Date(ensureUtc(value))
 }
+
+/**
+ * Convert an integer UTC hour (0–23) to the viewer's local equivalent.
+ *
+ * Returns a string like "22:00" (24-h, zero-padded) representing what
+ * "HH:00 UTC" maps to in the browser's local timezone today.
+ *
+ * Returns null when the input is out of range or not a finite integer.
+ */
+export function utcHourToLocal(utcHour: number): string | null {
+  if (!Number.isInteger(utcHour) || utcHour < 0 || utcHour > 23) return null
+  // Build a Date for today at the given UTC hour (minute 0).
+  const now = new Date()
+  const d = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), utcHour, 0, 0),
+  )
+  if (isNaN(d.getTime())) return null
+  // Extract local hours and minutes.
+  const localH = d.getHours()
+  const localM = d.getMinutes()
+  return `${String(localH).padStart(2, '0')}:${String(localM).padStart(2, '0')}`
+}

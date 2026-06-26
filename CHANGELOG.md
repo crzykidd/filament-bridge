@@ -11,6 +11,16 @@ GitHub release.
 
 ### Added
 
+- **Backup status surfaced in the UI** — the Dashboard now shows a compact "Last backup /
+  Next backup" row in the sync timing card, and Settings → Scheduled backups now shows a
+  full status block: last-run timestamp with success/failure detail, next fire time in
+  local timezone, count and total size of retained backup files, and the active retention
+  window. The **Run at (UTC hour)** selector is annotated with the local-timezone
+  equivalent ("03:00 UTC ≈ 22:00 local") so the schedule is immediately interpretable
+  without mental UTC conversion. The last-run summary (artifacts written, errors, pruned
+  filenames) is persisted in `BridgeConfig["backup_last_run"]` by the nightly job and
+  served via a new `GET /api/backup/status` endpoint. Closes #20.
+
 - **Scan page search box** — the `/scan/:filId/:spoolId` QR-target page now shows a
   search box at the top. Typing a query calls the new `GET /api/mobile/spools?q=…`
   endpoint (mobile-gated, so it works under both the normal-login and public-scan auth

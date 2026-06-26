@@ -758,6 +758,28 @@ export interface BackupImportResponse {
   conflicts: number
 }
 
+export interface BackupLastRun {
+  at: string
+  ok: boolean
+  bridge_state: string | null
+  filamentdb: string | null
+  pruned: string[]
+  error: string | null
+}
+
+export interface BackupRetained {
+  count: number
+  total_bytes: number
+}
+
+export interface BackupStatusResponse {
+  last_run: BackupLastRun | null
+  next_run_at: string | null
+  schedule_enabled: boolean
+  retention_days: number
+  retained: BackupRetained
+}
+
 // ---------------------------------------------------------------------------
 // Sync log
 // ---------------------------------------------------------------------------
