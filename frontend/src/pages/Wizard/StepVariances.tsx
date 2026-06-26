@@ -160,13 +160,17 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   // Phase 2: reconcile decisions per group — reconcileByGroup[groupIdx] = {field → ReconciledField}
   const [reconcileByGroup, setReconcileByGroup] = useState<Record<number, Record<string, ReconciledField>>>({})
 
-  // tare per SM filament id (string for input binding)
+  // tare per SM filament id (string for input binding; empty string when unknown/required)
   const [tareBySMId, setTareBySMId] = useState<Record<number, string>>(() => {
     const init: Record<number, string> = {}
     for (const g of data.groups) {
-      for (const m of g.members) init[m.ref.spoolman_filament_id!] = String(m.tare)
+      for (const m of g.members) {
+        init[m.ref.spoolman_filament_id!] = m.tare != null ? String(m.tare) : ''
+      }
     }
-    for (const f of data.ungrouped) init[f.ref.spoolman_filament_id!] = String(f.tare)
+    for (const f of data.ungrouped) {
+      init[f.ref.spoolman_filament_id!] = f.tare != null ? String(f.tare) : ''
+    }
     return init
   })
 
@@ -179,6 +183,32 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   // P2.6: sort control for groups and standalone sections
   type VariancesSortKey = 'vendor' | 'material'
   const [sortBy, setSortBy] = useState<VariancesSortKey>('vendor')
+
+  // Compute how many filaments still need a tare value entered (blocks "Save & Next")
+  const missingTareCount = useMemo(() => {
+    let count = 0
+    // Check auto-group masters (tare applies to the whole group via master)
+    for (const [idx] of data.groups.entries()) {
+      if (groupMembership[idx].size === 0) continue  // dissolved group
+      const masterId = masters[idx]
+      const val = tareBySMId[masterId]
+      if (val === '' || val === undefined || isNaN(parseFloat(val))) count++
+    }
+    // Check extra groups
+    for (const [idxStr, membership] of Object.entries(extraGroupMemberships)) {
+      if (membership.size === 0) continue
+      const masterId = extraMasters[parseInt(idxStr)]
+      const val = tareBySMId[masterId]
+      if (val === '' || val === undefined || isNaN(parseFloat(val))) count++
+    }
+    // Check standalone (ungrouped, not ignored)
+    for (const f of effectiveUngrouped) {
+      const smId = f.ref.spoolman_filament_id!
+      const val = tareBySMId[smId]
+      if (val === '' || val === undefined || isNaN(parseFloat(val))) count++
+    }
+    return count
+  }, [data.groups, groupMembership, masters, extraGroupMemberships, extraMasters, effectiveUngrouped, tareBySMId])
 
   // Lookup map: all filament data by SM id (static from API response)
   const allFilamentData = useMemo(() => {
@@ -359,8 +389,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       const tare: WizardTareOverride[] = []
       for (const [idx] of data.groups.entries()) {
         const masterId = masters[idx]
-        const groupTare = parseFloat(tareBySMId[masterId] ?? '200')
-        if (isNaN(groupTare)) continue
+        const groupTare = parseFloat(tareBySMId[masterId] ?? '')
+        if (isNaN(groupTare)) continue  // missing tare — gate above blocks Save before reaching here
         for (const smId of Array.from(groupMembership[idx])) {
           const filData = allFilamentData.get(smId)
           if (!filData) continue
@@ -373,8 +403,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       for (const [idxStr, membership] of Object.entries(extraGroupMemberships)) {
         const extraIdx = parseInt(idxStr)
         const masterId = extraMasters[extraIdx]
-        const groupTare = parseFloat(tareBySMId[masterId] ?? '200')
-        if (isNaN(groupTare)) continue
+        const groupTare = parseFloat(tareBySMId[masterId] ?? '')
+        if (isNaN(groupTare)) continue  // missing tare — gate above blocks Save before reaching here
         for (const smId of Array.from(membership)) {
           const filData = allFilamentData.get(smId)
           if (!filData) continue
@@ -385,8 +415,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
       }
       for (const f of effectiveUngrouped) {
         const smId = f.ref.spoolman_filament_id!
-        const filTare = parseFloat(tareBySMId[smId] ?? String(f.tare))
-        if (isNaN(filTare)) continue
+        const filTare = parseFloat(tareBySMId[smId] ?? '')
+        if (isNaN(filTare)) continue  // missing tare — gate above blocks Save before reaching here
         for (const spoolId of f.spool_ids) {
           tare.push({ spoolman_spool_id: spoolId, tare: filTare })
         }
@@ -486,8 +516,14 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
         onBack={prev}
         onNext={handleSave}
         nextLabel="Save & Next →"
+        nextDisabled={missingTareCount > 0}
         busy={saving}
         busyLabel="Saving…"
+        extra={missingTareCount > 0 ? (
+          <span className="text-xs text-red-600 dark:text-red-400">
+            Enter tare for {missingTareCount} filament{missingTareCount !== 1 ? 's' : ''} to continue
+          </span>
+        ) : undefined}
       />
 
       {/* P2.6: Sort control */}
@@ -531,9 +567,9 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             // All Spoolman colors below become its variants, so we must NOT ask the user to
             // pick a Spoolman color as master (and there's nothing to reconcile against it).
             const attaching = !!(group.existing_fdb_parent && attachDecision[groupIdx] === 'attach')
-            const masterTareVal = tareBySMId[masterId] ?? '200'
+            const masterTareVal = tareBySMId[masterId] ?? ''
             const masterData = allFilamentData.get(masterId)
-            const tareIsDefault = masterData?.tare_source === 'default'
+            const tareNeedsInput = masterTareVal === '' || isNaN(parseFloat(masterTareVal))
             const addCandidates = effectiveUngrouped.filter(f => !membership.has(f.ref.spoolman_filament_id!))
             const moveTargets = moveTargetOptions('auto', groupIdx)
 
@@ -589,12 +625,17 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                     </label>
                     <input
                       type="number" min="0" step="1"
+                      placeholder="required"
                       value={masterTareVal}
                       onChange={e => setTareBySMId(prev => ({ ...prev, [masterId]: e.target.value }))}
-                      className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                      className={`w-20 border rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 dark:bg-gray-700 dark:text-gray-100 ${
+                        tareNeedsInput
+                          ? 'border-red-400 dark:border-red-500 focus:ring-red-400'
+                          : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'
+                      }`}
                     />
-                    {tareIsDefault && (
-                      <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 px-1.5 py-0.5 rounded">default</span>
+                    {tareNeedsInput && (
+                      <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">required</span>
                     )}
                   </div>
                 </div>
@@ -1014,15 +1055,28 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                   </div>
                   <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 shrink-0">
                     Tare (g):
-                    <input
-                      type="number" min="0" step="1"
-                      value={tareBySMId[smId] ?? String(f.tare)}
-                      onChange={e => setTareBySMId(prev => ({ ...prev, [smId]: e.target.value }))}
-                      className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                    />
-                    {f.tare_source === 'default' && (
-                      <span className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 px-1.5 py-0.5 rounded">default</span>
-                    )}
+                    {(() => {
+                      const standaloneTareVal = tareBySMId[smId] ?? ''
+                      const standaloneTareNeedsInput = standaloneTareVal === '' || isNaN(parseFloat(standaloneTareVal))
+                      return (
+                        <>
+                          <input
+                            type="number" min="0" step="1"
+                            placeholder="required"
+                            value={standaloneTareVal}
+                            onChange={e => setTareBySMId(prev => ({ ...prev, [smId]: e.target.value }))}
+                            className={`w-20 border rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 dark:bg-gray-700 dark:text-gray-100 ${
+                              standaloneTareNeedsInput
+                                ? 'border-red-400 dark:border-red-500 focus:ring-red-400'
+                                : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'
+                            }`}
+                          />
+                          {standaloneTareNeedsInput && (
+                            <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">required</span>
+                          )}
+                        </>
+                      )
+                    })()}
                   </label>
                   {movingStandaloneId === smId ? (
                     <>
@@ -1063,7 +1117,8 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
             const extraIdx = parseInt(idxStr)
             if (membership.size === 0) return null
             const masterId = extraMasters[extraIdx]
-            const masterTareVal = tareBySMId[masterId] ?? '200'
+            const masterTareVal = tareBySMId[masterId] ?? ''
+            const extraTareNeedsInput = masterTareVal === '' || isNaN(parseFloat(masterTareVal))
             const moveTargetsExtra = moveTargetOptions('extra', extraIdx)
             return (
               <div key={extraIdx} className="bg-white dark:bg-gray-800 rounded-lg border border-indigo-200 dark:border-indigo-800 p-4 space-y-2">
@@ -1135,9 +1190,17 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                 <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                   Group tare (g):
                   <input type="number" min="0" step="1"
+                    placeholder="required"
                     value={masterTareVal}
                     onChange={e => setTareBySMId(prev => ({ ...prev, [masterId]: e.target.value }))}
-                    className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                    className={`w-20 border rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 dark:bg-gray-700 dark:text-gray-100 ${
+                      extraTareNeedsInput
+                        ? 'border-red-400 dark:border-red-500 focus:ring-red-400'
+                        : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'
+                    }`} />
+                  {extraTareNeedsInput && (
+                    <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">required</span>
+                  )}
                 </label>
               </div>
             )
@@ -1153,8 +1216,14 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
         onBack={prev}
         onNext={handleSave}
         nextLabel="Save & Next →"
+        nextDisabled={missingTareCount > 0}
         busy={saving}
         busyLabel="Saving…"
+        extra={missingTareCount > 0 ? (
+          <span className="text-xs text-red-600 dark:text-red-400">
+            Enter tare for {missingTareCount} filament{missingTareCount !== 1 ? 's' : ''} to continue
+          </span>
+        ) : undefined}
       />
     </div>
   )
@@ -1177,6 +1246,17 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
   const [skipped, setSkipped] = useState<Set<number>>(new Set())
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
+
+  // FDB direction: count rows where tare is unknown and no override has been entered
+  const missingTareFdbCount = useMemo(() => {
+    if (!weightsData) return 0
+    return weightsData.rows.filter(row => {
+      if (row.tare_source !== 'needs_input') return false
+      const key = `${row.spoolman_spool_id ?? 'null'}_${row.filamentdb_spool_id ?? 'null'}`
+      const val = overrides[key]
+      return !val || isNaN(parseFloat(val))
+    }).length
+  }, [weightsData, overrides])
 
   if (varLoading || wtLoading) return <p className="text-gray-500 dark:text-gray-400">Loading variant groups…</p>
   if (varError || wtError) return <p className="text-red-600 dark:text-red-400">{varError ?? wtError}</p>
@@ -1239,8 +1319,14 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
         onBack={prev}
         onNext={handleSave}
         nextLabel="Save & Next →"
+        nextDisabled={missingTareFdbCount > 0}
         busy={saving}
         busyLabel="Saving…"
+        extra={missingTareFdbCount > 0 ? (
+          <span className="text-xs text-red-600 dark:text-red-400">
+            Enter tare for {missingTareFdbCount} spool{missingTareFdbCount !== 1 ? 's' : ''} to continue
+          </span>
+        ) : undefined}
       />
 
       {/* FDB variant groups */}
@@ -1307,17 +1393,36 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
                       <td className="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">{row.name ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.net_weight?.toFixed(1) ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.gross_weight?.toFixed(1) ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{row.tare.toFixed(1)}</td>
+                      <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                        {row.tare != null ? row.tare.toFixed(1) : <span className="text-red-500 dark:text-red-400">—</span>}
+                      </td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${row.tare_source === 'default' ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'}`}>
-                          {row.tare_source}
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                          row.tare_source === 'needs_input'
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                            : row.tare_source === 'default'
+                              ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300'
+                              : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300'
+                        }`}>
+                          {row.tare_source === 'needs_input' ? 'required' : row.tare_source}
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <input type="number" min="0" step="1" placeholder={row.tare.toFixed(0)}
-                          value={overrides[key] ?? ''}
-                          onChange={e => setOverrides(o => ({ ...o, [key]: e.target.value }))}
-                          className="w-20 border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                        {(() => {
+                          const overrideVal = overrides[key] ?? ''
+                          const needsOverride = row.tare_source === 'needs_input' && (!overrideVal || isNaN(parseFloat(overrideVal)))
+                          return (
+                            <input type="number" min="0" step="1"
+                              placeholder={row.tare != null ? row.tare.toFixed(0) : 'required'}
+                              value={overrideVal}
+                              onChange={e => setOverrides(o => ({ ...o, [key]: e.target.value }))}
+                              className={`w-20 border rounded px-2 py-1 text-xs text-right focus:outline-none focus:ring-2 dark:bg-gray-700 dark:text-gray-100 ${
+                                needsOverride
+                                  ? 'border-red-400 dark:border-red-500 focus:ring-red-400'
+                                  : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'
+                              }`} />
+                          )
+                        })()}
                       </td>
                       <td className="px-4 py-3">
                         <DeepLinks filamentdbFilamentId={row.filamentdb_filament_id} spoolmanSpoolId={row.spoolman_spool_id} />
@@ -1338,8 +1443,14 @@ function FDBVariancesStep({ next, prev, setTareOverrides }: FDBProps) {
         onBack={prev}
         onNext={handleSave}
         nextLabel="Save & Next →"
+        nextDisabled={missingTareFdbCount > 0}
         busy={saving}
         busyLabel="Saving…"
+        extra={missingTareFdbCount > 0 ? (
+          <span className="text-xs text-red-600 dark:text-red-400">
+            Enter tare for {missingTareFdbCount} spool{missingTareFdbCount !== 1 ? 's' : ''} to continue
+          </span>
+        ) : undefined}
       />
     </div>
   )

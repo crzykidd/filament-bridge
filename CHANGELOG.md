@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wizard no longer silently writes 200 g as a default tare when Spoolman has no
+  `spool_weight` set** — a wrong tare poisons every spool's gross weight and all future
+  sync cycles for that filament. The Variances step now renders unknown-tare fields blank
+  with a red `required` badge and disables "Save & Next" until every tare is filled in.
+  The Execute endpoint also rejects (`422 tare_required`) if any tare-unknown filament
+  reaches it without an override, as a belt-and-suspenders guard. Applies to both
+  Spoolman → Filament DB and Filament DB → Spoolman directions.
+
 ## [0.6.2] — 2026-06-25
 
 ### Fixed

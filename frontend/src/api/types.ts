@@ -488,8 +488,8 @@ export interface WeightPreviewRow {
   name: string | null
   net_weight: number | null
   gross_weight: number | null
-  tare: number
-  tare_source: 'spoolman' | 'filamentdb' | 'default'
+  tare: number | null
+  tare_source: 'spoolman' | 'filamentdb' | 'default' | 'needs_input'
   override_tare: number | null
 }
 
@@ -548,8 +548,8 @@ export interface WizardVariantsResponse {
 export interface VariancesFilament {
   ref: FilamentRef
   spool_ids: number[]
-  tare: number
-  tare_source: 'spoolman' | 'default'
+  tare: number | null
+  tare_source: 'spoolman' | 'default' | 'needs_input'
   is_master: boolean
   conflicts: VariantPropConflict[]
   suggest_exclude: boolean
@@ -691,8 +691,7 @@ export interface DefaultTareEntry {
   spoolman_spool_id: number
   spoolman_filament_id: number | null
   name: string | null
-  planned_gross: number
-  default_tare_used: number
+  planned_gross: number | null
 }
 
 export interface VariantGroupPreviewEntry {

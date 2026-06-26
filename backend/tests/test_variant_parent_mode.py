@@ -93,6 +93,7 @@ def _sm_filament(fid: int, name: str, vendor_name: str = "ELEGOO", material: str
         name=name,
         vendor=SpoolmanVendor(id=1, name=vendor_name),
         material=material,
+        spool_weight=200.0,
     )
 
 
@@ -103,6 +104,7 @@ def _sm_spool(spool_id: int, filament: SpoolmanFilament, remaining: float = 500.
         remaining_weight=remaining,
         archived=False,
         extra={},
+        spool_weight=200.0,
     )
 
 

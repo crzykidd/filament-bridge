@@ -205,8 +205,9 @@ Field names are configurable via environment variables.
 
 #### FR-5: Weight conversion review
 - Tare (empty-reel weight) is reviewed in the **Variances** step: one editable tare per
-  variant group (the master's) and one per standalone filament; rows that fall back to the
-  200 g default are flagged
+  variant group (the master's) and one per standalone filament; filaments with no known
+  tare show a blank required field (red border) and **block Save & Next until filled** — no
+  200 g default is ever written
 - Overrides are expanded to per-spool `tare_overrides` and submitted with Execute
   (not persisted in BridgeConfig)
 - For the Filament DB → Spoolman direction, a per-spool weight-conversion table
