@@ -58,11 +58,17 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   `CI / Lint`.
 
 **Issue tracking / auto-close**
-- For a bug reported **in chat with no GitHub issue**, `gh issue create` one, then end
-  the fix commit body with `Fixes #N` so it auto-closes on release.
+- **Every commit that resolves a tracked issue ends its body with `Fixes #N`** (one per
+  issue it closes) — whether the issue was named by the user or filed from chat. This is
+  required for traceability, not optional.
+- For a bug reported **in chat with no GitHub issue**, `gh issue create` one first, then
+  reference it with `Fixes #N` in the fix commit body.
 - In the **release PR body**, add one closing keyword **per issue** (`Fixes #22`,
   `fixes #26`, `fixes #31`) — keywords do NOT distribute across a list, and a squash
-  merge discards commit trailers, so the PR body is the reliable closer.
+  merge discards commit trailers, so **the PR body is the reliable closer** (the commit
+  `Fixes #N` is for traceability; the PR body is what actually auto-closes on merge).
+- The CHANGELOG/release-notes entry for each issue should also name it (e.g. `Closes #36`
+  / `Fixes #13`) so the issue ↔ release mapping is visible in the notes.
 - For an already-closed issue lacking a version note, add a "Fixed in vX.Y.Z" comment.
 
 **Testing (run before committing)**
