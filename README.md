@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.3-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.4-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,10 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.4 (2026-06-27)
+
+- **Wizard completes on partial success, with a persistent Failure Report** — a single failed record no longer leaves a mostly-successful import marked "not done." Failed records are now saved durably (survive navigation/reload): the Dashboard shows a banner when the last import had failures, linking to a Wizard Import Report that lists the failures first (with the reason) then the successes, and offers a one-click **Re-run wizard** (idempotent — already-imported records are skipped). (#14)
 
 ### v0.6.3 (2026-06-27)
 

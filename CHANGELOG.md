@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-06-27
+
 ### Added
 
 - **Wizard partial-success completion + persistent Failure Report** — the wizard now
