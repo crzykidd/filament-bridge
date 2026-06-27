@@ -289,17 +289,27 @@ Field names are configurable via environment variables.
   - **New spool creation:** direction only (no conflict policy); defaults `two_way`
 - Apply changes to the other system via API calls; update the local snapshot
 - Auto-sync is disabled by default — must be explicitly enabled after initial sync
-- **Runtime-editable settings** (all configurable in Settings UI, stored in SQLite):
-  - `sync_interval_seconds` — interval override (env var is the start-up fallback)
-  - `never_import_empties` — skip zero-weight spools during wizard preview/execute
-  - `sync_log_retention_days` — auto-prune log entries older than N days (default 30)
-  - `debug_mode` — enable reset/clear endpoints (see Debug tools below)
+- **Runtime-editable settings** (all configurable in Settings UI, stored in SQLite): the
+  full canonical list with defaults is in `docs/configuration.md` § "Runtime-editable
+  settings (Settings UI)" and in `CLAUDE.md` § "Runtime-editable settings (BridgeConfig)".
+  Examples: `sync_interval_seconds`, `new_filament_policy`, `new_spool_policy`,
+  `never_import_empties`, `debug_mode`, `sync_log_retention_days`, `variant_parent_mode`,
+  and all the backup / mobile / label / OpenTag / auth / location / archive settings.
+  The env var is always the start-up fallback; the runtime value overrides it.
 
 #### FR-9: Spool weight sync (Spoolman → Filament DB)
-- Detect weight decrease in Spoolman (remaining_weight dropped)
-- Compute delta: `last_known_weight - current_weight`
-- Call `POST /api/filaments/:id/spools/:spoolId/usage` with `{ grams: delta, jobLabel: "spoolman sync [date]", source: "spoolman" }`
-- This creates a proper usage history entry in Filament DB, not a raw weight overwrite
+- Detect weight change in Spoolman (remaining_weight moved by more than the configurable
+  threshold, default ~2 g — `sync_weight_threshold_grams` in BridgeConfig)
+- **Weight decrease** (delta > 0, i.e. filament was consumed):
+  - Compute delta: `last_known_weight - current_weight`
+  - Call `POST /api/filaments/:id/spools/:spoolId/usage` with `{ grams: delta, jobLabel: "spoolman sync [date]", source: "spoolman" }`
+  - This creates a proper usage history entry in Filament DB (not a raw weight overwrite) and Filament DB reduces `totalWeight` by the delta internally
+- **Weight increase** (delta < 0, i.e. user refilled or corrected a spool):
+  - Call `PUT /api/filaments/:id/spools/:spoolId` to set `totalWeight` directly
+    (`new_net_weight + tare`), converting from Spoolman net to Filament DB gross
+  - Never creates a negative usage entry, which would corrupt the usage-history audit trail
+- After either path, BOTH side snapshots are refreshed to the post-write agreed values
+  (anti-ping-pong; see FR-10 for the same rule on the FDB→SM path)
 
 #### FR-10: Spool weight sync (Filament DB → Spoolman)
 - Detect weight change in Filament DB (usage logged or manual adjustment)
@@ -315,36 +325,62 @@ Field names are configurable via environment variables.
 - For configured field mappings (env var `FIELD_MAPPINGS`), sync values between Filament DB filament fields and Spoolman extra fields
 - Auto-match: if a Spoolman extra field name matches a Filament DB field name exactly, sync automatically (unless excluded via `FIELD_MAPPING_EXCLUDES`)
 - Explicit mapping: `FIELD_MAPPINGS=density=sm_density,temperatures.nozzle=nozzle_temp` overrides auto-match
-- Direction + conflict policy follow the `material_properties` category settings
-- **Native temperatures** — bed/nozzle temps are native fields on BOTH sides, so they are
-  synced by a dedicated pass (`_sync_material_props`): SM `settings_bed_temp` /
-  `settings_extruder_temp` ↔ FDB `temperatures.bed` / `.nozzle` (FDB writes
-  read-modify-write the `temperatures` object so sibling temps survive)
-- **Native shared filament scalars** — five fields with a direct FDB↔SM counterpart are synced by the dedicated `_sync_material_scalars` pass:
-  - SM `material` ↔ FDB `type` (name remap)
-  - SM `density` ↔ FDB `density`
-  - SM `diameter` ↔ FDB `diameter`
-  - SM `spool_weight` ↔ FDB `spoolWeight`
-  - SM `weight` ↔ FDB `netFilamentWeight`
-  - These fields are handled OUTSIDE the generic extra-field mapper (they are native, not extra-field)
-  - Snapshots keyed `_mp_<sm_field>` coexist with `_mc_sig`, `_cost`, `_finish_sig` via `_merge_snapshot`
-  - **Master/variant gate (PUSH_SM_TO_FDB):**
-    - Standalone or already-overridden variant → write directly
-    - Inherited AND SM value matches resolved (inherited) value → skip (no redundant override)
-    - Inherited AND SM value diverges → queue a `master_divergence` conflict; the human
-      resolves it with an explicit action that the bridge then applies upstream (FR-16)
-  - `conflict_type` column on `Conflict`: `"cross_system"` (standard both-sides-changed) or `"master_divergence"` (inherited-field divergence)
-  - Per-field dedup: `_has_open_conflict` accepts `conflict_type` so cross_system and master_divergence conflicts on the same field+ids deduplicate independently
+- Direction + conflict policy follow the `material_properties` category settings for ALL four passes below
+- **Four material-property sync passes** run each cycle under the `material_properties` direction/policy:
+  1. **`_sync_cost`** — filament price, spool-price-first effective cost; FDB→SM writes the filament price only
+  2. **`_sync_material_props`** — native bed/nozzle temps on both sides: SM `settings_bed_temp` /
+     `settings_extruder_temp` ↔ FDB `temperatures.bed` / `.nozzle` (FDB writes use
+     read-modify-write so sibling temps survive)
+  3. **`_sync_material_scalars`** — five native fields with a direct FDB↔SM counterpart:
+     - SM `material` ↔ FDB `type` (name remap)
+     - SM `density` ↔ FDB `density`
+     - SM `diameter` ↔ FDB `diameter`
+     - SM `spool_weight` ↔ FDB `spoolWeight`
+     - SM `weight` ↔ FDB `netFilamentWeight`
+     - These are native fields, not extra-field mappings; snapshots keyed `_mp_<sm_field>`
+  4. **`_sync_opentag_material_fields`** — seven OpenPrintTag typed extra fields on the Spoolman filament:
+     nozzle temp min/max, drying temp, drying time (minutes), Shore A hardness, Shore D hardness,
+     and transmission distance. Synced ↔ the matching FDB scalars (e.g. `temperatures.nozzleRangeMin`,
+     `dryingTemperature`, `dryingTime`, `shoreHardnessA`)
+- **Inheritance gate — both directions:**
+  - **SM→FDB (PUSH_SM_TO_FDB):** if the target FDB field is listed in `_inherited[]`
+    (a variant inheriting the value from its parent), the engine checks whether the incoming
+    SM value matches the resolved (inherited) value. If it matches → skip (no redundant
+    override). If it diverges → queue a `master_divergence` conflict; the human resolves
+    it with an explicit action that the bridge then applies upstream (FR-16). This gate
+    applies to all four passes above.
+  - **FDB→SM (PUSH_FDB_TO_SM):** if the source FDB field is inherited from the variant's
+    parent (detected by `should_skip_inherited`), the engine skips writing to Spoolman
+    (reason: "inherited from parent"). The parent's own mapping will write the canonical
+    value. This applies to the generic extra-field mapper and the scalar/opentag passes.
+- `conflict_type` column on `Conflict`: `"cross_system"` (standard both-sides-changed) or `"master_divergence"` (inherited-field divergence)
+- Per-field dedup: `_has_open_conflict` accepts `conflict_type` so cross_system and master_divergence conflicts on the same field+ids deduplicate independently
 
 #### FR-12: New record detection
-- When a new spool appears in Spoolman (no `filamentdb_spool_id` extra field):
-  - Try to auto-match to an existing Filament DB filament by vendor + name
-  - If matched: create a spool subdocument in Filament DB, write cross-reference IDs
-  - If unmatched: queue as conflict for user resolution
-- When a new spool appears in Filament DB (no Spoolman ID in label):
-  - Try to auto-match to an existing Spoolman filament
-  - If matched: create a Spoolman spool under that filament, write cross-reference IDs
-  - If unmatched: queue as conflict
+New records are handled by two independent runtime settings (both default `manual_review`):
+
+- **`new_filament_policy`** — what to do when an unmapped filament is detected:
+  - `manual_review` (default) — queue a `new_filament` conflict for user action; the user
+    can dismiss it or import directly from the conflict UI (see FR-16)
+  - `auto_import` — create the record and its mappings immediately using the same code path
+    as the wizard. **Exception:** even under `auto_import`, if `variant_parent_mode` is
+    `unset` AND the filament looks like a variant-cluster member, the engine falls back to
+    `manual_review` and queues a `new_filament` conflict (the user must set a variant parent
+    mode before auto-import can proceed for potential variants)
+
+- **`new_spool_policy`** — what to do when a new spool appears on an already-mapped filament:
+  - `manual_review` (default) — queue a `new_spool` conflict for user action
+  - `auto_import` — create the spool immediately and write cross-reference IDs
+  - A new spool on an **unmapped** filament is always held for `new_filament` handling
+    regardless of `new_spool_policy`
+
+- Creation direction (which sides are active for discovery) is gated by **`new_spool_sync_direction`**
+  (default `two_way`; direction only — no conflict policy for creation): `two_way` runs both
+  the SM→FDB and FDB→SM discovery passes; a one-way setting activates only that direction's pass
+
+- The `new_spool` and `new_filament` conflict types are distinct in the queue — `new_spool`
+  means the filament is already mapped but the spool is new; `new_filament` means the
+  filament itself is unmapped. Both are actionable via the conflict UI (dismiss or import)
 
 #### FR-13: Conflict detection and queuing
 - Conflicts are never auto-resolved — they always go into a queue for human decision
@@ -359,6 +395,10 @@ Field names are configurable via environment variables.
 **Upstream-deletion conflicts** — when a previously mapped spool is missing from one side AND a live, still-linked counterpart exists on the other side ("still linked" = the surviving Spoolman spool still carries the `filamentdb_spool_id` cross-reference), `_queue_deletion_conflict` fires. The field name is the sentinel `DELETION_FIELD = "__record_deleted__"`. The surviving side carries a descriptor `{ "exists": true, "deleted_side": "spoolman"|"filamentdb" }`; the deleted side value is null. Resolution via the conflict UI removes the orphaned bridge mapping and both snapshots (`api/conflicts.py:_cleanup_orphaned_mapping`).
 
 **Stale-connection purge (no conflict):** when BOTH sides are gone, or the FDB spool is gone and the surviving Spoolman spool's cross-reference was cleared, there is no live link to protect — the engine silently purges its own `SpoolMapping` + snapshots, auto-resolves any open deletion conflict (`resolution="auto_stale_purge"`), and logs an audit entry. Orphaned `FilamentMapping` rows (non-synthetic, no remaining spool mappings, FDB filament absent) are purged the same cycle. Bridge-local rows only — upstream records are never deleted.
+
+**Reappeared self-heal (no conflict):** when a previously-queued deletion conflict is still open but BOTH sides are now present and live again (e.g. an archived spool that was temporarily invisible to the bridge), the engine auto-resolves the stale conflict with `resolution="auto_resolved_reappeared"` and logs an audit entry. No value is chosen; the condition that created the conflict no longer applies.
+
+**Clarification — "conflicts are never auto-resolved":** this rule means the engine never silently picks a winning VALUE for a genuine data conflict (a field that changed on both sides). The two housekeeping paths above (`auto_stale_purge` and `auto_resolved_reappeared`) are not value resolution — they clean up bridge-local conflict rows whose triggering condition no longer applies. The user is not required to act on either; both are logged in the sync audit trail.
 
 #### FR-14: Validation dry run
 - Before enabling auto-sync, user can trigger a dry run
@@ -438,9 +478,20 @@ Field names are configurable via environment variables.
 - Table of all synced spool/filament pairs showing current state on both sides
 - Columns: name, vendor, color, Spoolman weight, Filament DB weight, sync status, last synced
 - **Each row displays two text-badge links** ("FDB"/"SM") to the record in Filament DB and Spoolman
-- Sortable and filterable
+- Filterable by status (all / in sync / pending / conflict / unlinked); full-text search by
+  name, vendor, or color; **expand-all / collapse-all** controls
 - **Hide empty spools** toggle (hides spools where Spoolman remaining_weight ≈ 0)
 - Visual indicators for: in sync (green), pending sync (yellow), conflict (red), unlinked (grey)
+- **Expandable per-row detail:** clicking a row (or the chevron) expands a section showing
+  per-field side-by-side last-known values from both snapshots ("Snapshot values"), so the
+  user can inspect exactly what the bridge last read from each side without leaving the page
+- **"See conflict" deep-link:** when a row's status is `conflict`, a button navigates to
+  `/conflicts?highlight=<conflict_id>` — the Conflicts page (FR-16) scrolls to and
+  highlights that specific conflict entry
+- **Backend API:** `GET /api/mappings` returns all rows; `PUT /api/mappings/{id}` relinking
+  and `DELETE /api/mappings/{id}` unlinking are available via the API (bridge-local only —
+  neither endpoint ever touches an upstream record). These operations are not currently
+  surfaced in the Synced Records UI but are available for programmatic or debug use
 
 ### P2 — Enhanced features
 
