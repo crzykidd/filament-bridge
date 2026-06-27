@@ -7,6 +7,7 @@ import type {
   BackupFilamentDbResponse,
   BackupImportResponse,
   BackupSpoolmanResponse,
+  BackupStatusResponse,
   BulkResolveRequest,
   BulkResolveResponse,
   ClearRefsResponse,
@@ -23,6 +24,7 @@ import type {
   MappingRow,
   MappingUpdateRequest,
   MobileSpoolDetail,
+  MobileSpoolSearchResult,
   TareBulkResponse,
   TareListResponse,
   TareUpdate,
@@ -187,6 +189,9 @@ export const updateMobileSpool = (fil: string, spool: string, body: MobileSpoolU
 
 export const getMobileLocations = () => request<string[]>('/mobile/locations')
 
+export const getMobileSpools = (q: string) =>
+  request<MobileSpoolSearchResult[]>(`/mobile/spools?q=${encodeURIComponent(q)}`)
+
 // ---------------------------------------------------------------------------
 // Labels (phase 3 — LabelForge printing)
 // ---------------------------------------------------------------------------
@@ -239,6 +244,7 @@ export const backupSpoolman = () =>
   request<BackupSpoolmanResponse>('/backup/spoolman', { method: 'POST' })
 export const backupFilamentDb = () =>
   request<BackupFilamentDbResponse>('/backup/filamentdb', { method: 'POST' })
+export const getBackupStatus = () => request<BackupStatusResponse>('/backup/status')
 
 // ---------------------------------------------------------------------------
 // Wizard

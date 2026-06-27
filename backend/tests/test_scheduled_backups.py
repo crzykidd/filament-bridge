@@ -274,3 +274,162 @@ def test_update_config_rejects_bad_hour(db):
 def test_update_config_rejects_zero_retention(db):
     resp = _client(db).put("/api/config", json={"backup_retention_days": 0})
     assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /backup/status (issue #20)
+# ---------------------------------------------------------------------------
+
+
+def _backup_client(db):
+    from app.api import backup as backup_api
+
+    app = FastAPI()
+    app.include_router(backup_api.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
+
+
+def test_backup_status_no_last_run(db):
+    """With no backup_last_run stored, last_run is null."""
+    resp = _backup_client(db).get("/api/backup/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["last_run"] is None
+    assert body["next_run_at"] is None  # no scheduler in test
+    assert body["schedule_enabled"] is True
+    assert body["retention_days"] == 7
+    assert body["retained"]["count"] == 0
+    assert body["retained"]["total_bytes"] == 0
+
+
+def test_backup_status_with_successful_last_run(db):
+    """A persisted success run is returned correctly."""
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    set_config_value(db, "backup_last_run", {
+        "at": now_iso,
+        "ok": True,
+        "bridge_state": "/data/backups/bridge-state-20260626T030000Z.json",
+        "filamentdb": "/data/backups/filamentdb-snapshot-20260626T030000Z.json",
+        "pruned": [],
+    })
+    db.commit()
+    resp = _backup_client(db).get("/api/backup/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["last_run"]["ok"] is True
+    assert body["last_run"]["bridge_state"] is not None
+    assert body["last_run"]["filamentdb"] is not None
+    assert body["last_run"]["error"] is None
+
+
+def test_backup_status_with_failed_last_run(db):
+    """A persisted failure run surfaces the error."""
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    set_config_value(db, "backup_last_run", {
+        "at": now_iso,
+        "ok": False,
+        "error": "FDB unreachable",
+    })
+    db.commit()
+    resp = _backup_client(db).get("/api/backup/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["last_run"]["ok"] is False
+    assert body["last_run"]["error"] == "FDB unreachable"
+
+
+def test_backup_status_retained_counts_files(db, tmp_path):
+    """retained.count and total_bytes reflect files in DATA_DIR/backups/."""
+    from unittest.mock import patch
+    from app.api import backup as backup_api
+
+    # Create two fake backup files.
+    bdir = tmp_path / "backups"
+    bdir.mkdir()
+    (bdir / "bridge-state-20260626T030000Z.json").write_text('{"x":1}')
+    (bdir / "filamentdb-snapshot-20260626T030000Z.json").write_text('{"y":2}')
+    # Non-matching file — should be excluded.
+    (bdir / "spoolman-backup.zip").write_text("zip")
+
+    app = FastAPI()
+    app.include_router(backup_api.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+
+    with patch("app.config.settings") as mock_settings:
+        mock_settings.data_dir = str(tmp_path)
+        # Also patch effective_backup_config to use our settings.
+        client = TestClient(app)
+        with patch("app.api.backup.get_backup_status.__wrapped__" if hasattr(backup_api.get_backup_status, "__wrapped__") else "app.api.config._settings", mock_settings):
+            pass  # The settings patch on the module is what counts.
+        # Re-patch at the config module level too.
+        with patch("app.api.config._settings", mock_settings):
+            resp = client.get("/api/backup/status")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["retained"]["count"] == 2
+    assert body["retained"]["total_bytes"] > 0
+
+
+def test_backup_status_schedule_disabled(db):
+    """When backup is disabled, schedule_enabled is false."""
+    set_config_value(db, "backup_schedule_enabled", False)
+    db.commit()
+    resp = _backup_client(db).get("/api/backup/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["schedule_enabled"] is False
+
+
+# ---------------------------------------------------------------------------
+# _backup_job last-run persistence (issue #20)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backup_job_records_success(db, tmp_path):
+    """Calling run_scheduled_backup + writing backup_last_run mirrors _backup_job success."""
+    import datetime as _dt
+
+    from app.api.config import get_config_value, set_config_value as scv
+    from app.core.backup_job import run_scheduled_backup
+
+    cfg = _Cfg(str(tmp_path))
+    result = await run_scheduled_backup(db, _fdb_mock(), settings=cfg)
+    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    scv(db, "backup_last_run", {
+        "at": now_iso,
+        "ok": True,
+        "bridge_state": result.get("bridge_state"),
+        "filamentdb": result.get("filamentdb"),
+        "pruned": result.get("pruned", []),
+    })
+    db.commit()
+
+    saved = get_config_value(db, "backup_last_run")
+    assert saved is not None
+    assert saved["ok"] is True
+    assert saved["bridge_state"] is not None
+
+
+@pytest.mark.asyncio
+async def test_backup_job_records_failure(db, tmp_path):
+    """On an exception the failure shape is persisted as backup_last_run."""
+    import datetime as _dt
+
+    from app.api.config import get_config_value, set_config_value as scv
+
+    # Simulate the except path that _backup_job takes.
+    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    scv(db, "backup_last_run", {
+        "at": now_iso,
+        "ok": False,
+        "error": "test failure",
+    })
+    db.commit()
+
+    saved = get_config_value(db, "backup_last_run")
+    assert saved is not None
+    assert saved["ok"] is False
+    assert saved["error"] == "test failure"

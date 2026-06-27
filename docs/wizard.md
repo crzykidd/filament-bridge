@@ -69,8 +69,10 @@ which line, and with what shared properties.
 - If an existing Filament DB parent line matches a group, choose **attach** (new colors
   become variants of your existing parent) or **create new parent**.
 - **One tare per group** — the master's empty-reel weight applies to all members, because
-  Filament DB stores one tare per filament. Rows using the 200 g fallback are flagged
-  `default`. Standalone filaments get their own tare field.
+  Filament DB stores one tare per filament. When Spoolman has no `spool_weight` for a
+  filament, the tare field is **blank and required** (red border, `required` badge) — the
+  "Save & Next" button stays disabled until every tare is filled. Standalone filaments get
+  their own tare field with the same gating. No 200 g default is ever written.
 - **Reconcile conflicting properties** — when group members disagree on type, density,
   diameter, temps, or spool weight, pick the canonical value (master's, any member's, or
   manual). The chosen values seed the Filament DB records *and* are written back to every
@@ -95,7 +97,7 @@ uses (the two cannot drift):
   **Archived spools always import as retired FDB spools** (only the spool is retired; the
   filament is always a normal, non-retired filament). Each archived entry shows an
   "archived → imports as retired" tag in the Preview panel.
-- **Default tare** — spools whose gross weight will be computed with the 200 g fallback.
+- **Missing tare** — spools with no known tare that need user input. This flag is now a hard block: Execute is rejected (422) if any tare is still unresolved.
 - **Variant groups** — the parent/variant tree about to be created.
 - **Planned writes** — a field-level list of every write, filterable by target system.
 

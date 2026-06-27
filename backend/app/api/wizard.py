@@ -59,8 +59,9 @@ from app.core.planner import (
     _SyncPlan,
     _filament_base_name,
     _plan_spoolman_to_fdb,
+    _resolve_filament_tare,
 )
-from app.core.weight import DEFAULT_TARE_GRAMS, fdb_to_spoolman_net, spoolman_to_fdb_gross
+from app.core.weight import fdb_to_spoolman_net, spoolman_to_fdb_gross
 from app.db import get_db
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.models.snapshot import Snapshot
@@ -218,11 +219,15 @@ def _resolve_variant_keywords(db: Session) -> list[str]:
     return result
 
 
-def _sm_filament_tare(sm: SpoolmanFilament) -> tuple[float, str]:
-    """Return (tare_grams, tare_source) for a Spoolman filament (filament-level spool_weight)."""
+def _sm_filament_tare(sm: SpoolmanFilament) -> tuple[float | None, str]:
+    """Return (tare_grams, tare_source) for a Spoolman filament (filament-level spool_weight).
+
+    Returns (None, "needs_input") when spool_weight is unknown — the wizard requires
+    the user to supply a tare value before executing.  Never falls back to 200 g.
+    """
     if sm.spool_weight is not None:
         return (sm.spool_weight, "spoolman")
-    return (DEFAULT_TARE_GRAMS, "default")
+    return (None, "needs_input")
 
 
 def _resolve_variant_parent_mode(db: Session) -> VariantParentMode:
@@ -474,37 +479,66 @@ async def wizard_weights(request: Request, db: Session = Depends(get_db)) -> Wiz
                 s.filament.spool_weight if s.filament else None
             )
             net = s.remaining_weight or 0.0
-            gross_res = spoolman_to_fdb_gross(net, tare)
-            rows.append(
-                WeightPreviewRow(
-                    direction=direction,
-                    spoolman_spool_id=s.id,
-                    name=s.filament.name if s.filament else None,
-                    net_weight=net,
-                    gross_weight=gross_res.total_weight,
-                    tare=gross_res.total_weight - net,
-                    tare_source="default" if gross_res.used_default_tare else "spoolman",
+            if tare is None:
+                # Unknown tare — cannot compute gross; require user input.
+                rows.append(
+                    WeightPreviewRow(
+                        direction=direction,
+                        spoolman_spool_id=s.id,
+                        name=s.filament.name if s.filament else None,
+                        net_weight=net,
+                        gross_weight=None,
+                        tare=None,
+                        tare_source="needs_input",
+                    )
                 )
-            )
+            else:
+                gross_res = spoolman_to_fdb_gross(net, tare)
+                rows.append(
+                    WeightPreviewRow(
+                        direction=direction,
+                        spoolman_spool_id=s.id,
+                        name=s.filament.name if s.filament else None,
+                        net_weight=net,
+                        gross_weight=gross_res.total_weight,
+                        tare=gross_res.total_weight - net,
+                        tare_source="spoolman",
+                    )
+                )
     else:
         direction = "filamentdb_to_spoolman"
         filaments = await request.app.state.filamentdb.get_filaments()
         for f in filaments:
             for sp in f.spools:
                 gross = sp.totalWeight or 0.0
-                net_res = fdb_to_spoolman_net(gross, f.spoolWeight)
-                rows.append(
-                    WeightPreviewRow(
-                        direction=direction,
-                        filamentdb_filament_id=f.id,
-                        filamentdb_spool_id=sp.id,
-                        name=f.name,
-                        net_weight=net_res.remaining_weight,
-                        gross_weight=gross,
-                        tare=gross - net_res.remaining_weight,
-                        tare_source="default" if net_res.used_default_tare else "filamentdb",
+                if f.spoolWeight is None:
+                    # Unknown tare — cannot compute net; require user input.
+                    rows.append(
+                        WeightPreviewRow(
+                            direction=direction,
+                            filamentdb_filament_id=f.id,
+                            filamentdb_spool_id=sp.id,
+                            name=f.name,
+                            net_weight=None,
+                            gross_weight=gross,
+                            tare=None,
+                            tare_source="needs_input",
+                        )
                     )
-                )
+                else:
+                    net_res = fdb_to_spoolman_net(gross, f.spoolWeight)
+                    rows.append(
+                        WeightPreviewRow(
+                            direction=direction,
+                            filamentdb_filament_id=f.id,
+                            filamentdb_spool_id=sp.id,
+                            name=f.name,
+                            net_weight=net_res.remaining_weight,
+                            gross_weight=gross,
+                            tare=gross - net_res.remaining_weight,
+                            tare_source="filamentdb",
+                        )
+                    )
 
     return WizardWeightsResponse(direction=direction, rows=rows)
 
@@ -1988,6 +2022,16 @@ async def _execute_fdb_to_spoolman(
             tare = tare_by_fdb_spool.get(fdb_spool.id)
             if tare is None:
                 tare = fdb_fil.spoolWeight
+            if tare is None:
+                # Should not reach here — the execute gate rejects when tare is unknown.
+                # Fail this spool explicitly rather than writing a silent 200 g guess.
+                _spool_label = f"{_fil_label} (spool {fdb_spool.id[:8]})"
+                _err = "tare unknown — enter empty-reel weight in the Variances step and re-execute"
+                logger.error("wizard execute %s: tare unknown for FDB spool %s (filament %s) — skipping",
+                             res.cycle_id, fdb_spool.id, fdb_fil.id)
+                res.add(db, "spool", "failed", error=_err,
+                        label=_spool_label, fdb_filament_id=fdb_fil.id, fdb_spool_id=fdb_spool.id)
+                continue
             net_res = fdb_to_spoolman_net(fdb_spool.totalWeight or 0.0, tare, precision=precision)
             try:
                 new_sm_spool = await spoolman.create_spool({
@@ -2143,15 +2187,15 @@ def _compute_empty_active(sm_spools: list) -> list[EmptyActiveEntry]:
 
 
 def _compute_default_tare(plan: _SyncPlan) -> list[DefaultTareEntry]:
+    """Collect spool creates where tare is unknown (needs user input before execute)."""
     result: list[DefaultTareEntry] = []
     for si in plan.spool_items:
-        if si.action == "create" and si.tare_source == "default":
+        if si.action == "create" and si.tare_source == "needs_input":
             result.append(DefaultTareEntry(
                 spoolman_spool_id=si.sm_spool.id,
                 spoolman_filament_id=si.sm_spool.filament.id if si.sm_spool.filament else None,
                 name=si.sm_spool.filament.name if si.sm_spool.filament else None,
-                planned_gross=si.planned_gross,
-                default_tare_used=si.used_tare,
+                planned_gross=None,  # cannot compute gross without known tare
             ))
     return result
 
@@ -2562,6 +2606,66 @@ async def wizard_execute(
             502, "upstream_fetch_failed",
             "Could not read both systems to execute the initial sync; nothing was written.",
         )
+
+    # Tare gate: reject execute if any to-be-created filament/spool lacks a known tare.
+    # This prevents the wizard from writing 200 g as a silent guess.
+    if import_direction == "spoolman":
+        _missing_tare_names: list[str] = []
+        _sm_spools_by_fil: dict[int, list] = {}
+        for _sp in sm_spools:
+            if _sp.filament:
+                _sm_spools_by_fil.setdefault(_sp.filament.id, []).append(_sp)
+        for _sm_fil in sm_filaments:
+            _dec = decisions_by_sm.get(_sm_fil.id, {})
+            if _dec.get("action") != "create":
+                continue  # link/skip — no write needed
+            _fil_spools = _sm_spools_by_fil.get(_sm_fil.id, [])
+            # Determine which spools would actually be imported for this filament.
+            # When never_import_empties is on, empty/archived spools are excluded.
+            # If there are no importable spools at all, the planner's D4 extension
+            # will skip the entire filament — no tare write will happen, so skip gate.
+            if include_empty:
+                _importable_spools = _fil_spools
+            else:
+                _importable_spools = [
+                    s for s in _fil_spools
+                    if not (s.archived or (s.remaining_weight is not None and s.remaining_weight <= 0))
+                ]
+            if not _importable_spools:
+                continue  # no spools will be created — skip tare gate for this filament
+            _resolved = _resolve_filament_tare(_sm_fil, _fil_spools, tare_by_sm_spool)
+            if _resolved is None:
+                _missing_tare_names.append(_sm_label(_sm_fil))
+        if _missing_tare_names:
+            n = len(_missing_tare_names)
+            raise api_error(
+                422, "tare_required",
+                f"{n} filament{'s' if n != 1 else ''} "
+                f"require a tare (empty-reel weight) before executing: "
+                f"{', '.join(_missing_tare_names[:5])}"
+                + (f" … and {n - 5} more" if n > 5 else "") + ". "
+                "Enter the empty-reel weight in the Variances step.",
+            )
+    else:
+        _missing_tare_fdb: list[str] = []
+        for _fdb_fil in fdb_filaments:
+            if _fdb_fil.spoolWeight is None:
+                # Check whether any spool of this filament has an override
+                _spool_overridden = any(
+                    sp.id in tare_by_fdb_spool for sp in _fdb_fil.spools
+                )
+                if not _spool_overridden:
+                    _missing_tare_fdb.append(_fdb_label(_fdb_fil))
+        if _missing_tare_fdb:
+            n = len(_missing_tare_fdb)
+            raise api_error(
+                422, "tare_required",
+                f"{n} filament{'s' if n != 1 else ''} "
+                f"require a tare (empty-reel weight) before executing: "
+                f"{', '.join(_missing_tare_fdb[:5])}"
+                + (f" … and {n - 5} more" if n > 5 else "") + ". "
+                "Enter the empty-reel weight in the Variances step.",
+            )
 
     if import_direction == "spoolman":
         exec_variant_mode = _resolve_variant_parent_mode(db)

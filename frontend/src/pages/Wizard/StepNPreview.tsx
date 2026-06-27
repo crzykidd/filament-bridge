@@ -13,7 +13,7 @@ type PlannedWritesFilter = 'all' | 'filamentdb' | 'spoolman'
 const FLAG_LABELS: Record<FlagKey, string> = {
   name_collision: 'Name collisions',
   empty_active: 'Empty active spools',
-  default_tare: 'Default tare used',
+  default_tare: 'Tare required',
   variant_group: 'Variant groups',
 }
 
@@ -202,15 +202,15 @@ export default function StepNPreview({ next, prev, goTo }: WizardCtx) {
         count={data.flag_counts.default_tare}
         open={open.has('default_tare')}
         onToggle={() => toggle('default_tare')}
-        tip="No reel weight found anywhere — 200 g assumed; fix per-group in Variances."
+        tip="No reel weight found anywhere — enter the empty-reel weight per-group in Variances. Execute is blocked until every tare is set."
       >
         <div className="divide-y divide-gray-100 dark:divide-gray-700">
           {data.default_tare.map((t, i) => (
             <div key={i} className="px-4 py-2 text-sm flex items-center justify-between gap-3">
               <div>
                 <span className="text-gray-700 dark:text-gray-200">{t.name ?? `Spool #${t.spoolman_spool_id}`}</span>
-                <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
-                  gross {t.planned_gross} g (tare {t.default_tare_used} g default)
+                <span className="ml-2 text-xs text-red-600 dark:text-red-400">
+                  no reel weight set — enter tare in Variances to continue
                 </span>
               </div>
               <DeepLinks

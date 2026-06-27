@@ -18,6 +18,7 @@ vi.mock('../api/client', () => ({
   triggerSync: vi.fn(),
   triggerDryRun: vi.fn(),
   setAutoSync: vi.fn(),
+  getBackupStatus: vi.fn(),
 }))
 
 vi.mock('react-router-dom', () => ({
@@ -45,7 +46,8 @@ vi.mock('../api/hooks', () => ({
 
 import Dashboard from './Dashboard'
 import { usePoll } from '../api/hooks'
-import type { SyncStatusResponse } from '../api/types'
+import { getBackupStatus } from '../api/client'
+import type { SyncStatusResponse, BackupStatusResponse } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -159,5 +161,62 @@ describe('Dashboard — filament-level counts', () => {
       // The Filaments section should still render with zero values.
       expect(screen.getByText('Filaments')).toBeInTheDocument()
     })
+  })
+})
+
+describe('Dashboard — backup status row (#20)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // Discriminate the two usePoll calls by their polled fn: sync vs backup.
+  function mockPolls(sync: SyncStatusResponse | null, backup: BackupStatusResponse | null) {
+    vi.mocked(usePoll).mockImplementation((fn: unknown) => ({
+      data: fn === getBackupStatus ? backup : sync,
+      loading: false,
+      error: null,
+      reload: vi.fn(),
+    }) as ReturnType<typeof usePoll>)
+  }
+
+  it('renders Last/Next backup when status is available', async () => {
+    mockPolls(makeStatus(), {
+      last_run: { at: '2026-06-26T03:00:00+00:00', ok: true, bridge_state: 'bridge-state-x.json', filamentdb: null, pruned: [], error: null },
+      next_run_at: '2026-06-27T03:00:00+00:00',
+      schedule_enabled: true,
+      retention_days: 7,
+      retained: { count: 3, total_bytes: 4096 },
+    })
+    render(<Dashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('Last backup')).toBeInTheDocument()
+      expect(screen.getByText('Next backup')).toBeInTheDocument()
+    })
+  })
+
+  it('omits the backup row entirely when backup status is unavailable', async () => {
+    mockPolls(makeStatus(), null)
+    render(<Dashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('Filaments')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('Last backup')).not.toBeInTheDocument()
+  })
+
+  it('shows "Disabled" for next backup when the schedule is off', async () => {
+    mockPolls(makeStatus(), {
+      last_run: null,
+      next_run_at: null,
+      schedule_enabled: false,
+      retention_days: 7,
+      retained: { count: 0, total_bytes: 0 },
+    })
+    render(<Dashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('Last backup')).toBeInTheDocument()
+    })
+    // last_run null → "Never"; schedule off → "Disabled".
+    expect(screen.getByText('Never')).toBeInTheDocument()
+    expect(screen.getByText('Disabled')).toBeInTheDocument()
   })
 })

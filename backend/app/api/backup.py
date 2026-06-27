@@ -17,13 +17,14 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 
 import httpx
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.config import read_config, set_config_value
+from app.api.config import get_config_value, read_config, set_config_value
 from app.api.errors import api_error
 from app.db import get_db
 from app.models.conflict import Conflict
@@ -32,6 +33,9 @@ from app.schemas.api import (
     BACKUP_SCHEMA_VERSION,
     BackupExport,
     BackupImportResponse,
+    BackupLastRun,
+    BackupRetained,
+    BackupStatusResponse,
 )
 
 router = APIRouter()
@@ -117,6 +121,71 @@ async def trigger_filamentdb_backup(request: Request) -> FilamentDBBackupRespons
         return FilamentDBBackupResponse(success=False, detail=f"File write error: {exc}")
     except Exception as exc:  # noqa: BLE001
         return FilamentDBBackupResponse(success=False, detail=str(exc))
+
+
+def _retained_files(data_dir: str) -> BackupRetained:
+    """Walk DATA_DIR/backups/ and tally files matching the known prefixes."""
+    from app.core.backup_job import DEFAULT_PREFIXES, backups_dir
+
+    bdir = backups_dir(data_dir)
+    if not os.path.isdir(bdir):
+        return BackupRetained(count=0, total_bytes=0)
+    count = 0
+    total_bytes = 0
+    for name in os.listdir(bdir):
+        if not name.startswith(DEFAULT_PREFIXES):
+            continue
+        full = os.path.join(bdir, name)
+        if os.path.isfile(full):
+            count += 1
+            total_bytes += os.path.getsize(full)
+    return BackupRetained(count=count, total_bytes=total_bytes)
+
+
+@router.get("/backup/status", response_model=BackupStatusResponse)
+def get_backup_status(request: Request, db: Session = Depends(get_db)) -> BackupStatusResponse:
+    """Return backup schedule observability data (issue #20).
+
+    - last_run: the summary persisted after the most recent scheduled run (null if never run).
+    - next_run_at: the scheduler's next fire time for the nightly_backup job (null when
+      the scheduler is absent — e.g. in tests — or the job doesn't exist).
+    - schedule_enabled / retention_days: from effective config.
+    - retained: count + total bytes of retained backup files in DATA_DIR/backups/.
+    """
+    from app.api.config import effective_backup_config
+    from app.config import settings as _settings
+
+    # Effective config for schedule state.
+    cfg = effective_backup_config(db)
+
+    # Last run from BridgeConfig.
+    raw_last_run = get_config_value(db, "backup_last_run", None)
+    last_run: BackupLastRun | None = None
+    if raw_last_run is not None:
+        try:
+            last_run = BackupLastRun(**raw_last_run)
+        except Exception:  # noqa: BLE001
+            pass  # corrupted value → treat as no last run
+
+    # Next run from the APScheduler job.
+    next_run_at: datetime.datetime | None = None
+    scheduler = getattr(getattr(request, "app", None), "state", None)
+    scheduler = getattr(scheduler, "scheduler", None) if scheduler else None
+    if scheduler is not None:
+        job = scheduler.get_job("nightly_backup")
+        if job is not None:
+            next_run_at = job.next_run_time  # tz-aware or None
+
+    # Retained files.
+    retained = _retained_files(_settings.data_dir)
+
+    return BackupStatusResponse(
+        last_run=last_run,
+        next_run_at=next_run_at,
+        schedule_enabled=cfg.backup_schedule_enabled,
+        retention_days=cfg.backup_retention_days,
+        retained=retained,
+    )
 
 
 def _decode(raw: str | None):

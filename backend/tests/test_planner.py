@@ -20,7 +20,6 @@ from sqlalchemy.pool import StaticPool
 from app.api import wizard
 from app.api.config import set_config_value
 from app.core.planner import _fdb_filament_payload_from_sm, _filament_base_name, _patch_fdb_name, _plan_spoolman_to_fdb
-from app.core.weight import DEFAULT_TARE_GRAMS
 from app.db import Base, get_db
 from app.models.config import seed_defaults
 from app.models.mapping import FilamentMapping, SpoolMapping
@@ -453,9 +452,10 @@ def test_planner_phase_a_sets_spool_weight_from_resolved_tare(db):
     )
 
 
-def test_planner_phase_a_uses_default_tare_when_no_override_and_no_sm_spool_weight(db):
-    """When no user tare override and sm.spool_weight is None, spoolWeight on the
-    filament payload must equal DEFAULT_TARE_GRAMS (200g)."""
+def test_planner_phase_a_no_tare_when_no_override_and_no_sm_spool_weight(db):
+    """When no user tare override and sm.spool_weight is None, spoolWeight must be
+    absent from the filament payload (None is filtered out by the payload builder).
+    The execute path rejects rather than writing 200 g as a guess."""
     sm_fil = _sm_filament(fid=21, name="PLA Green", weight=1000.0, spool_weight=None)
     sm_sp = SpoolmanSpool(
         id=211, filament=sm_fil, remaining_weight=600.0, archived=False, extra={},
@@ -474,8 +474,14 @@ def test_planner_phase_a_uses_default_tare_when_no_override_and_no_sm_spool_weig
 
     item = plan.filament_items[0]
     assert item.action == "create"
-    assert item.fdb_payload.get("spoolWeight") == DEFAULT_TARE_GRAMS, (
-        f"Expected spoolWeight={DEFAULT_TARE_GRAMS}, got {item.fdb_payload.get('spoolWeight')}"
+    # _resolve_filament_tare returns None → spoolWeight absent (filtered) or None
+    assert item.fdb_payload.get("spoolWeight") is None, (
+        f"Expected spoolWeight=None (no default fallback), got {item.fdb_payload.get('spoolWeight')}"
+    )
+    # The spool item must be tagged needs_input, not default
+    spool_item = plan.spool_items[0]
+    assert spool_item.tare_source == "needs_input", (
+        f"Expected tare_source='needs_input', got '{spool_item.tare_source}'"
     )
 
 
@@ -885,6 +891,7 @@ def test_stale_filament_mapping_execute_replaces_mapping(db):
     sm_fil = SpoolmanFilament(
         id=5, name="ELEGOO PLA Yellow",
         vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA", weight=1000.0,
+        spool_weight=200.0,  # provide tare so execute is not rejected
     )
     sm_sp = SpoolmanSpool(id=501, filament=sm_fil, remaining_weight=750.0, archived=False, extra={})
     # FDB has no filament matching the stale mapping target ("old-fdb-fil").
@@ -955,6 +962,7 @@ def test_stale_spool_mapping_execute_replaces_mapping(db):
     sm_fil = SpoolmanFilament(
         id=6, name="ELEGOO PLA Orange",
         vendor=SpoolmanVendor(id=1, name="ELEGOO"), material="PLA", weight=1000.0,
+        spool_weight=200.0,  # provide tare so execute is not rejected
     )
     sm_sp = SpoolmanSpool(id=601, filament=sm_fil, remaining_weight=800.0, archived=False, extra={})
     # FDB has a filament with a spool "current-spool-eee" (not the stale "old-spool-fff").
@@ -1202,6 +1210,7 @@ def test_execute_archived_spool_imports_as_retired_with_mapping(db):
     sm_fil = SpoolmanFilament(
         id=63, name="Light Purple PLA",
         vendor=SpoolmanVendor(id=1, name="ACME"), material="PLA", weight=1000.0,
+        spool_weight=200.0,  # provide tare so execute is not rejected
     )
     # Mirror SM spool #65: archived, negative remaining (used > initial)
     sm_sp = SpoolmanSpool(

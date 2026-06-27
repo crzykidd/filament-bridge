@@ -412,6 +412,39 @@ class ConfigUpdateRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Backup status (issue #20)
+# ---------------------------------------------------------------------------
+
+
+class BackupLastRun(BaseModel):
+    """Last scheduled-backup run summary, as stored in BridgeConfig."""
+
+    at: datetime.datetime
+    ok: bool
+    bridge_state: str | None = None
+    filamentdb: str | None = None
+    pruned: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class BackupRetained(BaseModel):
+    """Count and total size of retained backup files in DATA_DIR/backups/."""
+
+    count: int
+    total_bytes: int
+
+
+class BackupStatusResponse(BaseModel):
+    """GET /api/backup/status — backup schedule observability (issue #20)."""
+
+    last_run: BackupLastRun | None = None
+    next_run_at: datetime.datetime | None = None
+    schedule_enabled: bool
+    retention_days: int
+    retained: BackupRetained
+
+
+# ---------------------------------------------------------------------------
 # Wizard (FR-1 … FR-6)
 # ---------------------------------------------------------------------------
 
@@ -497,8 +530,8 @@ class WeightPreviewRow(BaseModel):
     name: str | None = None
     net_weight: float | None = None
     gross_weight: float | None = None
-    tare: float
-    tare_source: Literal["spoolman", "filamentdb", "default"]
+    tare: float | None = None
+    tare_source: Literal["spoolman", "filamentdb", "default", "needs_input"]
     override_tare: float | None = None  # UI sets this to override at execute (Phase 3b)
 
 
@@ -567,8 +600,8 @@ class VariancesFilament(BaseModel):
 
     ref: FilamentRef
     spool_ids: list[int] = Field(default_factory=list)
-    tare: float
-    tare_source: Literal["spoolman", "default"]
+    tare: float | None = None
+    tare_source: Literal["spoolman", "default", "needs_input"]
     is_master: bool = False
     conflicts: list[VariantPropConflict] = Field(default_factory=list)
     suggest_exclude: bool = False
@@ -738,13 +771,16 @@ class EmptyActiveEntry(BaseModel):
 
 
 class DefaultTareEntry(BaseModel):
-    """A planned spool create that used the 200 g default tare (no spool_weight set)."""
+    """A planned spool create with no known tare (spool_weight not set in Spoolman).
+
+    The wizard requires the user to enter a tare value for these spools before
+    executing — execute is blocked until all entries in this list are resolved.
+    """
 
     spoolman_spool_id: int
     spoolman_filament_id: int | None = None
     name: str | None = None
-    planned_gross: float
-    default_tare_used: float
+    planned_gross: float | None = None  # None when tare is unknown (no gross can be computed)
 
 
 class VariantGroupPreviewEntry(BaseModel):
@@ -966,6 +1002,23 @@ class MobileSpoolUpdateRequest(BaseModel):
     gross_grams: float | None = Field(default=None, ge=0)
     location: str | None = None
     weight_mode: MobileWeightMode | None = None
+
+
+class MobileSpoolSearchResult(BaseModel):
+    """One search result for GET /api/mobile/spools?q=…
+
+    Carries the minimum fields needed to display a result row and navigate to
+    ``/scan/{filamentdb_filament_id}/{filamentdb_spool_id}`` on selection.
+    """
+
+    filamentdb_filament_id: str
+    filamentdb_spool_id: str
+    spoolman_spool_id: int
+    name: str | None = None
+    vendor: str | None = None
+    color: str | None = None                 # bare hex (no #), from Spoolman snapshot
+    multi_color_hexes: str | None = None     # comma-separated when multi-color
+    multi_color_direction: str | None = None
 
 
 class LabelPrintRequest(BaseModel):

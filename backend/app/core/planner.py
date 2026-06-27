@@ -17,7 +17,7 @@ from app.core.color import apply_finish_tags, sm_multicolor_to_fdb
 from app.core.fields import resolve_effective_cost
 from app.core.material_tags import finish_ids_from_text, strip_finish_words
 from app.core.matcher import extract_finish_line, sm_prop_conflicts
-from app.core.weight import DEFAULT_TARE_GRAMS, spoolman_to_fdb_gross
+from app.core.weight import spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament, decode_extra_value
@@ -126,7 +126,7 @@ def _resolve_filament_tare(
     sm_filament: SpoolmanFilament,
     fil_spools: list,
     tare_by_sm_spool: dict[int, float],
-) -> float:
+) -> float | None:
     """Resolve the wizard-canonical tare for a Spoolman filament.
 
     Resolution order (mirrors Phase-C spool tare logic, lifted to the filament level):
@@ -134,10 +134,10 @@ def _resolve_filament_tare(
        by id, same deterministic tie-break used elsewhere).
     2. Spoolman spool-level spool_weight (first spool by id with a non-null value).
     3. Spoolman filament-level spool_weight.
-    4. DEFAULT_TARE_GRAMS (200 g).
+    4. None — tare is unknown; the wizard execute path rejects rather than guessing.
 
-    This is the same tare the Phase-C gross-weight computation uses, so the value
-    written to FDB spoolWeight always matches what drove the spool totalWeight.
+    Never falls back to DEFAULT_TARE_GRAMS (200 g).  The wizard gates execute on
+    all filaments where this returns None — the user must supply a tare first.
     """
     # Sort spools by id for deterministic selection (mirrors resolve_effective_cost).
     sorted_spools = sorted(fil_spools, key=lambda s: s.id)
@@ -152,8 +152,8 @@ def _resolve_filament_tare(
     # 3. Filament-level spool_weight.
     if sm_filament.spool_weight is not None:
         return sm_filament.spool_weight
-    # 4. Default.
-    return DEFAULT_TARE_GRAMS
+    # 4. Unknown — caller must reject; never write 200 g as a guess.
+    return None
 
 
 @dataclass
@@ -181,7 +181,7 @@ class _SpoolPlanItem:
     skip_fdb_spool_id: str | None = None  # xref for already-linked spools
     fdb_filament_id: str | None = None  # known (link/skip-linked), None for create
     planned_gross: float = 0.0
-    tare_source: str = "default"  # "spoolman" | "default"
+    tare_source: str = "needs_input"  # "spoolman" | "needs_input"
     used_tare: float = 0.0
     detail: str | None = None
     retired: bool = False  # True when the SM spool is archived → import as FDB retired spool
@@ -511,16 +511,31 @@ def _plan_spoolman_to_fdb(
                 tare = sm_spool.spool_weight if sm_spool.spool_weight is not None else (
                     sm_spool.filament.spool_weight if sm_spool.filament else None
                 )
-            gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, tare, precision=precision)
-            plan.spool_items.append(_SpoolPlanItem(
-                sm_spool=sm_spool, fil_item=item, action="create",
-                fdb_filament_id=item.fdb_id,  # None for new creates; filled post-write in execute
-                planned_gross=gross_res.total_weight,
-                tare_source="default" if gross_res.used_default_tare else "spoolman",
-                used_tare=gross_res.total_weight - (sm_spool.remaining_weight or 0.0),
-                retired=_spool_retired,
-                stale_spool_mapping=_stale_spool_mapping,
-            ))
+            if tare is None:
+                # No tare known and no user override — mark as needs_input.
+                # The execute gate will reject before writing; planned_gross is approximate
+                # (uses DEFAULT_TARE_GRAMS internally) but is never written.
+                gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, None, precision=precision)
+                plan.spool_items.append(_SpoolPlanItem(
+                    sm_spool=sm_spool, fil_item=item, action="create",
+                    fdb_filament_id=item.fdb_id,
+                    planned_gross=gross_res.total_weight,
+                    tare_source="needs_input",
+                    used_tare=gross_res.total_weight - (sm_spool.remaining_weight or 0.0),
+                    retired=_spool_retired,
+                    stale_spool_mapping=_stale_spool_mapping,
+                ))
+            else:
+                gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, tare, precision=precision)
+                plan.spool_items.append(_SpoolPlanItem(
+                    sm_spool=sm_spool, fil_item=item, action="create",
+                    fdb_filament_id=item.fdb_id,  # None for new creates; filled post-write in execute
+                    planned_gross=gross_res.total_weight,
+                    tare_source="spoolman",
+                    used_tare=tare,
+                    retired=_spool_retired,
+                    stale_spool_mapping=_stale_spool_mapping,
+                ))
 
     # D4 extension — when empties are excluded (never_import_empties is ON), a filament whose ONLY
     # spools were empty/depleted ends up with no create-spool-item; importing the filament alone

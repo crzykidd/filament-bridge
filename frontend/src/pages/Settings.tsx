@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { useBlocker, Link } from 'react-router-dom'
-import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus, getPrinterStatus, BridgeApiError } from '../api/client'
+import { getConfig, updateConfig, setAutoSync, exportBackup, importBackup, clearSpoolmanFdbRefs, clearSpoolmanOpentagIds, resetBridgeState, fullReset, authChangePassword, authRegenerateToken, getAuthStatus, getPrinterStatus, getBackupStatus, BridgeApiError } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BackupSafetyDialog } from '../components/BackupSafetyDialog'
 import { DebugConfirmDialog } from '../components/DebugConfirmDialog'
@@ -8,6 +8,7 @@ import type { SyncDirection2, ConflictPolicy, VariantParentMode, NewRecordPolicy
 import { useTheme } from '../context/ThemeContext'
 import type { ThemeMode } from '../context/ThemeContext'
 import { HelpTip } from '../components/HelpTip'
+import { formatLocal, utcHourToLocal } from '../utils/datetime'
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -186,6 +187,7 @@ function AppearanceSection() {
 
 export default function Settings() {
   const { data, loading, error, reload } = useApi(getConfig)
+  const { data: backupStatus } = useApi(getBackupStatus)
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
 
@@ -1525,7 +1527,17 @@ export default function Settings() {
 
           {/* Run hour (UTC) */}
           <div className="flex items-center justify-between py-2">
-            <span className={labelCls}>Run at (UTC hour)</span>
+            <div>
+              <span className={labelCls}>Run at (UTC hour)</span>
+              {(() => {
+                const local = utcHourToLocal(effBackupHour)
+                return local ? (
+                  <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
+                    {String(effBackupHour).padStart(2, '0')}:00 UTC ≈ {local} local
+                  </span>
+                ) : null
+              })()}
+            </div>
             <select
               disabled={!effBackupEnabled}
               value={effBackupHour}
@@ -1538,6 +1550,58 @@ export default function Settings() {
             </select>
           </div>
         </div>
+
+        {/* Backup status — last run outcome + next fire + retained files */}
+        {backupStatus?.retained && (
+          <div className="rounded-lg bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-3 mt-2 space-y-1.5 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-32 shrink-0">Last backup</span>
+              {backupStatus.last_run ? (
+                <span className={backupStatus.last_run.ok ? 'text-gray-900 dark:text-gray-100' : 'text-red-600 dark:text-red-400'}>
+                  {formatLocal(backupStatus.last_run.at)}
+                  {backupStatus.last_run.ok ? (
+                    <span className="ml-1.5 text-xs text-green-600 dark:text-green-400">
+                      {[
+                        backupStatus.last_run.bridge_state ? 'bridge-state' : null,
+                        backupStatus.last_run.filamentdb ? 'filamentdb' : null,
+                      ].filter(Boolean).join(', ') || 'no artifacts'}
+                    </span>
+                  ) : (
+                    <span className="ml-1.5 text-xs" title={backupStatus.last_run.error ?? undefined}>
+                      {backupStatus.last_run.error
+                        ? `Failed: ${backupStatus.last_run.error.slice(0, 80)}`
+                        : 'Failed'}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="text-gray-400 dark:text-gray-500">Never run</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-32 shrink-0">Next backup</span>
+              {backupStatus.schedule_enabled ? (
+                <span className="text-gray-900 dark:text-gray-100">
+                  {backupStatus.next_run_at ? formatLocal(backupStatus.next_run_at) : '—'}
+                </span>
+              ) : (
+                <span className="text-gray-400 dark:text-gray-500">Disabled</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 dark:text-gray-400 w-32 shrink-0">Retained files</span>
+              <span className="text-gray-700 dark:text-gray-300">
+                {backupStatus.retained.count} file{backupStatus.retained.count !== 1 ? 's' : ''}
+                {backupStatus.retained.count > 0 && (
+                  <span className="ml-1 text-xs text-gray-400 dark:text-gray-500">
+                    ({(backupStatus.retained.total_bytes / 1024).toFixed(1)} KB)
+                  </span>
+                )}
+                {' '}· retention window: {backupStatus.retention_days} day{backupStatus.retention_days !== 1 ? 's' : ''}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Wizard status */}

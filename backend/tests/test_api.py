@@ -125,7 +125,9 @@ def _client(db, spoolman=None, filamentdb=None) -> TestClient:
 def _sm_spool(spool_id: int, remaining: float, extra=None, location: str | None = None) -> SpoolmanSpool:
     return SpoolmanSpool(
         id=spool_id,
-        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO")),
+        filament=SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+                                  spool_weight=200.0),
+        spool_weight=200.0,  # spool-level tare so _resolve_filament_tare doesn't need filament match
         remaining_weight=remaining,
         archived=False,
         extra=extra or {},
@@ -975,7 +977,8 @@ def test_wizard_execute_skips_empty_spool_when_never_import_empties_on(db):
                      [{"spoolman_filament_id": 10, "action": "create"}])
     db.commit()
 
-    sm_filament = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))
+    sm_filament = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+                                   spool_weight=180.0)
     full_spool = SpoolmanSpool(
         id=1, filament=sm_filament, remaining_weight=500.0, archived=False, extra={},
     )
@@ -1011,7 +1014,8 @@ def test_wizard_execute_imports_empty_spool_when_never_import_empties_off(db):
                      [{"spoolman_filament_id": 10, "action": "create"}])
     db.commit()
 
-    sm_filament = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))
+    sm_filament = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+                                   spool_weight=180.0)
     full_spool = SpoolmanSpool(
         id=1, filament=sm_filament, remaining_weight=500.0, archived=False, extra={},
     )
@@ -1580,6 +1584,128 @@ def test_wizard_execute_filamentdb_direction_seeds_spoolman(db):
     assert filamentdb.update_spool.await_args.args[2]["label"] == "50"
     sm_map = db.query(SpoolMapping).one()
     assert sm_map.spoolman_spool_id == 50 and sm_map.filamentdb_spool_id == "fdb-spool-1"
+
+
+def test_wizard_execute_rejects_when_sm_tare_unknown(db):
+    """When a 'create' filament has no spool_weight and no tare override, execute
+    must reject with 422 tare_required instead of writing 200 g silently."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    sm_filament = SpoolmanFilament(
+        id=10, name="PLA Silver",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        spool_weight=None,  # unknown tare
+    )
+    sm_spool = SpoolmanSpool(
+        id=101, filament=sm_filament, remaining_weight=800.0, archived=False, extra={},
+    )
+    spoolman = _fake_spoolman(filaments=[sm_filament], spools=[sm_spool])
+    filamentdb = _fake_filamentdb(filaments=[])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["code"] == "tare_required"
+    assert "PLA Silver" in body["detail"]["message"]
+    # Nothing was written
+    filamentdb.create_filament.assert_not_called()
+    filamentdb.create_spool.assert_not_called()
+
+
+def test_wizard_execute_sm_proceeds_when_tare_provided_as_override(db):
+    """When tare is unknown but the user provides an override, execute proceeds."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+
+    sm_filament = SpoolmanFilament(
+        id=10, name="PLA Silver",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        spool_weight=None,  # unknown — user will supply override
+    )
+    sm_spool = SpoolmanSpool(
+        id=101, filament=sm_filament, remaining_weight=800.0, archived=False, extra={},
+    )
+    spoolman = _fake_spoolman(filaments=[sm_filament], spools=[sm_spool])
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, spoolman, filamentdb)
+
+    # User supplies 175 g tare override for spool 101
+    resp = client.post("/api/wizard/execute", json={"tare_overrides": [{"spoolman_spool_id": 101, "tare": 175.0}]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed"] == 0
+    # spoolWeight on created FDB filament should equal the user-supplied tare
+    filamentdb.create_filament.assert_awaited_once()
+    payload = filamentdb.create_filament.await_args.args[0]
+    assert payload.get("spoolWeight") == 175.0
+
+
+def test_wizard_execute_rejects_when_fdb_tare_unknown(db):
+    """FDB→SM direction: execute must reject with 422 tare_required when a FDB
+    filament has no spoolWeight and no per-spool tare override is supplied."""
+    set_config_value(db, "import_direction", "filamentdb")
+    db.commit()
+
+    # FDB filament with no spoolWeight
+    fdb_filament_no_tare = FDBFilament.model_validate({
+        "_id": "fil-no-tare",
+        "name": "PETG Clear",
+        "vendor": "sunlu",
+        "spoolWeight": None,  # unknown tare
+        "spools": [{"_id": "spool-1", "totalWeight": 950.0, "retired": False}],
+    })
+    spoolman = _fake_spoolman(filaments=[], vendors=[])
+    filamentdb = _fake_filamentdb(filaments=[fdb_filament_no_tare])
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/wizard/execute")
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["code"] == "tare_required"
+    assert "PETG Clear" in body["detail"]["message"]
+    # Nothing written to Spoolman
+    spoolman.create_spool.assert_not_called()
+
+
+def test_wizard_execute_fdb_proceeds_when_tare_provided_as_override(db):
+    """FDB→SM direction: with a per-spool tare override, execute proceeds even
+    when the filament spoolWeight is None."""
+    set_config_value(db, "import_direction", "filamentdb")
+    db.commit()
+
+    fdb_filament_no_tare = FDBFilament.model_validate({
+        "_id": "fil-no-tare",
+        "name": "PETG Clear",
+        "vendor": "sunlu",
+        "spoolWeight": None,
+        "spools": [{"_id": "spool-1", "totalWeight": 950.0, "retired": False}],
+    })
+    spoolman = _fake_spoolman(filaments=[], vendors=[])
+    spoolman.create_vendor = AsyncMock(return_value=SpoolmanVendor(id=5, name="sunlu"))
+    spoolman.create_filament = AsyncMock(
+        return_value=SpoolmanFilament(id=20, name="PETG Clear", vendor=SpoolmanVendor(id=5, name="sunlu"))
+    )
+    spoolman.create_spool = AsyncMock(return_value=_sm_spool(50, 750.0))
+    filamentdb = _fake_filamentdb(filaments=[fdb_filament_no_tare])
+    client = _client(db, spoolman, filamentdb)
+
+    # User supplies 200 g tare override for FDB spool "spool-1"
+    resp = client.post("/api/wizard/execute",
+                       json={"tare_overrides": [{"filamentdb_spool_id": "spool-1", "tare": 200.0}]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed"] == 0
+    spoolman.create_spool.assert_awaited_once()
+    # net = 950 gross - 200 tare = 750
+    assert spoolman.create_spool.await_args.args[0]["remaining_weight"] == 750.0
 
 
 # ---------------------------------------------------------------------------
@@ -2203,20 +2329,26 @@ def test_preview_empty_active_flags_empty_and_archived(db):
     assert body["flag_counts"]["empty_active"] == 2
 
 
-def test_preview_default_tare_reports_200g_substitution(db):
-    """default_tare: flags planned spool creates where no spool_weight was set → 200 g used."""
+def test_preview_default_tare_flags_unknown_tare_as_needs_input(db):
+    """default_tare: flags planned spool creates where no spool_weight is known (needs user input)."""
     sm_fil = SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"),
                                spool_weight=None)
-    spool = _sm_spool(1, 500.0)  # no spool_weight set
+    # Spool with no spool_weight at either the filament or spool level — tare unknown.
+    spool_no_tare = SpoolmanSpool(
+        id=1, filament=sm_fil, remaining_weight=500.0, archived=False, extra={},
+        spool_weight=None,
+    )
     decisions = [{"spoolman_filament_id": 10, "action": "create"}]
-    client, _, _ = _setup_preview(db, sm_filaments=[sm_fil], sm_spools=[spool], decisions=decisions)
+    client, _, _ = _setup_preview(db, sm_filaments=[sm_fil], sm_spools=[spool_no_tare], decisions=decisions)
 
     body = client.get("/api/wizard/preview").json()
     tare_flags = body["default_tare"]
-    assert len(tare_flags) == 1
+    assert len(tare_flags) == 1, f"Expected 1 tare flag, got {len(tare_flags)}"
     assert tare_flags[0]["spoolman_spool_id"] == 1
-    assert tare_flags[0]["default_tare_used"] == 200.0
-    assert tare_flags[0]["planned_gross"] == 700.0  # 500 + 200
+    # planned_gross is None when tare is unknown
+    assert tare_flags[0]["planned_gross"] is None
+    # No default_tare_used field — removed in the schema update
+    assert "default_tare_used" not in tare_flags[0]
     assert body["flag_counts"]["default_tare"] == 1
 
 
@@ -3153,8 +3285,8 @@ def test_wizard_variances_tare_source_and_props_present(db):
     assert f["settings_bed_temp"] == 60
 
 
-def test_wizard_variances_default_tare_when_no_spool_weight(db):
-    """tare_source is 'default' (200g) when filament has no spool_weight."""
+def test_wizard_variances_needs_input_tare_when_no_spool_weight(db):
+    """tare_source is 'needs_input' and tare is None when filament has no spool_weight."""
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",
                      [{"spoolman_filament_id": 10, "action": "create"}])
@@ -3165,8 +3297,8 @@ def test_wizard_variances_default_tare_when_no_spool_weight(db):
 
     body = client.get("/api/wizard/variances").json()
     f = body["ungrouped"][0]
-    assert f["tare"] == 200.0
-    assert f["tare_source"] == "default"
+    assert f["tare"] is None
+    assert f["tare_source"] == "needs_input"
 
 
 def test_wizard_variances_filamentdb_direction_returns_empty(db):
@@ -3350,7 +3482,7 @@ def test_wizard_execute_empty_spool_skipped_when_never_import_empties_on(db):
                      [{"spoolman_filament_id": 10, "action": "create"}])
     db.commit()
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
-    sm_fil = SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA")
+    sm_fil = SpoolmanFilament(id=10, name="PLA", vendor=elegoo, material="PLA", spool_weight=200.0)
     empty_spool = SpoolmanSpool(id=1, filament=sm_fil, remaining_weight=0.0, archived=False, extra={})
     full_spool = SpoolmanSpool(id=2, filament=sm_fil, remaining_weight=500.0, archived=False, extra={})
     spoolman = _fake_spoolman(filaments=[sm_fil], spools=[empty_spool, full_spool])
@@ -3956,10 +4088,10 @@ def test_wizard_preview_planned_writes_no_sm_writeback_when_no_reconcile(db):
 def test_wizard_execute_create_payload_includes_spool_price(db):
     """Wizard execute: FDB filament create payload uses spool price when set."""
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
-    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=20.0)
+    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=20.0, spool_weight=200.0)
     # Spool has price=29.99 — spool price wins over filament price
     sm_spool = SpoolmanSpool(
-        id=1, filament=sm_fil, remaining_weight=500.0, price=29.99, archived=False, extra={},
+        id=1, filament=sm_fil, remaining_weight=500.0, price=29.99, archived=False, extra={}, spool_weight=200.0,
     )
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",
@@ -3982,10 +4114,10 @@ def test_wizard_execute_create_payload_includes_spool_price(db):
 def test_wizard_execute_create_payload_falls_back_to_filament_price(db):
     """Wizard execute: FDB filament create payload uses filament price when no spool price."""
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
-    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=14.99)
+    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=14.99, spool_weight=200.0)
     # Spool has no price — filament price is the fallback
     sm_spool = SpoolmanSpool(
-        id=1, filament=sm_fil, remaining_weight=500.0, price=None, archived=False, extra={},
+        id=1, filament=sm_fil, remaining_weight=500.0, price=None, archived=False, extra={}, spool_weight=200.0,
     )
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",
@@ -4007,9 +4139,9 @@ def test_wizard_execute_create_payload_falls_back_to_filament_price(db):
 def test_wizard_execute_create_payload_omits_cost_when_none(db):
     """Wizard execute: FDB filament create payload omits cost when both spool and filament price are None."""
     elegoo = SpoolmanVendor(id=1, name="ELEGOO")
-    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=None)
+    sm_fil = SpoolmanFilament(id=10, name="PLA Blue", vendor=elegoo, material="PLA", price=None, spool_weight=200.0)
     sm_spool = SpoolmanSpool(
-        id=1, filament=sm_fil, remaining_weight=500.0, price=None, archived=False, extra={},
+        id=1, filament=sm_fil, remaining_weight=500.0, price=None, archived=False, extra={}, spool_weight=200.0,
     )
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",

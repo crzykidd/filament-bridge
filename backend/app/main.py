@@ -209,7 +209,13 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             switch is off (mirrors _sync_job's gating), then writes whichever
             backups are enabled and prunes old files. Any failure is logged, never
             raised, so a bad backup can't crash the scheduler.
+
+            Records the last-run summary in BridgeConfig["backup_last_run"] for
+            observability (issue #20): success writes the artifact paths + pruned
+            list; failure writes the error string. Both paths stamp a UTC ISO at-time.
             """
+            import datetime as _dt
+
             from app.api.config import effective_backup_config, prune_sync_log_now
             from app.core.backup_job import run_scheduled_backup
 
@@ -222,9 +228,29 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 if not cfg.backup_schedule_enabled:
                     logger.debug("Scheduled backups disabled — skipping nightly run")
                     return
-                await run_scheduled_backup(db, app.state.filamentdb, settings=cfg)
+                result = await run_scheduled_backup(db, app.state.filamentdb, settings=cfg)
+                _now_utc = _dt.datetime.now(_dt.timezone.utc).isoformat()
+                set_config_value(db, "backup_last_run", {
+                    "at": _now_utc,
+                    "ok": True,
+                    "bridge_state": result.get("bridge_state"),
+                    "filamentdb": result.get("filamentdb"),
+                    "pruned": result.get("pruned", []),
+                })
+                db.commit()
             except Exception as exc:
                 logger.error("Unhandled error in backup job: %s", exc, exc_info=True)
+                try:
+                    import datetime as _dt2
+                    _now_utc = _dt2.datetime.now(_dt2.timezone.utc).isoformat()
+                    set_config_value(db, "backup_last_run", {
+                        "at": _now_utc,
+                        "ok": False,
+                        "error": str(exc),
+                    })
+                    db.commit()
+                except Exception:  # noqa: BLE001
+                    pass
             finally:
                 db.close()
 

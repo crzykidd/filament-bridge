@@ -101,6 +101,60 @@ precedence as `SYNC_INTERVAL_SECONDS`). No restart is needed to change a runtime
 | `BACKUP_RETENTION_DAYS` | Retention (days) | `7` | Delete bridge-written backups older than this |
 | `BACKUP_HOUR_UTC` | Run at (UTC hour) | `3` | Hour of day (UTC, 0–23) the job fires at minute 0 |
 
+## Backup status (observability)
+
+The bridge surfaces backup status in two places so you can confirm the schedule is running:
+
+### Dashboard
+
+A compact **Last backup / Next backup** row appears in the sync timing card on the
+Dashboard. It shows:
+
+- **Last backup** — local timestamp and a green tick (success) or a red warning (failure
+  with the error message in the tooltip).
+- **Next backup** — the scheduler's next fire time (from APScheduler) in your local
+  timezone, or "Disabled" when the master switch is off.
+
+### Settings → Scheduled backups
+
+A status block below the schedule controls shows the full last-run detail:
+
+| Row | Content |
+|---|---|
+| Last backup | Timestamp + artifact labels ("bridge-state", "filamentdb") on success, or the failure reason. "Never run" when no scheduled run has completed yet. |
+| Next backup | Scheduler's next fire time, or "Disabled". |
+| Retained files | Count and total size of retained backup files in `DATA_DIR/backups/`, plus the active retention window. |
+
+The **Run at (UTC hour)** selector now annotates the UTC hour with its local equivalent
+(e.g. "03:00 UTC ≈ 22:00 local") so you can tell at a glance when the job fires in your
+timezone.
+
+### API
+
+`GET /api/backup/status` returns the status payload:
+
+```json
+{
+  "last_run": {
+    "at": "2026-06-26T03:00:00+00:00",
+    "ok": true,
+    "bridge_state": "/data/backups/bridge-state-20260626T030000Z.json",
+    "filamentdb": "/data/backups/filamentdb-snapshot-20260626T030000Z.json",
+    "pruned": []
+  },
+  "next_run_at": "2026-06-27T03:00:00+00:00",
+  "schedule_enabled": true,
+  "retention_days": 7,
+  "retained": {
+    "count": 4,
+    "total_bytes": 102400
+  }
+}
+```
+
+`last_run` is `null` until the first scheduled run completes (or fails). On failure,
+`ok` is `false` and `error` contains the exception message; the artifact paths are absent.
+
 ## Restoring
 
 - **Bridge state** — use **Settings → Backup → Import backup** with a `bridge-state-*.json`

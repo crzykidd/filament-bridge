@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.2-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.3-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,12 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.3 (2026-06-27)
+
+- **Wizard now requires a tare when none is known** — instead of silently assuming a 200 g reel weight (which poisons every spool's gross weight and all future sync for that filament), the Bulk Import Wizard's Variances step leaves an unknown tare blank and required, and won't let you continue until it's filled. (#13)
+- **Search box on the mobile scan page** — after scanning a label and updating a spool, type a name, vendor, color, or spool number to jump straight to another spool — no re-scanning. Works on both the logged-in and public scan flows. (#36)
+- **Backup status in the UI** — the Dashboard shows a Last/Next backup row, and Settings → Scheduled backups shows last-run outcome, next fire time, and retained-file count/size, with the UTC run-hour annotated in your local timezone. (#20)
 
 ### v0.6.2 (2026-06-25)
 

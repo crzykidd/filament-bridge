@@ -488,8 +488,8 @@ export interface WeightPreviewRow {
   name: string | null
   net_weight: number | null
   gross_weight: number | null
-  tare: number
-  tare_source: 'spoolman' | 'filamentdb' | 'default'
+  tare: number | null
+  tare_source: 'spoolman' | 'filamentdb' | 'default' | 'needs_input'
   override_tare: number | null
 }
 
@@ -548,8 +548,8 @@ export interface WizardVariantsResponse {
 export interface VariancesFilament {
   ref: FilamentRef
   spool_ids: number[]
-  tare: number
-  tare_source: 'spoolman' | 'default'
+  tare: number | null
+  tare_source: 'spoolman' | 'default' | 'needs_input'
   is_master: boolean
   conflicts: VariantPropConflict[]
   suggest_exclude: boolean
@@ -691,8 +691,7 @@ export interface DefaultTareEntry {
   spoolman_spool_id: number
   spoolman_filament_id: number | null
   name: string | null
-  planned_gross: number
-  default_tare_used: number
+  planned_gross: number | null
 }
 
 export interface VariantGroupPreviewEntry {
@@ -757,6 +756,28 @@ export interface BackupImportResponse {
   filament_mappings: number
   spool_mappings: number
   conflicts: number
+}
+
+export interface BackupLastRun {
+  at: string
+  ok: boolean
+  bridge_state: string | null
+  filamentdb: string | null
+  pruned: string[]
+  error: string | null
+}
+
+export interface BackupRetained {
+  count: number
+  total_bytes: number
+}
+
+export interface BackupStatusResponse {
+  last_run: BackupLastRun | null
+  next_run_at: string | null
+  schedule_enabled: boolean
+  retention_days: number
+  retained: BackupRetained
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,6 +1142,20 @@ export interface MobileSpoolUpdateRequest {
   gross_grams?: number | null
   location?: string | null
   weight_mode?: MobileWeightMode | null
+}
+
+/** One result from GET /api/mobile/spools?q=…
+ *  Mirrors backend `MobileSpoolSearchResult`.
+ *  Carries the ids needed to navigate to `/scan/{fil}/{spool}` on selection. */
+export interface MobileSpoolSearchResult {
+  filamentdb_filament_id: string
+  filamentdb_spool_id: string
+  spoolman_spool_id: number
+  name: string | null
+  vendor: string | null
+  color: string | null
+  multi_color_hexes: string | null
+  multi_color_direction: string | null
 }
 
 // ---------------------------------------------------------------------------
