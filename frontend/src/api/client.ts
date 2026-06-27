@@ -54,6 +54,7 @@ import type {
   WizardDirectionResponse,
   WizardExecuteRequest,
   WizardExecuteResponse,
+  WizardLastRunResponse,
   WizardMatchesRequest,
   WizardMatchesResponse,
   WizardPreviewResponse,
@@ -282,6 +283,9 @@ export const postWizardContainerNameOverrides = (body: ContainerNameOverridesReq
 
 export const postWizardExecute = (body: WizardExecuteRequest) =>
   json<WizardExecuteResponse>('/wizard/execute', 'POST', body)
+
+export const getWizardLastRun = () =>
+  request<WizardLastRunResponse | null>('/wizard/last-run')
 
 // ---------------------------------------------------------------------------
 // OpenTag cleanup tool

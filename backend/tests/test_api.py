@@ -1422,9 +1422,9 @@ def test_wizard_execute_per_record_error_isolation(db):
     body = client.post("/api/wizard/execute").json()
     assert body["created"] == 1
     assert body["failed"] == 1
-    # wizard_completed stays false when any record fails — user must re-run after fixing
-    assert body["wizard_completed"] is False
-    assert get_config_value(db, "wizard_completed") is False
+    # Partial success (1 created + 1 failed) → wizard_completed is True (issue #14).
+    assert body["wizard_completed"] is True
+    assert get_config_value(db, "wizard_completed") is True
     # Only the good spool got a mapping row.
     assert db.query(SpoolMapping).count() == 1
     assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
@@ -1539,7 +1539,8 @@ def test_wizard_execute_location_failure_isolates_to_spool(db):
     body = client.post("/api/wizard/execute").json()
     assert body["created"] == 1   # spool 2 (no location) succeeded
     assert body["failed"] == 1    # spool 1 (bad location) failed
-    assert body["wizard_completed"] is False
+    # Partial success → wizard_completed is True (issue #14).
+    assert body["wizard_completed"] is True
     assert db.query(SpoolMapping).count() == 1
     assert db.query(SyncLog).filter_by(action="error", entity_type="spool").count() == 1
 
@@ -2204,23 +2205,162 @@ def test_wizard_completed_flips_true_on_zero_failures(db):
     assert get_config_value(db, "wizard_completed") is True
 
 
-def test_wizard_completed_stays_false_on_any_failure(db):
+def test_wizard_completed_stays_false_on_total_failure(db):
+    """Total failure (0 successes, ≥1 failure) → wizard_completed stays False (issue #14).
+
+    Uses action="create" (no existing FDB filament) so even the filament creation fails,
+    yielding 0 successes total.
+    """
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "promote_color")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "create"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA Red", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[])
+    filamentdb.create_filament = AsyncMock(side_effect=RuntimeError("filament API down"))
+    filamentdb.create_spool = AsyncMock(side_effect=RuntimeError("boom"))
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] >= 1
+    assert body["created"] == 0
+    assert body["updated"] == 0
+    assert body["skipped"] == 0
+    assert body["wizard_completed"] is False
+    assert get_config_value(db, "wizard_completed") is False
+
+
+def test_wizard_completed_true_on_partial_success(db):
+    """Partial success (≥1 success AND ≥1 failure) → wizard_completed is True (issue #14)."""
     set_config_value(db, "import_direction", "spoolman")
     set_config_value(db, "wizard_match_decisions",
                      [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
     db.commit()
     spoolman = _fake_spoolman(
         filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
-        spools=[_sm_spool(1, 800.0)],
+        spools=[_sm_spool(1, 800.0), _sm_spool(2, 600.0)],
     )
     filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
-    filamentdb.create_spool = AsyncMock(side_effect=RuntimeError("boom"))
+
+    async def _create_spool_partial(filament_id, payload):
+        if payload["label"] == "2":
+            raise RuntimeError("partial fail")
+        return {"_id": "fdb-spool-1"}
+
+    filamentdb.create_spool = AsyncMock(side_effect=_create_spool_partial)
     client = _client(db, spoolman, filamentdb)
 
     body = client.post("/api/wizard/execute").json()
+    assert body["created"] == 1
     assert body["failed"] == 1
-    assert body["wizard_completed"] is False
-    assert get_config_value(db, "wizard_completed") is False
+    assert body["wizard_completed"] is True
+    assert get_config_value(db, "wizard_completed") is True
+    # wizard_last_run blob persisted with failure count
+    last_run_raw = get_config_value(db, "wizard_last_run")
+    assert last_run_raw is not None
+    import json as _json
+    last_run = _json.loads(last_run_raw) if isinstance(last_run_raw, str) else last_run_raw
+    assert last_run["failed"] == 1
+    assert last_run["created"] == 1
+    assert last_run["completed"] is True
+    # failures appear first in the records list
+    records = last_run["records"]
+    assert records[0]["action"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# Wizard last-run endpoint + sync status wizard_last_failures (issue #14)
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_last_run_returns_null_before_any_execute(db):
+    """GET /api/wizard/last-run returns null when no execute has run yet."""
+    resp = _client(db).get("/api/wizard/last-run")
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
+def test_wizard_last_run_persisted_after_execute(db):
+    """wizard execute persists the last-run blob; GET /api/wizard/last-run returns it."""
+    spoolman, filamentdb = _setup_link_execute(db)
+    client = _client(db, spoolman, filamentdb)
+
+    exec_resp = client.post("/api/wizard/execute")
+    assert exec_resp.status_code == 200
+
+    resp = client.get("/api/wizard/last-run")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data is not None
+    assert data["completed"] is True
+    assert data["failed"] == 0
+    assert data["created"] == 1
+    assert "cycle_id" in data
+    assert "at" in data
+    assert "direction" in data
+    assert isinstance(data["records"], list)
+
+
+def test_wizard_last_run_blob_records_failures_first(db):
+    """wizard_last_run blob has failed records before succeeded records."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 10, "action": "link", "filamentdb_id": "fil-1"}])
+    db.commit()
+    spoolman = _fake_spoolman(
+        filaments=[SpoolmanFilament(id=10, name="PLA", vendor=SpoolmanVendor(id=1, name="ELEGOO"))],
+        spools=[_sm_spool(1, 800.0), _sm_spool(2, 600.0)],
+    )
+    filamentdb = _fake_filamentdb(filaments=[_fdb_filament("fil-1", "ignored", 0.0)])
+
+    async def _create_spool_partial(filament_id, payload):
+        if payload["label"] == "1":
+            raise RuntimeError("first fails")
+        return {"_id": "fdb-spool-2"}
+
+    filamentdb.create_spool = AsyncMock(side_effect=_create_spool_partial)
+    client = _client(db, spoolman, filamentdb)
+    client.post("/api/wizard/execute")
+
+    resp = client.get("/api/wizard/last-run")
+    data = resp.json()
+    records = data["records"]
+    assert len(records) >= 2
+    # First record must be the failed one
+    assert records[0]["action"] == "failed"
+    # All subsequent records must not be failed
+    for rec in records[1:]:
+        assert rec["action"] != "failed"
+
+
+def test_sync_status_wizard_last_failures_zero_by_default(db):
+    """wizard_last_failures defaults to 0 when no execute has run."""
+    body = _client(db).get("/api/sync/status").json()
+    assert body["wizard_last_failures"] == 0
+
+
+def test_sync_status_wizard_last_failures_reflects_blob(db):
+    """wizard_last_failures in sync status reflects the failed count from the last run."""
+    blob = {
+        "cycle_id": "test-cycle",
+        "at": "2026-01-01T00:00:00+00:00",
+        "direction": "spoolman_to_filamentdb",
+        "created": 1,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 3,
+        "completed": True,
+        "records": [],
+    }
+    set_config_value(db, "wizard_last_run", blob)
+    db.commit()
+
+    body = _client(db).get("/api/sync/status").json()
+    assert body["wizard_last_failures"] == 3
 
 
 # ---------------------------------------------------------------------------

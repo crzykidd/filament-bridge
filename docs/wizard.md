@@ -119,12 +119,27 @@ needs to rank candidates. The sync engine opportunistically backfills this blob 
 mappings created before this feature shipped.
 
 Failures are **per-record**: a name collision or API error records a failed row and the
-run continues. The result view puts failures front and center with the record name and the
-exact error, plus a full per-record table of everything created, updated, and skipped.
+run continues. The result view puts **failures first** (red banner with per-record reason),
+then a full table of everything created, updated, and skipped.
 Each summary counter (Created / Updated / Skipped / Failed) also shows a filament/spool
 split (e.g. "2f / 5s") so it's clear how many filament pairs versus individual spools
-were affected. `wizard_completed` only flips on a zero-failure run — fix the failures and
-re-run; nothing already imported is duplicated.
+were affected.
+
+`wizard_completed` flips on any run with at least one success (**partial success** counts),
+or on a clean zero-failure run (including an empty "nothing to import" run). A **total
+failure** (0 successes, ≥1 failure) leaves the flag false so the user must re-run.
+
+### Persistent Failure Report
+
+Every execute run (that is not a fatal 502/422/409) persists a `wizard_last_run` blob
+with full per-record detail. The Dashboard shows a **yellow failure banner** when the last
+run had failures (`wizard_last_failures > 0` in the sync status). Clicking "Review
+failures" opens the **Wizard Import Report** page (`/wizard/report`), which renders
+failures-first and includes a **Re-run wizard** button.
+
+Re-running the wizard retries still-failed records. Already-imported records are skipped
+(idempotent), so nothing is duplicated. As failures succeed on re-run, the failure count
+drops to 0 and the Dashboard banner disappears.
 
 ### Idempotent re-runs — find-or-attach on 409
 

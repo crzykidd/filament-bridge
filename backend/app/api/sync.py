@@ -170,6 +170,15 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
     if auto_enabled and last_sync_at is not None:
         next_sync_at = last_sync_at + datetime.timedelta(seconds=_effective_sync_interval(db))
 
+    # wizard_last_failures: read from the persisted last-run blob (0 when no blob).
+    _last_run = get_config_value(db, "wizard_last_run", None)
+    wizard_last_failures = 0
+    if isinstance(_last_run, dict):
+        try:
+            wizard_last_failures = int(_last_run.get("failed", 0))
+        except Exception:  # noqa: BLE001
+            pass
+
     return SyncStatusResponse(
         last_sync_at=last_sync_at,
         next_sync_at=next_sync_at,
@@ -181,4 +190,5 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
         systems=systems,
         sync_blocked=bool(blocked_reasons),
         sync_blocked_reasons=blocked_reasons,
+        wizard_last_failures=wizard_last_failures,
     )

@@ -65,6 +65,7 @@ function makeStatus(overrides?: Partial<SyncStatusResponse>): SyncStatusResponse
     systems: {},
     sync_blocked: false,
     sync_blocked_reasons: [],
+    wizard_last_failures: 0,
     ...overrides,
   }
 }
@@ -148,6 +149,25 @@ describe('Dashboard — filament-level counts', () => {
       expect(screen.getByText('6')).toBeInTheDocument()   // filament total
       expect(screen.getByText('2')).toBeInTheDocument()   // spool unlinked
     })
+  })
+
+  it('shows the wizard failure banner when wizard_last_failures > 0', async () => {
+    mockUsePoll(makeStatus({ wizard_last_failures: 2 }))
+    render(<Dashboard />)
+    await waitFor(() => {
+      expect(screen.getByText(/completed with/i)).toBeInTheDocument()
+    })
+    const review = screen.getByRole('link', { name: /review failures/i })
+    expect(review).toHaveAttribute('href', '/wizard/report')
+  })
+
+  it('hides the wizard failure banner when there are no failures', async () => {
+    mockUsePoll(makeStatus({ wizard_last_failures: 0 }))
+    render(<Dashboard />)
+    await waitFor(() => {
+      expect(screen.getByText('Filaments')).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/review failures/i)).not.toBeInTheDocument()
   })
 
   it('shows zeros when filament_counts is empty (backward compat)', async () => {

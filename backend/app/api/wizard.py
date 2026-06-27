@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 
@@ -97,6 +98,7 @@ from app.schemas.api import (
     WizardExecuteRecord,
     WizardExecuteRequest,
     WizardExecuteResponse,
+    WizardLastRunResponse,
     WizardMatchesRequest,
     WizardMatchesResponse,
     WizardPreviewResponse,
@@ -2692,11 +2694,28 @@ async def wizard_execute(
             precision=precision,
         )
 
-    # Only flip wizard_completed when the run had zero failures. A partial run
-    # leaves the flag false so the user can fix issues and re-run (idempotent).
-    wizard_done = res.failed == 0
+    # Flip wizard_completed on any run with at least one success (partial success counts),
+    # OR on a clean zero-failure run (incl. empty "nothing to import"). Total failure
+    # (0 successes, ≥1 failure) leaves the flag false so the user can fix and re-run.
+    wizard_done = (res.created + res.updated + res.skipped) > 0 or res.failed == 0
     if wizard_done:
         set_config_value(db, "wizard_completed", True)
+
+    # Persist the run summary so the Dashboard can show a durable Failure Report.
+    # Records are sorted failures-first so the report renders most-important items at top.
+    _sorted_records = sorted(res.records, key=lambda r: 0 if r.action == "failed" else 1)
+    _last_run_blob = {
+        "cycle_id": res.cycle_id,
+        "at": datetime.now(timezone.utc).isoformat(),
+        "direction": res.direction,
+        "created": res.created,
+        "updated": res.updated,
+        "skipped": res.skipped,
+        "failed": res.failed,
+        "completed": wizard_done,
+        "records": [r.model_dump() for r in _sorted_records],
+    }
+    set_config_value(db, "wizard_last_run", _last_run_blob)
     db.commit()
 
     logger.info(
@@ -2727,3 +2746,20 @@ async def wizard_execute(
         failed_filaments=_type_action_counts.get(("filament", "failed"), 0),
         failed_spools=_type_action_counts.get(("spool", "failed"), 0),
     )
+
+
+@router.get("/wizard/last-run", response_model=WizardLastRunResponse | None)
+async def wizard_last_run_summary(db: Session = Depends(get_db)) -> WizardLastRunResponse | None:
+    """Return the persisted summary of the most recent wizard execute run (issue #14).
+
+    Returns null (204-equivalent body) when no run has been executed yet.
+    Records are ordered failures-first so clients can render the Failure Report
+    without additional sorting.
+    """
+    data = get_config_value(db, "wizard_last_run", None)
+    if not isinstance(data, dict):
+        return None
+    try:
+        return WizardLastRunResponse(**data)
+    except Exception:  # noqa: BLE001
+        return None

@@ -123,6 +123,13 @@ _DEFAULTS = {
     #         "filamentdb": <path|null>, "pruned": [...names]} on success,
     # or {"at": <UTC iso>, "ok": false, "error": <str>} on failure.
     "backup_last_run": "null",
+    # Last wizard execute run summary (issue #14). Written by wizard_execute in api/wizard.py;
+    # never user-editable. Null until the first execute run completes (even partial).
+    # Shape: {"cycle_id", "at": <UTC iso>, "direction", "created", "updated", "skipped",
+    #         "failed", "completed": bool, "records": [WizardExecuteRecord dicts]}.
+    # Records are ordered: failures first, then succeeded. Persisted on every execute
+    # that reaches the gate (fatal 502/422/409 short-circuits before persisting).
+    "wizard_last_run": "null",
 }
 
 
