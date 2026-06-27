@@ -9,6 +9,15 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bulk Import Wizard no longer crashes on the Variances step** — selecting spools and
+  proceeding to the Spoolman → Filament DB variances/tare review threw "Cannot access
+  'effectiveUngrouped' before initialization" and rendered an error page, making imports in
+  that direction impossible (regression introduced with the v0.6.3 required-tare change). A
+  `useMemo` was declared before the variables it reads; it's now ordered correctly, with a
+  render regression test guarding it. Closes #42.
+
 ## [0.6.4] — 2026-06-27
 
 ### Added
