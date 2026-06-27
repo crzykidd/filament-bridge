@@ -184,7 +184,33 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
   type VariancesSortKey = 'vendor' | 'material'
   const [sortBy, setSortBy] = useState<VariancesSortKey>('vendor')
 
-  // Compute how many filaments still need a tare value entered (blocks "Save & Next")
+  // Lookup map: all filament data by SM id (static from API response)
+  const allFilamentData = useMemo(() => {
+    const map = new Map<number, VariancesFilament>()
+    for (const g of data.groups) {
+      for (const m of g.members) map.set(m.ref.spoolman_filament_id!, m)
+    }
+    for (const f of data.ungrouped) map.set(f.ref.spoolman_filament_id!, f)
+    return map
+  }, [data])
+
+  // Effective ungrouped pool: all filaments NOT in any group AND not ignored
+  const effectiveUngrouped = useMemo<VariancesFilament[]>(() => {
+    const inAnyGroup = new Set<number>()
+    for (const membership of Object.values(groupMembership)) {
+      for (const id of membership) inAnyGroup.add(id)
+    }
+    for (const membership of Object.values(extraGroupMemberships)) {
+      for (const id of membership) inAnyGroup.add(id)
+    }
+    return Array.from(allFilamentData.values()).filter(
+      f => !inAnyGroup.has(f.ref.spoolman_filament_id!) && !ignoredIds.has(f.ref.spoolman_filament_id!)
+    )
+  }, [allFilamentData, groupMembership, extraGroupMemberships, ignoredIds])
+
+  // Compute how many filaments still need a tare value entered (blocks "Save & Next").
+  // MUST be declared after effectiveUngrouped/allFilamentData — it reads them, so an earlier
+  // placement throws "Cannot access 'effectiveUngrouped' before initialization" (TDZ) at render.
   const missingTareCount = useMemo(() => {
     let count = 0
     // Check auto-group masters (tare applies to the whole group via master)
@@ -209,30 +235,6 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
     }
     return count
   }, [data.groups, groupMembership, masters, extraGroupMemberships, extraMasters, effectiveUngrouped, tareBySMId])
-
-  // Lookup map: all filament data by SM id (static from API response)
-  const allFilamentData = useMemo(() => {
-    const map = new Map<number, VariancesFilament>()
-    for (const g of data.groups) {
-      for (const m of g.members) map.set(m.ref.spoolman_filament_id!, m)
-    }
-    for (const f of data.ungrouped) map.set(f.ref.spoolman_filament_id!, f)
-    return map
-  }, [data])
-
-  // Effective ungrouped pool: all filaments NOT in any group AND not ignored
-  const effectiveUngrouped = useMemo<VariancesFilament[]>(() => {
-    const inAnyGroup = new Set<number>()
-    for (const membership of Object.values(groupMembership)) {
-      for (const id of membership) inAnyGroup.add(id)
-    }
-    for (const membership of Object.values(extraGroupMemberships)) {
-      for (const id of membership) inAnyGroup.add(id)
-    }
-    return Array.from(allFilamentData.values()).filter(
-      f => !inAnyGroup.has(f.ref.spoolman_filament_id!) && !ignoredIds.has(f.ref.spoolman_filament_id!)
-    )
-  }, [allFilamentData, groupMembership, extraGroupMemberships, ignoredIds])
 
   function pickMaster(groupIdx: number, smId: number) {
     setMasters(prev => ({ ...prev, [groupIdx]: smId }))

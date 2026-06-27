@@ -9,6 +9,24 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-06-27
+
+### Added
+
+- **Sortable columns on the Synced Records page** — click a column header to sort by Name,
+  Vendor, Spoolman weight, Filament DB weight, or Last synced (click again to reverse; rows
+  with a missing value always sort last). Sorting applies to the current filtered/searched
+  set. Closes #41.
+
+### Fixed
+
+- **Bulk Import Wizard no longer crashes on the Variances step** — selecting spools and
+  proceeding to the Spoolman → Filament DB variances/tare review threw "Cannot access
+  'effectiveUngrouped' before initialization" and rendered an error page, making imports in
+  that direction impossible (regression introduced with the v0.6.3 required-tare change). A
+  `useMemo` was declared before the variables it reads; it's now ordered correctly, with a
+  render regression test guarding it. Closes #42.
+
 ## [0.6.4] — 2026-06-27
 
 ### Added
