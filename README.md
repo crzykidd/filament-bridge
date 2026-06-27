@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.4-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.5-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,11 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.5 (2026-06-27)
+
+- **Fixed: Bulk Import Wizard crash** — the Spoolman → Filament DB Variances step threw "Cannot access … before initialization" and showed an error page, making imports in that direction impossible (regression from the v0.6.3 required-tare change). It now renders correctly, guarded by a regression test. (#42)
+- **Sortable columns on Synced Records** — click a column header to sort by Name, Vendor, Spoolman weight, Filament DB weight, or Last synced (click again to reverse). (#41)
 
 ### v0.6.4 (2026-06-27)
 

@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-06-27
+
 ### Added
 
 - **Sortable columns on the Synced Records page** — click a column header to sort by Name,
