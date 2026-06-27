@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-06-27
+
 ### Added
 
 - **Backup status surfaced in the UI** — the Dashboard now shows a compact "Last backup /
