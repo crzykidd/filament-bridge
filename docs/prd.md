@@ -259,8 +259,17 @@ Field names are configurable via environment variables.
 - Log all actions for audit trail; report created / updated / skipped / failed with a
   human-readable label and error detail per record; failures are surfaced prominently in
   the Execute result view
-- `wizard_completed` flips only on a zero-failure run; the wizard is re-runnable and
-  idempotent — already-linked records are skipped
+- `wizard_completed` flips on any run with at least one success (partial success counts),
+  or on a clean zero-failure run (including an empty "nothing to import" run). A total
+  failure (0 successes, ≥1 failure) leaves the flag false so the user must re-run.
+- Every execute that reaches the gate (fatal 502/422/409 short-circuit before this)
+  persists a `wizard_last_run` blob in BridgeConfig with counts + per-record detail,
+  records ordered failures-first. `GET /api/wizard/last-run` returns the blob.
+- A **Failure Report** is surfaced on the Dashboard as a persistent banner when
+  `wizard_last_failures > 0` (from `GET /api/sync/status`), linking to `/wizard/report`
+  which renders the persisted blob (failures-first). The banner survives navigation and
+  reload. Re-running the wizard retries failed records; the report clears as they succeed.
+- The wizard is re-runnable and idempotent — already-linked records are skipped
 
 ### P0 — Continuous sync engine
 

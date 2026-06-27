@@ -18,6 +18,7 @@ import Reconcile from './pages/Reconcile'
 import TareEditor from './pages/TareEditor'
 import DocsViewer from './pages/DocsViewer'
 import { WizardShell } from './pages/Wizard'
+import WizardFailureReport from './pages/WizardFailureReport'
 import MobileUpdates from './pages/MobileUpdates'
 import ScanTarget from './pages/ScanTarget'
 import Login from './pages/Login'
@@ -50,6 +51,7 @@ const router = createBrowserRouter(
         <Route path="reconcile" element={<Reconcile />} />
         <Route path="tare-editor" element={<TareEditor />} />
         <Route path="mobile-updates" element={<MobileUpdates />} />
+        <Route path="wizard/report" element={<WizardFailureReport />} />
         <Route path="wizard/*" element={<WizardShell />} />
         <Route path="docs" element={<DocsViewer />} />
         <Route path="docs/:slug" element={<DocsViewer />} />

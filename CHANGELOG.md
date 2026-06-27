@@ -9,6 +9,18 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Wizard partial-success completion + persistent Failure Report** — the wizard now
+  completes (`wizard_completed = true`) on any run with at least one success, not only on
+  zero-failure runs. A total failure (0 successes, ≥1 failure) still leaves the flag false.
+  Every execute run persists a `wizard_last_run` blob (failures-first record ordering) in
+  BridgeConfig, served by a new `GET /api/wizard/last-run` endpoint. The Dashboard shows
+  a persistent amber banner when `wizard_last_failures > 0` (from sync status), linking to
+  a new **Wizard Import Report** page (`/wizard/report`) that renders the persisted
+  failures-first report and includes a **Re-run wizard** button. Re-running is idempotent
+  — already-imported records skip; the banner disappears when failures reach 0. Closes #14.
+
 ## [0.6.3] — 2026-06-27
 
 ### Added

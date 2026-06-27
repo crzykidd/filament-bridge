@@ -111,6 +111,9 @@ class SyncStatusResponse(BaseModel):
     # refused. blocked_reasons holds the per-system upgrade messages.
     sync_blocked: bool = False
     sync_blocked_reasons: list[str] = []
+    # Number of failed records from the last wizard execute run (0 = no failures / no run).
+    # Drives the persistent Dashboard failure banner (issue #14).
+    wizard_last_failures: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -732,6 +735,24 @@ class WizardExecuteResponse(BaseModel):
     skipped_spools: int = 0
     failed_filaments: int = 0
     failed_spools: int = 0
+
+
+class WizardLastRunResponse(BaseModel):
+    """Persisted summary of the most recent wizard execute run (issue #14).
+
+    Returned by GET /api/wizard/last-run. Records are ordered failures-first so
+    the Dashboard Failure Report shows the most important items at the top.
+    """
+
+    cycle_id: str
+    at: str  # ISO datetime string (UTC)
+    direction: str
+    created: int
+    updated: int
+    skipped: int
+    failed: int
+    completed: bool
+    records: list[WizardExecuteRecord]
 
 
 # ---------------------------------------------------------------------------

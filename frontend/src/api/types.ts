@@ -106,6 +106,8 @@ export interface SyncStatusResponse {
   systems: Record<string, SystemStatus>
   sync_blocked: boolean
   sync_blocked_reasons: string[]
+  /** Number of failed records from the last wizard execute run (0 = none/no run). */
+  wizard_last_failures: number
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +651,19 @@ export interface WizardExecuteResponse {
   skipped_spools: number
   failed_filaments: number
   failed_spools: number
+}
+
+export interface WizardLastRunResponse {
+  cycle_id: string
+  at: string
+  direction: string
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  completed: boolean
+  /** Records ordered failures-first, then succeeded. */
+  records: WizardExecuteRecord[]
 }
 
 // ---------------------------------------------------------------------------

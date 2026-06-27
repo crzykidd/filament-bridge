@@ -171,6 +171,22 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Wizard failure banner — shown when the last execute run had failures */}
+      {(data?.wizard_last_failures ?? 0) > 0 && (
+        <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 flex items-center justify-between gap-4">
+          <p className="text-sm text-amber-800 dark:text-amber-300">
+            Last wizard import completed with <strong>{data!.wizard_last_failures}</strong> failure{data!.wizard_last_failures !== 1 ? 's' : ''}.
+            Re-running the wizard retries failed records.
+          </p>
+          <Link
+            to="/wizard/report"
+            className="shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded"
+          >
+            Review failures
+          </Link>
+        </div>
+      )}
+
       {/* Spools sync state */}
       <div>
         <h2 className="flex items-center text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
