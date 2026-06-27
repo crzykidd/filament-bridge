@@ -480,6 +480,9 @@ New records are handled by two independent runtime settings (both default `manua
 - **Each row displays two text-badge links** ("FDB"/"SM") to the record in Filament DB and Spoolman
 - Filterable by status (all / in sync / pending / conflict / unlinked); full-text search by
   name, vendor, or color; **expand-all / collapse-all** controls
+- **Sortable columns** — click a header to sort by Name, Vendor, Spoolman weight, Filament DB
+  weight, or Last synced (toggles ascending/descending; rows with a missing value sort last).
+  Sorting applies to the currently filtered/searched set
 - **Hide empty spools** toggle (hides spools where Spoolman remaining_weight ≈ 0)
 - Visual indicators for: in sync (green), pending sync (yellow), conflict (red), unlinked (grey)
 - **Expandable per-row detail:** clicking a row (or the chevron) expands a section showing

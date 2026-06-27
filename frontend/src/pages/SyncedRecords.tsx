@@ -8,10 +8,22 @@ import { ColorDisplay } from '../components/ColorDisplay'
 import { HelpTip } from '../components/HelpTip'
 import { PrintLabelButton } from '../components/PrintLabelButton'
 import type { MappingDetailField, MappingRow, MappingStatus } from '../api/types'
-import { formatLocal } from '../utils/datetime'
+import { formatLocal, parseUtc } from '../utils/datetime'
 
 function isFilamentRow(row: MappingRow): boolean {
   return row.kind === 'filament'
+}
+
+type SortKey = 'name' | 'vendor' | 'spoolman_weight' | 'filamentdb_weight' | 'last_synced'
+type SortDir = 'asc' | 'desc'
+
+// Column header label → sortable row field. Headers absent here are not sortable.
+const SORTABLE: Record<string, SortKey> = {
+  Name: 'name',
+  Vendor: 'vendor',
+  'SM weight': 'spoolman_weight',
+  'FDB weight': 'filamentdb_weight',
+  'Last synced': 'last_synced',
 }
 
 const STATUS_OPTIONS: Array<{ value: MappingStatus | ''; label: string }> = [
@@ -68,6 +80,8 @@ export default function SyncedRecords() {
   const [statusFilter, setStatusFilter] = useState<MappingStatus | ''>('')
   const [search, setSearch] = useState('')
   const [hideEmpty, setHideEmpty] = useState(false)
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   // The Print-label action only appears when the mobile/labels feature is enabled.
   const [labelsEnabled, setLabelsEnabled] = useState(false)
@@ -84,6 +98,16 @@ export default function SyncedRecords() {
       return next
     })
 
+  // Click a sortable header: same column toggles asc↔desc; a new column starts ascending.
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+
   let rows: MappingRow[] = data ?? []
   if (statusFilter) rows = rows.filter(r => r.status === statusFilter)
   if (hideEmpty) rows = rows.filter(r => !r.is_empty)
@@ -94,6 +118,29 @@ export default function SyncedRecords() {
       r.vendor?.toLowerCase().includes(q) ||
       r.color?.toLowerCase().includes(q)
     )
+  }
+  if (sortKey) {
+    const dir = sortDir === 'asc' ? 1 : -1
+    // Copy before sorting so we never mutate the cached `data` array (rows === data when unfiltered).
+    rows = [...rows].sort((a, b) => {
+      const av = a[sortKey]
+      const bv = b[sortKey]
+      // Missing values always sort last, regardless of direction.
+      const aEmpty = av === null || av === undefined || av === ''
+      const bEmpty = bv === null || bv === undefined || bv === ''
+      if (aEmpty && bEmpty) return 0
+      if (aEmpty) return 1
+      if (bEmpty) return -1
+      let cmp: number
+      if (sortKey === 'name' || sortKey === 'vendor') {
+        cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' })
+      } else if (sortKey === 'last_synced') {
+        cmp = parseUtc(String(av)).getTime() - parseUtc(String(bv)).getTime()
+      } else {
+        cmp = (av as number) - (bv as number)
+      }
+      return cmp * dir
+    })
   }
 
   const emptyMessage = EMPTY_MESSAGES[statusFilter] ?? 'No records'
@@ -158,21 +205,33 @@ export default function SyncedRecords() {
               <thead className="bg-gray-50 dark:bg-gray-750">
                 <tr>
                   <th className="w-8 px-2 py-3" />
-                  {(['Name', 'Vendor', 'Color', 'SM weight', 'FDB weight', 'Status', 'Last synced', 'Links'] as const).map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                      {h === 'SM weight' ? (
-                        <span className="inline-flex items-center">
-                          SM weight
-                          <HelpTip text="Net filament weight from Spoolman (reel excluded), as of the last sync." />
-                        </span>
-                      ) : h === 'FDB weight' ? (
-                        <span className="inline-flex items-center">
-                          FDB weight
-                          <HelpTip text="Gross weight from Filament DB (filament + empty reel), as of the last sync." />
-                        </span>
-                      ) : h}
-                    </th>
-                  ))}
+                  {(['Name', 'Vendor', 'Color', 'SM weight', 'FDB weight', 'Status', 'Last synced', 'Links'] as const).map(h => {
+                    const sk: SortKey | undefined = SORTABLE[h]
+                    const active = sk && sortKey === sk
+                    return (
+                      <th
+                        key={h}
+                        onClick={sk ? () => toggleSort(sk) : undefined}
+                        aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined}
+                        className={`px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide ${
+                          sk ? 'cursor-pointer select-none hover:text-gray-700 dark:hover:text-gray-200' : ''
+                        }`}
+                      >
+                        {h === 'SM weight' ? (
+                          <span className="inline-flex items-center">
+                            SM weight
+                            <HelpTip text="Net filament weight from Spoolman (reel excluded), as of the last sync." />
+                          </span>
+                        ) : h === 'FDB weight' ? (
+                          <span className="inline-flex items-center">
+                            FDB weight
+                            <HelpTip text="Gross weight from Filament DB (filament + empty reel), as of the last sync." />
+                          </span>
+                        ) : h}
+                        {active && <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>}
+                      </th>
+                    )
+                  })}
                   {labelsEnabled && (
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
                       Labels

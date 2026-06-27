@@ -9,6 +9,13 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Sortable columns on the Synced Records page** — click a column header to sort by Name,
+  Vendor, Spoolman weight, Filament DB weight, or Last synced (click again to reverse; rows
+  with a missing value always sort last). Sorting applies to the current filtered/searched
+  set. Closes #41.
+
 ### Fixed
 
 - **Bulk Import Wizard no longer crashes on the Variances step** — selecting spools and

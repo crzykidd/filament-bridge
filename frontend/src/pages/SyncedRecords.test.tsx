@@ -56,6 +56,7 @@ vi.mock('../api/hooks', () => ({
 
 vi.mock('../utils/datetime', () => ({
   formatLocal: (v: string | null) => v ?? '—',
+  parseUtc: (v: string) => new Date(v),
 }))
 
 import { useApi } from '../api/hooks'
@@ -202,6 +203,52 @@ describe('SyncedRecords — "See conflict" link', () => {
     ])
     const buttons = screen.getAllByRole('button', { name: /see conflict/i })
     expect(buttons).toHaveLength(2)
+  })
+})
+
+describe('SyncedRecords — sortable columns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const rowA = makeInSyncRow({ id: 1, name: 'Charlie', vendor: 'Zeta', spoolman_weight: 100, filamentdb_weight: 900 })
+  const rowB = makeInSyncRow({ id: 2, name: 'Alpha', vendor: 'Mu', spoolman_weight: 300, filamentdb_weight: 500 })
+  const rowC = makeInSyncRow({ id: 3, name: 'Bravo', vendor: 'Aardvark', spoolman_weight: 200, filamentdb_weight: 700 })
+
+  // Read the rendered name column (td:nth-child(2)) in DOM order, skipping the header row.
+  function rowNames(): string[] {
+    return screen.getAllByRole('row')
+      .slice(1)
+      .map(r => (r.querySelector('td:nth-child(2)')?.textContent ?? '').trim())
+  }
+
+  it('sorts by Name ascending, then descending on a second click', () => {
+    renderWithRows([rowA, rowB, rowC])
+    fireEvent.click(screen.getByText('Name'))
+    expect(rowNames()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+    fireEvent.click(screen.getByText('Name'))
+    expect(rowNames()).toEqual(['Charlie', 'Bravo', 'Alpha'])
+  })
+
+  it('sorts by SM weight numerically (not lexically)', () => {
+    renderWithRows([rowA, rowB, rowC])
+    fireEvent.click(screen.getByText('SM weight'))
+    expect(rowNames()).toEqual(['Charlie', 'Bravo', 'Alpha']) // 100, 200, 300
+  })
+
+  it('sorts by Vendor ascending', () => {
+    renderWithRows([rowA, rowB, rowC])
+    fireEvent.click(screen.getByText('Vendor'))
+    expect(rowNames()).toEqual(['Bravo', 'Alpha', 'Charlie']) // Aardvark, Mu, Zeta
+  })
+
+  it('keeps rows with a missing weight value last in both directions', () => {
+    const noWeight = makeInSyncRow({ id: 4, name: 'NoWeight', spoolman_weight: null })
+    renderWithRows([rowB, noWeight]) // Alpha=300, NoWeight=null
+    fireEvent.click(screen.getByText('SM weight')) // asc
+    expect(rowNames()).toEqual(['Alpha', 'NoWeight'])
+    fireEvent.click(screen.getByText('SM weight')) // desc — null still last
+    expect(rowNames()).toEqual(['Alpha', 'NoWeight'])
   })
 })
 
