@@ -1,5 +1,26 @@
 # Decision record
 
+## 2026-06-28 — `new_filament`/`new_spool` conflicts update in place (stable id), GitHub #44
+
+**Context.** `_upsert_new_record_conflict` (`core/engine.py`) used **delete-and-recreate**: every
+sync cycle it deleted the open conflict for an unmapped record and inserted a fresh row. Any record
+that stayed unmapped across cycles (i.e. the whole migration backlog) got a **new autoincrement id
+every ~120s** — observed ids climbed into the millions. The Conflicts UI holds the id from its last
+list fetch; the moment a cycle fired, that id was gone, so `GET /conflicts/{id}/filament-suggestions`
+and `POST /conflicts/{id}/import` (both `filter_by(id=...)`) returned **404 "No conflict with id N"**,
+breaking the Add → link/import flow and leaving the preview greyed out.
+
+**Decision.** Make the upsert **update the matching open conflict in place**, preserving its `id`;
+only insert when none exists; prune any extra duplicate open rows. Same one-open-conflict-per-(item,
+kind) guarantee and same match key (entity_type, field_name, spoolman_id OR fdb_filament_id OR
+fdb_spool_id), but the id is now **stable across cycles**, so a held UI id stays valid. This also
+stops the runaway autoincrement churn.
+
+**Frontend guard.** The Conflicts Add flow additionally treats a `404 conflict_not_found` as a
+recoverable "the list was refreshed by a background sync — reopen Add and try again" state (reloads
+the list via `onResolved`) instead of surfacing the raw error. Defensive — the backend fix removes
+the root cause, but it covers pre-existing stale rows and any future churn source.
+
 ## 2026-06-24 — Sync spool location in the continuous engine, compared by name (`location_sync`, GitHub #29)
 
 **Context.** The ongoing sync engine never diffed or propagated spool **location**: a location

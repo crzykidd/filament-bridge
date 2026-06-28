@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conflict "Add" no longer breaks after a sync cycle** — for records that stayed unmapped
+  across cycles (a large migration backlog), the bridge re-created each `new_filament`/`new_spool`
+  conflict every sync with a brand-new id. The Conflicts page held the old id, so clicking
+  **Add → Link to existing filament** failed with "Could not load suggestions: No conflict with
+  id …" and left the preview greyed out (the import call hit the same stale-id 404). Conflicts
+  are now updated in place with a stable id across cycles, and the Add flow recovers gracefully if
+  it ever does hit a stale id. Closes #44.
+
 ## [0.6.5] — 2026-06-27
 
 ### Added

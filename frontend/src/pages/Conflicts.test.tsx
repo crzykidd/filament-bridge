@@ -23,6 +23,13 @@ vi.mock('../api/client', () => ({
   bulkResolveConflicts: vi.fn(),
   importConflictRecord: vi.fn(),
   getFilamentSuggestions: vi.fn(),
+  // Real error class so `e instanceof BridgeApiError` works in catch paths.
+  BridgeApiError: class BridgeApiError extends Error {
+    constructor(public status: number, public code: string, message: string) {
+      super(message)
+      this.name = 'BridgeApiError'
+    }
+  },
 }))
 
 // Mock react-router-dom: provide a controllable useSearchParams.
@@ -49,7 +56,7 @@ vi.mock('../api/hooks', () => ({
   useApi: vi.fn(),
 }))
 
-import { getDivergenceContext, resolveConflict, importConflictRecord, getFilamentSuggestions } from '../api/client'
+import { getDivergenceContext, resolveConflict, importConflictRecord, getFilamentSuggestions, BridgeApiError } from '../api/client'
 import { useApi } from '../api/hooks'
 import type { ConflictResponse, DivergenceContextResponse, FilamentSuggestionsResponse, WizardExecuteResponse } from '../api/types'
 
@@ -878,6 +885,30 @@ describe('Conflicts page — Add "link" suggestions dropdown', () => {
     await waitFor(() => {
       expect(screen.getByText(/No suggestions/i)).toBeInTheDocument()
     })
+  })
+
+  it('recovers gracefully when a background sync churned the conflict id (stale-id 404)', async () => {
+    // The conflict the UI holds was replaced by a sync cycle → suggestions 404s.
+    vi.mocked(getFilamentSuggestions).mockRejectedValue(
+      new BridgeApiError(404, 'conflict_not_found', 'No conflict with id 1040242'),
+    )
+
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    // Friendly recovery message — not the raw "No conflict with id" error.
+    await waitFor(() => {
+      expect(screen.getByText(/refreshed by a background sync/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/No conflict with id 1040242/)).not.toBeInTheDocument()
   })
 })
 
