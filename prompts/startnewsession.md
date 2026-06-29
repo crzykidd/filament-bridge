@@ -61,8 +61,10 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - **Every commit that resolves a tracked issue ends its body with `Fixes #N`** (one per
   issue it closes) — whether the issue was named by the user or filed from chat. This is
   required for traceability, not optional.
-- For a bug reported **in chat with no GitHub issue**, `gh issue create` one first, then
-  reference it with `Fixes #N` in the fix commit body.
+- For a bug reported **in chat with no GitHub issue** — **or any major issue/bug we
+  discover during work** — `gh issue create` a full issue first, then reference it with
+  `Fixes #N` in the fix commit body so it closes with the fix. **If you're unsure whether
+  something warrants its own issue, ASK** — don't silently skip it or silently file it.
 - In the **release PR body**, add one closing keyword **per issue** (`Fixes #22`,
   `fixes #26`, `fixes #31`) — keywords do NOT distribute across a list, and a squash
   merge discards commit trailers, so **the PR body is the reliable closer** (the commit
