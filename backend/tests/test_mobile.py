@@ -65,6 +65,7 @@ def _fake_filamentdb(detail=None, locations=None) -> AsyncMock:
     client.get_filament = AsyncMock(return_value=detail)
     client.update_spool = AsyncMock(return_value={})
     client.log_usage = AsyncMock(return_value={})
+    client.add_dry_cycle = AsyncMock(return_value={})
     client.get_locations = AsyncMock(return_value=locations or [])
     client.create_location = AsyncMock(return_value={"_id": "loc-new", "name": "X"})
     return client
@@ -563,3 +564,109 @@ def test_search_spools_only_returns_spool_rows():
     assert r.status_code == 200
     # No spool rows exist — the filament-only row must not be returned.
     assert len(r.json()) == 0
+
+
+# ===========================================================================
+# Dry cycle — POST /api/mobile/spool/{fil}/{spool}/dry-cycle
+# ===========================================================================
+
+
+def _fdb_detail_with_drying(gross=1000.0):
+    """FDB detail carrying dryingTemperature + dryingTime + a spool dryCycles array.
+
+    Mirrors the real GET /api/filaments/:id shape: the spool carries a dryCycles[]
+    array of {date, tempC, durationMin} entries (no convenience lastDriedAt/
+    dryCycleCount fields — those are computed and not reliably returned). The newest
+    cycle date is deliberately NOT last in the array, to exercise the newest-wins
+    derivation.
+    """
+    return FDBFilamentDetail.model_validate({
+        "_id": "fil-1", "name": "PLA", "spoolWeight": 200.0, "colorName": "Galaxy Black",
+        "color": "#111111", "type": "PLA", "_inherited": [],
+        "dryingTemperature": 65,
+        "dryingTime": 240,
+        "spools": [{
+            "_id": "spool-1", "totalWeight": gross, "retired": False,
+            "dryCycles": [
+                {"date": "2026-05-01T10:00:00Z", "tempC": 60, "durationMin": 180},
+                {"date": "2026-06-01T10:00:00Z", "tempC": 65, "durationMin": 240},
+                {"date": "2026-04-01T10:00:00Z", "tempC": 55, "durationMin": 120},
+            ],
+        }],
+    })
+
+
+def test_dry_cycle_calls_add_dry_cycle_and_returns_detail():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    spoolman = _fake_spoolman(spool=_sm_spool())
+    filamentdb = _fake_filamentdb(detail=_fdb_detail_with_drying())
+    client = _client(db, spoolman, filamentdb)
+
+    r = client.post(
+        "/api/mobile/spool/fil-1/spool-1/dry-cycle",
+        json={"temp_c": 65, "duration_min": 240, "notes": "pre-print"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["filamentdb_spool_id"] == "spool-1"
+    # add_dry_cycle called once with camelCase FDB keys (no date).
+    filamentdb.add_dry_cycle.assert_awaited_once_with(
+        "fil-1", "spool-1",
+        {"tempC": 65, "durationMin": 240, "notes": "pre-print"},
+    )
+
+
+def test_dry_cycle_omits_none_fields():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    spoolman = _fake_spoolman(spool=_sm_spool())
+    filamentdb = _fake_filamentdb(detail=_fdb_detail())
+    client = _client(db, spoolman, filamentdb)
+
+    r = client.post("/api/mobile/spool/fil-1/spool-1/dry-cycle", json={})
+    assert r.status_code == 200
+    # No fields → empty dict passed to add_dry_cycle.
+    filamentdb.add_dry_cycle.assert_awaited_once_with("fil-1", "spool-1", {})
+
+
+def test_dry_cycle_403_when_feature_disabled():
+    db = _make_db()  # mobile_labels_enabled defaults to false
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb(detail=_fdb_detail()))
+    r = client.post("/api/mobile/spool/fil-1/spool-1/dry-cycle", json={"temp_c": 65})
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "mobile_labels_disabled"
+
+
+def test_dry_cycle_404_when_unmapped():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb(detail=_fdb_detail()))
+    r = client.post("/api/mobile/spool/fil-1/spool-1/dry-cycle", json={"temp_c": 65})
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "spool_not_mapped"
+
+
+@pytest.mark.asyncio
+async def test_assemble_spool_detail_surfaces_drying_fields():
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    spoolman = _fake_spoolman(spool=_sm_spool())
+    filamentdb = _fake_filamentdb(detail=_fdb_detail_with_drying())
+
+    detail = await assemble_spool_detail(
+        db, spoolman, filamentdb, fdb_fil_id="fil-1", fdb_spool_id="spool-1",
+    )
+    assert detail is not None
+    assert detail.recommended_drying_temp_c == 65
+    assert detail.recommended_drying_time_min == 240
+    assert detail.last_dried_at == "2026-06-01T10:00:00Z"
+    assert detail.dry_cycle_count == 3

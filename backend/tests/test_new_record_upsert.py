@@ -157,6 +157,46 @@ async def test_two_cycles_produce_one_new_filament_conflict(db):
 
 
 @pytest.mark.asyncio
+async def test_conflict_id_is_stable_across_cycles(db):
+    """Re-queuing the same unmapped item across cycles UPDATES the row in place — its
+    `id` is preserved (issue #44).  A churned id would 404 the Add/import/suggestions
+    endpoints (which look the conflict up by id) the moment a sync cycle fires."""
+    from app.core.engine import run_sync_cycle
+
+    sm_spool = _sm_spool_rich(1, filament_id=10, vendor="ELEGOO", name="PLA Wood", color_hex="8B5E3C", material="PLA")
+    _seed_policy(db, filament_policy="manual_review")
+    spoolman = _fake_spoolman(spools=[sm_spool])
+    fdb_client = _fake_filamentdb(filaments=[])
+
+    def _open_id() -> int:
+        c = (
+            db.query(Conflict)
+            .filter(
+                Conflict.resolved_at.is_(None),
+                Conflict.entity_type == "filament",
+                Conflict.field_name == "new_filament",
+                Conflict.spoolman_id == 10,
+            )
+            .one()
+        )
+        return c.id
+
+    with patch("app.core.engine._settings") as ms:
+        _default_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="stable-1")
+        db.expire_all()
+        first_id = _open_id()
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="stable-2")
+        db.expire_all()
+        second_id = _open_id()
+
+    assert first_id == second_id, (
+        f"Conflict id must be stable across cycles (was {first_id}, became {second_id}) — "
+        "a churned id breaks the Add/import/suggestions by-id lookup"
+    )
+
+
+@pytest.mark.asyncio
 async def test_pre_seeded_duplicate_collapses_on_next_cycle(db):
     """A pre-seeded duplicate new_filament conflict collapses to one on the next cycle."""
     from app.core.engine import run_sync_cycle

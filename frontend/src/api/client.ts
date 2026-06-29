@@ -24,6 +24,7 @@ import type {
   MappingRow,
   MappingUpdateRequest,
   MobileSpoolDetail,
+  MobileDryCycleRequest,
   MobileSpoolSearchResult,
   TareBulkResponse,
   TareListResponse,
@@ -189,6 +190,9 @@ export const updateMobileSpool = (fil: string, spool: string, body: MobileSpoolU
   json<MobileSpoolDetail>(`/mobile/spool/${fil}/${spool}`, 'PATCH', body)
 
 export const getMobileLocations = () => request<string[]>('/mobile/locations')
+
+export const logMobileDryCycle = (fil: string, spool: string, body: MobileDryCycleRequest) =>
+  json<MobileSpoolDetail>(`/mobile/spool/${fil}/${spool}/dry-cycle`, 'POST', body)
 
 export const getMobileSpools = (q: string) =>
   request<MobileSpoolSearchResult[]>(`/mobile/spools?q=${encodeURIComponent(q)}`)

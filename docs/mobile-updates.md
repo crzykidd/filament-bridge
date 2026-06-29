@@ -65,6 +65,16 @@ The identity in the URL is the **Filament DB filament id + spool id** — the br
 the Spoolman spool through its own mapping. Keeping the QR on the durable Filament DB ids
 means a physical label survives re-imports and re-mapping.
 
+### Log a dry cycle
+
+Below the Save block, the card has a **Log dry cycle** section. Tap it to record that you dried this spool:
+
+- **Temperature (°C)** and **Duration (minutes)** are pre-filled from the Filament DB filament's recommended `dryingTemperature` and `dryingTime` values (if set). You can edit these before logging.
+- **Notes** is an optional free-text field.
+- Tapping **Log dry cycle** posts immediately (`POST /api/mobile/spool/{fil}/{spool}/dry-cycle`) — this is a **separate action from Save** and does not send any weight or location data.
+- This is a **Filament DB-only, one-way write** — Spoolman has no dry-cycle concept and is never updated. There is no snapshot refresh (nothing for the sync engine to detect).
+- After logging, the card refreshes to show the updated **Last dried** date and total cycle count from FDB.
+
 ## Weight-save modes
 
 The weight you enter is **absolute** (a true-up to the current scale reading), but how the

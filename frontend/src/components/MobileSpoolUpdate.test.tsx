@@ -24,6 +24,7 @@ vi.mock('../api/client', async () => {
     getMobileSpool: vi.fn(),
     getMobileLocations: vi.fn(),
     updateMobileSpool: vi.fn(),
+    logMobileDryCycle: vi.fn(),
   }
 })
 
@@ -31,7 +32,7 @@ vi.mock('./DeepLinkContext', () => ({
   useDeepLinkBases: () => ({ filamentdbUrl: 'http://fdb.test', spoolmanUrl: 'http://sm.test' }),
 }))
 
-import { getMobileSpool, getMobileLocations, updateMobileSpool } from '../api/client'
+import { getMobileSpool, getMobileLocations, updateMobileSpool, logMobileDryCycle } from '../api/client'
 import type { MobileSpoolDetail } from '../api/types'
 import { MobileSpoolUpdate } from './MobileSpoolUpdate'
 
@@ -51,6 +52,10 @@ function makeDetail(overrides?: Partial<MobileSpoolDetail>): MobileSpoolDetail {
     tare: 200,
     location: 'Shelf A',
     weight_default_mode: 'direct_correction',
+    recommended_drying_temp_c: 65,
+    recommended_drying_time_min: 240,
+    last_dried_at: null,
+    dry_cycle_count: null,
     ...overrides,
   }
 }
@@ -173,5 +178,51 @@ describe('MobileSpoolUpdate', () => {
     await waitFor(() =>
       expect(screen.getByText(/mobile updates are disabled/i)).toBeInTheDocument(),
     )
+  })
+
+  // ---------------------------------------------------------------------------
+  // Dry cycle section
+  // ---------------------------------------------------------------------------
+
+  it('renders the Log dry cycle section with temp/duration prefilled from recommended values', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeDetail({ recommended_drying_temp_c: 65, recommended_drying_time_min: 240 }),
+    )
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    expect(screen.getByLabelText(/temperature/i)).toHaveValue('65')
+    expect(screen.getByLabelText(/duration/i)).toHaveValue('240')
+    expect(screen.getByRole('button', { name: /log dry cycle/i })).toBeInTheDocument()
+  })
+
+  it('clicking Log dry cycle calls logMobileDryCycle with prefilled values', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeDetail({ recommended_drying_temp_c: 65, recommended_drying_time_min: 240 }),
+    )
+    ;(logMobileDryCycle as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /log dry cycle/i }))
+
+    await waitFor(() => expect(logMobileDryCycle).toHaveBeenCalledTimes(1))
+    expect(logMobileDryCycle).toHaveBeenCalledWith('fil-001', 'spool-001', expect.objectContaining({
+      temp_c: 65,
+      duration_min: 240,
+    }))
+  })
+
+  it('clicking Save does NOT call logMobileDryCycle', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(updateMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText(/scale weight/i), { target: { value: '1000' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(updateMobileSpool).toHaveBeenCalledTimes(1))
+    expect(logMobileDryCycle).not.toHaveBeenCalled()
   })
 })

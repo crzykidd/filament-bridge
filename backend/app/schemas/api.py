@@ -1011,6 +1011,19 @@ class MobileSpoolDetail(BaseModel):
     location: str | None = None
     # The effective default weight-save mode the page should preselect.
     weight_default_mode: MobileWeightMode = "direct_correction"
+    # Dry-cycle info (FDB-only, one-way write)
+    last_dried_at: str | None = None
+    dry_cycle_count: int | None = None
+    recommended_drying_temp_c: int | None = None
+    recommended_drying_time_min: int | None = None
+
+
+class MobileDryCycleRequest(BaseModel):
+    """Body for POST /api/mobile/spool/{fil}/{spool}/dry-cycle."""
+
+    temp_c: int | None = Field(default=None, ge=0)
+    duration_min: int | None = Field(default=None, ge=0)
+    notes: str | None = None
 
 
 class MobileSpoolUpdateRequest(BaseModel):

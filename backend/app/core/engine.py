@@ -2360,18 +2360,20 @@ def _upsert_new_record_conflict(
     spoolman_value: Any = None,
     filamentdb_value: Any = None,
 ) -> None:
-    """Upsert a new_filament or new_spool conflict (unconditional replace-on-resync).
+    """Upsert a new_filament or new_spool conflict (update-in-place on resync).
 
-    Before inserting, deletes any existing OPEN conflict for the same item+kind so
-    there is at most one open conflict per (item, conflict_type) at all times.  This
-    prevents the duplicate-accumulation bug where the same unmapped record re-queues
-    every cycle.
+    Updates the existing OPEN conflict for the same item+kind in place — preserving
+    its `id` — instead of delete-and-recreate, so the conflict id is STABLE across
+    sync cycles.  Only inserts when no open conflict exists.  This keeps at most one
+    open conflict per (item, conflict_type) while guaranteeing the UI's held conflict
+    id stays valid (the Add/import/suggestions endpoints look the conflict up by id —
+    a churned id would 404 mid-flow).  Any extra duplicate open rows are pruned.
 
     The match key is (entity_type, field_name, spoolman_id OR fdb_filament_id OR
     fdb_spool_id) — never item alone, so an unrelated cross_system conflict on the
     same item is never wiped.
     """
-    # Delete any existing OPEN conflict for this same item + kind.
+    # Find existing OPEN conflict(s) for this same item + kind.
     q = (
         db.query(Conflict)
         .filter(
@@ -2386,22 +2388,36 @@ def _upsert_new_record_conflict(
         q = q.filter(Conflict.filamentdb_filament_id == fdb_filament_id)
     if fdb_spool_id is not None:
         q = q.filter(Conflict.filamentdb_spool_id == fdb_spool_id)
-    for old in q.all():
-        db.delete(old)
+    existing = q.order_by(Conflict.id.asc()).all()
 
-    # Insert the fresh conflict row with a distinct conflict_type for clarity.
-    db.add(
-        Conflict(
-            entity_type=entity_type,
-            spoolman_id=spoolman_id,
-            filamentdb_filament_id=fdb_filament_id,
-            filamentdb_spool_id=fdb_spool_id,
-            field_name=field_name,
-            spoolman_value=json.dumps(spoolman_value) if spoolman_value is not None else None,
-            filamentdb_value=json.dumps(filamentdb_value) if filamentdb_value is not None else None,
-            conflict_type=field_name,  # "new_filament" | "new_spool"
+    sm_val = json.dumps(spoolman_value) if spoolman_value is not None else None
+    fdb_val = json.dumps(filamentdb_value) if filamentdb_value is not None else None
+
+    if existing:
+        # Update the oldest matching row in place (stable id); prune any duplicates.
+        row = existing[0]
+        row.spoolman_id = spoolman_id
+        row.filamentdb_filament_id = fdb_filament_id
+        row.filamentdb_spool_id = fdb_spool_id
+        row.spoolman_value = sm_val
+        row.filamentdb_value = fdb_val
+        row.conflict_type = field_name  # "new_filament" | "new_spool"
+        for dup in existing[1:]:
+            db.delete(dup)
+    else:
+        # No open conflict yet — insert a fresh row.
+        db.add(
+            Conflict(
+                entity_type=entity_type,
+                spoolman_id=spoolman_id,
+                filamentdb_filament_id=fdb_filament_id,
+                filamentdb_spool_id=fdb_spool_id,
+                field_name=field_name,
+                spoolman_value=sm_val,
+                filamentdb_value=fdb_val,
+                conflict_type=field_name,  # "new_filament" | "new_spool"
+            )
         )
-    )
     _log(
         db, cycle_id, "conflict", "conflict", entity_type,
         spoolman_id=spoolman_id,

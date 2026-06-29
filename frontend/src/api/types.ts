@@ -1149,6 +1149,18 @@ export interface MobileSpoolDetail {
   tare: number
   location: string | null
   weight_default_mode: MobileWeightMode
+  // Dry-cycle info (FDB-only, one-way write)
+  last_dried_at?: string | null
+  dry_cycle_count?: number | null
+  recommended_drying_temp_c?: number | null
+  recommended_drying_time_min?: number | null
+}
+
+/** Body for POST /api/mobile/spool/{fil}/{spool}/dry-cycle. */
+export interface MobileDryCycleRequest {
+  temp_c?: number | null
+  duration_min?: number | null
+  notes?: string | null
 }
 
 /** Body for PATCH /api/mobile/spool/{fil}/{spool}. Mirrors backend

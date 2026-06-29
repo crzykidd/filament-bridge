@@ -7,6 +7,7 @@ import {
   getDivergenceContext,
   importConflictRecord,
   getFilamentSuggestions,
+  BridgeApiError,
 } from '../api/client'
 import { useApi } from '../api/hooks'
 import { DeepLinks } from '../components/DeepLinks'
@@ -91,6 +92,17 @@ function classifyConflict(c: ConflictResponse): ConflictType {
 function isImportable(c: ConflictResponse): boolean {
   return c.field_name === 'new_spool' || c.field_name === 'new_filament'
 }
+
+// A conflict the UI is holding can be replaced by a background sync cycle (the
+// engine refreshes open new_filament/new_spool conflicts each cycle). When that
+// happens the by-id lookup behind suggestions/import 404s. Detect that case so the
+// Add flow can recover by reloading the list instead of showing a raw error.
+function isStaleConflict(e: unknown): boolean {
+  return e instanceof BridgeApiError && e.status === 404 && e.code === 'conflict_not_found'
+}
+
+const STALE_CONFLICT_MSG =
+  'This conflict was refreshed by a background sync. The list has been reloaded — reopen Add and try again.'
 
 function deletedSideLabel(conflict: ConflictResponse): string {
   const descriptor = (conflict.spoolman_value ?? conflict.filamentdb_value) as { deleted_side?: string } | null
@@ -244,9 +256,16 @@ function NewRecordAddFlow({
     setSuggestionsErr(null)
     getFilamentSuggestions(conflict.id)
       .then(res => setSuggestions(res.suggestions))
-      .catch(e => setSuggestionsErr(e instanceof Error ? e.message : String(e)))
+      .catch(e => {
+        if (isStaleConflict(e)) {
+          setSuggestionsErr(STALE_CONFLICT_MSG)
+          onResolved()  // reload the conflict list so the row picks up the fresh id
+        } else {
+          setSuggestionsErr(e instanceof Error ? e.message : String(e))
+        }
+      })
       .finally(() => setSuggestionsLoading(false))
-  }, [filamentAction, isSmToFdb, conflict.id, suggestions])
+  }, [filamentAction, isSmToFdb, conflict.id, suggestions, onResolved])
 
   // The effective FDB id: manual override wins if valid, else selected suggestion.
   const effectiveFilamentdbId = manualId.trim() && is24Hex(manualId)
@@ -268,7 +287,12 @@ function NewRecordAddFlow({
       setPreview(res)
       setStep('preview')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      if (isStaleConflict(e)) {
+        setErr(STALE_CONFLICT_MSG)
+        onResolved()
+      } else {
+        setErr(e instanceof Error ? e.message : String(e))
+      }
     } finally {
       setLoading(false)
     }
@@ -287,7 +311,12 @@ function NewRecordAddFlow({
       setStep('done')
       onResolved()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      if (isStaleConflict(e)) {
+        setErr(STALE_CONFLICT_MSG)
+        onResolved()
+      } else {
+        setErr(e instanceof Error ? e.message : String(e))
+      }
     } finally {
       setLoading(false)
     }
