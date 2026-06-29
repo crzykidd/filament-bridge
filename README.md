@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.6-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.7-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,10 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.7 (2026-06-29)
+
+- **Fixed: spools no longer go missing after a manual merge or reset** — a spool that exists in both Spoolman and Filament DB but had lost its bridge mapping (from a partial import, a manual merge, or a state reset) was silently skipped — invisible in Synced Records and Mobile Updates. The sync engine now re-adopts these orphaned spools automatically each cycle, and never silently drops a spool: anything it can't cleanly reconcile (e.g. a cross-ref colliding with a different already-mapped spool) is surfaced as a conflict instead. (#48)
 
 ### v0.6.6 (2026-06-28)
 

@@ -9,6 +9,20 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-06-29
+
+### Fixed
+
+- **Orphaned spools are reconciled instead of silently dropped** — a Spoolman spool that
+  exists in both systems (it carries a live Filament DB cross-reference) but had lost its
+  bridge mapping — from a partial import, a manual merge, or a bridge-state reset — was
+  silently skipped: invisible in Synced Records and Mobile Updates, and never re-queued.
+  The sync engine now **adopts** such orphans automatically each cycle, re-creating the
+  missing mapping (linked to the filament's mapping when present, otherwise unlinked). A
+  spool is never silently skipped now: if it can't be cleanly reconciled — e.g. its
+  cross-ref collides with a different already-mapped spool — it surfaces as a `new_spool`
+  conflict instead. Closes #48.
+
 ## [0.6.6] — 2026-06-28
 
 ### Added

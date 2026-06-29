@@ -1751,42 +1751,124 @@ async def test_engine_new_spool_stale_xref_triggers_create(db):
     assert result.errors == 0, f"Expected no errors, got {result.errors}"
 
 
-@pytest.mark.asyncio
-async def test_engine_new_spool_live_xref_skips(db):
-    """Ongoing new-spool detection (SM→FDB path): a SM spool with a live
-    filamentdb_spool_id xref (pointing at an id that IS in fdb_spool_index) must be
-    skipped — the SM→FDB path must NOT call filamentdb.create_spool for it.
+def _fdb_filament_with_labeled_spool(fid: str, spool_id: str, label: str) -> FDBFilament:
+    """FDB filament whose spool carries a label (= the SM spool id) so the FDB→SM
+    path treats it as already-linked and leaves it alone in a reconcile test."""
+    return FDBFilament.model_validate({
+        "_id": fid,
+        "name": "PLA",
+        "spoolWeight": 200.0,
+        "spools": [{"_id": spool_id, "totalWeight": 700.0, "retired": False, "label": label}],
+    })
 
-    Note: the FDB→SM path still runs under two_way default and may create a SM spool
-    from the FDB spool; we only assert that FDB spool creation was NOT triggered by the
-    SM→FDB path (live xref = already-linked orphan).
-    """
-    # SM spool has xref to 'live-spool-bbb' which IS in current FDB data.
+
+def _engine_settings(mock_settings):
+    mock_settings.filamentdb_spoolman_id_field = "label"
+    mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
+    mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
+    mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
+    mock_settings.parsed_field_mappings = {}
+    mock_settings.parsed_field_mapping_excludes = set()
+
+
+@pytest.mark.asyncio
+async def test_engine_new_spool_live_xref_reconciles(db):
+    """Ongoing new-spool detection (SM→FDB path): a SM spool with a live
+    filamentdb_spool_id xref (pointing at an id that IS in fdb_spool_index) but NO
+    SpoolMapping is an orphan — the engine now ADOPTS it by creating the missing
+    SpoolMapping (issue #48), instead of silently skipping it. It must NOT call
+    filamentdb.create_spool (no new FDB spool — the link already exists)."""
     live_xref = json.dumps("live-spool-bbb")
     sm_sp = _sm_spool_with_extra(
         502, filament_id=51,
         extra={"filamentdb_spool_id": live_xref},
     )
-    fdb_fil = _fdb_filament_with_spool("fdb-fil-51", "live-spool-bbb")
+    # FDB spool already carries the SM spool id as its label (set when it was created),
+    # so the FDB→SM path leaves it alone — this is purely an SM→FDB reconcile.
+    fdb_fil = _fdb_filament_with_labeled_spool("fdb-fil-51", "live-spool-bbb", "502")
     _add_fil_mapping(db, sm_fil_id=51, fdb_fil_id="fdb-fil-51")
+    fm_id = db.query(FilamentMapping).filter_by(filamentdb_id="fdb-fil-51").first().id
 
     spoolman = _fake_spoolman(spools=[sm_sp])
     fdb_client = _fake_filamentdb(filaments=[fdb_fil])
-    # Track FDB spool creates; there should be zero (live xref → SM→FDB path is skipped).
     fdb_client.create_spool = AsyncMock(return_value={"_id": "should-not-be-called"})
 
     with patch("app.core.engine._settings") as mock_settings:
-        mock_settings.filamentdb_spoolman_id_field = "label"
-        mock_settings.spoolman_field_filamentdb_id = "filamentdb_id"
-        mock_settings.spoolman_field_filamentdb_spool_id = "filamentdb_spool_id"
-        mock_settings.spoolman_field_filamentdb_parent_id = "filamentdb_parent_id"
-        mock_settings.parsed_field_mappings = {}
-        mock_settings.parsed_field_mapping_excludes = set()
+        _engine_settings(mock_settings)
         await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
 
-    # The SM→FDB path must not create a FDB spool — live xref means the SM spool is
-    # already linked or orphaned with a live reference, so it is skipped.
+    # No FDB spool created — the orphan was adopted, not re-created.
     fdb_client.create_spool.assert_not_called()
+    # A SpoolMapping now exists, linked to the FDB filament's FilamentMapping.
+    sm_map = db.query(SpoolMapping).filter_by(spoolman_spool_id=502).first()
+    assert sm_map is not None, "orphan SM spool 502 must be adopted into a SpoolMapping"
+    assert sm_map.filamentdb_filament_id == "fdb-fil-51"
+    assert sm_map.filamentdb_spool_id == "live-spool-bbb"
+    assert sm_map.filament_mapping_id == fm_id
+
+
+@pytest.mark.asyncio
+async def test_engine_orphan_reconcile_unlinked_when_no_filament_mapping(db):
+    """An orphan whose FDB filament has no FilamentMapping is still adopted, with a
+    NULL filament_mapping_id (surfaced as 'unlinked' in the UI) — never silently skipped."""
+    live_xref = json.dumps("live-spool-ccc")
+    sm_sp = _sm_spool_with_extra(503, filament_id=52, extra={"filamentdb_spool_id": live_xref})
+    fdb_fil = _fdb_filament_with_labeled_spool("fdb-fil-52", "live-spool-ccc", "503")
+    # NOTE: no FilamentMapping for fil 52.
+
+    spoolman = _fake_spoolman(spools=[sm_sp])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.create_spool = AsyncMock(return_value={"_id": "nope"})
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _engine_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    sm_map = db.query(SpoolMapping).filter_by(spoolman_spool_id=503).first()
+    assert sm_map is not None, "orphan must be adopted even without a FilamentMapping"
+    assert sm_map.filamentdb_spool_id == "live-spool-ccc"
+    assert sm_map.filament_mapping_id is None
+
+
+@pytest.mark.asyncio
+async def test_engine_orphan_collision_falls_through_to_conflict(db):
+    """An orphan whose live FDB cross-ref points at a spool ALREADY mapped to a
+    different SM spool (collision — e.g. a duplicated Spoolman spool) must NOT be
+    adopted onto the same FDB spool. It falls through to new-spool handling, which (under
+    the default manual_review policy) queues a visible new_spool conflict — never a
+    silent skip."""
+    # FDB spool 'shared-spool' is already claimed by SM spool 999.
+    db.add(SpoolMapping(
+        spoolman_spool_id=999,
+        filamentdb_filament_id="fdb-fil-53",
+        filamentdb_spool_id="shared-spool",
+    ))
+    _add_fil_mapping(db, sm_fil_id=53, fdb_fil_id="fdb-fil-53")
+    db.commit()
+
+    # SM spool 504 carries a colliding xref to the same FDB spool.
+    sm_sp = _sm_spool_with_extra(504, filament_id=53, extra={"filamentdb_spool_id": json.dumps("shared-spool")})
+    fdb_fil = _fdb_filament_with_labeled_spool("fdb-fil-53", "shared-spool", "999")
+
+    spoolman = _fake_spoolman(spools=[sm_sp])
+    fdb_client = _fake_filamentdb(filaments=[fdb_fil])
+    fdb_client.create_spool = AsyncMock(return_value={"_id": "nope"})
+
+    with patch("app.core.engine._settings") as mock_settings:
+        _engine_settings(mock_settings)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # No second SpoolMapping was created for SM 504 onto the shared FDB spool.
+    sm504 = db.query(SpoolMapping).filter_by(spoolman_spool_id=504).first()
+    assert sm504 is None, "colliding orphan must not be adopted onto the shared FDB spool"
+    # It surfaces as a new_spool conflict instead (manual_review default).
+    from app.models.conflict import Conflict
+    conflict = db.query(Conflict).filter(
+        Conflict.resolved_at.is_(None),
+        Conflict.field_name == "new_spool",
+        Conflict.spoolman_id == 504,
+    ).first()
+    assert conflict is not None, "colliding orphan must queue a visible new_spool conflict"
 
 
 # ---------------------------------------------------------------------------
