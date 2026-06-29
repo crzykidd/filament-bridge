@@ -95,14 +95,16 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.5** (sortable Synced Records columns #41; wizard Variances-step
-  TDZ crash fix #42). Recent: v0.6.4 (wizard partial-success + persistent Failure Report
-  #14), v0.6.3 (backup-status UI #20, scan-page search box), v0.6.2 (require tare entry
-  #13), v0.6.1 (Tare Editor #26, sync-log retention #22).
+- Latest release: **v0.6.6** (mobile dry-cycle log #45; stable conflict ids — Conflicts
+  "Add" no longer breaks after a sync cycle #44; tested-upstream baseline → Filament DB
+  1.59.3). Recent: v0.6.5 (sortable Synced Records columns #41; wizard Variances-step TDZ
+  crash fix #42), v0.6.4 (wizard partial-success + persistent Failure Report #14), v0.6.3
+  (backup-status UI #20, scan-page search box), v0.6.2 (require tare entry #13).
 - Open issues (see `docs/backlog.md`): **#40** surface mapping edit/unlink in Synced
   Records UI, **#24** Discord webhook notifications (FR-20), **#25** print-history
   enrichment decision (FR-22, deferred). The docs/PRD-sync batch (#15–#19, #23), wizard
-  UX (#13/#14), backup-status (#20), and Tare Editor (#26) have all shipped.
+  UX (#13/#14), backup-status (#20), Tare Editor (#26), and conflict/mobile fixes
+  (#44/#45) have all shipped.
 
 ## How to start a session
 
