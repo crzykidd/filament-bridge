@@ -95,16 +95,18 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.6** (mobile dry-cycle log #45; stable conflict ids — Conflicts
-  "Add" no longer breaks after a sync cycle #44; tested-upstream baseline → Filament DB
-  1.59.3). Recent: v0.6.5 (sortable Synced Records columns #41; wizard Variances-step TDZ
-  crash fix #42), v0.6.4 (wizard partial-success + persistent Failure Report #14), v0.6.3
-  (backup-status UI #20, scan-page search box), v0.6.2 (require tare entry #13).
-- Open issues (see `docs/backlog.md`): **#40** surface mapping edit/unlink in Synced
-  Records UI, **#24** Discord webhook notifications (FR-20), **#25** print-history
-  enrichment decision (FR-22, deferred). The docs/PRD-sync batch (#15–#19, #23), wizard
-  UX (#13/#14), backup-status (#20), Tare Editor (#26), and conflict/mobile fixes
-  (#44/#45) have all shipped.
+- Latest release: **v0.6.7** (orphan-spool reconcile — a spool in both systems but with a
+  lost bridge mapping is now re-adopted each cycle instead of silently skipped #48). Recent:
+  v0.6.6 (mobile dry-cycle log #45; stable conflict ids #44; tested-upstream baseline →
+  Filament DB 1.59.3), v0.6.5 (sortable Synced Records columns #41; wizard Variances TDZ fix
+  #42), v0.6.4 (wizard partial-success + Failure Report #14), v0.6.3 (backup-status UI #20).
+- Open issues (see `docs/backlog.md`): **#47** read-only API token option, **#40** surface
+  mapping edit/unlink in Synced Records UI, **#24** Discord webhook notifications (FR-20),
+  **#25** print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync
+  batch (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), and the
+  conflict/mobile/orphan fixes (#44/#45/#48).
+- Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
+  auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
 
 ## How to start a session
 
