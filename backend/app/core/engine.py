@@ -2448,6 +2448,63 @@ def _queue_if_new_filament(db: Session, cycle_id: str, sm_spool: SpoolmanSpool) 
     )
 
 
+def _reconcile_orphan_spool(
+    db: Session,
+    cycle_id: str,
+    result: CycleResult,
+    dry_run: bool,
+    sm_spool: SpoolmanSpool,
+    fdb_spool_id: str,
+    fdb_spool_index: dict[str, tuple[str, FDBSpool]],
+) -> None:
+    """Adopt a Spoolman spool that carries a live FDB cross-ref but has no SpoolMapping.
+
+    A spool whose ``filamentdb_spool_id`` points at a still-existing FDB spool, yet has no
+    SpoolMapping row, is an *orphan*: it exists in both systems but the bridge has lost the
+    link (a partial import, a manual merge, or a bridge-state reset that cleared mappings
+    while the upstream cross-refs survived). Without reconciliation it is invisible to the
+    bridge forever (Synced Records, Mobile Updates) and is never re-detected — the old code
+    silently ``continue``d past it. This re-creates the missing SpoolMapping so it behaves
+    like any other mapped spool, linking to the FDB filament's FilamentMapping when one
+    exists (else an unlinked mapping, surfaced as such in the UI).
+
+    The caller guarantees the target FDB spool is not already claimed by a different
+    SpoolMapping; a collision is handled by falling through to normal new-spool handling.
+    """
+    fdb_fil_id, _fdb_spool = fdb_spool_index[fdb_spool_id]
+    if dry_run:
+        result.preview.append({
+            "action": "link",
+            "entity_type": "spool",
+            "direction": "spoolman_to_filamentdb",
+            "label": _preview_label(sm_spool=sm_spool),
+            "field": "reconcile_orphan",
+            "old": None, "new": None,
+            "reason": "adopt orphan cross-ref into a SpoolMapping",
+            "spoolman_id": sm_spool.id,
+            "fdb_filament_id": fdb_fil_id,
+            "fdb_spool_id": fdb_spool_id,
+        })
+        result.updated += 1
+        return
+    fm = db.query(FilamentMapping).filter_by(filamentdb_id=fdb_fil_id).first()
+    db.add(SpoolMapping(
+        spoolman_spool_id=sm_spool.id,
+        filamentdb_filament_id=fdb_fil_id,
+        filamentdb_spool_id=fdb_spool_id,
+        filament_mapping_id=fm.id if fm else None,
+    ))
+    _log(
+        db, cycle_id, "spoolman_to_filamentdb", "link", "spool",
+        spoolman_id=sm_spool.id,
+        fdb_filament_id=fdb_fil_id,
+        fdb_spool_id=fdb_spool_id,
+        field_name="reconcile_orphan",
+        new_value="adopted orphan cross-ref into SpoolMapping",
+    )
+    result.updated += 1
+
+
 async def _handle_new_sm_spool(
     db: Session,
     cycle_id: str,
@@ -3932,7 +3989,25 @@ async def run_sync_cycle(
             fdb_spool_id_raw = sm_spool.extra.get(_settings.spoolman_field_filamentdb_spool_id)
             fdb_spool_id = decode_extra_value(fdb_spool_id_raw)
             if fdb_spool_id and fdb_spool_id in fdb_spool_index:
-                continue  # has live cross-ref but no SpoolMapping row — orphan, skip
+                # Orphan: a live FDB cross-ref but no SpoolMapping for this SM spool. Adopt
+                # it (reconcile) when the target FDB spool is unclaimed — otherwise it stays
+                # invisible to the bridge forever (mobile, synced records) and is never
+                # re-detected. If the FDB spool is already mapped to a DIFFERENT SM spool
+                # (collision — e.g. a duplicated Spoolman spool), don't adopt; fall through
+                # to new-spool handling so this spool gets its own FDB spool / a visible
+                # new_spool conflict instead of a silent skip.
+                claimed = (
+                    db.query(SpoolMapping)
+                    .filter(SpoolMapping.filamentdb_spool_id == fdb_spool_id)
+                    .first()
+                )
+                if claimed is None:
+                    _reconcile_orphan_spool(
+                        db, cycle_id, result, dry_run,
+                        sm_spool, fdb_spool_id, fdb_spool_index,
+                    )
+                    continue
+                # collision → fall through to new-spool handling below.
             # never_import_empties: don't import (or queue a conflict for) a zero-remaining
             # spool. Without this an empty unmapped spool on a mapped filament was re-queued
             # as a `new_spool` conflict every cycle (it can never auto-import). Archived spools

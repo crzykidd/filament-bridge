@@ -1,5 +1,35 @@
 # Decision record
 
+## 2026-06-28 — Reconcile orphaned spools instead of silently skipping them, GitHub #48
+
+**Context.** A Spoolman spool whose `filamentdb_spool_id` extra pointed at a still-existing
+FDB spool but had **no `SpoolMapping`** was silently skipped by both the engine
+(`if fdb_spool_id and fdb_spool_id in fdb_spool_index: continue  # orphan, skip`) and the
+planner (`xref_is_live → action="skip"/"already linked"`). Such an *orphan* exists in both
+systems but the bridge has lost the link — from a partial import, a manual merge, or a
+**bridge-state reset that clears mappings while the upstream cross-refs survive**. Result:
+the spool is invisible to the bridge forever (Synced Records, Mobile Updates) and never
+re-detected. Confirmed in production (SM #226: in FDB, no mapping, no conflict, not in the
+mobile list).
+
+**Decision.** The engine's new-SM-spool pass now **reconciles** an orphan instead of
+skipping it, via `_reconcile_orphan_spool`: when the target FDB spool is unclaimed, it
+creates the missing `SpoolMapping` (linked to the FDB filament's `FilamentMapping` when one
+exists, else an unlinked mapping). This runs every cycle, so it **auto-heals existing
+orphans** — no manual action. Cases, by cross-ref state:
+
+| Cross-ref | Behavior |
+|---|---|
+| live FDB spool, no mapping, FDB spool unclaimed | **reconcile** — create the SpoolMapping, log a `link` action |
+| live FDB spool, mapping already exists | skip (the spool is in `mapped_sm_spool_ids`, handled before the cross-ref check) |
+| stale cross-ref (target spool gone) | falls through to normal new-spool handling (conflict / auto-import); the re-import overwrites the dangling id |
+| live FDB spool already mapped to a **different** SM spool (collision, e.g. a duplicated Spoolman spool) | don't adopt — fall through to new-spool handling so it gets its own FDB spool / a visible `new_spool` conflict |
+
+**Principle: a spool is never silently skipped** — it is either mapped or visibly waiting in
+the conflict queue. The collision guard reuses `_handle_new_sm_spool` (no new conflict
+machinery). The planner's `"already linked"` preview is left as-is for now (cosmetic; it
+self-heals once the engine reconciles) — a planner mirror is a possible follow-up.
+
 ## 2026-06-28 — `new_filament`/`new_spool` conflicts update in place (stable id), GitHub #44
 
 **Context.** `_upsert_new_record_conflict` (`core/engine.py`) used **delete-and-recreate**: every
