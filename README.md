@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.5-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.6-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,12 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.6 (2026-06-28)
+
+- **Log a dry cycle from the mobile spool page** — the mobile scan/update card now has a dedicated "Log dry cycle" section (temperature, duration, optional notes), pre-filled from the filament's recommended drying settings. It logs straight to Filament DB on its own button — separate from Save — and the card shows the last-dried date and total cycle count. (#45)
+- **Fixed: Conflict "Add" no longer breaks after a sync cycle** — during a large migration the bridge re-issued each new-filament/new-spool conflict with a new id every cycle, so clicking **Add → Link to existing filament** failed with "No conflict with id …" and greyed out the import. Conflict ids are now stable across cycles. (#44)
+- **Verified against Filament DB 1.59.3** (Spoolman 0.23.1 unchanged); minimum supported versions are unchanged.
 
 ### v0.6.5 (2026-06-27)
 
