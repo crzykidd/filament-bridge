@@ -138,6 +138,14 @@ cost, color) are synced by dedicated passes and need no mapping — see
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_A` | No | `openprinttag_hardness_shore_a` | Typed (**float**) Spoolman filament extra for OPT `hardnessShoreA`. Synced ↔ FDB `shoreHardnessA`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_D` | No | `openprinttag_hardness_shore_d` | Typed (**float**) Spoolman filament extra for OPT `hardnessShoreD`. Synced ↔ FDB `shoreHardnessD`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_TRANSMISSION_DISTANCE` | No | `openprinttag_transmission_distance` | Typed (**float**) Spoolman filament extra for OPT `transmissionDistance` (mm). Synced ↔ FDB `transmissionDistance`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_BED_TEMP_MAX` | No | `openprinttag_bed_temp_max` | Typed (**integer**) Spoolman filament extra for OPT `bedTempMax` (°C). **Spoolman-only** — FDB's single `temperatures.bed` is already synced via the native `settings_bed_temp` channel, so this extra is not a second writer to that field. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_BED_TEMP_MIN` | No | `openprinttag_bed_temp_min` | Typed (**integer**) Spoolman filament extra for OPT `bedTempMin` (°C). **Spoolman-only** — FDB has no bed-range field, so this is not synced to FDB. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CHAMBER_TEMP_MIN` | No | `openprinttag_chamber_temp_min` | Typed (**integer**) Spoolman filament extra for OPT `chamberTempMin` (°C). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CHAMBER_TEMP_MAX` | No | `openprinttag_chamber_temp_max` | Typed (**integer**) Spoolman filament extra for OPT `chamberTempMax` (°C). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CHAMBER_TEMP` | No | `openprinttag_chamber_temp` | Typed (**integer**) Spoolman filament extra for OPT `chamberTemp` (°C) — collapsed back-compat value. **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_PREHEAT_TEMP` | No | `openprinttag_preheat_temp` | Typed (**integer**) Spoolman filament extra for OPT `preheatTemp` (°C). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_DIAMETER_MIN` | No | `openprinttag_nozzle_diameter_min` | Typed (**float**) Spoolman filament extra for OPT `nozzleDiameterMin` (mm). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CURE_WAVELENGTH` | No | `openprinttag_cure_wavelength` | Typed (**integer**) Spoolman filament extra for OPT `cureWavelength` (nm). Relevant for resin/UV-cure materials. **Spoolman-only**. |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the locally cached OpenPrintTag dataset is considered stale and re-fetched. |
 
 ## Build / logging / misc

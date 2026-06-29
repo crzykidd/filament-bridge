@@ -1806,11 +1806,13 @@ async def _sync_opentag_material_fields(
     matprop_direction: str = "filamentdb_to_spoolman",
     matprop_policy: str = "manual",
 ) -> None:
-    """Bidirectional sync of the seven OpenPrintTag material-setting extras.
+    """Bidirectional sync of the OpenPrintTag material-setting extras that have an FDB counterpart.
 
-    Each ``OPENTAG_EXTRA_FIELDS`` entry maps a TYPED Spoolman filament extra
-    field (``extra.openprinttag_*``) to a writable first-class Filament DB field
-    (e.g. ``temperatures.nozzleRangeMin``, ``dryingTime``, ``shoreHardnessA``).
+    Each ``OPENTAG_EXTRA_FIELDS`` entry with a non-None ``fdb_path`` maps a TYPED
+    Spoolman filament extra field (``extra.openprinttag_*``) to a writable first-class
+    Filament DB field (e.g. ``temperatures.nozzleRangeMin``, ``dryingTime``,
+    ``temperatures.bed``).  Entries with ``fdb_path=None`` are Spoolman-only and
+    are skipped by this pass — they are populated by the Apply flow only.
 
     This rides the SAME material-properties direction + conflict policy as the
     native scalar/temperature passes — no bespoke precedence.  SM→FDB writes are
@@ -1836,6 +1838,11 @@ async def _sync_opentag_material_fields(
         for ef in OPENTAG_EXTRA_FIELDS:
             sm_key = getattr(_settings, ef.config_attr)
             sm_now = _norm_opt_field(decode_extra_value(sm_fil.extra.get(sm_key)), ef.field_type)
+
+            # Spoolman-only fields have no FDB counterpart — skip the FDB leg entirely.
+            # They are populated by the Apply flow and never synced to Filament DB.
+            if ef.fdb_path is None:
+                continue
 
             if fdb_detail is None:
                 try:

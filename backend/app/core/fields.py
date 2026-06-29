@@ -50,55 +50,119 @@ FDB_SYNCABLE_FIELDS: frozenset[str] = _FDB_SCALAR_FIELDS | _FDB_DOTTED_FIELDS
 
 @dataclass(frozen=True)
 class OpenTagExtraField:
-    config_attr: str   # attribute name on Settings holding the (overridable) key
-    default_key: str   # default Spoolman extra-field key
-    field_type: str    # Spoolman field_type: "integer" | "float"
-    opt_key: str       # key on the OPTMaterial dict
-    fdb_path: str      # dotted FDB filament field path (in FDB_SYNCABLE_FIELDS)
-    label: str         # human label / sync-log + snapshot field name
+    config_attr: str        # attribute name on Settings holding the (overridable) key
+    default_key: str        # default Spoolman extra-field key
+    field_type: str         # Spoolman field_type: "integer" | "float"
+    opt_key: str            # key on the OPTMaterial dict
+    label: str              # human label / sync-log + snapshot field name
+    fdb_path: str | None = None  # dotted FDB field path (None = Spoolman-only, no FDB sync)
 
 
-#: The seven OpenPrintTag material-setting extra fields.  Order is stable.
+#: The fifteen OpenPrintTag material-setting extra fields.  Order is stable.
+#: Entries with fdb_path are synced bidirectionally with Filament DB by
+#: _sync_opentag_material_fields.  Entries without fdb_path are Spoolman-only:
+#: populated by the Apply flow, never read or written to FDB.
 OPENTAG_EXTRA_FIELDS: tuple[OpenTagExtraField, ...] = (
     OpenTagExtraField(
         "spoolman_field_openprinttag_nozzle_temp_min",
         "openprinttag_nozzle_temp_min", "integer",
-        "nozzleTempMin", "temperatures.nozzleRangeMin", "opt_nozzle_temp_min",
+        "nozzleTempMin", "opt_nozzle_temp_min",
+        fdb_path="temperatures.nozzleRangeMin",
     ),
     OpenTagExtraField(
         "spoolman_field_openprinttag_nozzle_temp_max",
         "openprinttag_nozzle_temp_max", "integer",
-        "nozzleTempMax", "temperatures.nozzleRangeMax", "opt_nozzle_temp_max",
+        "nozzleTempMax", "opt_nozzle_temp_max",
+        fdb_path="temperatures.nozzleRangeMax",
     ),
     OpenTagExtraField(
         "spoolman_field_openprinttag_drying_temp",
         "openprinttag_drying_temp", "integer",
-        "dryingTemp", "dryingTemperature", "opt_drying_temp",
+        "dryingTemp", "opt_drying_temp",
+        fdb_path="dryingTemperature",
     ),
     OpenTagExtraField(
         "spoolman_field_openprinttag_drying_time",
         "openprinttag_drying_time", "integer",
-        "dryingTime", "dryingTime", "opt_drying_time",
+        "dryingTime", "opt_drying_time",
+        fdb_path="dryingTime",
     ),
     OpenTagExtraField(
         "spoolman_field_openprinttag_hardness_shore_a",
         "openprinttag_hardness_shore_a", "float",
-        "hardnessShoreA", "shoreHardnessA", "opt_hardness_shore_a",
+        "hardnessShoreA", "opt_hardness_shore_a",
+        fdb_path="shoreHardnessA",
     ),
     OpenTagExtraField(
         "spoolman_field_openprinttag_hardness_shore_d",
         "openprinttag_hardness_shore_d", "float",
-        "hardnessShoreD", "shoreHardnessD", "opt_hardness_shore_d",
+        "hardnessShoreD", "opt_hardness_shore_d",
+        fdb_path="shoreHardnessD",
     ),
     OpenTagExtraField(
         "spoolman_field_openprinttag_transmission_distance",
         "openprinttag_transmission_distance", "float",
-        "transmissionDistance", "transmissionDistance", "opt_transmission_distance",
+        "transmissionDistance", "opt_transmission_distance",
+        fdb_path="transmissionDistance",
+    ),
+    # --- Bed temperature ---
+    # bed_temp_min: Spoolman-only (FDB has no bed range, only a single bed temp)
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_bed_temp_min",
+        "openprinttag_bed_temp_min", "integer",
+        "bedTempMin", "opt_bed_temp_min",
+    ),
+    # bed_temp_max: Spoolman-only.  FDB's single temperatures.bed is ALREADY synced
+    # to/from Spoolman's native settings_bed_temp by MATERIAL_PROP_TEMP_PAIRS (engine.py,
+    # "this pass owns them").  Adding temperatures.bed here too would make two Spoolman
+    # fields (settings_bed_temp + this extra) fight over the same FDB field → ping-pong.
+    # So this extra is Spoolman-side tracking only; bed temp still reaches FDB via the
+    # native settings_bed_temp channel (OPT Apply populates settings_bed_temp from bedTempMax).
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_bed_temp_max",
+        "openprinttag_bed_temp_max", "integer",
+        "bedTempMax", "opt_bed_temp_max",
+    ),
+    # --- Chamber temperature (all Spoolman-only — FDB has no chamber field) ---
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_chamber_temp_min",
+        "openprinttag_chamber_temp_min", "integer",
+        "chamberTempMin", "opt_chamber_temp_min",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_chamber_temp_max",
+        "openprinttag_chamber_temp_max", "integer",
+        "chamberTempMax", "opt_chamber_temp_max",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_chamber_temp",
+        "openprinttag_chamber_temp", "integer",
+        "chamberTemp", "opt_chamber_temp",
+    ),
+    # --- Other Spoolman-only fields ---
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_preheat_temp",
+        "openprinttag_preheat_temp", "integer",
+        "preheatTemp", "opt_preheat_temp",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_nozzle_diameter_min",
+        "openprinttag_nozzle_diameter_min", "float",
+        "nozzleDiameterMin", "opt_nozzle_diameter_min",
+    ),
+    OpenTagExtraField(
+        "spoolman_field_openprinttag_cure_wavelength",
+        "openprinttag_cure_wavelength", "integer",
+        "cureWavelength", "opt_cure_wavelength",
     ),
 )
 
-# Every FDB target for the OPT extra fields must be in the writable allow-list.
-assert all(f.fdb_path in FDB_SYNCABLE_FIELDS for f in OPENTAG_EXTRA_FIELDS)
+# FDB targets for entries that have them must be in the writable allow-list.
+assert all(
+    f.fdb_path in FDB_SYNCABLE_FIELDS
+    for f in OPENTAG_EXTRA_FIELDS
+    if f.fdb_path is not None
+)
 
 
 @dataclass

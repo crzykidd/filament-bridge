@@ -685,6 +685,134 @@ def test_opt_to_spoolman_fields_omits_absent_material_setting_extras():
         assert f"extra.{getattr(_s, attr)}" not in fields
 
 
+def test_opt_to_spoolman_fields_emits_new_material_extras():
+    """New OPT extra fields (bed/chamber/preheat/nozzle-dia/cure) are emitted when present."""
+    from app.config import settings as _s
+    opt = {
+        **_OPT_PLA_SILK,
+        "bedTempMin": 50,
+        "bedTempMax": 60,
+        "chamberTempMin": 25,
+        "chamberTempMax": 35,
+        "chamberTemp": 30,
+        "preheatTemp": 40,
+        "nozzleDiameterMin": 0.4,
+        "cureWavelength": 405,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_bed_temp_min}"] == 50
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_bed_temp_max}"] == 60
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_chamber_temp_min}"] == 25
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_chamber_temp_max}"] == 35
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_chamber_temp}"] == 30
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_preheat_temp}"] == 40
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_nozzle_diameter_min}"] == 0.4
+    assert fields[f"extra.{_s.spoolman_field_openprinttag_cure_wavelength}"] == 405
+
+
+def test_opt_to_spoolman_fields_omits_absent_new_material_extras():
+    """New OPT extra fields are NOT emitted when the OPT value is absent/None."""
+    from app.config import settings as _s
+    opt = {
+        **_OPT_PETG,
+        "bedTempMin": None,
+        "bedTempMax": None,
+        "chamberTempMin": None,
+        "chamberTempMax": None,
+        "chamberTemp": None,
+        "preheatTemp": None,
+        "nozzleDiameterMin": None,
+        "cureWavelength": None,
+    }
+    fields = opt_to_spoolman_fields(opt)
+    for attr in (
+        "spoolman_field_openprinttag_bed_temp_min",
+        "spoolman_field_openprinttag_bed_temp_max",
+        "spoolman_field_openprinttag_chamber_temp_min",
+        "spoolman_field_openprinttag_chamber_temp_max",
+        "spoolman_field_openprinttag_chamber_temp",
+        "spoolman_field_openprinttag_preheat_temp",
+        "spoolman_field_openprinttag_nozzle_diameter_min",
+        "spoolman_field_openprinttag_cure_wavelength",
+    ):
+        assert f"extra.{getattr(_s, attr)}" not in fields
+
+
+def test_opentag_cache_parser_populates_new_material_keys():
+    """_parse_tarball_full: new keys are populated from properties and absent when empty."""
+    import io
+    import tarfile
+    import yaml
+    from app.core.opentag_cache import _parse_tarball_full
+
+    def _make_tarball(materials: list[dict]) -> bytes:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            # brand
+            brand_yaml = yaml.dump({"slug": "acme", "name": "Acme"}).encode()
+            ti = tarfile.TarInfo("repo/data/brands/acme.yaml")
+            ti.size = len(brand_yaml)
+            tf.addfile(ti, io.BytesIO(brand_yaml))
+            for i, m in enumerate(materials):
+                mat_yaml = yaml.dump(m).encode()
+                ti = tarfile.TarInfo(f"repo/data/materials/m{i}.yaml")
+                ti.size = len(mat_yaml)
+                tf.addfile(ti, io.BytesIO(mat_yaml))
+        buf.seek(0)
+        return buf.read()
+
+    # Material with populated new fields
+    populated = {
+        "uuid": "abc-populated",
+        "slug": "acme-pla-test",
+        "brand": {"slug": "acme"},
+        "name": "Test PLA",
+        "type": "PLA",
+        "class": "FFF",
+        "properties": {
+            "min_nozzle_diameter": 0.4,
+            "cure_wavelength": 405,
+            "min_bed_temperature": 50,
+            "max_bed_temperature": 60,
+            "min_chamber_temperature": 25,
+            "max_chamber_temperature": 35,
+            "preheat_temperature": 40,
+        },
+    }
+    # Material with empty properties
+    empty = {
+        "uuid": "abc-empty",
+        "slug": "acme-pla-empty",
+        "brand": {"slug": "acme"},
+        "name": "Empty PLA",
+        "type": "PLA",
+        "class": "FFF",
+        "properties": {},
+    }
+
+    tarball = _make_tarball([populated, empty])
+    result = _parse_tarball_full(tarball)
+    mats = {m["slug"]: m for m in result["materials"]}
+
+    pop = mats["acme-pla-test"]
+    assert pop["nozzleDiameterMin"] == 0.4
+    assert pop["cureWavelength"] == 405
+    assert pop["bedTempMin"] == 50
+    assert pop["bedTempMax"] == 60
+    assert pop["chamberTempMin"] == 25
+    assert pop["chamberTempMax"] == 35
+    assert pop["preheatTemp"] == 40
+
+    emp = mats["acme-pla-empty"]
+    assert emp["nozzleDiameterMin"] is None
+    assert emp["cureWavelength"] is None
+    assert emp["bedTempMin"] is None
+    assert emp["bedTempMax"] is None
+    assert emp["chamberTempMin"] is None
+    assert emp["chamberTempMax"] is None
+    assert emp["preheatTemp"] is None
+
+
 def test_opentag_drying_time_passes_through_as_minutes():
     """dryingTime is MINUTES on both OpenPrintTag and Filament DB — the Apply flow
     stores the OPT value unchanged (regression for the old ÷60 hours bug, #27)."""
@@ -4028,6 +4156,56 @@ async def test_ensure_extra_fields_spool_section_isolated_from_filament_section(
     )
 
 
+@pytest.mark.asyncio
+async def test_ensure_extra_fields_registers_all_new_typed_fields():
+    """ensure_extra_fields must register all new typed OPT extra fields with the
+    correct field_type (integer/float) when they are missing from Spoolman."""
+    from app.services.spoolman import SpoolmanClient
+    from app.core.fields import OPENTAG_EXTRA_FIELDS
+    from app.config import settings as _s
+
+    registered: dict[str, str] = {}  # key → field_type
+
+    async def _fake_get_fields(url, **kwargs):
+        if "spool" in url:
+            resp = MagicMock()
+            resp.raise_for_status = MagicMock()
+            resp.json = MagicMock(return_value=[
+                {"key": _s.spoolman_field_filamentdb_id, "name": "x", "field_type": "text", "entity_type": "spool"},
+                {"key": _s.spoolman_field_filamentdb_parent_id, "name": "x", "field_type": "text", "entity_type": "spool"},
+                {"key": _s.spoolman_field_filamentdb_spool_id, "name": "x", "field_type": "text", "entity_type": "spool"},
+            ])
+            return resp
+        # Filament: nothing registered yet
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json = MagicMock(return_value=[])
+        return resp
+
+    async def _fake_post(url, json=None):
+        key = url.split("/")[-1]
+        registered[key] = (json or {}).get("field_type", "text")
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    client = SpoolmanClient("http://spoolman.test")
+    client._client = MagicMock()
+    client._http.get = AsyncMock(side_effect=_fake_get_fields)
+    client._http.post = AsyncMock(side_effect=_fake_post)
+
+    await client.ensure_extra_fields()
+
+    # Every OPENTAG_EXTRA_FIELDS entry must have been registered with correct type.
+    for ef in OPENTAG_EXTRA_FIELDS:
+        key = getattr(_s, ef.config_attr)
+        assert key in registered, f"Field {key!r} was not registered"
+        assert registered[key] == ef.field_type, (
+            f"Field {key!r}: expected field_type={ef.field_type!r}, "
+            f"got {registered[key]!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # _rgba_to_hex (moved from opentag_secondary to opentag_cache)
 # ---------------------------------------------------------------------------
@@ -6354,11 +6532,12 @@ async def test_matches_no_has_update_when_all_fields_match_despite_float_int_typ
     # SM filament that is ALREADY fully synced: spool_weight=200.0 (Pydantic float from SM API)
     # and weight=1000.0 (Pydantic float). The key: these are whole-number floats.
     slug_key = _ot_mod._settings.spoolman_field_openprinttag_slug
-    # Nozzle temp extra field keys (defaults "openprinttag_nozzle_temp_min" / "..._max").
-    # OPT emits these as int (int(round(float(200))) = 200).  Spoolman stores and returns
-    # them as JSON-encoded strings → encode_extra_value(200) matches how the real SM API works.
+    # Nozzle/bed temp extra field keys. OPT emits these as int. Spoolman stores and returns
+    # them as JSON-encoded strings → encode_extra_value(N) matches how the real SM API works.
     nozzle_min_key = _ot_mod._settings.spoolman_field_openprinttag_nozzle_temp_min
     nozzle_max_key = _ot_mod._settings.spoolman_field_openprinttag_nozzle_temp_max
+    bed_min_key = _ot_mod._settings.spoolman_field_openprinttag_bed_temp_min
+    bed_max_key = _ot_mod._settings.spoolman_field_openprinttag_bed_temp_max
     fake_sm = AsyncMock()
     fake_sm.get_filaments = AsyncMock(return_value=[
         SpoolmanFilament(
@@ -6377,13 +6556,14 @@ async def test_matches_no_has_update_when_all_fields_match_despite_float_int_typ
                 uuid_key: encode_extra_value(_OPT_PLA_SILK["uuid"]),
                 slug_key: encode_extra_value(_OPT_PLA_SILK["slug"]),
                 "filamentdb_material_tags": encode_extra_value("17"),  # silk tag
-                # Nozzle temps: already synced from OPT (int values, JSON-encoded by SM).
+                # Nozzle/bed temps: already synced from OPT (int values, JSON-encoded by SM).
                 # Without these the fields would be absent (None) on the SM side while OPT
-                # proposes 200 / 230 → genuine diff → has_update=True (correct, but not the
-                # scenario we are testing).  Here we pre-populate them to simulate a filament
-                # that has already been fully updated.
+                # proposes values → genuine diff → has_update=True (correct, but not the
+                # scenario we are testing).  Pre-populate to simulate a fully-updated filament.
                 nozzle_min_key: encode_extra_value(_OPT_PLA_SILK["nozzleTempMin"]),
                 nozzle_max_key: encode_extra_value(_OPT_PLA_SILK["nozzleTempMax"]),
+                bed_min_key: encode_extra_value(_OPT_PLA_SILK["bedTempMin"]),
+                bed_max_key: encode_extra_value(_OPT_PLA_SILK["bedTempMax"]),
             },
         )
     ])
@@ -6535,6 +6715,8 @@ def _full_material(uuid, slug, **overrides):
         "hardnessShoreD": 80.0,
         # forward-compat placeholder — 0 upstream occurrences, EXCLUDED from the report.
         "heatbreakTemperature": None,
+        "nozzleDiameterMin": 0.4,
+        "cureWavelength": 405,  # nm — filled so default record is gap-free
         "transmissionDistance": 1.2,
         "tags": ["matte"],
         "photoUrl": "https://example.test/photo.png",

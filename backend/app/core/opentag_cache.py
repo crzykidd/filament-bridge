@@ -62,6 +62,8 @@ OPTMaterial dict shape (identical to the old FDB feed shape — consumers are un
         "hardnessShoreD":     float | None,
         "hardnessShoreA":     float | None,   # NEW: hardness_shore_a (soft TPU materials)
         "heatbreakTemperature": int | None,   # NEW: heatbreak_temperature (not in current dataset; forward-compat → None)
+        "nozzleDiameterMin":  float | None,   # NEW: min_nozzle_diameter (mm)
+        "cureWavelength":     int | None,     # NEW: cure_wavelength (nm, resin materials)
         "transmissionDistance": float | None,
         "tags":               list[str],
         "photoUrl":           str | None,
@@ -116,10 +118,14 @@ Field mapping (raw YAML key → feed key):
   yaml.properties.max_bed_temperature     → bedTempMax
   yaml.properties.min_chamber_temperature
     or yaml.properties.chamber_temperature → chamberTemp
+  yaml.properties.min_chamber_temperature → chamberTempMin (distinct from max)
+  yaml.properties.max_chamber_temperature → chamberTempMax (distinct from min)
   yaml.properties.preheat_temperature     → preheatTemp
   yaml.properties.drying_temperature      → dryingTemp
   yaml.properties.drying_time             → dryingTime
   yaml.properties.hardness_shore_d        → hardnessShoreD
+  yaml.properties.min_nozzle_diameter     → nozzleDiameterMin (mm)
+  yaml.properties.cure_wavelength         → cureWavelength (nm, resin)
   yaml.transmission_distance              → transmissionDistance  (top-level key)
   yaml.tags                               → tags
   yaml.photos[0].url                      → photoUrl
@@ -163,7 +169,8 @@ _SHA_TIMEOUT = httpx.Timeout(15.0)
 #: v1: materials-only (implicit / absent key on legacy caches)
 #: v2: full schema — adds material chamberTempMin/Max, hardnessShoreA,
 #:     heatbreakTemperature + packages_by_material + containers_by_slug
-CACHE_SCHEMA_VERSION: int = 2
+#: v3: adds nozzleDiameterMin + cureWavelength to material dicts
+CACHE_SCHEMA_VERSION: int = 3
 
 # ---------------------------------------------------------------------------
 # Canonical "supported field" schema
@@ -193,6 +200,8 @@ SUPPORTED_MATERIAL_FIELDS: list[tuple[str, str]] = [
     ("hardnessShoreA", "Hardness (Shore A)"),
     ("hardnessShoreD", "Hardness (Shore D)"),
     ("heatbreakTemperature", "Heatbreak temp"),
+    ("nozzleDiameterMin", "Min nozzle diameter (mm)"),
+    ("cureWavelength", "Cure wavelength (nm)"),
     ("transmissionDistance", "Transmission distance"),
     ("tags", "Tags"),
     ("photoUrl", "Photo URL"),
@@ -395,6 +404,9 @@ def _parse_tarball_full(raw_bytes: bytes) -> dict[str, Any]:
                 # heatbreak_temperature is not present in the current upstream
                 # dataset; mapped for forward-compat (always None today).
                 "heatbreakTemperature": props.get("heatbreak_temperature"),
+                "nozzleDiameterMin": props.get("min_nozzle_diameter"),
+                # cure_wavelength lives under properties for resin materials.
+                "cureWavelength": props.get("cure_wavelength"),
                 "transmissionDistance": doc.get("transmission_distance"),
                 "tags": doc.get("tags") or [],
                 "photoUrl": photo_url,

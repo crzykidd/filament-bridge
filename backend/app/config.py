@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     spoolman_field_openprinttag_hardness_shore_a: str = "openprinttag_hardness_shore_a"
     spoolman_field_openprinttag_hardness_shore_d: str = "openprinttag_hardness_shore_d"
     spoolman_field_openprinttag_transmission_distance: str = "openprinttag_transmission_distance"
+    spoolman_field_openprinttag_bed_temp_min: str = "openprinttag_bed_temp_min"
+    spoolman_field_openprinttag_bed_temp_max: str = "openprinttag_bed_temp_max"
+    spoolman_field_openprinttag_chamber_temp_min: str = "openprinttag_chamber_temp_min"
+    spoolman_field_openprinttag_chamber_temp_max: str = "openprinttag_chamber_temp_max"
+    spoolman_field_openprinttag_chamber_temp: str = "openprinttag_chamber_temp"
+    spoolman_field_openprinttag_preheat_temp: str = "openprinttag_preheat_temp"
+    spoolman_field_openprinttag_nozzle_diameter_min: str = "openprinttag_nozzle_diameter_min"
+    spoolman_field_openprinttag_cure_wavelength: str = "openprinttag_cure_wavelength"
 
     # Local OpenTag cache staleness threshold (hours)
     opentag_cache_max_age_hours: int = 24
