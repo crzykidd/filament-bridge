@@ -572,7 +572,14 @@ def test_search_spools_only_returns_spool_rows():
 
 
 def _fdb_detail_with_drying(gross=1000.0):
-    """FDB detail carrying dryingTemperature + dryingTime + spool dry-cycle fields."""
+    """FDB detail carrying dryingTemperature + dryingTime + a spool dryCycles array.
+
+    Mirrors the real GET /api/filaments/:id shape: the spool carries a dryCycles[]
+    array of {date, tempC, durationMin} entries (no convenience lastDriedAt/
+    dryCycleCount fields — those are computed and not reliably returned). The newest
+    cycle date is deliberately NOT last in the array, to exercise the newest-wins
+    derivation.
+    """
     return FDBFilamentDetail.model_validate({
         "_id": "fil-1", "name": "PLA", "spoolWeight": 200.0, "colorName": "Galaxy Black",
         "color": "#111111", "type": "PLA", "_inherited": [],
@@ -580,7 +587,11 @@ def _fdb_detail_with_drying(gross=1000.0):
         "dryingTime": 240,
         "spools": [{
             "_id": "spool-1", "totalWeight": gross, "retired": False,
-            "lastDriedAt": "2026-06-01T10:00:00Z", "dryCycleCount": 3,
+            "dryCycles": [
+                {"date": "2026-05-01T10:00:00Z", "tempC": 60, "durationMin": 180},
+                {"date": "2026-06-01T10:00:00Z", "tempC": 65, "durationMin": 240},
+                {"date": "2026-04-01T10:00:00Z", "tempC": 55, "durationMin": 120},
+            ],
         }],
     })
 

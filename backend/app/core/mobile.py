@@ -84,8 +84,15 @@ async def assemble_spool_detail(
 
     _dry_temp = getattr(fdb_detail, "dryingTemperature", None)
     _dry_time = getattr(fdb_detail, "dryingTime", None)
-    _last_dried = getattr(fdb_spool, "lastDriedAt", None) if fdb_spool else None
-    _dry_count = getattr(fdb_spool, "dryCycleCount", None) if fdb_spool else None
+    # Derive last-dried + count from the spool's dryCycles array (the canonical source
+    # on the detail view). FDB's convenience lastDriedAt/dryCycleCount fields are
+    # computed and not reliably present on GET /api/filaments/:id, so we don't read
+    # them. Newest cycle date wins — matching FDB's own "last dried" semantics.
+    _cycles = getattr(fdb_spool, "dryCycles", None) if fdb_spool else None
+    _cycles = _cycles if isinstance(_cycles, list) else []
+    _cycle_dates = [c.get("date") for c in _cycles if isinstance(c, dict) and c.get("date")]
+    _last_dried = max(_cycle_dates) if _cycle_dates else None
+    _dry_count = len(_cycles) if _cycles else None
 
     return MobileSpoolDetail(
         filamentdb_filament_id=fdb_fil_id,
