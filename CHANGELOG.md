@@ -9,6 +9,10 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Log a dry cycle from the mobile spool page** — the mobile scan/update card now has a dedicated "Log dry cycle" section with temperature, duration, and optional notes inputs (pre-filled from the filament's recommended drying settings). Tapping "Log dry cycle" posts immediately to Filament DB (`POST /api/filaments/:id/spools/:spoolId/dry-cycles`) — it is a FDB-only one-way write with no Spoolman update and no snapshot refresh, independent of the weight/location Save. The summary row shows the last dried date and total cycle count. Closes #45.
+
 ### Fixed
 
 - **Conflict "Add" no longer breaks after a sync cycle** — for records that stayed unmapped

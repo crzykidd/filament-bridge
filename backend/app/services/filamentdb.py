@@ -156,6 +156,17 @@ class FilamentDBClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def add_dry_cycle(
+        self, filament_id: str, spool_id: str, payload: dict
+    ) -> dict:
+        """POST /api/filaments/:id/spools/:spoolId/dry-cycles — log a dry cycle."""
+        resp = await self._http.post(
+            f"/api/filaments/{filament_id}/spools/{spool_id}/dry-cycles",
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     async def update_spool(
         self, filament_id: str, spool_id: str, payload: dict
     ) -> dict:

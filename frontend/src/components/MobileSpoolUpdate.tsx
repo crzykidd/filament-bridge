@@ -14,7 +14,7 @@
  */
 
 import { useState } from 'react'
-import { getMobileSpool, getMobileLocations, updateMobileSpool } from '../api/client'
+import { getMobileSpool, getMobileLocations, updateMobileSpool, logMobileDryCycle } from '../api/client'
 import { useApi } from '../api/hooks'
 import { BridgeApiError } from '../api/client'
 import { ColorDisplay } from './ColorDisplay'
@@ -54,6 +54,14 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
   const [err, setErr] = useState<string | null>(null)
   const [savedMsg, setSavedMsg] = useState<string | null>(null)
 
+  // Dry cycle state (lazy init from recommended values)
+  const [dryTemp, setDryTemp] = useState<string | null>(null)
+  const [dryDuration, setDryDuration] = useState<string | null>(null)
+  const [dryNotes, setDryNotes] = useState('')
+  const [drySubmitting, setDrySubmitting] = useState(false)
+  const [dryErr, setDryErr] = useState<string | null>(null)
+  const [drySavedMsg, setDrySavedMsg] = useState<string | null>(null)
+
   if (loading) {
     return <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
   }
@@ -65,6 +73,32 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
   const detail = data
   const effectiveMode: MobileWeightMode = weightMode ?? detail.weight_default_mode
   const effectiveLocation = location ?? detail.location ?? ''
+
+  // Dry cycle effective values: user input (once set) falls back to filament recommendation.
+  const effectiveDryTemp = dryTemp ?? (detail.recommended_drying_temp_c != null ? String(detail.recommended_drying_temp_c) : '')
+  const effectiveDryDuration = dryDuration ?? (detail.recommended_drying_time_min != null ? String(detail.recommended_drying_time_min) : '')
+
+  async function handleLogDryCycle() {
+    setDrySubmitting(true)
+    setDryErr(null)
+    setDrySavedMsg(null)
+    try {
+      const tempNum = effectiveDryTemp.trim() !== '' ? Number(effectiveDryTemp) : null
+      const durNum = effectiveDryDuration.trim() !== '' ? Number(effectiveDryDuration) : null
+      await logMobileDryCycle(filId, spoolId, {
+        ...(tempNum != null && Number.isFinite(tempNum) ? { temp_c: tempNum } : {}),
+        ...(durNum != null && Number.isFinite(durNum) ? { duration_min: durNum } : {}),
+        ...(dryNotes.trim() ? { notes: dryNotes.trim() } : {}),
+      })
+      setDryNotes('')
+      setDrySavedMsg('Dry cycle logged.')
+      await reload()
+    } catch (e) {
+      setDryErr(e instanceof BridgeApiError ? e.message : String(e))
+    } finally {
+      setDrySubmitting(false)
+    }
+  }
 
   // Live net preview from the entered gross weight.
   const grossNum = grossInput.trim() === '' ? null : Number(grossInput)
@@ -150,6 +184,15 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
         <dd className="text-right font-medium text-gray-900 dark:text-gray-100">{fmtGrams(detail.net)}</dd>
         <dt className="text-gray-500 dark:text-gray-400">Location</dt>
         <dd className="text-right font-medium text-gray-900 dark:text-gray-100">{detail.location ?? '—'}</dd>
+        <dt className="text-gray-500 dark:text-gray-400">Last dried</dt>
+        <dd className="text-right font-medium text-gray-900 dark:text-gray-100">
+          {detail.last_dried_at
+            ? new Date(detail.last_dried_at).toLocaleDateString()
+            : '—'}
+          {detail.dry_cycle_count != null && detail.dry_cycle_count > 0
+            ? <span className="text-gray-400 dark:text-gray-500"> · {detail.dry_cycle_count} cycles</span>
+            : null}
+        </dd>
       </dl>
 
       {/* Weight input — gross / scale reading */}
@@ -276,6 +319,80 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
             {savedMsg}
           </div>
         )}
+      </div>
+
+      {/* Log dry cycle — FDB-only one-way write, separate from Save */}
+      <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Log dry cycle</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Logged immediately when you tap Log dry cycle — separate from Save.
+        </p>
+        <div>
+          <label htmlFor="dry-temp" className={labelCls}>Temperature (°C)</label>
+          <input
+            id="dry-temp"
+            type="text"
+            inputMode="numeric"
+            value={effectiveDryTemp}
+            onChange={e => setDryTemp(e.target.value)}
+            placeholder="e.g. 65"
+            className={inputCls}
+            autoComplete="off"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
+            data-form-type="other"
+          />
+        </div>
+        <div>
+          <label htmlFor="dry-duration" className={labelCls}>Duration (minutes)</label>
+          <input
+            id="dry-duration"
+            type="text"
+            inputMode="numeric"
+            value={effectiveDryDuration}
+            onChange={e => setDryDuration(e.target.value)}
+            placeholder="e.g. 240"
+            className={inputCls}
+            autoComplete="off"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
+            data-form-type="other"
+          />
+        </div>
+        <div>
+          <label htmlFor="dry-notes" className={labelCls}>Notes (optional)</label>
+          <input
+            id="dry-notes"
+            type="text"
+            value={dryNotes}
+            onChange={e => setDryNotes(e.target.value)}
+            placeholder="e.g. pre-print drying"
+            className={inputCls}
+            autoComplete="off"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
+            data-form-type="other"
+          />
+        </div>
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => { void handleLogDryCycle() }}
+            disabled={drySubmitting}
+            className="w-full bg-teal-600 text-white rounded px-4 py-2.5 text-base font-medium hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {drySubmitting ? 'Logging…' : 'Log dry cycle'}
+          </button>
+          {dryErr && <p className="text-sm text-red-600 dark:text-red-400">{dryErr}</p>}
+          {drySavedMsg && !dryErr && (
+            <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded p-2.5 text-sm text-emerald-800 dark:text-emerald-300">
+              {drySavedMsg}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Print label (LabelForge) — feature is already gated on the route here */}

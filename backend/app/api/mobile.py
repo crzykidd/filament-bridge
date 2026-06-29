@@ -34,7 +34,7 @@ from app.core.mobile import assemble_spool_detail, resolve_spool_mapping
 from app.core.weight import DEFAULT_TARE_GRAMS
 from app.core.weight_ops import apply_absolute_weight
 from app.db import get_db
-from app.schemas.api import MobileSpoolDetail, MobileSpoolSearchResult, MobileSpoolUpdateRequest
+from app.schemas.api import MobileDryCycleRequest, MobileSpoolDetail, MobileSpoolSearchResult, MobileSpoolUpdateRequest
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +181,47 @@ async def update_mobile_spool(
         db.commit()
 
     # Return the refreshed detail (live re-fetch).
+    detail = await assemble_spool_detail(
+        db, spoolman, filamentdb, fdb_fil_id=fil, fdb_spool_id=spool,
+    )
+    if detail is None:  # pragma: no cover - mapping existed above
+        raise api_error(404, "spool_not_mapped", f"No bridge mapping found for spool {spool}.")
+    return detail
+
+
+@router.post(
+    "/mobile/spool/{fil}/{spool}/dry-cycle",
+    response_model=MobileSpoolDetail,
+    dependencies=[Depends(_require_labels_enabled)],
+)
+async def log_mobile_dry_cycle(
+    fil: str,
+    spool: str,
+    payload: MobileDryCycleRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MobileSpoolDetail:
+    """Log a dry cycle for the spool identified by FDB ids (FDB-only, no snapshot refresh)."""
+    spoolman = request.app.state.spoolman
+    filamentdb = request.app.state.filamentdb
+
+    mapping = resolve_spool_mapping(db, spool)
+    if mapping is None:
+        raise api_error(
+            404, "spool_not_mapped",
+            f"No bridge mapping found for Filament DB spool {spool}.",
+        )
+
+    fdb_payload: dict = {}
+    if payload.temp_c is not None:
+        fdb_payload["tempC"] = payload.temp_c
+    if payload.duration_min is not None:
+        fdb_payload["durationMin"] = payload.duration_min
+    if payload.notes:
+        fdb_payload["notes"] = payload.notes
+
+    await filamentdb.add_dry_cycle(fil, spool, fdb_payload)
+
     detail = await assemble_spool_detail(
         db, spoolman, filamentdb, fdb_fil_id=fil, fdb_spool_id=spool,
     )

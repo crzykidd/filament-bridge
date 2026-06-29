@@ -82,6 +82,11 @@ async def assemble_spool_detail(
     color_hex = sm_fil.color_hex or fdb_detail.color
     material = sm_fil.material or fdb_detail.type
 
+    _dry_temp = getattr(fdb_detail, "dryingTemperature", None)
+    _dry_time = getattr(fdb_detail, "dryingTime", None)
+    _last_dried = getattr(fdb_spool, "lastDriedAt", None) if fdb_spool else None
+    _dry_count = getattr(fdb_spool, "dryCycleCount", None) if fdb_spool else None
+
     return MobileSpoolDetail(
         filamentdb_filament_id=fdb_fil_id,
         filamentdb_spool_id=fdb_spool_id,
@@ -97,4 +102,8 @@ async def assemble_spool_detail(
         tare=tare,
         location=sm_spool.location,
         weight_default_mode=mobile_weight_default_mode(db),  # type: ignore[arg-type]
+        last_dried_at=str(_last_dried) if _last_dried is not None else None,
+        dry_cycle_count=int(_dry_count) if _dry_count is not None else None,
+        recommended_drying_temp_c=int(_dry_temp) if _dry_temp is not None else None,
+        recommended_drying_time_min=int(_dry_time) if _dry_time is not None else None,
     )
