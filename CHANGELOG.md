@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-06-29
+
 ### Fixed
 
 - **Orphaned spools are reconciled instead of silently dropped** — a Spoolman spool that
