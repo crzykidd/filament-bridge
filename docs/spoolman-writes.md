@@ -44,6 +44,14 @@ material-properties sync pass (same direction + conflict policy as the other mat
 | `openprinttag_hardness_shore_a` | float | `shoreHardnessA` | OPT `hardnessShoreA` |
 | `openprinttag_hardness_shore_d` | float | `shoreHardnessD` | OPT `hardnessShoreD` |
 | `openprinttag_transmission_distance` | float | `transmissionDistance` | OPT `transmissionDistance` (mm) |
+| `openprinttag_bed_temp_max` | integer | *(Spoolman-only)* | OPT `bedTempMax` (°C) — FDB's single `temperatures.bed` is already synced via the native `settings_bed_temp` channel, so this extra is not a second writer |
+| `openprinttag_bed_temp_min` | integer | *(Spoolman-only)* | OPT `bedTempMin` (°C) — no FDB bed-range field; stored in Spoolman only |
+| `openprinttag_chamber_temp_min` | integer | *(Spoolman-only)* | OPT `chamberTempMin` (°C) |
+| `openprinttag_chamber_temp_max` | integer | *(Spoolman-only)* | OPT `chamberTempMax` (°C) |
+| `openprinttag_chamber_temp` | integer | *(Spoolman-only)* | OPT `chamberTemp` (°C) — collapsed back-compat value |
+| `openprinttag_preheat_temp` | integer | *(Spoolman-only)* | OPT `preheatTemp` (°C) |
+| `openprinttag_nozzle_diameter_min` | float | *(Spoolman-only)* | OPT `nozzleDiameterMin` (mm) |
+| `openprinttag_cure_wavelength` | integer | *(Spoolman-only)* | OPT `cureWavelength` (nm) — relevant for resins/UV materials |
 
 All extras are stored JSON-encoded (`encode_extra_value`) — including the typed numeric ones
 (Spoolman returns `230` as `"230"`, which `decode_extra_value` parses back to `230`).
@@ -69,7 +77,8 @@ lone change, one-way FDB→SM, or an FDB-winning conflict policy). See
 | Filament | `spool_weight` | Native-scalar sync resolves FDB→SM (from FDB `spoolWeight`) |
 | Filament | `weight` | Native-scalar sync resolves FDB→SM (from FDB `netFilamentWeight`) |
 | Filament | `extra.filamentdb_material_tags` | Finish-tag sync resolves FDB→SM (Filament DB ≥ 1.33.0); CSV of OpenPrintTag IDs from FDB `optTags` |
-| Filament | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` | OpenPrintTag material-setting sync resolves FDB→SM (from the FDB counterpart field). Master/variant-gated SM→FDB; both snapshots refresh after a write (anti-ping-pong) |
+| Filament | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` | OpenPrintTag material-setting sync (FDB ↔ SM bidirectional) for the 7 fields that have a dedicated FDB counterpart. Master/variant-gated; both snapshots refresh after a write (anti-ping-pong) |
+| Filament | `extra.openprinttag_{bed_temp_max,bed_temp_min,chamber_temp_min,chamber_temp_max,chamber_temp,preheat_temp,nozzle_diameter_min,cure_wavelength}` | Spoolman-only OPT extras — populated by the OpenTag Apply flow; **no FDB sync via this pass**, never read or written to Filament DB by the OPT material-setting sync. (Bed temp still reaches FDB `temperatures.bed` through the native `settings_bed_temp` channel above.) |
 | Spool | `extra.{mapped field}` | Generic field-mapping sync (FR-11) resolves FDB→SM; arbitrary mapped FDB fields stored as spool extras |
 | Spool | `archived` (bool) | Lifecycle sync resolves FDB→SM — a *mapped* spool retired in Filament DB (`retired`) flips Spoolman `archived` to match; un-retire mirrors back (`archived: false`). Runs **after** the weight pass so a depleted spool's final decrement settles first. Governed by `archive_sync_direction` / `archive_conflict_policy`, not by `never_import_empties`. See [sync-model.md](sync-model.md). |
 
@@ -140,7 +149,7 @@ Only the fields the user confirmed (not marked "keep mine") are written.
 | Filament | update | `name` | User confirmed the reviewable name field (defaults to the OpenTag material name) |
 | Filament | update | `vendor` → `vendor_id` | User confirmed the Manufacturer field; the Manufacturer row surfaces whenever SM vendor and OpenTag brand differ by any visible character (including case-only). Resolved via find-or-create (`_ensure_vendor`): exact trimmed name match against existing vendors; creates a new vendor if no exact match. Re-points THIS filament only — existing vendor never renamed, other filaments never touched. A case-only diff intentionally creates a near-duplicate vendor (accepted trade-off). **This is the only OpenTag path that may CREATE a new Spoolman vendor.** |
 | Filament | update | `material`, `color_hex`, `density`, `diameter`, `settings_extruder_temp`, `settings_bed_temp`, `multi_color_hexes`, `multi_color_direction` (any subset) | User confirmed in the review/confirm UI |
-| Filament | update | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance}` (any subset) | User confirmed; the seven typed OpenPrintTag material-setting extras. Only emitted as review rows when the OPT material carries the value; `drying_time` is in minutes (no conversion — FDB `dryingTime` is also minutes) |
+| Filament | update | `extra.openprinttag_{nozzle_temp_min,nozzle_temp_max,drying_temp,drying_time,hardness_shore_a,hardness_shore_d,transmission_distance,bed_temp_min,bed_temp_max,chamber_temp_min,chamber_temp_max,chamber_temp,preheat_temp,nozzle_diameter_min,cure_wavelength}` (any subset) | User confirmed; all 15 typed OPT material-setting extras. Only emitted as review rows when the OPT material carries the value. `drying_time` is in minutes (no conversion — FDB `dryingTime` is also minutes). Spoolman-only fields (bed_temp_min, chamber_*, preheat_temp, nozzle_diameter_min, cure_wavelength) are written to Spoolman but never synced to FDB |
 | Filament | update | `spool_weight`, `weight` (native) | User confirmed; weight-model bonus from the OPT material→package→container lookup — container `emptyWeight` → `spool_weight` (tare), package `nominalNettoFullWeight` → `weight`. Only surfaced when the dataset has package/container data for the matched material |
 | Filament | update | `extra.filamentdb_material_tags` | User confirmed; JSON list of finish IDs from the OPTMaterial tags |
 | Filament | update | `extra.openprinttag_slug`, `extra.openprinttag_uuid` | Always written for non-ignored filaments with a match |

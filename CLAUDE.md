@@ -267,6 +267,14 @@ filament-bridge/
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_A` | No | `openprinttag_hardness_shore_a` | Spoolman filament **float** extra field for OPT `hardnessShoreA`. Synced ↔ FDB `shoreHardnessA`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_HARDNESS_SHORE_D` | No | `openprinttag_hardness_shore_d` | Spoolman filament **float** extra field for OPT `hardnessShoreD`. Synced ↔ FDB `shoreHardnessD`. |
 | `SPOOLMAN_FIELD_OPENPRINTTAG_TRANSMISSION_DISTANCE` | No | `openprinttag_transmission_distance` | Spoolman filament **float** extra field for OPT `transmissionDistance` (mm). Synced ↔ FDB `transmissionDistance`. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_BED_TEMP_MAX` | No | `openprinttag_bed_temp_max` | Spoolman filament **integer** extra field for OPT `bedTempMax` (°C). **Spoolman-only** — FDB's single `temperatures.bed` is already synced via the native `settings_bed_temp` channel (OPT Apply populates it from `bedTempMax`), so this extra is not a second writer. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_BED_TEMP_MIN` | No | `openprinttag_bed_temp_min` | Spoolman filament **integer** extra field for OPT `bedTempMin` (°C). **Spoolman-only** — FDB has no bed-range field. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CHAMBER_TEMP_MIN` | No | `openprinttag_chamber_temp_min` | Spoolman filament **integer** extra field for OPT `chamberTempMin` (°C). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CHAMBER_TEMP_MAX` | No | `openprinttag_chamber_temp_max` | Spoolman filament **integer** extra field for OPT `chamberTempMax` (°C). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CHAMBER_TEMP` | No | `openprinttag_chamber_temp` | Spoolman filament **integer** extra field for OPT `chamberTemp` (°C) — collapsed back-compat value. **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_PREHEAT_TEMP` | No | `openprinttag_preheat_temp` | Spoolman filament **integer** extra field for OPT `preheatTemp` (°C). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_NOZZLE_DIAMETER_MIN` | No | `openprinttag_nozzle_diameter_min` | Spoolman filament **float** extra field for OPT `nozzleDiameterMin` (mm). **Spoolman-only**. |
+| `SPOOLMAN_FIELD_OPENPRINTTAG_CURE_WAVELENGTH` | No | `openprinttag_cure_wavelength` | Spoolman filament **integer** extra field for OPT `cureWavelength` (nm). Relevant for resin/UV materials. **Spoolman-only**. |
 | `OPENTAG_CACHE_MAX_AGE_HOURS` | No | `24` | Hours before the local OpenTag dataset cache is considered stale |
 | `CONTAINER_PARENT_MARKER` | No | `(Master)` | String appended (after a space) to generic-container parent names in the wizard. Empty string = no suffix. Overridable at runtime via Settings. |
 | `BRIDGE_CHANNEL` | No | `release` | Build channel baked in at image build time (Docker build arg `BUILD_CHANNEL`). When `dev`, the displayed version gets a `-dev` suffix (+ short commit). |

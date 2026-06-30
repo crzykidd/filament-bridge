@@ -296,3 +296,76 @@ async def test_opt_field_fdb_to_sm_writes_extra(db):
     )
     assert result.updated >= 1
     fdb_client.update_filament.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# New fields: all Spoolman-only (no FDB leg)
+# ---------------------------------------------------------------------------
+
+KEY_BED_MAX = "openprinttag_bed_temp_max"    # fdb_path=None → Spoolman-only
+KEY_CHAMBER = "openprinttag_chamber_temp"    # fdb_path=None → Spoolman-only
+
+
+@pytest.mark.asyncio
+async def test_opt_field_bed_temp_max_is_spoolman_only_no_fdb_write(db):
+    """openprinttag_bed_temp_max is Spoolman-only — the OPT pass must NOT write to FDB.
+
+    FDB's single ``temperatures.bed`` is already owned by the native
+    ``settings_bed_temp`` ↔ ``temperatures.bed`` pass (MATERIAL_PROP_TEMP_PAIRS).
+    The OPT bed-temp extra therefore has no FDB leg, or two Spoolman fields would
+    fight over the same FDB field (ping-pong).  Bed temp still reaches FDB via the
+    native channel — just not through this extra.
+    """
+    _add_fil_mapping(db)
+    _seed_matprop(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    # SM bed-temp extra diverges from FDB's temperatures.bed — must NOT trigger a write.
+    sm_fil = _sm_fil_opt(extra={KEY_BED_MAX: encode_extra_value(65)})
+    fdb_detail = _fdb_detail_opt(temperatures={"bed": 60}, parent_id=None, inherited=[])
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_fdb(filaments=[_fdb_list_opt()], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _opt_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # The OPT pass must never write temperatures.bed from the bed-temp extra.
+    for call in fdb_client.update_filament.call_args_list:
+        args, _ = call
+        if args[0] == OT_FDB_FIL_ID and "temperatures" in args[1]:
+            assert "bed" not in args[1]["temperatures"], \
+                "bed_temp_max must be Spoolman-only — no FDB temperatures.bed write"
+    # No conflict queued for a Spoolman-only field either.
+    assert db.query(Conflict).filter_by(field_name="opt_bed_temp_max").first() is None
+
+
+@pytest.mark.asyncio
+async def test_opt_field_spoolman_only_no_fdb_write(db):
+    """Spoolman-only field (chamber_temp, fdb_path=None) never triggers an FDB write.
+
+    Even if the SM extra changes, the engine must skip the FDB leg entirely for
+    fields with no FDB counterpart.
+    """
+    _add_fil_mapping(db)
+    _seed_matprop(db, direction="spoolman_to_filamentdb", policy="manual")
+
+    # Put a chamber temp value in Spoolman — there is no FDB field to compare against.
+    sm_fil = _sm_fil_opt(extra={KEY_CHAMBER: encode_extra_value(30)})
+    fdb_detail = _fdb_detail_opt(temperatures={}, parent_id=None, inherited=[])
+
+    # No prior snapshot for this key (first-sight scenario for a Spoolman-only field).
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_fdb(filaments=[_fdb_list_opt()], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _opt_settings(ms)
+        await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # The FDB client must never be asked to update a filament for this field.
+    fdb_client.update_filament.assert_not_called()
+    # No conflicts should be queued for a Spoolman-only field.
+    conflict = db.query(Conflict).filter_by(field_name="opt_chamber_temp").first()
+    assert conflict is None

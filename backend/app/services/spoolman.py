@@ -261,15 +261,23 @@ class SpoolmanClient:
         # numeric field).
         from app.core.fields import OPENTAG_EXTRA_FIELDS
 
-        # Human-readable names for the seven OpenPrintTag material-setting extras.
+        # Human-readable names for the OpenPrintTag material-setting extras.
         _OPENTAG_FIELD_NAMES: dict[str, str] = {
-            "openprinttag_nozzle_temp_min": "OpenPrintTag Nozzle Temp (min)",
-            "openprinttag_nozzle_temp_max": "OpenPrintTag Nozzle Temp (max)",
-            "openprinttag_drying_temp": "OpenPrintTag Drying Temp",
-            "openprinttag_drying_time": "OpenPrintTag Drying Time (h)",
+            "openprinttag_nozzle_temp_min": "OpenPrintTag Nozzle Temp Min (°C)",
+            "openprinttag_nozzle_temp_max": "OpenPrintTag Nozzle Temp Max (°C)",
+            "openprinttag_drying_temp": "OpenPrintTag Drying Temp (°C)",
+            "openprinttag_drying_time": "OpenPrintTag Drying Time (min)",
             "openprinttag_hardness_shore_a": "OpenPrintTag Hardness (Shore A)",
             "openprinttag_hardness_shore_d": "OpenPrintTag Hardness (Shore D)",
-            "openprinttag_transmission_distance": "OpenPrintTag Transmission Distance",
+            "openprinttag_transmission_distance": "OpenPrintTag Transmission Distance (mm)",
+            "openprinttag_bed_temp_min": "OpenPrintTag Bed Temp Min (°C)",
+            "openprinttag_bed_temp_max": "OpenPrintTag Bed Temp Max (°C)",
+            "openprinttag_chamber_temp_min": "OpenPrintTag Chamber Temp Min (°C)",
+            "openprinttag_chamber_temp_max": "OpenPrintTag Chamber Temp Max (°C)",
+            "openprinttag_chamber_temp": "OpenPrintTag Chamber Temp (°C)",
+            "openprinttag_preheat_temp": "OpenPrintTag Preheat Temp (°C)",
+            "openprinttag_nozzle_diameter_min": "OpenPrintTag Min Nozzle Diameter (mm)",
+            "openprinttag_cure_wavelength": "OpenPrintTag Cure Wavelength (nm)",
         }
 
         runtime_filament_fields = [

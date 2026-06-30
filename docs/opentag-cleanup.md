@@ -97,10 +97,11 @@ The single tarball download is parsed into three cache structures (all in
 `opentag_cache.json`):
 
 - **`materials`** — one OPTMaterial dict per `class: FFF` material. Carries the full
-  upstream `properties` set: nozzle/bed/chamber temps (chamber now keeps **distinct
-  `chamberTempMin`/`chamberTempMax`** plus a back-compat collapsed `chamberTemp`), density,
-  drying temp/time, preheat temp, **`hardnessShoreA`** and `hardnessShoreD`, transmission
-  distance, tags, photo URL, the material-level product URL, and primary/secondary colors.
+  upstream `properties` set: nozzle/bed/chamber temps (bed: `bedTempMin` + `bedTempMax`;
+  chamber: **distinct `chamberTempMin`/`chamberTempMax`** plus a back-compat collapsed
+  `chamberTemp`), density, drying temp/time, preheat temp, **`hardnessShoreA`** and
+  `hardnessShoreD`, transmission distance, `nozzleDiameterMin`, `cureWavelength`, tags,
+  photo URL, the material-level product URL, and primary/secondary colors.
   (`heatbreakTemperature` is mapped for forward-compat but absent from the current dataset.)
 - **`packages_by_material`** — `{ material_slug: [package, …] }` (a material has 1→N
   packages). Each package carries `slug`, `uuid`, `gtin` (barcode), `brandSpecificId` (the
