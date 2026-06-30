@@ -97,16 +97,17 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.7** (orphan-spool reconcile — a spool in both systems but with a
-  lost bridge mapping is now re-adopted each cycle instead of silently skipped #48). Recent:
-  v0.6.6 (mobile dry-cycle log #45; stable conflict ids #44; tested-upstream baseline →
-  Filament DB 1.59.3), v0.6.5 (sortable Synced Records columns #41; wizard Variances TDZ fix
-  #42), v0.6.4 (wizard partial-success + Failure Report #14), v0.6.3 (backup-status UI #20).
+- Latest release: **v0.6.8** (OpenPrintTag material properties — bed/chamber/preheat temps,
+  min nozzle diameter, cure wavelength — now tracked as Spoolman custom fields from the exact
+  matched OPT record; bed temp still syncs to FDB via the existing channel #50). Recent:
+  v0.6.7 (orphan-spool reconcile #48), v0.6.6 (mobile dry-cycle log #45; stable conflict ids
+  #44; tested-upstream baseline → Filament DB 1.59.3), v0.6.5 (sortable Synced Records columns
+  #41; wizard Variances TDZ fix #42), v0.6.4 (wizard partial-success + Failure Report #14).
 - Open issues (see `docs/backlog.md`): **#47** read-only API token option, **#40** surface
   mapping edit/unlink in Synced Records UI, **#24** Discord webhook notifications (FR-20),
   **#25** print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync
-  batch (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), and the
-  conflict/mobile/orphan fixes (#44/#45/#48).
+  batch (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), the
+  conflict/mobile/orphan fixes (#44/#45/#48), and OPT material-property tracking (#50).
 - Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
   auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
 
