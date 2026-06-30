@@ -9,6 +9,19 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.8] — 2026-06-29
+
+### Added
+
+- **OpenPrintTag material properties tracked as Spoolman custom fields** — applying an
+  OpenTag match now also records bed temperature (min/max), chamber temperature
+  (min/max + collapsed), preheat temperature, minimum nozzle diameter, and cure
+  wavelength on the Spoolman filament as typed extra fields, alongside the existing
+  nozzle/drying/hardness/transmission fields. Values come from the exact matched
+  OpenPrintTag record (no inference across sibling records). These are Spoolman-side
+  tracking fields; bed temperature still reaches Filament DB through the existing
+  bed-temperature sync channel. Closes #50.
+
 ## [0.6.7] — 2026-06-29
 
 ### Fixed

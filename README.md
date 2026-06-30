@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.7-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.8-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,10 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.8 (2026-06-29)
+
+- **More OpenPrintTag data saved to Spoolman** — applying an OpenTag match now also records bed, chamber, and preheat temperatures, minimum nozzle diameter, and cure wavelength as Spoolman custom fields (alongside the existing nozzle/drying/hardness/transmission fields), taken from the exact matched OpenPrintTag record. Bed temperature still syncs to Filament DB as before. (#50)
 
 ### v0.6.7 (2026-06-29)
 
