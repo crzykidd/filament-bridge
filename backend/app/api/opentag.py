@@ -14,6 +14,7 @@ blocked by ad blockers.  The routes use "openprinttag" instead, which is safe.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import logging
 from typing import Any
 
@@ -994,7 +995,7 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
                 dataset_count=meta.get("count", 0),
                 dataset_fetched_at=meta.get("fetched_at"),
                 dataset_commit_sha=meta.get("commit_sha"),
-                sm_count=await _safe_sm_count(sm),
+                sm_content_hash=await _safe_sm_content_hash(sm),
                 aliases_raw=aliases_raw,
                 tag_map=tag_map,
                 field_names=field_names,
@@ -1083,7 +1084,7 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
         dataset_count=dataset["count"],
         dataset_fetched_at=dataset["fetched_at"],
         dataset_commit_sha=dataset.get("commit_sha"),
-        sm_count=len(sm_filaments),
+        sm_content_hash=_build_sm_content_hash(sm_filaments),
         aliases_raw=aliases_raw,
         tag_map=tag_map,
         field_names=field_names,
@@ -1097,17 +1098,36 @@ async def opentag_matches(request: Request, recompute: bool = False) -> OpenTagM
     return response
 
 
-async def _safe_sm_count(sm: Any) -> int:
-    """Best-effort Spoolman filament count for stale-input detection.
+def _build_sm_content_hash(filaments: list[_SpoolmanFilament]) -> str:
+    """SHA-256 hash of the Spoolman filament set for content-aware staleness.
+
+    Includes vendor name, filament name, and material type — the fields that
+    most affect match scores.  A vendor rename (same count, different name)
+    produces a different hash and flips ``stale_inputs``.  Order-independent:
+    entries are sorted before hashing.
+    """
+    h = hashlib.sha256()
+    entries = sorted(
+        f"{f.vendor.name if f.vendor else ''}\x00{f.name}\x00{f.material or ''}"
+        for f in filaments
+    )
+    for entry in entries:
+        h.update(entry.encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+async def _safe_sm_content_hash(sm: Any) -> str:
+    """Best-effort Spoolman filament content hash for stale-input detection.
 
     Used only by the cached fast path to decide ``stale_inputs``; a failure here
-    must never block serving the cache, so it returns -1 (which simply forces
-    ``stale_inputs`` true) on error.
+    must never block serving the cache, so it returns empty string (which simply
+    forces ``stale_inputs`` true) on error.
     """
     try:
-        return len(await sm.get_filaments())
+        return _build_sm_content_hash(await sm.get_filaments())
     except Exception:
-        return -1
+        return ""
 
 
 @router.post("/openprinttag/apply", response_model=OpenTagApplyResponse)

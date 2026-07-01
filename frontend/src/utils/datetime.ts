@@ -86,3 +86,22 @@ export function utcHourToLocal(utcHour: number): string | null {
   const localM = d.getMinutes()
   return `${String(localH).padStart(2, '0')}:${String(localM).padStart(2, '0')}`
 }
+
+/**
+ * Format a UTC timestamp as a human-readable relative age for the match
+ * freshness badge, e.g. "18 hours ago", "2 days ago", "5 minutes ago".
+ *
+ * Exported so it can be unit-tested directly.
+ */
+export function formatMatchAge(fetchedAt: string | null): string {
+  if (!fetchedAt) return 'never'
+  const d = parseUtc(fetchedAt)
+  const diffMs = Date.now() - d.getTime()
+  const days = Math.floor(diffMs / 86_400_000)
+  const hours = Math.floor(diffMs / 3_600_000)
+  const minutes = Math.floor(diffMs / 60_000)
+  if (days >= 1) return `${days} day${days !== 1 ? 's' : ''} ago`
+  if (hours >= 1) return `${hours} hour${hours !== 1 ? 's' : ''} ago`
+  if (minutes >= 1) return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`
+  return 'just now'
+}
