@@ -35,7 +35,7 @@ import type {
   OpenTagFilamentMatch,
   OpenTagMatchesResponse,
 } from '../api/types'
-import { parseUtc } from '../utils/datetime'
+import { formatMatchAge, parseUtc } from '../utils/datetime'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1658,7 +1658,7 @@ function MissingValuesReport() {
       {rows.length === 0 ? (
         <div className="py-12 text-center text-gray-500 dark:text-gray-400">
           {tagged === 0
-            ? 'No tagged filaments yet — apply OpenPrintTag identities first (Match to DB).'
+            ? 'No tagged filaments yet — apply OpenPrintTag identities first (use Matches → Review).'
             : 'Every tagged filament has a complete OpenPrintTag record (for the selected fields).'}
         </div>
       ) : (
@@ -1710,11 +1710,7 @@ export default function OpenTagCleanup() {
   // Loading / work state
   const [working, setWorking] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
-  // After a hash-checked Refresh found the dataset unchanged, offer a one-click
-  // "Pull contents anyway" (force download). Cleared whenever a load starts or a
-  // changed-content refresh succeeds.
-  const [offerForcePull, setOfferForcePull] = useState(false)
-  // "Dataset already up to date" note shown after a hash-checked Refresh found no change.
+  // "Dataset already up to date" note shown after a hash-checked check found no change.
   const [upToDateMsg, setUpToDateMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [response, setResponse] = useState<OpenTagMatchesResponse | null>(null)
@@ -1795,7 +1791,7 @@ export default function OpenTagCleanup() {
     setWorking(true)
     setError(null)
     setStatusMsg(null)
-    setOfferForcePull(false)
+    setUpToDateMsg(null)
     try {
       let datasetChanged = false
       if (datasetMode !== 'skip') {
@@ -1810,20 +1806,21 @@ export default function OpenTagCleanup() {
         // Refresh status banner after the check/download.
         getOpenTagStatus().then(s => setCacheStatus(s)).catch(() => {})
         if (datasetMode === 'check' && meta.unchanged) {
-          // No content change — tell the user, bump the banner age, offer force pull.
-          // Skip the heavy recompute: the dataset is byte-for-byte identical.
+          // No content change — tell the user and bump the banner age.
           const n = meta.count.toLocaleString()
           const sha = meta.commit_sha ? meta.commit_sha.slice(0, 7) : 'same commit'
           setStatusMsg(null)
-          setOfferForcePull(true)
           setError(null)
-          // Surface the "already up to date" note via statusMsg-style banner below.
           setUpToDateMsg(`Dataset already up to date (${sha} · ${n} records).`)
-          return
+          if (!recomputeMatches) {
+            // No recompute requested — report the dataset is fresh and stop.
+            return
+          }
+          // Recompute requested: dataset is fresh, proceed without downloading.
+        } else {
+          datasetChanged = true
         }
-        datasetChanged = true
       }
-      setUpToDateMsg(null)
       // A dataset re-download/change always means a fresh recompute (cache invalid).
       const recompute = recomputeMatches || datasetChanged
       setStatusMsg(
@@ -1844,29 +1841,21 @@ export default function OpenTagCleanup() {
     }
   }, [_applyMatchesData, cacheStatus])
 
-  // "Refresh dataset" (toolbar): cheap SHA check first — download+recompute only if
-  // the upstream commit actually changed; otherwise just bump the age and offer pull.
-  const handleRefresh = useCallback(async () => {
-    setToolbarView('match')
-    setViewMode('all')
-    runLoad('check')
-  }, [runLoad])
-
-  // "Pull contents anyway": force the full tarball download even when the SHA matched.
+  // "Force re-download dataset": force the full tarball download regardless of commit SHA.
   const handleForcePull = useCallback(async () => {
     setToolbarView('match')
     setViewMode('all')
     runLoad('pull')
   }, [runLoad])
 
-  // "Refresh match" (match view): keep the cached dataset, force a fresh server recompute.
-  const handleRecompute = useCallback(() => {
+  // "Re-match": SHA-check OPT (download only if changed) + always re-read Spoolman + recompute.
+  const handleReMatch = useCallback(() => {
     setToolbarView('match')
     setViewMode('all')
-    runLoad('skip', true)
+    runLoad('check', true)
   }, [runLoad])
 
-  // "Match to DB" toolbar button: switch to match view and load the cached result (fast).
+  // "Matches" toolbar button: switch to match view and show the cached result (fast).
   const handleMatchToDb = useCallback(() => {
     setToolbarView('match')
     setViewMode('all')
@@ -2098,28 +2087,37 @@ export default function OpenTagCleanup() {
         <button
           type="button"
           className={`px-4 py-2 text-sm rounded border transition-colors ${
-            working && toolbarView !== 'missing-values'
-              ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 opacity-70 cursor-not-allowed'
-              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
-          }`}
-          onClick={() => void handleRefresh()}
-          disabled={working}
-          title="Re-download the OpenPrintTag dataset from OpenPrintTag, then reprocess"
-        >
-          Refresh dataset
-        </button>
-        <button
-          type="button"
-          className={`px-4 py-2 text-sm rounded border transition-colors ${
             toolbarView === 'match'
               ? 'bg-indigo-100 dark:bg-indigo-900/40 border-indigo-400 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300 font-semibold'
               : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
           }`}
           onClick={handleMatchToDb}
           disabled={working}
-          title="Scan Spoolman filaments and match against the OpenPrintTag dataset"
+          title="Show your most recent match results (cached). Nothing is re-scanned — use Re-match to update."
         >
-          Match to DB
+          Matches
+        </button>
+        <button
+          type="button"
+          className={`px-4 py-2 text-sm rounded border transition-colors ${
+            working && toolbarView !== 'missing-values'
+              ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300 opacity-70 cursor-not-allowed'
+              : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+          }`}
+          onClick={handleReMatch}
+          disabled={working}
+          title="Re-read your Spoolman filaments and check OpenPrintTag for updates, then re-score all matches."
+        >
+          Re-match
+        </button>
+        <button
+          type="button"
+          className="px-4 py-2 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+          onClick={() => void handleForcePull()}
+          disabled={working}
+          title="Download the full OpenPrintTag dataset even if it hasn't changed upstream."
+        >
+          Force re-download dataset
         </button>
         <button
           type="button"
@@ -2133,6 +2131,21 @@ export default function OpenTagCleanup() {
         >
           Show missing values
         </button>
+
+        {/* Match freshness badge — always visible once matches have been loaded */}
+        {response?.computed_at && (
+          <div className="ml-auto">
+            {response.stale_inputs ? (
+              <span className="px-3 py-1.5 rounded bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 text-sm text-amber-800 dark:text-amber-300 whitespace-nowrap">
+                Last matched {formatMatchAge(response.computed_at)} · Spoolman changed since — Re-match to update.
+              </span>
+            ) : (
+              <span className="text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                Last matched {formatMatchAge(response.computed_at)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Dataset status banner — populated instantly from cache, no FDB fetch */}
@@ -2153,46 +2166,11 @@ export default function OpenTagCleanup() {
                 {upToDateMsg}
               </span>
             )}
-            {offerForcePull && (
-              <button
-                type="button"
-                className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-                onClick={() => void handleForcePull()}
-                disabled={working}
-                title="Force a full re-download of the OpenPrintTag dataset even though the upstream commit is unchanged"
-              >
-                Pull contents anyway
-              </button>
-            )}
           </>
         ) : (
           <span className="text-sm text-gray-500 dark:text-gray-400">
             {cacheStatus === null ? 'Checking dataset cache…' : 'No dataset cached yet.'}
           </span>
-        )}
-        {/* Match freshness + recompute — only shown after a match has been loaded */}
-        {response && (
-          <div className="ml-auto flex items-center gap-3">
-            {response.computed_at && (
-              <span className="text-xs text-gray-500 dark:text-gray-400">
-                last matched {formatAge(response.computed_at)}
-              </span>
-            )}
-            {response.stale_inputs && (
-              <span className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-1.5 py-0.5">
-                data changed since last match — Refresh
-              </span>
-            )}
-            <button
-              type="button"
-              className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
-              onClick={handleRecompute}
-              disabled={working}
-              title="Re-scan Spoolman and recompute matches against the current dataset (no download)"
-            >
-              {working ? 'Working…' : 'Refresh match'}
-            </button>
-          </div>
         )}
       </div>
 
@@ -2201,13 +2179,13 @@ export default function OpenTagCleanup() {
         <div className="py-12 text-center text-gray-500 dark:text-gray-400">
           <p className="text-base mb-2 font-medium text-gray-700 dark:text-gray-200">Pick an action above to get started.</p>
           <p className="text-sm">
-            <strong>Match to DB</strong> — scan Spoolman filaments and match against the OpenPrintTag dataset.
+            <strong>Matches</strong> — show your most recent match results (cached; no re-scan).
+          </p>
+          <p className="text-sm mt-1">
+            <strong>Re-match</strong> — re-read your Spoolman filaments, check OpenPrintTag for updates, and re-score all matches.
           </p>
           <p className="text-sm mt-1">
             <strong>Show missing values</strong> — find which of your tagged filaments most need data contributed to OpenPrintTag (audits the OpenPrintTag database, not your spools).
-          </p>
-          <p className="text-sm mt-1">
-            <strong>Refresh dataset</strong> — re-download the OpenPrintTag dataset and reprocess matches.
           </p>
         </div>
       )}

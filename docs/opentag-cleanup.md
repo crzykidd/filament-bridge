@@ -11,18 +11,21 @@ lists, so the routes avoid it).
 ## Landing state and toolbar
 
 The page opens in an **idle landing state** — nothing is fetched on mount. A top toolbar
-offers three actions:
+offers four actions:
 
-- **Refresh dataset** — check OpenPrintTag for a newer dataset, then run matching and enter
-  the Match-to-DB view. This is **smart**: it first does a cheap upstream commit-SHA check
-  (one tiny request) and only downloads + re-parses the multi-MB tarball when the upstream
-  repo actually changed. If the dataset is unchanged it just freshens the cache age, shows
-  *"Dataset already up to date (commit · N records)"*, and offers a **Pull contents anyway**
-  button that forces a full re-download regardless of the commit. See
-  [Smart refresh](#smart-refresh-commit-sha-gate) below.
-- **Match to DB** — load the match review view. The **last match result is cached**, so
-  this returns instantly when a prior match exists (no re-scoring). Only the first match
-  (or an explicit refresh) actually computes. Switches to the match review view.
+- **Matches** — show your most recent match results (cached; nothing is re-scanned). Returns
+  instantly when a prior match exists. Switches to the match review view. Use this to browse
+  what the last match found without triggering a re-score.
+- **Re-match** — re-read your Spoolman filaments live, do a cheap OpenPrintTag commit-SHA
+  check (downloads the dataset only if upstream changed), then re-score all matches. This is
+  the primary refresh action: it catches both a Spoolman edit (vendor rename, filament
+  name change) and new OpenPrintTag data in one click, without a needless full download
+  every time. When the dataset is found unchanged a *"Dataset already up to date"* note
+  appears; the Spoolman re-read and re-score still proceeds.
+- **Force re-download dataset** — force a full OpenPrintTag tarball download regardless of
+  the upstream commit SHA, then recompute matches. Use this when you suspect the local cache
+  is corrupt or you want to guarantee the very latest dataset even if the commit hash is
+  unchanged.
 - **Show missing values** — an optional tool to find which of your tagged filaments most need
   data contributed to OpenPrintTag. Audits the OpenPrintTag database (not your spools): for
   each tagged filament it lists every supported field the community database leaves empty, so
@@ -31,13 +34,16 @@ offers three actions:
 The **dataset-status banner** (count, age, stale flag) is always visible — it reads the
 local cache status cheaply without fetching from OpenPrintTag.
 
-Once a match has been loaded, the banner shows **last matched &lt;time&gt;** and a
-**Refresh match** button that re-scores against the current dataset without re-downloading.
-If the underlying inputs changed since the cached match was computed — the dataset was
-refreshed, the Spoolman filament count changed, or a relevant setting (manufacturer
-mappings, finish-tag map, extra-field names) was edited — a **"data changed since last
-match — Refresh"** hint appears next to it. Applying writes (main Apply or the updates
-review) automatically forces a recompute so the view reflects what was just written.
+The toolbar shows a **prominent freshness badge** whenever matches have been loaded:
+
+- When fresh: *"Last matched 18 hours ago"* (relative age in minutes / hours / days).
+- When stale: an amber badge reading *"Last matched 2 days ago · Spoolman changed since —
+  Re-match to update."* This fires when the content fingerprint detects any change in
+  Spoolman — a vendor rename, filament name edit, or material-type change all trigger it,
+  not just an addition or deletion. Click **Re-match** to clear it.
+
+Applying writes (main Apply or the updates review) automatically forces a recompute so
+the view reflects what was just written.
 
 ### Performance: non-blocking scoring + result cache
 
@@ -51,13 +57,14 @@ Matching is CPU-bound (scoring every Spoolman filament against the brand-gated s
   The completeness report and manual search are offloaded the same way.
 - **Result cache.** `GET /api/openprinttag/matches` persists the computed result to
   `DATA_DIR/opentag_matches_cache.json` (alongside `computed_at` and input fingerprints) and
-  serves it instantly on the next visit. The fingerprint covers the dataset identity
-  (the upstream `commit_sha`, falling back to `count`+`fetched_at`), the Spoolman filament
-  count, and a hash of the alias/tag/field config; when any differs from the cached inputs
-  the cache is still served but flagged with
-  `stale_inputs` so the UI can prompt for a refresh. Recompute only happens on the first
-  match or when called with `?recompute=true` (the **Refresh match** / **Refresh dataset**
-  buttons).
+  serves it instantly on the next visit. The fingerprint covers three components: the dataset
+  identity (the upstream `commit_sha`, falling back to `count`+`fetched_at`); a SHA-256
+  **content hash of the Spoolman filament set** (vendor name + filament name + material type
+  per filament, sorted, order-independent); and a hash of the alias/tag/field config. When
+  any component differs from the cached inputs the cache is still served but flagged with
+  `stale_inputs` so the toolbar freshness badge escalates to the amber stale prompt. Recompute
+  only happens on the first match or when called with `?recompute=true` (the **Re-match**
+  button or **Force re-download dataset**).
 
 ## The dataset
 
@@ -74,13 +81,14 @@ The tarball is large, so the bridge avoids re-downloading it unless the upstream
 actually changed. The cache file stores the upstream `main` HEAD **commit SHA**
 (`commit_sha`) alongside the materials. The refresh decision works as follows:
 
-- **Stale auto-reload** (cache older than `OPENTAG_CACHE_MAX_AGE_HOURS`) and **manual
-  Refresh** both run a cheap `GET …/commits/main` with the `application/vnd.github.sha`
-  media type (returns just the 40-char SHA as plain text). If the SHA **matches** the
-  cached one, the bridge rewrites only `fetched_at` (bumping the age) and reports
-  `unchanged=true` — **no tarball download**. If it **differs** (or no SHA was stored yet,
-  e.g. a pre-SHA cache), the tarball is downloaded and the new SHA recorded.
-- **Pull contents anyway** forces a full download regardless of the commit (`POST
+- **Stale auto-reload** (cache older than `OPENTAG_CACHE_MAX_AGE_HOURS`) and **Re-match**
+  both run a cheap `GET …/commits/main` with the `application/vnd.github.sha` media type
+  (returns just the 40-char SHA as plain text). If the SHA **matches** the cached one, the
+  bridge rewrites only `fetched_at` (bumping the age) and reports `unchanged=true` — **no
+  tarball download** — but still proceeds to re-read Spoolman and recompute matches when
+  called from Re-match. If it **differs** (or no SHA was stored yet, e.g. a pre-SHA cache),
+  the tarball is downloaded and the new SHA recorded.
+- **Force re-download dataset** forces a full download regardless of the commit (`POST
   /api/openprinttag/refresh?pull=true`). The default refresh (`?pull=false`) is the
   SHA-checked path and returns `{ unchanged, count, fetched_at, commit_sha }`.
 - The SHA check is **best-effort**: any failure (timeout, connectivity, GitHub rate-limit —

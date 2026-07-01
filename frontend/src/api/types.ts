@@ -1130,6 +1130,36 @@ export interface ReconcileResponse {
 export type MobileRedirectTarget = 'bridge' | 'filamentdb'
 export type MobileWeightMode = 'direct_correction' | 'usage'
 
+/** One AMS/MMU slot on a Filament DB printer. */
+export interface MobilePrinterSlot {
+  slot_id: string
+  slot_name: string
+  spool_id: string | null      // FDB spool subdocument _id currently loaded; null = empty
+  filament_id: string | null   // FDB filament _id; null = empty
+}
+
+/** A Filament DB printer with its AMS/MMU slots and current occupancy. */
+export interface MobilePrinter {
+  printer_id: string
+  printer_name: string
+  slots: MobilePrinterSlot[]
+}
+
+/** Current printer/slot assignment for a spool. */
+export interface MobileSpoolAssignment {
+  printer_id: string
+  printer_name: string
+  slot_id: string
+  slot_name: string
+  filament_id: string | null
+}
+
+/** Body for PUT /api/mobile/spool/{fil}/{spool}/assignment. */
+export interface MobileAssignmentRequest {
+  printer_id: string
+  slot_id: string
+}
+
 /** Assembled, live spool detail for the mobile scan/update page.
  *  Mirrors backend `MobileSpoolDetail`. Identity is the Filament DB filament id +
  *  spool id (encoded in the QR); `number` is the Spoolman spool id. */
@@ -1154,6 +1184,8 @@ export interface MobileSpoolDetail {
   dry_cycle_count?: number | null
   recommended_drying_temp_c?: number | null
   recommended_drying_time_min?: number | null
+  // Retired flag — true when the FDB spool is retired; disables slot picker
+  is_retired?: boolean
 }
 
 /** Body for POST /api/mobile/spool/{fil}/{spool}/dry-cycle. */

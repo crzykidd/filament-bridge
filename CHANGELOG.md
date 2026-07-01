@@ -9,6 +9,26 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.9] — 2026-06-30
+
+### Added
+
+- **Assign a spool to a printer slot from your phone** — the mobile spool page now has a
+  Printer + Slot (AMS/MMU) picker: choose a printer and slot to load the spool into, or
+  clear it. Writes directly to Filament DB (which tracks slot assignments); shows the
+  current assignment, warns when a slot already holds another spool, and disables
+  assignment for retired spools. Closes #53.
+
+### Changed
+
+- **Clearer OpenPrintTag Cleanup controls** — the match/refresh buttons are consolidated
+  into **Matches** (shows your cached results) and a single **Re-match** (re-reads your
+  Spoolman filaments *and* checks OpenPrintTag for updates, then re-scores), plus a
+  separate **Force re-download dataset**. A prominent "Last matched X ago" badge shows how
+  fresh the view is, and staleness is now content-aware — editing a vendor or filament
+  name in Spoolman (not just adding/removing spools) flags the matches stale and prompts a
+  Re-match. Honest tooltips on every button. Closes #52.
+
 ## [0.6.8] — 2026-06-29
 
 ### Added

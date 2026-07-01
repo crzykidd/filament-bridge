@@ -670,3 +670,236 @@ async def test_assemble_spool_detail_surfaces_drying_fields():
     assert detail.recommended_drying_time_min == 240
     assert detail.last_dried_at == "2026-06-01T10:00:00Z"
     assert detail.dry_cycle_count == 3
+
+
+@pytest.mark.asyncio
+async def test_assemble_spool_detail_surfaces_is_retired():
+    """is_retired is propagated from the FDB spool subdocument."""
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    spoolman = _fake_spoolman(spool=_sm_spool())
+    retired_detail = FDBFilamentDetail.model_validate({
+        "_id": "fil-1", "name": "PLA", "spoolWeight": 200.0, "colorName": "Galaxy Black",
+        "color": "#111111", "type": "PLA", "_inherited": [],
+        "spools": [{"_id": "spool-1", "totalWeight": 1000.0, "retired": True}],
+    })
+    filamentdb = _fake_filamentdb(detail=retired_detail)
+
+    detail = await assemble_spool_detail(
+        db, spoolman, filamentdb, fdb_fil_id="fil-1", fdb_spool_id="spool-1",
+    )
+    assert detail is not None
+    assert detail.is_retired is True
+
+
+# ===========================================================================
+# Printer + slot assignment endpoints
+# ===========================================================================
+
+_PRINTER_RAW = [
+    {
+        "_id": "printer-1",
+        "name": "Bambu X1C",
+        "amsSlots": [
+            {"_id": "slot-1", "slotName": "AMS 1", "spoolId": None, "filamentId": None},
+            {"_id": "slot-2", "slotName": "AMS 2", "spoolId": "spool-99", "filamentId": "fil-99"},
+        ],
+    }
+]
+
+_ASSIGNMENT_RAW = {
+    "assignment": {
+        "printerId": "printer-1",
+        "printerName": "Bambu X1C",
+        "slotId": "slot-1",
+        "slotName": "AMS 1",
+        "filamentId": "fil-1",
+    }
+}
+
+
+def _fake_filamentdb_with_printers(detail=None) -> AsyncMock:
+    client = _fake_filamentdb(detail=detail)
+    client.list_printers = AsyncMock(return_value=_PRINTER_RAW)
+    client.get_spool_assignment = AsyncMock(return_value=_ASSIGNMENT_RAW)
+    client.set_spool_assignment = AsyncMock(return_value=_ASSIGNMENT_RAW)
+    client.clear_spool_assignment = AsyncMock(return_value={"assignment": None})
+    return client
+
+
+def test_get_printers_returns_list():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.commit()
+    client = _client(db, _fake_spoolman(), _fake_filamentdb_with_printers())
+
+    r = client.get("/api/mobile/printers")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    p = body[0]
+    assert p["printer_id"] == "printer-1"
+    assert p["printer_name"] == "Bambu X1C"
+    assert len(p["slots"]) == 2
+    assert p["slots"][0]["slot_id"] == "slot-1"
+    assert p["slots"][0]["spool_id"] is None
+    assert p["slots"][1]["spool_id"] == "spool-99"
+
+
+def test_get_printers_403_when_feature_disabled():
+    db = _make_db()
+    client = _client(db, _fake_spoolman(), _fake_filamentdb_with_printers())
+    r = client.get("/api/mobile/printers")
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "mobile_labels_disabled"
+
+
+def test_get_spool_assignment_returns_assignment():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb_with_printers(detail=_fdb_detail()))
+
+    r = client.get("/api/mobile/spool/fil-1/spool-1/assignment")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["printer_id"] == "printer-1"
+    assert body["slot_id"] == "slot-1"
+    assert body["slot_name"] == "AMS 1"
+
+
+def test_get_spool_assignment_404_when_unmapped():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb_with_printers())
+    r = client.get("/api/mobile/spool/fil-1/spool-1/assignment")
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "spool_not_mapped"
+
+
+def test_get_spool_assignment_403_when_feature_disabled():
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb_with_printers())
+    r = client.get("/api/mobile/spool/fil-1/spool-1/assignment")
+    assert r.status_code == 403
+
+
+def test_get_spool_assignment_returns_null_when_unassigned():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    fdb = _fake_filamentdb_with_printers(detail=_fdb_detail())
+    fdb.get_spool_assignment = AsyncMock(return_value={"assignment": None})
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), fdb)
+
+    r = client.get("/api/mobile/spool/fil-1/spool-1/assignment")
+    assert r.status_code == 200
+    assert r.json() is None
+
+
+def test_put_assignment_happy_path():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    fdb = _fake_filamentdb_with_printers(detail=_fdb_detail())
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), fdb)
+
+    r = client.put(
+        "/api/mobile/spool/fil-1/spool-1/assignment",
+        json={"printer_id": "printer-1", "slot_id": "slot-1"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["printer_id"] == "printer-1"
+    # Verify we called set_spool_assignment with the right args.
+    fdb.set_spool_assignment.assert_awaited_once_with("spool-1", "printer-1", "slot-1")
+
+
+def test_put_assignment_propagates_400_retired():
+    """FDB 400 (retired spool) is surfaced as bridge 400 spool_retired."""
+    import httpx as _httpx
+
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    fdb = _fake_filamentdb_with_printers(detail=_fdb_detail())
+    mock_resp = MagicMock()
+    mock_resp.status_code = 400
+    fdb.set_spool_assignment = AsyncMock(
+        side_effect=_httpx.HTTPStatusError("400", request=MagicMock(), response=mock_resp)
+    )
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), fdb)
+
+    r = client.put(
+        "/api/mobile/spool/fil-1/spool-1/assignment",
+        json={"printer_id": "printer-1", "slot_id": "slot-1"},
+    )
+    assert r.status_code == 400
+    assert r.json()["detail"]["code"] == "spool_retired"
+
+
+def test_put_assignment_propagates_404():
+    """FDB 404 (spool/printer/slot not found) is surfaced as bridge 404 not_found."""
+    import httpx as _httpx
+
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    fdb = _fake_filamentdb_with_printers(detail=_fdb_detail())
+    mock_resp = MagicMock()
+    mock_resp.status_code = 404
+    fdb.set_spool_assignment = AsyncMock(
+        side_effect=_httpx.HTTPStatusError("404", request=MagicMock(), response=mock_resp)
+    )
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), fdb)
+
+    r = client.put(
+        "/api/mobile/spool/fil-1/spool-1/assignment",
+        json={"printer_id": "printer-1", "slot_id": "slot-1"},
+    )
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "not_found"
+
+
+def test_put_assignment_403_when_feature_disabled():
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb_with_printers())
+    r = client.put(
+        "/api/mobile/spool/fil-1/spool-1/assignment",
+        json={"printer_id": "printer-1", "slot_id": "slot-1"},
+    )
+    assert r.status_code == 403
+
+
+def test_delete_assignment_happy_path():
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    fdb = _fake_filamentdb_with_printers(detail=_fdb_detail())
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), fdb)
+
+    r = client.delete("/api/mobile/spool/fil-1/spool-1/assignment")
+    assert r.status_code == 200
+    assert r.json() is None  # assignment: null → returns None
+    fdb.clear_spool_assignment.assert_awaited_once_with("spool-1")
+
+
+def test_delete_assignment_403_when_feature_disabled():
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=1, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    db.commit()
+    client = _client(db, _fake_spoolman(spool=_sm_spool()), _fake_filamentdb_with_printers())
+    r = client.delete("/api/mobile/spool/fil-1/spool-1/assignment")
+    assert r.status_code == 403

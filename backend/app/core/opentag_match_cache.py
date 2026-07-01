@@ -14,7 +14,7 @@ Cache file shape (``opentag_matches_cache.json``)::
         "computed_at": "2026-06-18T12:00:00+00:00",
         "fingerprint": {
             "dataset": "abc123…",  # upstream commit SHA (falls back to count:fetched_at)
-            "sm_count": 87,
+            "sm_content_hash": "<sha256 hex>",
             "config_hash": "<sha256 hex>"
         },
         "response": { ...OpenTagMatchesResponse dict... }
@@ -29,8 +29,12 @@ Fingerprint notes
 * ``config_hash`` covers the vendor-alias CSV, the material-tag map, and the
   openprinttag extra-field names — anything that changes how a match is computed
   or where its identity is written.
-* ``sm_count`` is the Spoolman filament count — a cheap proxy for "your
-  inventory changed since the last match".
+* ``sm_content_hash`` is a SHA-256 hash of the Spoolman filament set (vendor
+  name + filament name + material type per filament, sorted, order-independent).
+  A vendor rename — same count but different name — produces a different hash
+  and flips ``stale_inputs``, catching edits the old ``sm_count`` proxy missed.
+  Existing caches lacking this key read as stale on first load post-upgrade and
+  re-match on demand.
 
 When any fingerprint component differs from the live inputs the cache is still
 served (so the page is instant) but ``stale_inputs`` is set so the UI can prompt
@@ -93,7 +97,7 @@ def build_fingerprint(
     *,
     dataset_count: int,
     dataset_fetched_at: str | None,
-    sm_count: int,
+    sm_content_hash: str,
     aliases_raw: str,
     tag_map: dict[str, int],
     field_names: dict[str, str],
@@ -104,7 +108,7 @@ def build_fingerprint(
         "dataset": dataset_fingerprint(
             dataset_count, dataset_fetched_at, dataset_commit_sha
         ),
-        "sm_count": sm_count,
+        "sm_content_hash": sm_content_hash,
         "config_hash": config_fingerprint(aliases_raw, tag_map, field_names),
     }
 
@@ -155,6 +159,6 @@ def inputs_stale(cached_fingerprint: dict[str, Any] | None, current: dict[str, A
         return True
     return (
         cached_fingerprint.get("dataset") != current.get("dataset")
-        or cached_fingerprint.get("sm_count") != current.get("sm_count")
+        or cached_fingerprint.get("sm_content_hash") != current.get("sm_content_hash")
         or cached_fingerprint.get("config_hash") != current.get("config_hash")
     )

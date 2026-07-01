@@ -982,6 +982,40 @@ class ReconcileResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class MobilePrinterSlot(BaseModel):
+    """One AMS/MMU slot on a Filament DB printer."""
+
+    slot_id: str   # the slot's _id in FDB
+    slot_name: str
+    spool_id: str | None = None      # FDB spool subdocument _id currently loaded; null = empty
+    filament_id: str | None = None   # FDB filament _id of the loaded spool; null = empty
+
+
+class MobilePrinter(BaseModel):
+    """A Filament DB printer with its AMS/MMU slots and current occupancy."""
+
+    printer_id: str
+    printer_name: str
+    slots: list[MobilePrinterSlot]
+
+
+class MobileSpoolAssignment(BaseModel):
+    """Current printer/slot assignment for a spool, or None when unassigned."""
+
+    printer_id: str
+    printer_name: str
+    slot_id: str
+    slot_name: str
+    filament_id: str | None = None
+
+
+class MobileAssignmentRequest(BaseModel):
+    """Body for PUT /api/mobile/spool/{fil}/{spool}/assignment."""
+
+    printer_id: str
+    slot_id: str
+
+
 class MobileSpoolDetail(BaseModel):
     """Assembled, live spool detail for the mobile scan/update page.
 
@@ -1016,6 +1050,8 @@ class MobileSpoolDetail(BaseModel):
     dry_cycle_count: int | None = None
     recommended_drying_temp_c: int | None = None
     recommended_drying_time_min: int | None = None
+    # Retired flag — FDB spool.retired; disables the printer-slot picker when true.
+    is_retired: bool = False
 
 
 class MobileDryCycleRequest(BaseModel):

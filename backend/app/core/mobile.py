@@ -94,6 +94,8 @@ async def assemble_spool_detail(
     _last_dried = max(_cycle_dates) if _cycle_dates else None
     _dry_count = len(_cycles) if _cycles else None
 
+    is_retired = bool(fdb_spool.retired) if fdb_spool is not None else False
+
     return MobileSpoolDetail(
         filamentdb_filament_id=fdb_fil_id,
         filamentdb_spool_id=fdb_spool_id,
@@ -113,4 +115,5 @@ async def assemble_spool_detail(
         dry_cycle_count=int(_dry_count) if _dry_count is not None else None,
         recommended_drying_temp_c=int(_dry_temp) if _dry_temp is not None else None,
         recommended_drying_time_min=int(_dry_time) if _dry_time is not None else None,
+        is_retired=is_retired,
     )

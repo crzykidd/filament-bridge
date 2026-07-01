@@ -7509,22 +7509,22 @@ def test_match_cache_helpers_fingerprint_and_stale():
 
     base = build_fingerprint(
         dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
-        sm_count=5, aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
+        sm_content_hash="hash_a", aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
     )
     # Same inputs → not stale.
     same = build_fingerprint(
         dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
-        sm_count=5, aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
+        sm_content_hash="hash_a", aliases_raw="prusa=prusament", tag_map={"silk": 16}, field_names={"uuid": "u"},
     )
     assert inputs_stale(base, same) is False
     # Config change → stale.
     cfg = build_fingerprint(
         dataset_count=10, dataset_fetched_at="2026-06-18T00:00:00+00:00",
-        sm_count=5, aliases_raw="", tag_map={"silk": 16}, field_names={"uuid": "u"},
+        sm_content_hash="hash_a", aliases_raw="", tag_map={"silk": 16}, field_names={"uuid": "u"},
     )
     assert inputs_stale(base, cfg) is True
-    # SM count change → stale; dataset change → stale; no cache → stale.
-    smc = dict(base, sm_count=6)
+    # SM content hash change → stale; dataset change → stale; no cache → stale.
+    smc = dict(base, sm_content_hash="hash_b")
     assert inputs_stale(base, smc) is True
     ds = dict(base, dataset="11:2026-06-18T00:00:00+00:00")
     assert inputs_stale(base, ds) is True
@@ -7540,10 +7540,10 @@ def test_dataset_fingerprint_prefers_commit_sha():
     # Same SHA but different count/fetched_at → still identical fingerprint (SHA wins).
     a = build_fingerprint(
         dataset_count=10, dataset_fetched_at="t1", dataset_commit_sha="sha1",
-        sm_count=5, aliases_raw="", tag_map={}, field_names={},
+        sm_content_hash="h1", aliases_raw="", tag_map={}, field_names={},
     )
     b = build_fingerprint(
         dataset_count=99, dataset_fetched_at="t2", dataset_commit_sha="sha1",
-        sm_count=5, aliases_raw="", tag_map={}, field_names={},
+        sm_content_hash="h1", aliases_raw="", tag_map={}, field_names={},
     )
     assert a["dataset"] == b["dataset"] == "sha:sha1"

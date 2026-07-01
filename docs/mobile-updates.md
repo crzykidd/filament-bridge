@@ -75,6 +75,23 @@ Below the Save block, the card has a **Log dry cycle** section. Tap it to record
 - This is a **Filament DB-only, one-way write** — Spoolman has no dry-cycle concept and is never updated. There is no snapshot refresh (nothing for the sync engine to detect).
 - After logging, the card refreshes to show the updated **Last dried** date and total cycle count from FDB.
 
+### Assign to printer slot (AMS / MMU)
+
+Below the dry-cycle block, the card has a **Printer slot** section. Use it to assign this spool to (or clear it from) an AMS or MMU slot on a Filament DB printer:
+
+- The card shows the **current assignment** (printer name + slot name) or "Currently unassigned" if no slot is set.
+- A **Printer** dropdown lists every printer configured in Filament DB. Selecting one reveals a **Slot** dropdown showing that printer's slots. Occupied slots are labelled "(occupied)" and selecting one that belongs to a *different* spool shows a warning — assigning clears the other spool from that slot.
+- Clicking **Assign** sends `PUT /api/mobile/spool/{fil}/{spool}/assignment` and the card refreshes to show the new assignment.
+- Clicking **Clear** (shown only when a slot is currently assigned) sends `DELETE /api/mobile/spool/{fil}/{spool}/assignment` and the card refreshes to "Currently unassigned".
+- **Retired spools cannot be assigned.** The dropdown is replaced with a disabled message when the spool is retired.
+- This is a **Filament DB-only, one-way write** — Spoolman has no printer-slot concept and is never updated. There is no snapshot refresh (printer slot is not a sync-engine field).
+
+The endpoints used by this section:
+- `GET /api/mobile/printers` — list all Filament DB printers with their slots and current occupancy
+- `GET /api/mobile/spool/{fil}/{spool}/assignment` — current assignment for this spool (null if unassigned)
+- `PUT /api/mobile/spool/{fil}/{spool}/assignment` — assign to a printer+slot (`{printer_id, slot_id}`)
+- `DELETE /api/mobile/spool/{fil}/{spool}/assignment` — clear the current assignment (idempotent)
+
 ## Weight-save modes
 
 The weight you enter is **absolute** (a true-up to the current scale reading), but how the
