@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.8-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.9-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,11 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.9 (2026-06-30)
+
+- **Set a spool's printer slot from your phone** — the mobile spool page now has a Printer + Slot (AMS/MMU) picker to load a spool into a slot or clear it, written straight to Filament DB. It shows the current assignment, warns if a slot already holds another spool, and blocks retired spools. (#53)
+- **Clearer OpenPrintTag Cleanup controls** — the confusing match/refresh buttons are now just **Matches** (cached view) + a single **Re-match** (re-reads Spoolman *and* checks OpenPrintTag, then re-scores), with a "Last matched X ago" freshness badge. Staleness is content-aware, so renaming a vendor/filament in Spoolman now flags a re-match instead of silently showing the old value. (#52)
 
 ### v0.6.8 (2026-06-29)
 
