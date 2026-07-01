@@ -280,6 +280,44 @@ class FilamentDBClient:
         return True
 
     # ------------------------------------------------------------------
+    # Printers + slot assignment (mobile printer-slot feature, FDB-only)
+    # ------------------------------------------------------------------
+
+    async def list_printers(self) -> list[dict]:
+        """GET /api/printers — list all printers with amsSlots[] and occupancy."""
+        resp = await self._http.get("/api/printers")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_spool_assignment(self, spool_id: str) -> dict:
+        """GET /api/spools/:spoolId/assignment → {assignment: null | {...}}."""
+        resp = await self._http.get(f"/api/spools/{spool_id}/assignment")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def set_spool_assignment(
+        self, spool_id: str, printer_id: str, slot_id: str
+    ) -> dict:
+        """PUT /api/spools/:spoolId/assignment — assign spool to a printer slot.
+
+        400 when the spool is retired; 404 when spool/printer/slot is missing.
+        Clears the spool from any prior slot first (FDB does this atomically).
+        Returns the fresh {assignment} payload.
+        """
+        resp = await self._http.put(
+            f"/api/spools/{spool_id}/assignment",
+            json={"printerId": printer_id, "slotId": slot_id},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def clear_spool_assignment(self, spool_id: str) -> dict:
+        """DELETE /api/spools/:spoolId/assignment — clear from any slot; idempotent."""
+        resp = await self._http.delete(f"/api/spools/{spool_id}/assignment")
+        resp.raise_for_status()
+        return resp.json()
+
+    # ------------------------------------------------------------------
     # Backup
     # ------------------------------------------------------------------
 

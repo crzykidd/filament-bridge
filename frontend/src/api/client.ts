@@ -23,8 +23,11 @@ import type {
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
+  MobileAssignmentRequest,
+  MobileSpoolAssignment,
   MobileSpoolDetail,
   MobileDryCycleRequest,
+  MobilePrinter,
   MobileSpoolSearchResult,
   TareBulkResponse,
   TareListResponse,
@@ -196,6 +199,18 @@ export const logMobileDryCycle = (fil: string, spool: string, body: MobileDryCyc
 
 export const getMobileSpools = (q: string) =>
   request<MobileSpoolSearchResult[]>(`/mobile/spools?q=${encodeURIComponent(q)}`)
+
+export const getMobilePrinters = () =>
+  request<MobilePrinter[]>('/mobile/printers')
+
+export const getMobileSpoolAssignment = (fil: string, spool: string) =>
+  request<MobileSpoolAssignment | null>(`/mobile/spool/${fil}/${spool}/assignment`)
+
+export const setMobileSpoolAssignment = (fil: string, spool: string, body: MobileAssignmentRequest) =>
+  json<MobileSpoolAssignment | null>(`/mobile/spool/${fil}/${spool}/assignment`, 'PUT', body)
+
+export const clearMobileSpoolAssignment = (fil: string, spool: string) =>
+  request<MobileSpoolAssignment | null>(`/mobile/spool/${fil}/${spool}/assignment`, { method: 'DELETE' })
 
 // ---------------------------------------------------------------------------
 // Labels (phase 3 — LabelForge printing)

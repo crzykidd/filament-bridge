@@ -25,6 +25,10 @@ vi.mock('../api/client', async () => {
     getMobileLocations: vi.fn(),
     updateMobileSpool: vi.fn(),
     logMobileDryCycle: vi.fn(),
+    getMobilePrinters: vi.fn(),
+    getMobileSpoolAssignment: vi.fn(),
+    setMobileSpoolAssignment: vi.fn(),
+    clearMobileSpoolAssignment: vi.fn(),
   }
 })
 
@@ -32,8 +36,17 @@ vi.mock('./DeepLinkContext', () => ({
   useDeepLinkBases: () => ({ filamentdbUrl: 'http://fdb.test', spoolmanUrl: 'http://sm.test' }),
 }))
 
-import { getMobileSpool, getMobileLocations, updateMobileSpool, logMobileDryCycle } from '../api/client'
-import type { MobileSpoolDetail } from '../api/types'
+import {
+  getMobileSpool,
+  getMobileLocations,
+  updateMobileSpool,
+  logMobileDryCycle,
+  getMobilePrinters,
+  getMobileSpoolAssignment,
+  setMobileSpoolAssignment,
+  clearMobileSpoolAssignment,
+} from '../api/client'
+import type { MobileSpoolDetail, MobilePrinter, MobileSpoolAssignment } from '../api/types'
 import { MobileSpoolUpdate } from './MobileSpoolUpdate'
 
 function makeDetail(overrides?: Partial<MobileSpoolDetail>): MobileSpoolDetail {
@@ -60,10 +73,31 @@ function makeDetail(overrides?: Partial<MobileSpoolDetail>): MobileSpoolDetail {
   }
 }
 
+const makePrinter = (overrides?: Partial<MobilePrinter>): MobilePrinter => ({
+  printer_id: 'printer-1',
+  printer_name: 'Bambu X1C',
+  slots: [
+    { slot_id: 'slot-1', slot_name: 'AMS 1', spool_id: null, filament_id: null },
+    { slot_id: 'slot-2', slot_name: 'AMS 2', spool_id: 'spool-999', filament_id: 'fil-999' },
+  ],
+  ...overrides,
+})
+
+const makeAssignment = (overrides?: Partial<MobileSpoolAssignment>): MobileSpoolAssignment => ({
+  printer_id: 'printer-1',
+  printer_name: 'Bambu X1C',
+  slot_id: 'slot-1',
+  slot_name: 'AMS 1',
+  filament_id: 'fil-001',
+  ...overrides,
+})
+
 describe('MobileSpoolUpdate', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     ;(getMobileLocations as ReturnType<typeof vi.fn>).mockResolvedValue(['Shelf A', 'Dry box B'])
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    ;(getMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(null)
   })
 
   it('renders a fetched detail', async () => {
@@ -224,5 +258,154 @@ describe('MobileSpoolUpdate', () => {
 
     await waitFor(() => expect(updateMobileSpool).toHaveBeenCalledTimes(1))
     expect(logMobileDryCycle).not.toHaveBeenCalled()
+  })
+
+  // ---------------------------------------------------------------------------
+  // Printer slot picker section — render smoke test + occupied-slot detection
+  // ---------------------------------------------------------------------------
+
+  it('renders the Printer slot section', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    // The section heading must be present
+    expect(screen.getByText(/printer slot/i)).toBeInTheDocument()
+  })
+
+  it('shows "Currently unassigned" when the assignment is null', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/currently unassigned/i)).toBeInTheDocument())
+  })
+
+  it('shows the current assignment when one exists', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(makeAssignment())
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/bambu x1c.*ams 1/i)).toBeInTheDocument()
+    )
+  })
+
+  it('shows the printer select when printers are available', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([makePrinter()])
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByLabelText(/^printer$/i)).toBeInTheDocument()
+    )
+    expect(screen.getByRole('option', { name: 'Bambu X1C' })).toBeInTheDocument()
+  })
+
+  it('shows the slot select after a printer is selected', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([makePrinter()])
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText(/^printer$/i)).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/^printer$/i), { target: { value: 'printer-1' } })
+
+    await waitFor(() => expect(screen.getByLabelText(/^slot$/i)).toBeInTheDocument())
+  })
+
+  it('shows occupied warning when choosing a slot held by a different spool', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([makePrinter()])
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText(/^printer$/i)).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/^printer$/i), { target: { value: 'printer-1' } })
+    await waitFor(() => expect(screen.getByLabelText(/^slot$/i)).toBeInTheDocument())
+
+    // slot-2 is occupied by spool-999 (not our spool spool-001)
+    fireEvent.change(screen.getByLabelText(/^slot$/i), { target: { value: 'slot-2' } })
+
+    await waitFor(() =>
+      expect(screen.getByText(/occupied by another spool/i)).toBeInTheDocument()
+    )
+  })
+
+  it('does NOT show occupied warning when choosing our own current slot', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    // Slot-1 is occupied by our own spool ('spool-001')
+    const printer = makePrinter({
+      slots: [
+        { slot_id: 'slot-1', slot_name: 'AMS 1', spool_id: 'spool-001', filament_id: 'fil-001' },
+      ],
+    })
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([printer])
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText(/^printer$/i)).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/^printer$/i), { target: { value: 'printer-1' } })
+    await waitFor(() => expect(screen.getByLabelText(/^slot$/i)).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText(/^slot$/i), { target: { value: 'slot-1' } })
+
+    expect(screen.queryByText(/occupied by another spool/i)).not.toBeInTheDocument()
+  })
+
+  it('disables the slot picker with a message when the spool is retired', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail({ is_retired: true }))
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([makePrinter()])
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/this spool is retired/i)).toBeInTheDocument()
+    )
+    // The printer select must not appear
+    expect(screen.queryByLabelText(/^printer$/i)).not.toBeInTheDocument()
+  })
+
+  it('clicking Assign calls setMobileSpoolAssignment with selected printer+slot', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([makePrinter()])
+    ;(getMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    ;(setMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(makeAssignment())
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByLabelText(/^printer$/i)).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/^printer$/i), { target: { value: 'printer-1' } })
+    await waitFor(() => expect(screen.getByLabelText(/^slot$/i)).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText(/^slot$/i), { target: { value: 'slot-1' } })
+
+    fireEvent.click(screen.getByRole('button', { name: /^assign$/i }))
+
+    await waitFor(() => expect(setMobileSpoolAssignment).toHaveBeenCalledWith(
+      'fil-001', 'spool-001', { printer_id: 'printer-1', slot_id: 'slot-1' },
+    ))
+    await waitFor(() => expect(screen.getByText(/assigned\./i)).toBeInTheDocument())
+  })
+
+  it('clicking Clear calls clearMobileSpoolAssignment', async () => {
+    ;(getMobileSpool as ReturnType<typeof vi.fn>).mockResolvedValue(makeDetail())
+    ;(getMobilePrinters as ReturnType<typeof vi.fn>).mockResolvedValue([makePrinter()])
+    ;(getMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(makeAssignment())
+    ;(clearMobileSpoolAssignment as ReturnType<typeof vi.fn>).mockResolvedValue(null)
+    render(<MobileSpoolUpdate filId="fil-001" spoolId="spool-001" />)
+
+    await waitFor(() => expect(screen.getByText('ELEGOO')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: /^clear$/i })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /^clear$/i }))
+
+    await waitFor(() => expect(clearMobileSpoolAssignment).toHaveBeenCalledWith('fil-001', 'spool-001'))
+    await waitFor(() => expect(screen.getByText(/assignment cleared/i)).toBeInTheDocument())
   })
 })

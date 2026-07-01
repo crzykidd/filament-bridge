@@ -14,13 +14,28 @@
  */
 
 import { useState } from 'react'
-import { getMobileSpool, getMobileLocations, updateMobileSpool, logMobileDryCycle } from '../api/client'
+import {
+  getMobileSpool,
+  getMobileLocations,
+  updateMobileSpool,
+  logMobileDryCycle,
+  getMobilePrinters,
+  getMobileSpoolAssignment,
+  setMobileSpoolAssignment,
+  clearMobileSpoolAssignment,
+} from '../api/client'
 import { useApi } from '../api/hooks'
 import { BridgeApiError } from '../api/client'
 import { ColorDisplay } from './ColorDisplay'
 import { DeepLinks } from './DeepLinks'
 import { PrintLabelButton } from './PrintLabelButton'
-import type { MobileSpoolDetail, MobileWeightMode, MobileSpoolUpdateRequest } from '../api/types'
+import type {
+  MobileSpoolDetail,
+  MobileWeightMode,
+  MobileSpoolUpdateRequest,
+  MobilePrinter,
+  MobileSpoolAssignment,
+} from '../api/types'
 
 interface MobileSpoolUpdateProps {
   filId: string
@@ -45,6 +60,13 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
   // Locations are best-effort — failures here must not block the page.
   const { data: locations } = useApi<string[]>(getMobileLocations, [])
 
+  // Printers + current assignment are fetched once (best-effort — never block page).
+  const { data: printers } = useApi<MobilePrinter[]>(getMobilePrinters, [])
+  const { data: initialAssignment, reload: reloadAssignment } = useApi<MobileSpoolAssignment | null>(
+    () => getMobileSpoolAssignment(filId, spoolId),
+    [filId, spoolId],
+  )
+
   // --- Form state (initialized lazily from the loaded detail) ---------------
   const [grossInput, setGrossInput] = useState('')
   const [location, setLocation] = useState<string | null>(null)
@@ -61,6 +83,13 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
   const [drySubmitting, setDrySubmitting] = useState(false)
   const [dryErr, setDryErr] = useState<string | null>(null)
   const [drySavedMsg, setDrySavedMsg] = useState<string | null>(null)
+
+  // Printer slot picker state
+  const [selectedPrinterId, setSelectedPrinterId] = useState<string>('')
+  const [selectedSlotId, setSelectedSlotId] = useState<string>('')
+  const [slotSubmitting, setSlotSubmitting] = useState(false)
+  const [slotErr, setSlotErr] = useState<string | null>(null)
+  const [slotSavedMsg, setSlotSavedMsg] = useState<string | null>(null)
 
   if (loading) {
     return <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
@@ -395,10 +424,215 @@ export function MobileSpoolUpdate({ filId, spoolId }: MobileSpoolUpdateProps) {
         </div>
       </div>
 
+      {/* Printer + Slot assignment — FDB-only, one-way write, no Spoolman mirror */}
+      <PrinterSlotPicker
+        filId={filId}
+        spoolId={spoolId}
+        isRetired={detail.is_retired ?? false}
+        printers={printers ?? []}
+        currentAssignment={initialAssignment ?? null}
+        selectedPrinterId={selectedPrinterId}
+        selectedSlotId={selectedSlotId}
+        onPrinterChange={pid => { setSelectedPrinterId(pid); setSelectedSlotId(''); setSlotErr(null); setSlotSavedMsg(null) }}
+        onSlotChange={sid => { setSelectedSlotId(sid); setSlotErr(null); setSlotSavedMsg(null) }}
+        submitting={slotSubmitting}
+        err={slotErr}
+        savedMsg={slotSavedMsg}
+        onAssign={async () => {
+          setSlotSubmitting(true)
+          setSlotErr(null)
+          setSlotSavedMsg(null)
+          try {
+            await setMobileSpoolAssignment(filId, spoolId, {
+              printer_id: selectedPrinterId,
+              slot_id: selectedSlotId,
+            })
+            setSlotSavedMsg('Assigned.')
+            setSelectedPrinterId('')
+            setSelectedSlotId('')
+            await reloadAssignment()
+          } catch (e) {
+            setSlotErr(e instanceof BridgeApiError ? e.message : String(e))
+          } finally {
+            setSlotSubmitting(false)
+          }
+        }}
+        onClear={async () => {
+          setSlotSubmitting(true)
+          setSlotErr(null)
+          setSlotSavedMsg(null)
+          try {
+            await clearMobileSpoolAssignment(filId, spoolId)
+            setSlotSavedMsg('Assignment cleared.')
+            setSelectedPrinterId('')
+            setSelectedSlotId('')
+            await reloadAssignment()
+          } catch (e) {
+            setSlotErr(e instanceof BridgeApiError ? e.message : String(e))
+          } finally {
+            setSlotSubmitting(false)
+          }
+        }}
+      />
+
       {/* Print label (LabelForge) — feature is already gated on the route here */}
       <div className="border-t border-gray-100 dark:border-gray-700 pt-4">
         <PrintLabelButton filId={filId} spoolId={spoolId} />
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// PrinterSlotPicker — sub-component for the printer + slot assignment section
+// ---------------------------------------------------------------------------
+
+interface PrinterSlotPickerProps {
+  filId: string
+  spoolId: string
+  isRetired: boolean
+  printers: MobilePrinter[]
+  currentAssignment: MobileSpoolAssignment | null
+  selectedPrinterId: string
+  selectedSlotId: string
+  onPrinterChange: (printerId: string) => void
+  onSlotChange: (slotId: string) => void
+  submitting: boolean
+  err: string | null
+  savedMsg: string | null
+  onAssign: () => void
+  onClear: () => void
+}
+
+function PrinterSlotPicker({
+  spoolId,
+  isRetired,
+  printers,
+  currentAssignment,
+  selectedPrinterId,
+  selectedSlotId,
+  onPrinterChange,
+  onSlotChange,
+  submitting,
+  err,
+  savedMsg,
+  onAssign,
+  onClear,
+}: PrinterSlotPickerProps) {
+  const inputCls =
+    'w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-base bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400'
+  const labelCls = 'block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1'
+
+  const selectedPrinter = printers.find(p => p.printer_id === selectedPrinterId) ?? null
+  const selectedSlot = selectedPrinter?.slots.find(s => s.slot_id === selectedSlotId) ?? null
+
+  // Occupied warning: slot has a different spool loaded
+  const occupiedByOther =
+    selectedSlot !== null &&
+    selectedSlot.spool_id !== null &&
+    selectedSlot.spool_id !== spoolId
+
+  const canAssign = !submitting && selectedPrinterId !== '' && selectedSlotId !== ''
+
+  return (
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-3">
+      <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Printer slot</h2>
+
+      {/* Current assignment summary */}
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        {currentAssignment
+          ? <>Currently: <span className="font-medium text-gray-700 dark:text-gray-300">{currentAssignment.printer_name} — {currentAssignment.slot_name}</span></>
+          : 'Currently unassigned'}
+      </p>
+
+      {isRetired ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          This spool is retired and cannot be assigned to a printer slot.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            FDB-only — Spoolman has no printer-slot concept. One spool per slot; assigning displaces any current occupant.
+          </p>
+
+          {/* Printer select */}
+          <div>
+            <label htmlFor="slot-printer" className={labelCls}>Printer</label>
+            <select
+              id="slot-printer"
+              value={selectedPrinterId}
+              onChange={e => onPrinterChange(e.target.value)}
+              className={inputCls}
+              disabled={submitting || printers.length === 0}
+            >
+              <option value="">— Select printer —</option>
+              {printers.map(p => (
+                <option key={p.printer_id} value={p.printer_id}>{p.printer_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Slot select (only shown after a printer is chosen) */}
+          {selectedPrinter && (
+            <div>
+              <label htmlFor="slot-slot" className={labelCls}>Slot</label>
+              <select
+                id="slot-slot"
+                value={selectedSlotId}
+                onChange={e => onSlotChange(e.target.value)}
+                className={inputCls}
+                disabled={submitting}
+              >
+                <option value="">— Select slot —</option>
+                {selectedPrinter.slots.map(s => (
+                  <option key={s.slot_id} value={s.slot_id}>
+                    {s.slot_name}
+                    {s.spool_id && s.spool_id !== spoolId ? ' (occupied)' : ''}
+                    {s.spool_id === spoolId ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Occupied-slot warning */}
+          {occupiedByOther && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded p-2.5 text-xs text-amber-800 dark:text-amber-300">
+              This slot is occupied by another spool (FDB spool id: {selectedSlot!.spool_id}).
+              Assigning will move that spool out.
+            </div>
+          )}
+
+          {/* Assign + Clear buttons */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onAssign}
+              disabled={!canAssign}
+              className="flex-1 bg-indigo-600 text-white rounded px-4 py-2 text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? 'Saving…' : 'Assign'}
+            </button>
+            {currentAssignment && (
+              <button
+                type="button"
+                onClick={onClear}
+                disabled={submitting}
+                className="flex-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded px-4 py-2 text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
+      {savedMsg && !err && (
+        <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded p-2.5 text-sm text-emerald-800 dark:text-emerald-300">
+          {savedMsg}
+        </div>
+      )}
     </div>
   )
 }

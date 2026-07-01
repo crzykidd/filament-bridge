@@ -12,9 +12,15 @@ the router is included with the normal ``_auth_dep`` in ``main.py``; there is no
 special public router.
 
 Endpoints:
-  GET   /api/mobile/spool/{fil}/{spool}  → assembled MobileSpoolDetail (404 if no mapping)
-  PATCH /api/mobile/spool/{fil}/{spool}  → apply weight (per mode) and/or location, return detail
-  GET   /api/mobile/locations            → sorted distinct location names (FDB + SM) for a datalist
+  GET    /api/mobile/spool/{fil}/{spool}            → assembled MobileSpoolDetail (404 if no mapping)
+  PATCH  /api/mobile/spool/{fil}/{spool}            → apply weight (per mode) and/or location, return detail
+  POST   /api/mobile/spool/{fil}/{spool}/dry-cycle  → log a dry cycle (FDB-only, no snapshot refresh)
+  GET    /api/mobile/spools                         → search mapped spools for the scan-page search box
+  GET    /api/mobile/locations                      → sorted distinct location names (FDB + SM) for a datalist
+  GET    /api/mobile/printers                       → list FDB printers with AMS/MMU slots + occupancy
+  GET    /api/mobile/spool/{fil}/{spool}/assignment → current printer-slot assignment for the spool
+  PUT    /api/mobile/spool/{fil}/{spool}/assignment → assign spool to a printer slot (FDB-only)
+  DELETE /api/mobile/spool/{fil}/{spool}/assignment → clear spool from its current slot (FDB-only)
 """
 
 from __future__ import annotations
@@ -26,6 +32,8 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
+import httpx
+
 from app.api.config import mobile_labels_enabled, mobile_weight_default_mode
 from app.api.mappings import build_mapping_rows
 from app.api.errors import api_error
@@ -34,7 +42,16 @@ from app.core.mobile import assemble_spool_detail, resolve_spool_mapping
 from app.core.weight import DEFAULT_TARE_GRAMS
 from app.core.weight_ops import apply_absolute_weight
 from app.db import get_db
-from app.schemas.api import MobileDryCycleRequest, MobileSpoolDetail, MobileSpoolSearchResult, MobileSpoolUpdateRequest
+from app.schemas.api import (
+    MobileAssignmentRequest,
+    MobileDryCycleRequest,
+    MobilePrinter,
+    MobilePrinterSlot,
+    MobileSpoolAssignment,
+    MobileSpoolDetail,
+    MobileSpoolSearchResult,
+    MobileSpoolUpdateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -304,3 +321,139 @@ async def get_mobile_locations(request: Request) -> list[str]:
         logger.warning("mobile/locations: could not fetch SM spools: %s", exc)
 
     return sorted(names)
+
+
+# ---------------------------------------------------------------------------
+# Printer + slot assignment (FDB-only, one-way write, no Spoolman mirror)
+# ---------------------------------------------------------------------------
+
+
+def _parse_printers(raw: list[dict]) -> list[MobilePrinter]:
+    """Convert raw FDB /api/printers response to the bridge's MobilePrinter list."""
+    printers = []
+    for p in raw:
+        pid = str(p.get("_id") or "")
+        pname = str(p.get("name") or "")
+        slots = []
+        for s in p.get("amsSlots") or []:
+            sid = str(s.get("_id") or "")
+            sname = str(s.get("slotName") or "")
+            raw_spool = s.get("spoolId")
+            raw_fil = s.get("filamentId")
+            slots.append(MobilePrinterSlot(
+                slot_id=sid,
+                slot_name=sname,
+                spool_id=str(raw_spool) if raw_spool else None,
+                filament_id=str(raw_fil) if raw_fil else None,
+            ))
+        printers.append(MobilePrinter(printer_id=pid, printer_name=pname, slots=slots))
+    return printers
+
+
+@router.get(
+    "/mobile/printers",
+    response_model=list[MobilePrinter],
+    dependencies=[Depends(_require_labels_enabled)],
+)
+async def get_mobile_printers(request: Request) -> list[MobilePrinter]:
+    """Return all FDB printers with AMS/MMU slots and current occupancy."""
+    filamentdb = request.app.state.filamentdb
+    raw = await filamentdb.list_printers()
+    return _parse_printers(raw)
+
+
+def _parse_assignment(raw: dict) -> MobileSpoolAssignment | None:
+    """Convert FDB /api/spools/:id/assignment response to our schema, or None."""
+    a = raw.get("assignment")
+    if not a:
+        return None
+    return MobileSpoolAssignment(
+        printer_id=str(a.get("printerId") or ""),
+        printer_name=str(a.get("printerName") or ""),
+        slot_id=str(a.get("slotId") or ""),
+        slot_name=str(a.get("slotName") or ""),
+        filament_id=str(a["filamentId"]) if a.get("filamentId") else None,
+    )
+
+
+@router.get(
+    "/mobile/spool/{fil}/{spool}/assignment",
+    response_model=MobileSpoolAssignment | None,
+    dependencies=[Depends(_require_labels_enabled)],
+)
+async def get_mobile_spool_assignment(
+    fil: str,
+    spool: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MobileSpoolAssignment | None:
+    """Return the current printer-slot assignment for the spool, or null."""
+    filamentdb = request.app.state.filamentdb
+
+    mapping = resolve_spool_mapping(db, spool)
+    if mapping is None:
+        raise api_error(404, "spool_not_mapped", f"No bridge mapping found for Filament DB spool {spool}.")
+
+    raw = await filamentdb.get_spool_assignment(spool)
+    return _parse_assignment(raw)
+
+
+@router.put(
+    "/mobile/spool/{fil}/{spool}/assignment",
+    response_model=MobileSpoolAssignment | None,
+    dependencies=[Depends(_require_labels_enabled)],
+)
+async def set_mobile_spool_assignment(
+    fil: str,
+    spool: str,
+    payload: MobileAssignmentRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MobileSpoolAssignment | None:
+    """Assign the spool to a printer slot (FDB-only, no Spoolman write, no snapshot refresh).
+
+    Propagates FDB 400 (retired spool) and 404 (spool/printer/slot not found) as
+    bridge errors. FDB clears the spool from any prior slot before assigning.
+    """
+    filamentdb = request.app.state.filamentdb
+
+    mapping = resolve_spool_mapping(db, spool)
+    if mapping is None:
+        raise api_error(404, "spool_not_mapped", f"No bridge mapping found for Filament DB spool {spool}.")
+
+    try:
+        raw = await filamentdb.set_spool_assignment(spool, payload.printer_id, payload.slot_id)
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status == 400:
+            raise api_error(400, "spool_retired", "Cannot assign a retired spool to a printer slot.") from exc
+        if status == 404:
+            raise api_error(404, "not_found", "Printer, slot, or spool not found in Filament DB.") from exc
+        raise
+
+    return _parse_assignment(raw)
+
+
+@router.delete(
+    "/mobile/spool/{fil}/{spool}/assignment",
+    response_model=MobileSpoolAssignment | None,
+    dependencies=[Depends(_require_labels_enabled)],
+)
+async def clear_mobile_spool_assignment(
+    fil: str,
+    spool: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MobileSpoolAssignment | None:
+    """Clear the spool's printer-slot assignment (FDB-only, idempotent).
+
+    Always returns None (the cleared assignment) — FDB returns {assignment: null}.
+    """
+    filamentdb = request.app.state.filamentdb
+
+    mapping = resolve_spool_mapping(db, spool)
+    if mapping is None:
+        raise api_error(404, "spool_not_mapped", f"No bridge mapping found for Filament DB spool {spool}.")
+
+    raw = await filamentdb.clear_spool_assignment(spool)
+    return _parse_assignment(raw)
