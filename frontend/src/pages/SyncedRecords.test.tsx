@@ -272,6 +272,41 @@ describe('SyncedRecords — Unlink action', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Weight (net) / (gross) labels in the expanded detail grid (#55)
+// ---------------------------------------------------------------------------
+
+describe('SyncedRecords — Weight net/gross labels', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('labels the expanded Weight row (net) on Spoolman and (gross) on Filament DB', () => {
+    renderWithRows([makeInSyncRow({
+      detail: [{ field: 'weight', label: 'Weight', spoolman: 300, filamentdb: 500 }],
+    })])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.getByText('(net)')).toBeInTheDocument()
+    expect(screen.getByText('(gross)')).toBeInTheDocument()
+  })
+
+  it('omits the suffix on an empty weight side', () => {
+    renderWithRows([makeInSyncRow({
+      detail: [{ field: 'weight', label: 'Weight', spoolman: 300, filamentdb: null }],
+    })])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.getByText('(net)')).toBeInTheDocument()
+    expect(screen.queryByText('(gross)')).not.toBeInTheDocument()
+  })
+
+  it('does not label non-weight detail rows', () => {
+    renderWithRows([makeInSyncRow({
+      detail: [{ field: 'material', label: 'Material', spoolman: 'PLA', filamentdb: 'PLA' }],
+    })])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.queryByText('(net)')).not.toBeInTheDocument()
+    expect(screen.queryByText('(gross)')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // "See conflict" deep-link (existing tests — must still pass)
 // ---------------------------------------------------------------------------
 

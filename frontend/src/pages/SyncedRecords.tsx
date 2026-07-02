@@ -63,13 +63,27 @@ function DetailGrid({ detail }: { detail: MappingDetailField[] }) {
       <div className="font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">Field</div>
       <div className="font-medium text-emerald-700 dark:text-emerald-400">Spoolman</div>
       <div className="font-medium text-blue-700 dark:text-blue-400">Filament DB</div>
-      {detail.map(d => (
-        <Fragment key={d.field}>
-          <div className="text-gray-600 dark:text-gray-300">{d.label}</div>
-          <div className="font-mono text-gray-800 dark:text-gray-200">{fmtDetailValue(d.spoolman)}</div>
-          <div className="font-mono text-gray-800 dark:text-gray-200">{fmtDetailValue(d.filamentdb)}</div>
-        </Fragment>
-      ))}
+      {detail.map(d => {
+        // Weight is net on the Spoolman side (filament only) and gross on the Filament DB
+        // side (filament + reel tare), so they legitimately differ — label each like the
+        // summary columns do to avoid a "these don't match" confusion.
+        const isWeight = d.field === 'weight'
+        const hasSm = d.spoolman !== null && d.spoolman !== undefined && d.spoolman !== ''
+        const hasFdb = d.filamentdb !== null && d.filamentdb !== undefined && d.filamentdb !== ''
+        return (
+          <Fragment key={d.field}>
+            <div className="text-gray-600 dark:text-gray-300">{d.label}</div>
+            <div className="font-mono text-gray-800 dark:text-gray-200">
+              {fmtDetailValue(d.spoolman)}
+              {isWeight && hasSm && <span className="ml-1 text-gray-400 dark:text-gray-500">(net)</span>}
+            </div>
+            <div className="font-mono text-gray-800 dark:text-gray-200">
+              {fmtDetailValue(d.filamentdb)}
+              {isWeight && hasFdb && <span className="ml-1 text-gray-400 dark:text-gray-500">(gross)</span>}
+            </div>
+          </Fragment>
+        )
+      })}
     </div>
   )
 }
