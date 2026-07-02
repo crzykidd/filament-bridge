@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeSlug from 'rehype-slug'
 import type { Components } from 'react-markdown'
 import type { AnchorHTMLAttributes } from 'react'
 
@@ -309,7 +310,7 @@ export default function DocsViewer() {
 
       {!loading && content !== null && (
         <article className="min-w-0">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSlug]} components={mdComponents}>
             {content}
           </ReactMarkdown>
         </article>
