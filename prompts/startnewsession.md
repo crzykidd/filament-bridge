@@ -132,7 +132,7 @@ mark each line here when it ships.
   Fix together with H1: auth material never crosses the backup boundary.
 
 **Security — medium**
-- [ ] **M1** Session cookie `Secure` flag derives from `request.url.scheme`
+- [x] **M1** (done 2026-07-02, #58) Session cookie `Secure` flag derives from `request.url.scheme`
   (`api/auth.py:112-113`) but uvicorn runs without `--proxy-headers` (Dockerfile CMD),
   so behind a TLS proxy the cookie is never `Secure`. `labels.py:67` *does* trust
   `X-Forwarded-Proto` — inconsistent. Fix: `--proxy-headers` + small security-headers

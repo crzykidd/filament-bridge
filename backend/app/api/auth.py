@@ -110,7 +110,14 @@ def _clear_session_cookie(response: Response) -> None:
 
 
 def _is_https(request: Request) -> bool:
-    return request.url.scheme == "https"
+    """Return True iff the request is (or was forwarded as) HTTPS.
+
+    Checks X-Forwarded-Proto first so the cookie Secure flag is correct behind a
+    TLS-terminating reverse proxy (where uvicorn sees the inner http:// URL).
+    Mirrors the same pattern used in labels.py:_resolve_base_url.
+    """
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return proto == "https"
 
 
 # ---------------------------------------------------------------------------

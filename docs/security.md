@@ -82,6 +82,44 @@ file is not a credential dump, and a crafted backup cannot overwrite the admin p
 session-signing key. If you are migrating to a new host and want to carry over the admin
 password and API token, reset them via Settings after the restore.
 
+## Reverse proxy and TLS
+
+A reverse proxy is **not required**. There are two supported deployment shapes:
+
+- **LAN-only, plain HTTP (no proxy)** — Access the container directly over `http://`
+  (e.g. `http://nas:8090`). Everything works as-is; the `fb_session` cookie is issued
+  without the `Secure` attribute, which is correct for a plaintext channel. This is a fine
+  setup for a purely local homelab that isn't exposed to the internet.
+- **Behind a TLS-terminating reverse proxy or tunnel (recommended for any internet or
+  HTTPS exposure)** — Nginx, Caddy, **Traefik**, a **Cloudflare Tunnel**, etc. terminate
+  TLS and forward to the bridge over http. As long as they set `X-Forwarded-Proto: https`
+  (Traefik and Cloudflare both do by default), the cookie correctly gets `Secure=true`.
+
+**Proxy-header trust** — Uvicorn is started with `--proxy-headers --forwarded-allow-ips=*`
+so `request.url.scheme`, client IP, and Host are derived from the forwarded headers rather
+than the inner plaintext connection. The app also reads `X-Forwarded-Proto` directly when
+determining the `Secure` attribute on the `fb_session` cookie. Because forwarded headers
+are trusted from any immediate peer, **do not publish port 8090 directly to the internet**
+alongside the proxy — a client reaching the port directly could set
+`X-Forwarded-Proto: https` and receive a Secure cookie over a plain channel. With a proxy
+or tunnel as the only ingress (the normal setup — proxy on the same host, same Docker
+network, or a Cloudflare Tunnel), this is not a concern, because the proxy overwrites the
+forwarded headers itself. A LAN-only deployment with no ingress from the internet is also
+unaffected.
+
+**Response security headers** — The bridge adds the following headers to every response:
+
+| Header | Value | Purpose |
+|---|---|---|
+| `X-Content-Type-Options` | `nosniff` | Prevent MIME-type sniffing |
+| `X-Frame-Options` | `DENY` | Block clickjacking (no iframes in the SPA) |
+| `Referrer-Policy` | `same-origin` | Avoid leaking URLs to external origins (Filament DB, Spoolman) |
+
+`Content-Security-Policy` and `Strict-Transport-Security` are **intentionally not set by
+the bridge** — CSP for the Vite/React SPA + react-markdown docs viewer needs care and
+should be tuned at the proxy; HSTS is harmful on plain-http LAN deployments and belongs
+at the TLS terminator.
+
 ## What is NOT implemented
 
 - Multi-user support

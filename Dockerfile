@@ -52,4 +52,8 @@ ENV BRIDGE_CHANNEL=$BUILD_CHANNEL \
 EXPOSE 8090
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
+# --proxy-headers trusts X-Forwarded-Proto/Host/For so request.url.scheme and
+# client IP are correct.  --forwarded-allow-ips=* is safe here because the
+# container is always behind the operator's own reverse proxy (no direct internet
+# exposure); if that assumption changes, restrict this to the proxy's IP instead.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090", "--proxy-headers", "--forwarded-allow-ips=*"]

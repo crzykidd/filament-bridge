@@ -11,6 +11,17 @@ GitHub release.
 
 ### Security
 
+- **Session cookie `Secure` flag now correct behind a TLS proxy** — `_is_https()` in
+  `app/api/auth.py` previously checked only `request.url.scheme`, which uvicorn sees as
+  `http` behind a TLS-terminating proxy, causing `fb_session` to be set without `Secure`.
+  It now checks `X-Forwarded-Proto` first (mirroring the existing pattern in
+  `labels.py:_resolve_base_url`). Uvicorn is also started with `--proxy-headers
+  --forwarded-allow-ips=*` in the Dockerfile so `request.url.scheme` is correct at the
+  server layer too.
+- **Security headers added to every response** — the bridge now sets
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
+  `Referrer-Policy: same-origin` on all responses. CSP and HSTS are intentionally left to
+  the reverse proxy.
 - **Backup export/import no longer leaks or accepts auth secrets** — `GET /api/backup/export`
   (and the nightly on-disk backup) now strip `auth_secret`, `admin_password_hash`,
   `api_token`, and `labelforge_token` from the exported config so an exported file is not a

@@ -1,5 +1,36 @@
 # Decision record
 
+## 2026-07-02 — Proxy-aware Secure cookie flag + response security headers, GitHub #58
+
+**Context.** A security audit found the `fb_session` cookie's `Secure` flag was derived
+solely from `request.url.scheme` (`app/api/auth.py:_is_https`), which uvicorn sees as `http`
+behind a TLS-terminating reverse proxy — so the cookie shipped without `Secure`. `labels.py`
+already trusted `X-Forwarded-Proto`, so the codebase was internally inconsistent. No response
+security headers were set.
+
+**Decision.**
+- `_is_https` now reads `X-Forwarded-Proto` first, falling back to `request.url.scheme`. This
+  is the load-bearing fix and is unit-testable via TestClient (uvicorn's `--proxy-headers` is
+  a server-layer setting the test client does not exercise). The Dockerfile CMD also gains
+  `--proxy-headers --forwarded-allow-ips=*` for server-layer correctness.
+- A tiny `_security_headers` middleware sets `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` via `setdefault` (never clobbering a
+  route-set header).
+
+**Non-obvious choices.**
+- **No shared proto helper extracted.** The pattern is one line; a shared module would force an
+  awkward cross-import between `auth.py` and `labels.py`. Behavior is now consistent even
+  though the line is written in both places. (Kept per the prompt's "keep it tight" steer.)
+- **`--forwarded-allow-ips=*` trust.** Acceptable because the container always sits behind the
+  operator's own reverse proxy; a client with direct port-8090 access could spoof
+  `X-Forwarded-Proto`. Documented in `docs/security.md` and the Dockerfile — the container must
+  not be directly internet-exposed.
+- **`Referrer-Policy: same-origin`** over `no-referrer` — preserves the referrer for same-origin
+  API calls while suppressing it to Filament DB / Spoolman.
+- **CSP and HSTS deferred to the reverse proxy** — a strict CSP for the Vite/React SPA +
+  react-markdown docs viewer needs per-feature tuning and risks breakage; HSTS is harmful on
+  plain-http LAN deployments and belongs at the TLS terminator.
+
 ## 2026-07-02 — Backup boundary excludes auth secrets and internal state, GitHub #57
 
 **Context.** A security audit found the bridge-state backup treated the whole `BridgeConfig`
