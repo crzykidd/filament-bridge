@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Security
+
+- **Backup export/import no longer leaks or accepts auth secrets** — `GET /api/backup/export`
+  (and the nightly on-disk backup) now strip `auth_secret`, `admin_password_hash`,
+  `api_token`, and `labelforge_token` from the exported config so an exported file is not a
+  credential dump. `POST /api/backup/import` ignores those same keys if they appear in an
+  uploaded payload, so a crafted backup cannot overwrite the target instance's password or
+  session-signing key. Per-instance internal state (`backup_last_run`, `wizard_last_run`) is
+  also excluded from the backup boundary.
+
 ## [0.6.10] — 2026-07-01
 
 ### Added

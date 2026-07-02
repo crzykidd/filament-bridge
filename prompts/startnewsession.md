@@ -115,6 +115,90 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
   auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
 
+## 2026-07-02 repo audit findings (work queue — update as items ship)
+
+A three-track audit (security / token-usage / docs) on 2026-07-02 produced this
+prioritized queue. Work items **one at a time** via handoff prompts in `prompts/`;
+mark each line here when it ships.
+
+**Security — high**
+- [x] **H1** (done 2026-07-02, #57) `GET /api/backup/export` (and the nightly on-disk backup) serializes the
+  whole `BridgeConfig` table with no denylist (`api/backup.py:238` → `api/config.py:41-43`),
+  leaking `auth_secret` (cookie-signing key → session forgery), `admin_password_hash`,
+  `api_token`, `labelforge_token` in cleartext JSON.
+- [x] **H2** (done 2026-07-02, #57) `POST /api/backup/import` writes every `payload.config` key with no
+  allowlist (`api/backup.py:256-258`) — a crafted backup can overwrite
+  `admin_password_hash` / `auth_secret` (account takeover / offline cookie forgery).
+  Fix together with H1: auth material never crosses the backup boundary.
+
+**Security — medium**
+- [ ] **M1** Session cookie `Secure` flag derives from `request.url.scheme`
+  (`api/auth.py:112-113`) but uvicorn runs without `--proxy-headers` (Dockerfile CMD),
+  so behind a TLS proxy the cookie is never `Secure`. `labels.py:67` *does* trust
+  `X-Forwarded-Proto` — inconsistent. Fix: `--proxy-headers` + small security-headers
+  middleware (no CSP/XFO/HSTS today; CORS default is correctly same-origin).
+- [ ] **M2** No rate-limit/lockout on `/api/auth/login` (`api/auth.py:303-323`);
+  `/api/auth/status` reveals whether a password is set. Matters when internet-exposed.
+- [ ] **M3** (accepted-risk candidate) `api_token`/`labelforge_token` stored plaintext
+  in SQLite and returned by `GET /api/config` for the Settings UI. Deliberate; revisit
+  only if H1 fix doesn't feel sufficient.
+
+**Security — low / notes**
+- [ ] **L1** `mobile_session_days=0` public mode allows unauthenticated weight/location
+  writes, printer-slot changes, inventory enumeration, and physical label prints —
+  by design, but undocumented as a security consequence (fold into D1).
+- Verified good: bcrypt+salt, timing-safe token compare, HttpOnly+SameSite=lax cookie
+  (CSRF-neutralizing), `/r/` open-redirect + SPA path-traversal defenses, no raw SQL,
+  no XSS sinks, no tokens in localStorage, non-root container, debug endpoints
+  double-gated. Deps modern.
+
+**Token usage (CLAUDE.md ~12–14k tokens/session; target ~3.5k)**
+- [ ] **T1** Replace CLAUDE.md env-var + runtime-settings tables (~4.3k tokens, 37% of
+  file) with a pointer to `docs/configuration.md` (already the superset); keep only the
+  2 required vars + cross-ref field defaults.
+- [ ] **T2** Demote "read `docs/prd.md` before writing any code" (58 KB ≈ 14.5k tokens)
+  to "consult when implementing a new FR".
+- [ ] **T3** Shrink the annotated file tree (~2k tokens, already stale) to a top-level
+  directory map.
+- [ ] **T4** Sync internals: keep the 5 hard invariants inline (net/gross; never
+  subtract usageHistory; refresh BOTH snapshots; lifecycle after weight; usage endpoint
+  not weight overwrite), point to `docs/sync-model.md` for the rest.
+- [ ] **T5** Move upstream API endpoint lists + gotchas to a new `docs/upstream-apis.md`
+  (keep `?limit=1000` and `?allow_archived=true` inline — nastiest gotchas).
+- [ ] **T6** Release-process rules are triplicated (CLAUDE.md / standards.md /
+  `.claude/commands/release-*.md`) — one pointer line in CLAUDE.md suffices.
+- [ ] **T7** Fence archives: one CLAUDE.md line that `prompts/done/` (1.4 MB) and
+  `docs/archive/` are historical, never read unprompted; move `wizard-redesign.md`,
+  `reconcile-backlog.md`, `CHANGELOG-0.x.md` to `docs/archive/`.
+- [ ] **T8** `docs/decisions.md` is 304 KB (~76k tokens/lookup) — add a dated topic
+  index at the top (or split by area).
+
+**Docs**
+- [ ] **D1** `docs/security.md` stale (highest-impact doc gap): hard-coded "30-day
+  session" (now `mobile_session_days`, absent from the doc); protected-routes list
+  omits public `GET /api/version` and the `mobile_session_days=0` public scan surface.
+  README repeats the 30-day claim. Include the L1 warning here.
+- [ ] **D2** Reconcile page (`api/reconcile.py`, `pages/Reconcile.tsx`) has no current
+  doc (only the historical `reconcile-backlog.md`).
+- [ ] **D3** Tare Editor (`api/tare.py`, `pages/TareEditor.tsx`) has no user guide
+  despite writing tare to both upstreams.
+- [ ] **D4** v0.6.7 orphan-spool re-adoption pass missing from `docs/sync-model.md`
+  passes table.
+- [ ] **D5** CLAUDE.md drift: tree missing 20+ files; runtime-settings table missing 9
+  keys (`auto_sync_enabled`, weight/material direction+policy, …); debug tools say
+  three, code has four (`clear-spoolman-opentag-ids` omitted; README says three too).
+  Largely absorbed by T1–T5.
+- [ ] **D6** `docs/conflicts.md:181,185` claims a Relink action that was deferred
+  (only Unlink shipped, v0.6.10 / #40).
+- [ ] **D7** `docs/README.md` index orphans `backlog.md` (index is user-visible in-app
+  via DocsViewer).
+- Optional: `CONTRIBUTING.md`, `SECURITY.md` (vuln-reporting), troubleshooting/FAQ.
+- Verified clean: env-var docs full parity incl. defaults; CHANGELOG consistent;
+  wizard.md / mobile-updates.md / README accurate; LICENSE present.
+
+**Agreed dispatch order:** 1) H1+H2 → 2) M1 → 3) D1(+L1) → 4) CLAUDE.md restructure
+(T1–T8, absorbs D5) → 5) D2/D3/D4/D6/D7 → 6) optional M2, CONTRIBUTING/SECURITY.md.
+
 ## How to start a session
 
 1. Read the docs above.

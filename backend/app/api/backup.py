@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.config import get_config_value, read_config, set_config_value
+from app.api.config import SECRET_CONFIG_KEYS, get_config_value, read_config, set_config_value
 from app.api.errors import api_error
 from app.db import get_db
 from app.models.conflict import Conflict
@@ -232,10 +232,14 @@ def export_backup(db: Session = Depends(get_db)) -> BackupExport:
         }
         for c in db.query(Conflict).filter(Conflict.resolved_at.is_(None)).all()
     ]
+    # Exclude auth secrets and internal-state keys so the exported file is not a
+    # credential dump and importing it never overwrites the target instance's own
+    # credentials.  See SECRET_CONFIG_KEYS in app.api.config for the full list.
+    safe_config = {k: v for k, v in read_config(db).items() if k not in SECRET_CONFIG_KEYS}
     return BackupExport(
         schema_version=BACKUP_SCHEMA_VERSION,
         exported_at=datetime.datetime.now(datetime.timezone.utc),
-        config=read_config(db),
+        config=safe_config,
         filament_mappings=filament_mappings,
         spool_mappings=spool_mappings,
         open_conflicts=open_conflicts,
@@ -254,6 +258,8 @@ def import_backup(payload: BackupExport, db: Session = Depends(get_db)) -> Backu
 
     config_count = 0
     for key, value in payload.config.items():
+        if key in SECRET_CONFIG_KEYS:
+            continue  # never restore auth credentials or internal-state timestamps
         set_config_value(db, key, value)
         config_count += 1
 

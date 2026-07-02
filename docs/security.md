@@ -72,11 +72,15 @@ when `AUTH_ENABLED=true` (a known current password alone is not sufficient).
 
 ## Backup export and secrets
 
-A bridge backup export (`GET /api/backup/export`) includes `auth_secret`,
-`admin_password_hash`, and `api_token` alongside mappings and config. This is
-intentional — a restore (`POST /api/backup/import`) must be full-fidelity so
-sessions and API tokens continue to work without requiring the user to re-set
-credentials. Store backup files with the same care as the bridge database volume.
+Backup exports (`GET /api/backup/export` and the nightly on-disk job) **deliberately
+exclude** auth secrets: `auth_secret`, `admin_password_hash`, `api_token`, and
+`labelforge_token` are never written to the exported file. Import (`POST /api/backup/import`)
+likewise silently ignores any of those keys if they appear in the payload.
+
+This means a restored backup keeps the **target instance's own credentials** — an exported
+file is not a credential dump, and a crafted backup cannot overwrite the admin password or
+session-signing key. If you are migrating to a new host and want to carry over the admin
+password and API token, reset them via Settings after the restore.
 
 ## What is NOT implemented
 

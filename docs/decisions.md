@@ -1,5 +1,27 @@
 # Decision record
 
+## 2026-07-02 — Backup boundary excludes auth secrets and internal state, GitHub #57
+
+**Context.** A security audit found the bridge-state backup treated the whole `BridgeConfig`
+key→JSON store as opaque. `GET /api/backup/export` (and the nightly on-disk backup) emitted
+`auth_secret` (the itsdangerous cookie-signing key), `admin_password_hash`, `api_token`, and
+`labelforge_token` in cleartext (H1 — an exported file was a credential dump enabling session
+forgery), and `POST /api/backup/import` applied every config key with no allowlist (H2 — a
+crafted backup could overwrite the target's password hash or signing key → account takeover).
+
+**Decision.** A single `SECRET_CONFIG_KEYS` frozenset in `app/api/config.py` names every key
+that must not cross the backup boundary; export strips them and import skips them. It holds two
+semantic groups under one constant (kept together deliberately — both are "must not cross the
+backup boundary"): the four **auth secrets** above, and two **write-only internal-state** keys
+(`backup_last_run`, `wizard_last_run`) whose per-instance run summaries are meaningless when
+restored onto a different instance. The nightly on-disk backup inherits the fix because
+`build_state_export` delegates to `export_backup`.
+
+**Consequence (intended behavior change).** A restore no longer carries over the admin password
+or API token — the target instance keeps its own credentials. Migrating to a new host now
+requires re-setting the password/token via Settings after the restore. Documented in
+`docs/security.md` and `docs/backups.md`.
+
 ## 2026-06-28 — Reconcile orphaned spools instead of silently skipping them, GitHub #48
 
 **Context.** A Spoolman spool whose `filamentdb_spool_id` extra pointed at a still-existing
