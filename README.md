@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.10-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.11-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,22 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.11 (2026-07-02)
+
+- **Security hardening from a full repository audit (Claude Fable 5)** — three fixes:
+  bridge backups no longer include auth secrets (an exported/nightly backup is not a
+  credential dump, and importing one can't overwrite your password or session key #57);
+  the session cookie's `Secure` flag is now correct behind a TLS reverse proxy / tunnel,
+  plus baseline response security headers (#58); and login now rate-limits after 5 wrong
+  attempts per IP (HTTP 429, 5-minute cooldown) (#59).
+- **Behind a proxy?** The bridge now trusts `X-Forwarded-Proto` and runs with
+  `--proxy-headers`. A reverse proxy is still **not required** — plain-HTTP LAN use is
+  unchanged; Traefik and Cloudflare Tunnel work out of the box. See
+  [docs/security.md](docs/security.md).
+- **New docs & clearer security model** — added Reconcile and Tare Editor guides,
+  `CONTRIBUTING.md`, `SECURITY.md`, corrected the auth/session documentation, and documented
+  exactly what the optional public mobile-scan mode (`mobile_session_days=0`) exposes.
 
 ### v0.6.10 (2026-07-01)
 
