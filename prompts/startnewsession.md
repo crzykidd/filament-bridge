@@ -97,19 +97,21 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.9** (mobile printer-slot AMS/MMU assignment — set/clear a spool's
-  printer slot from the mobile page, FDB-only one-way write #53; OpenTag Cleanup control
-  clarity — consolidated "Re-match", content-aware staleness, "Last matched X ago" badge #52).
-  Recent: v0.6.8 (OPT material properties — bed/chamber/preheat temps, nozzle diameter, cure
-  wavelength as Spoolman custom fields #50), v0.6.7 (orphan-spool reconcile #48), v0.6.6
-  (mobile dry-cycle log #45; stable conflict ids #44; tested-upstream baseline → Filament DB
-  1.59.3), v0.6.5 (sortable Synced Records columns #41; wizard Variances TDZ fix #42).
-- Open issues (see `docs/backlog.md`): **#47** read-only API token option, **#40** surface
-  mapping edit/unlink in Synced Records UI, **#24** Discord webhook notifications (FR-20),
-  **#25** print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync
-  batch (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), the
+- Latest release: **v0.6.10** (Unlink a spool pairing from the Synced Records page — bridge-local,
+  no upstream delete #40 *partial*; Synced Records detail Weight row now labeled (net)/(gross)
+  #55; tested-upstream baseline → Filament DB 1.62.0). Recent: v0.6.9 (mobile printer-slot AMS/MMU
+  assignment #53; OpenTag control clarity — "Re-match", content-aware staleness, freshness badge
+  #52), v0.6.8 (OPT material properties as Spoolman custom fields #50), v0.6.7 (orphan-spool
+  reconcile #48), v0.6.6 (mobile dry-cycle log #45; stable conflict ids #44).
+- Open issues (see `docs/backlog.md`): **#40** RELINK in Synced Records UI — Unlink shipped
+  (v0.6.10), relink still needs a `filament-suggestions-by-mapping` backend endpoint + ranked
+  picker (see the #40 comment); **#47** read-only API token option (needs a design call:
+  separate token vs per-token scope); **#24** Discord webhook notifications (FR-20); **#25**
+  print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync batch
+  (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), the
   conflict/mobile/orphan fixes (#44/#45/#48), OPT material-property tracking (#50), OpenTag
-  control clarity (#52), and mobile printer-slot assignment (#53).
+  control clarity (#52), mobile printer-slot assignment (#53), Synced Records Unlink (#40),
+  and net/gross weight labels (#55).
 - Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
   auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
 
