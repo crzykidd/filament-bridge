@@ -97,17 +97,19 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.8** (OpenPrintTag material properties — bed/chamber/preheat temps,
-  min nozzle diameter, cure wavelength — now tracked as Spoolman custom fields from the exact
-  matched OPT record; bed temp still syncs to FDB via the existing channel #50). Recent:
-  v0.6.7 (orphan-spool reconcile #48), v0.6.6 (mobile dry-cycle log #45; stable conflict ids
-  #44; tested-upstream baseline → Filament DB 1.59.3), v0.6.5 (sortable Synced Records columns
-  #41; wizard Variances TDZ fix #42), v0.6.4 (wizard partial-success + Failure Report #14).
+- Latest release: **v0.6.9** (mobile printer-slot AMS/MMU assignment — set/clear a spool's
+  printer slot from the mobile page, FDB-only one-way write #53; OpenTag Cleanup control
+  clarity — consolidated "Re-match", content-aware staleness, "Last matched X ago" badge #52).
+  Recent: v0.6.8 (OPT material properties — bed/chamber/preheat temps, nozzle diameter, cure
+  wavelength as Spoolman custom fields #50), v0.6.7 (orphan-spool reconcile #48), v0.6.6
+  (mobile dry-cycle log #45; stable conflict ids #44; tested-upstream baseline → Filament DB
+  1.59.3), v0.6.5 (sortable Synced Records columns #41; wizard Variances TDZ fix #42).
 - Open issues (see `docs/backlog.md`): **#47** read-only API token option, **#40** surface
   mapping edit/unlink in Synced Records UI, **#24** Discord webhook notifications (FR-20),
   **#25** print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync
   batch (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), the
-  conflict/mobile/orphan fixes (#44/#45/#48), and OPT material-property tracking (#50).
+  conflict/mobile/orphan fixes (#44/#45/#48), OPT material-property tracking (#50), OpenTag
+  control clarity (#52), and mobile printer-slot assignment (#53).
 - Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
   auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
 

@@ -9,6 +9,27 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-07-01
+
+### Added
+
+- **Unlink a spool pairing directly from the Synced Records page** — each expanded spool
+  row now has an **Unlink** button (confirm dialog → severs the bridge's internal
+  pairing). The action is bridge-local: no record in Filament DB or Spoolman is created,
+  modified, or deleted. The table reloads automatically on success. Part of #40 (relink
+  from the UI is deferred pending a filament-suggestions-by-mapping endpoint).
+
+### Changed
+
+- **Synced Records detail now labels weights (net) / (gross)** — the expanded row's Weight
+  comparison shows `(net)` on the Spoolman side and `(gross)` on the Filament DB side (same
+  convention as the summary columns), so the legitimately-different numbers no longer look
+  mismatched. Closes #55.
+- **Verified against Filament DB 1.62.0** — the "latest tested upstreams" baseline moved
+  from Filament DB 1.59.3 to 1.62.0 (Spoolman 0.23.1 unchanged). Releases 1.60.0–1.62.0
+  brought no bridge-affecting API changes; minimum supported versions are unchanged
+  (FDB 1.33.0 / Spoolman 0.22.0).
+
 ## [0.6.9] — 2026-06-30
 
 ### Added

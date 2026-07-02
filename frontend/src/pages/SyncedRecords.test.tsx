@@ -1,15 +1,20 @@
 /**
- * Frontend tests for SyncedRecords — "See conflict" deep-link.
+ * Frontend tests for SyncedRecords:
  *
- * Tests:
- *   - A conflict row with conflict_id renders the "See conflict" button.
- *   - Clicking "See conflict" navigates to /conflicts?highlight=<id>.
- *   - A non-conflict row does NOT show "See conflict".
- *   - A conflict row with conflict_id === null does NOT show "See conflict".
+ * Existing:
+ *   - "See conflict" deep-link behaviour
+ *   - Sortable columns
+ *   - Filament-only rows (kind="filament")
+ *
+ * New (issue #40 — Unlink action):
+ *   - Render smoke test: mounts with spool rows without crash
+ *   - Unlink: spool row shows "Unlink" button in expanded detail; clicking it shows
+ *     the confirm panel; confirming calls deleteMapping and reloads
+ *   - Filament-only rows do NOT show the Unlink button
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import React from 'react'
 
 // ---------------------------------------------------------------------------
@@ -25,10 +30,12 @@ vi.mock('react-router-dom', () => ({
 vi.mock('../api/client', () => ({
   getMappings: vi.fn(),
   getVersionInfo: vi.fn(() => Promise.resolve({ mobile_labels_enabled: false })),
+  deleteMapping: vi.fn(),
   printLabel: vi.fn(),
   BridgeApiError: class BridgeApiError extends Error {
     constructor(public status: number, public code: string, message: string) {
       super(message)
+      this.name = 'BridgeApiError'
     }
   },
 }))
@@ -60,6 +67,7 @@ vi.mock('../utils/datetime', () => ({
 }))
 
 import { useApi } from '../api/hooks'
+import { deleteMapping } from '../api/client'
 import type { MappingRow } from '../api/types'
 
 // ---------------------------------------------------------------------------
@@ -155,19 +163,151 @@ const SyncedRecords = SyncedRecordsModule.default
 // Test helpers
 // ---------------------------------------------------------------------------
 
+const reloadMock = vi.fn().mockResolvedValue(undefined)
+
 function renderWithRows(rows: MappingRow[]) {
   vi.mocked(useApi).mockReturnValue({
     data: rows,
     loading: false,
     error: null,
-    reload: vi.fn(),
-    refetch: vi.fn(),
+    reload: reloadMock,
+    refetch: reloadMock,
   })
   return render(<SyncedRecords />)
 }
 
+/** Expand a row by clicking its name cell. */
+function expandRow(name: string) {
+  fireEvent.click(screen.getByText(name))
+}
+
 // ---------------------------------------------------------------------------
-// Tests
+// Smoke test
+// ---------------------------------------------------------------------------
+
+describe('SyncedRecords — render smoke test', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('mounts with spool rows without crash', () => {
+    renderWithRows([makeInSyncRow(), makeConflictRow()])
+    expect(screen.getByText('ELEGOO PLA Blue')).toBeInTheDocument()
+    expect(screen.getByText('ELEGOO PLA Red')).toBeInTheDocument()
+  })
+
+  it('mounts with filament-only rows without crash', () => {
+    renderWithRows([makeFilamentOnlyRow()])
+    expect(screen.getByText('PLA Grey')).toBeInTheDocument()
+  })
+
+  it('mounts with empty data without crash', () => {
+    renderWithRows([])
+    expect(screen.getByText('No records')).toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Unlink action
+// ---------------------------------------------------------------------------
+
+describe('SyncedRecords — Unlink action', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('shows Unlink button in expanded spool row detail', () => {
+    renderWithRows([makeInSyncRow()])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.getByRole('button', { name: /^unlink$/i })).toBeInTheDocument()
+  })
+
+  it('clicking Unlink shows the confirm panel with bridge-local disclaimer', () => {
+    renderWithRows([makeInSyncRow()])
+    expandRow('ELEGOO PLA Blue')
+    fireEvent.click(screen.getByRole('button', { name: /^unlink$/i }))
+    expect(screen.getByText(/not deleted or modified/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /yes, unlink/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument()
+  })
+
+  it('confirming Unlink calls deleteMapping with the row id and reloads', async () => {
+    vi.mocked(deleteMapping).mockResolvedValue(undefined)
+    renderWithRows([makeInSyncRow({ id: 7 })])
+    expandRow('ELEGOO PLA Blue')
+    fireEvent.click(screen.getByRole('button', { name: /^unlink$/i }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /yes, unlink/i }))
+    })
+    await waitFor(() => {
+      expect(deleteMapping).toHaveBeenCalledWith(7)
+      expect(reloadMock).toHaveBeenCalled()
+    })
+  })
+
+  it('Cancel hides the confirm panel without calling deleteMapping', () => {
+    renderWithRows([makeInSyncRow()])
+    expandRow('ELEGOO PLA Blue')
+    fireEvent.click(screen.getByRole('button', { name: /^unlink$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+    expect(screen.queryByText(/not deleted or modified/i)).not.toBeInTheDocument()
+    expect(deleteMapping).not.toHaveBeenCalled()
+  })
+
+  it('shows error message when deleteMapping rejects', async () => {
+    const { BridgeApiError } = await import('../api/client')
+    vi.mocked(deleteMapping).mockRejectedValue(new BridgeApiError(404, 'mapping_not_found', 'No such mapping'))
+    renderWithRows([makeInSyncRow()])
+    expandRow('ELEGOO PLA Blue')
+    fireEvent.click(screen.getByRole('button', { name: /^unlink$/i }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /yes, unlink/i }))
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/no such mapping/i)).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT show Unlink button for filament-only rows', () => {
+    renderWithRows([makeFilamentOnlyRow()])
+    expandRow('PLA Grey')
+    expect(screen.queryByRole('button', { name: /^unlink$/i })).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Weight (net) / (gross) labels in the expanded detail grid (#55)
+// ---------------------------------------------------------------------------
+
+describe('SyncedRecords — Weight net/gross labels', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+
+  it('labels the expanded Weight row (net) on Spoolman and (gross) on Filament DB', () => {
+    renderWithRows([makeInSyncRow({
+      detail: [{ field: 'weight', label: 'Weight', spoolman: 300, filamentdb: 500 }],
+    })])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.getByText('(net)')).toBeInTheDocument()
+    expect(screen.getByText('(gross)')).toBeInTheDocument()
+  })
+
+  it('omits the suffix on an empty weight side', () => {
+    renderWithRows([makeInSyncRow({
+      detail: [{ field: 'weight', label: 'Weight', spoolman: 300, filamentdb: null }],
+    })])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.getByText('(net)')).toBeInTheDocument()
+    expect(screen.queryByText('(gross)')).not.toBeInTheDocument()
+  })
+
+  it('does not label non-weight detail rows', () => {
+    renderWithRows([makeInSyncRow({
+      detail: [{ field: 'material', label: 'Material', spoolman: 'PLA', filamentdb: 'PLA' }],
+    })])
+    expandRow('ELEGOO PLA Blue')
+    expect(screen.queryByText('(net)')).not.toBeInTheDocument()
+    expect(screen.queryByText('(gross)')).not.toBeInTheDocument()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// "See conflict" deep-link (existing tests — must still pass)
 // ---------------------------------------------------------------------------
 
 describe('SyncedRecords — "See conflict" link', () => {

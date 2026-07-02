@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getMappings, getVersionInfo } from '../api/client'
+import { getMappings, getVersionInfo, deleteMapping, BridgeApiError } from '../api/client'
 import { useApi } from '../api/hooks'
 import { StatusBadge } from '../components/StatusBadge'
 import { DeepLinks } from '../components/DeepLinks'
@@ -63,19 +63,75 @@ function DetailGrid({ detail }: { detail: MappingDetailField[] }) {
       <div className="font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">Field</div>
       <div className="font-medium text-emerald-700 dark:text-emerald-400">Spoolman</div>
       <div className="font-medium text-blue-700 dark:text-blue-400">Filament DB</div>
-      {detail.map(d => (
-        <Fragment key={d.field}>
-          <div className="text-gray-600 dark:text-gray-300">{d.label}</div>
-          <div className="font-mono text-gray-800 dark:text-gray-200">{fmtDetailValue(d.spoolman)}</div>
-          <div className="font-mono text-gray-800 dark:text-gray-200">{fmtDetailValue(d.filamentdb)}</div>
-        </Fragment>
-      ))}
+      {detail.map(d => {
+        // Weight is net on the Spoolman side (filament only) and gross on the Filament DB
+        // side (filament + reel tare), so they legitimately differ — label each like the
+        // summary columns do to avoid a "these don't match" confusion.
+        const isWeight = d.field === 'weight'
+        const hasSm = d.spoolman !== null && d.spoolman !== undefined && d.spoolman !== ''
+        const hasFdb = d.filamentdb !== null && d.filamentdb !== undefined && d.filamentdb !== ''
+        return (
+          <Fragment key={d.field}>
+            <div className="text-gray-600 dark:text-gray-300">{d.label}</div>
+            <div className="font-mono text-gray-800 dark:text-gray-200">
+              {fmtDetailValue(d.spoolman)}
+              {isWeight && hasSm && <span className="ml-1 text-gray-400 dark:text-gray-500">(net)</span>}
+            </div>
+            <div className="font-mono text-gray-800 dark:text-gray-200">
+              {fmtDetailValue(d.filamentdb)}
+              {isWeight && hasFdb && <span className="ml-1 text-gray-400 dark:text-gray-500">(gross)</span>}
+            </div>
+          </Fragment>
+        )
+      })}
     </div>
   )
 }
 
+/** Inline confirm panel for Unlink. */
+function UnlinkConfirm({
+  onConfirm,
+  onCancel,
+  loading,
+  error,
+}: {
+  onConfirm: () => void
+  onCancel: () => void
+  loading: boolean
+  error: string | null
+}) {
+  return (
+    <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded space-y-2">
+      <p className="text-sm font-medium text-red-800 dark:text-red-300">Unlink this pairing?</p>
+      <p className="text-xs text-red-700 dark:text-red-400">
+        This removes the bridge&rsquo;s internal cross-reference only —{' '}
+        <strong>the Filament DB and Spoolman records are not deleted or modified.</strong>
+      </p>
+      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+      <div className="flex gap-2">
+        <button
+          onClick={onConfirm}
+          disabled={loading}
+          className="px-3 py-1 bg-red-600 text-white rounded text-xs font-medium hover:bg-red-700 disabled:opacity-50"
+        >
+          {loading ? 'Unlinking…' : 'Yes, unlink'}
+        </button>
+        <button
+          onClick={onCancel}
+          disabled={loading}
+          className="px-3 py-1 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded text-xs font-medium hover:bg-gray-300 dark:hover:bg-gray-600"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+type RowAction = 'unlink' | null
+
 export default function SyncedRecords() {
-  const { data, loading, error } = useApi(getMappings)
+  const { data, loading, error, reload } = useApi(getMappings)
   const navigate = useNavigate()
   const [statusFilter, setStatusFilter] = useState<MappingStatus | ''>('')
   const [search, setSearch] = useState('')
@@ -85,6 +141,11 @@ export default function SyncedRecords() {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   // The Print-label action only appears when the mobile/labels feature is enabled.
   const [labelsEnabled, setLabelsEnabled] = useState(false)
+
+  // Per-row action state
+  const [activeAction, setActiveAction] = useState<{ id: number; action: RowAction } | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   useEffect(() => {
     getVersionInfo().then(v => setLabelsEnabled(v.mobile_labels_enabled)).catch(() => {})
@@ -97,6 +158,30 @@ export default function SyncedRecords() {
       else next.add(id)
       return next
     })
+
+  function openAction(rowId: number, action: RowAction) {
+    setActiveAction({ id: rowId, action })
+    setActionError(null)
+  }
+
+  function closeAction() {
+    setActiveAction(null)
+    setActionError(null)
+    setActionLoading(false)
+  }
+
+  async function handleUnlink(rowId: number) {
+    setActionLoading(true)
+    setActionError(null)
+    try {
+      await deleteMapping(rowId)
+      closeAction()
+      await reload()
+    } catch (e) {
+      setActionError(e instanceof BridgeApiError ? e.message : String(e))
+      setActionLoading(false)
+    }
+  }
 
   // Click a sortable header: same column toggles asc↔desc; a new column starts ascending.
   const toggleSort = (key: SortKey) => {
@@ -248,6 +333,7 @@ export default function SyncedRecords() {
                 {rows.map(row => {
                   const expanded = expandedIds.has(row.id)
                   const filamentOnly = isFilamentRow(row)
+                  const rowActive = activeAction?.id === row.id
                   return (
                     <Fragment key={`${row.kind}-${row.id}`}>
                       <tr
@@ -331,6 +417,31 @@ export default function SyncedRecords() {
                                   <HelpTip text="Last-known values per side from the bridge's snapshots — '—' means the field hasn't been baselined by a sync yet." />
                                 </div>
                                 <DetailGrid detail={row.detail} />
+
+                                {/* Pairing actions — bridge-local; no upstream writes */}
+                                <div className="mt-4 flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                                  <span className="text-xs text-gray-400 dark:text-gray-500">Pairing actions</span>
+                                  <HelpTip text="Unlink only modifies the bridge's internal cross-reference. No records in Filament DB or Spoolman are created, modified, or deleted." />
+                                  <button
+                                    onClick={() =>
+                                      rowActive && activeAction?.action === 'unlink'
+                                        ? closeAction()
+                                        : openAction(row.id, 'unlink')
+                                    }
+                                    className="ml-2 px-2.5 py-1 text-xs font-medium rounded border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 transition-colors"
+                                  >
+                                    Unlink
+                                  </button>
+                                </div>
+
+                                {rowActive && activeAction?.action === 'unlink' && (
+                                  <UnlinkConfirm
+                                    onConfirm={() => handleUnlink(row.id)}
+                                    onCancel={closeAction}
+                                    loading={actionLoading}
+                                    error={actionError}
+                                  />
+                                )}
                               </>
                             )}
                           </td>

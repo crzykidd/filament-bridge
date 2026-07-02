@@ -491,10 +491,15 @@ New records are handled by two independent runtime settings (both default `manua
 - **"See conflict" deep-link:** when a row's status is `conflict`, a button navigates to
   `/conflicts?highlight=<conflict_id>` — the Conflicts page (FR-16) scrolls to and
   highlights that specific conflict entry
-- **Backend API:** `GET /api/mappings` returns all rows; `PUT /api/mappings/{id}` relinking
-  and `DELETE /api/mappings/{id}` unlinking are available via the API (bridge-local only —
-  neither endpoint ever touches an upstream record). These operations are not currently
-  surfaced in the Synced Records UI but are available for programmatic or debug use
+- **Unlink action in the expanded row detail:** each spool row shows a bridge-local
+  **Unlink** button — confirm dialog → severs the bridge's internal pairing via
+  `DELETE /api/mappings/{id}`. The Filament DB and Spoolman records are unchanged; the
+  table reloads on success. Filament-only rows (kind="filament") do not show it because
+  the backend only manages spool mappings (SpoolMapping) for these endpoints.
+- **Relink / edit** (`PUT /api/mappings/{id}`) remains **API-only** — not yet surfaced in
+  the UI. A ranked filament picker for relink is deferred pending a
+  filament-suggestions-by-mapping backend endpoint (the existing suggestions endpoint
+  requires a conflict ID). See #40.
 
 ### P2 — Enhanced features
 
