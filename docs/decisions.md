@@ -142,6 +142,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Security & auth
 
+- [2026-07-02 — Secrets stored plaintext in SQLite is an accepted risk (M3 won't-fix)](#2026-07-02--secrets-stored-plaintext-in-sqlite-is-an-accepted-risk-m3-wont-fix)
 - [2026-07-02 — Proxy-aware Secure cookie flag + response security headers](#2026-07-02--proxy-aware-secure-cookie-flag--response-security-headers-github-58) — #58
 - [2026-06-09 — Single-account auth + API token + first-login required-settings gate](#2026-06-09--single-account-auth--api-token--first-login-required-settings-gate)
 
@@ -193,6 +194,29 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-07-02 — Secrets stored plaintext in SQLite is an accepted risk (M3 won't-fix)
+
+**Context.** The 2026-07-02 security audit noted (finding M3) that the bridge stores its secrets
+— `api_token`, `labelforge_token`, `auth_secret`, `admin_password_hash` — as plaintext (or a plain
+bcrypt hash) in the SQLite `BridgeConfig` table, and that `GET /api/config` returns `api_token` /
+`labelforge_token` to the authenticated Settings UI so the user can view/copy them.
+
+**Decision — accepted risk, not fixed.** For a **single-admin, self-hosted LAN app** this is an
+intentional tradeoff, not a vulnerability worth mitigating:
+- Any attacker who can read the SQLite file already owns the data volume (and thus everything the
+  bridge can do) — encrypting-at-rest with a key that must also live on the same host buys nothing.
+- The API token is deliberately displayable so the user can copy it into scripts/Moonraker; it is
+  "no more secret than the database file itself" (see the API-token decision).
+- `GET /api/config` is auth-gated and only returns the two *display* tokens — never the cookie
+  signing key or the password hash (verified: `admin_password_hash` / `auth_secret` are excluded).
+- The genuinely damaging leak vector (secrets escaping the box via the **backup** export/import)
+  was closed separately — see [Backup boundary excludes auth secrets](#2026-07-02--backup-boundary-excludes-auth-secrets-and-internal-state-github-57).
+
+If the deployment model ever changes (multi-tenant, hosted, secrets shared across a team),
+revisit: move to a real secrets store / at-rest encryption with an externally-provided key, and
+stop returning tokens in `GET /api/config`. Until then, **won't-fix by design.**
 
 
 ## 2026-07-02 — Proxy-aware Secure cookie flag + response security headers, GitHub #58

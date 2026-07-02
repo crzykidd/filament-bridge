@@ -137,11 +137,13 @@ mark each line here when it ships.
   so behind a TLS proxy the cookie is never `Secure`. `labels.py:67` *does* trust
   `X-Forwarded-Proto` — inconsistent. Fix: `--proxy-headers` + small security-headers
   middleware (no CSP/XFO/HSTS today; CORS default is correctly same-origin).
-- [ ] **M2** No rate-limit/lockout on `/api/auth/login` (`api/auth.py:303-323`);
-  `/api/auth/status` reveals whether a password is set. Matters when internet-exposed.
-- [ ] **M3** (accepted-risk candidate) `api_token`/`labelforge_token` stored plaintext
-  in SQLite and returned by `GET /api/config` for the Settings UI. Deliberate; revisit
-  only if H1 fix doesn't feel sufficient.
+- [~] **M2** (dispatched 2026-07-02, in review) No rate-limit/lockout on
+  `/api/auth/login`. Per-IP in-memory throttle (5 attempts → 429 + Retry-After, 5-min
+  cooldown, reset on success, skipped when AUTH_ENABLED=false).
+- [x] **M3** (won't-fix, documented 2026-07-02) `api_token`/`labelforge_token` stored
+  plaintext in SQLite and returned by `GET /api/config`. Accepted risk for a single-admin
+  self-hosted LAN app — recorded in `docs/decisions.md` (2026-07-02 M3 entry). The
+  damaging leak vector (backup export) was closed by H1.
 
 **Security — low / notes**
 - [x] **L1** (done 2026-07-02, folded into D1) `mobile_session_days=0` public mode allows unauthenticated weight/location
@@ -190,7 +192,10 @@ New `docs/upstream-apis.md` created + added to docs index.
 - [x] **D6** (done 2026-07-02) `docs/conflicts.md` — corrected the stale Relink claim
   (only Unlink shipped; relink deferred).
 - [x] **D7** (done 2026-07-02) `docs/README.md` — added `backlog.md` to the index.
-- Optional: `CONTRIBUTING.md`, `SECURITY.md` (vuln-reporting), troubleshooting/FAQ.
+- [x] Optional (done 2026-07-02): added `CONTRIBUTING.md` and `SECURITY.md`
+  (vuln-reporting). Also wired `rehype-slug` into the in-app DocsViewer so
+  decisions.md's topic-index anchors jump in-app (the T8 follow-up). Still open:
+  troubleshooting/FAQ doc (not done).
 - Verified clean: env-var docs full parity incl. defaults; CHANGELOG consistent;
   wizard.md / mobile-updates.md / README accurate; LICENSE present.
 

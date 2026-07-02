@@ -182,6 +182,7 @@ CATEGORIES = [
 
     ("Security & auth", [
         # Auth gates, session cookies, API tokens, security headers
+        "2026-07-02 — Secrets stored plaintext in SQLite is an accepted risk (M3 won't-fix)",
         "2026-07-02 — Proxy-aware Secure cookie flag + response security headers, GitHub #58",
         "2026-06-09 — Single-account auth + API token + first-login required-settings gate",
     ]),
