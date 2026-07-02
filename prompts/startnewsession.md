@@ -181,20 +181,15 @@ New `docs/upstream-apis.md` created + added to docs index.
   session" (now `mobile_session_days`, absent from the doc); protected-routes list
   omits public `GET /api/version` and the `mobile_session_days=0` public scan surface.
   README repeats the 30-day claim. Include the L1 warning here.
-- [ ] **D2** Reconcile page (`api/reconcile.py`, `pages/Reconcile.tsx`) has no current
-  doc (only the historical `reconcile-backlog.md`).
-- [ ] **D3** Tare Editor (`api/tare.py`, `pages/TareEditor.tsx`) has no user guide
-  despite writing tare to both upstreams.
-- [ ] **D4** v0.6.7 orphan-spool re-adoption pass missing from `docs/sync-model.md`
-  passes table.
-- [ ] **D5** CLAUDE.md drift: tree missing 20+ files; runtime-settings table missing 9
-  keys (`auto_sync_enabled`, weight/material direction+policy, …); debug tools say
-  three, code has four (`clear-spoolman-opentag-ids` omitted; README says three too).
-  Largely absorbed by T1–T5.
-- [ ] **D6** `docs/conflicts.md:181,185` claims a Relink action that was deferred
-  (only Unlink shipped, v0.6.10 / #40).
-- [ ] **D7** `docs/README.md` index orphans `backlog.md` (index is user-visible in-app
-  via DocsViewer).
+- [x] **D2** (done 2026-07-02) Reconcile page — created `docs/reconcile.md` + indexed.
+- [x] **D3** (done 2026-07-02) Tare Editor — created `docs/tare-editor.md` + indexed.
+- [x] **D4** (done 2026-07-02) Added the orphan-spool re-adoption pass row to
+  `docs/sync-model.md` passes table.
+- [x] **D5** (done, absorbed by T1–T5) CLAUDE.md drift — resolved by the CLAUDE.md
+  restructure (tables → pointer to configuration.md; tree → top-level map).
+- [x] **D6** (done 2026-07-02) `docs/conflicts.md` — corrected the stale Relink claim
+  (only Unlink shipped; relink deferred).
+- [x] **D7** (done 2026-07-02) `docs/README.md` — added `backlog.md` to the index.
 - Optional: `CONTRIBUTING.md`, `SECURITY.md` (vuln-reporting), troubleshooting/FAQ.
 - Verified clean: env-var docs full parity incl. defaults; CHANGELOG consistent;
   wizard.md / mobile-updates.md / README accurate; LICENSE present.
