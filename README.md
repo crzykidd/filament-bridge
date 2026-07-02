@@ -253,7 +253,7 @@ per-system warning explaining why sync is off — so you can see and fix it. An 
 version does *not* block sync (that is treated as a connectivity issue, surfaced as `degraded`
 health, not as "too old").
 
-Latest tested upstreams: **Filament DB 1.59.3** and **Spoolman 0.23.1**.
+Latest tested upstreams: **Filament DB 1.62.0** and **Spoolman 0.23.1**.
 
 - **Filament DB** — the bridge gates version-specific features automatically.
 - **Spoolman** — the bridge creates its required extra fields (`filamentdb_id`, `filamentdb_spool_id`, etc.) automatically on startup if they are missing.

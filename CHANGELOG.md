@@ -9,6 +9,13 @@ GitHub release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Verified against Filament DB 1.62.0** — the "latest tested upstreams" baseline moved
+  from Filament DB 1.59.3 to 1.62.0 (Spoolman 0.23.1 unchanged). Releases 1.60.0–1.62.0
+  brought no bridge-affecting API changes; minimum supported versions are unchanged
+  (FDB 1.33.0 / Spoolman 0.22.0).
+
 ## [0.6.9] — 2026-06-30
 
 ### Added
