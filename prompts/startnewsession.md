@@ -171,9 +171,10 @@ New `docs/upstream-apis.md` created + added to docs index.
   decisions.md-read-whole. **Did NOT physically move files** — they're referenced from
   `docs/README.md`, `docs/decisions.md`, `CHANGELOG.md`, and ~8 handoff prompts; the fence
   delivers the token savings without breaking those links.
-- [ ] **T8** `docs/decisions.md` is 304 KB (~76k tokens/lookup) — add a dated topic index at
-  the top (or split by area). STILL PENDING — separate follow-up (fence line already tells
-  agents to search it, not read it whole).
+- [x] **T8** (done 2026-07-02) `docs/decisions.md` — prepended a 155-entry topic-grouped
+  index (11 areas) + `scripts/gen-decisions-index.py` (idempotent regen). Body byte-identical;
+  155/155 anchors resolve. NOTE: DocsViewer lacks `rehype-slug`, so in-app anchor jumps don't
+  work yet (fine on GitHub) — optional frontend follow-up to add `rehype-slug`.
 
 **Docs**
 - [x] **D1** (done 2026-07-02) `docs/security.md` stale (highest-impact doc gap): hard-coded "30-day

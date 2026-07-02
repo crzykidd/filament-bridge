@@ -1,5 +1,200 @@
 # Decision record
 
+<!-- decisions-topic-index-start -->
+
+_New entries: add a line to the matching area below, or re-run `scripts/gen-decisions-index.py` after updating CATEGORIES._
+
+### Sync engine & anti-ping-pong
+
+- [2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)](#2026-06-11--small-fix-batch-compose-image-interval-pagination-dry-run-settings-copy)
+- [2026-06-11 — Honor configured cross-reference field names in ensure_extra_fields + engine orphan guard](#2026-06-11--honor-configured-cross-reference-field-names-in-ensure_extra_fields--engine-orphan-guard)
+- [2026-06-11 — Durable `changes.log` file (`CHANGES_LOG_ENABLED` / `CHANGES_LOG_PATH`)](#2026-06-11--durable-changeslog-file-changes_log_enabled--changes_log_path)
+- [2026-06-11 — Debug startup state dump (`DEBUG_STARTUP_DUMP`)](#2026-06-11--debug-startup-state-dump-debug_startup_dump)
+- [2026-06-11 — Startup state dump retries the upstream fetch (~2 min) instead of one-shot](#2026-06-11--startup-state-dump-retries-the-upstream-fetch-2-min-instead-of-one-shot)
+- [2026-06-11 — FR-11 fix: FDB `_field_values` now persisted in spool snapshots](#2026-06-11--fr-11-fix-fdb-_field_values-now-persisted-in-spool-snapshots)
+- [2026-06-10 — Engine: stale spool mappings purge instead of queuing deletion conflicts](#2026-06-10--engine-stale-spool-mappings-purge-instead-of-queuing-deletion-conflicts)
+- [2026-06-08 — Sync interval + log retention are runtime-configurable; no in-app log-file rotation](#2026-06-08--sync-interval--log-retention-are-runtime-configurable-no-in-app-log-file-rotation)
+- [2026-06-06 — Per-category sync direction + conflict policy (two-axis model)](#2026-06-06--per-category-sync-direction--conflict-policy-two-axis-model)
+- [2026-05-30 — Phase 5 sync fixes (PATCH, weight precision, material default, wizard gating)](#2026-05-30--phase-5-sync-fixes-patch-weight-precision-material-default-wizard-gating)
+- [2026-05-29 — Async-job / sync-DB bridging approach (Option A — inline)](#2026-05-29--async-job--sync-db-bridging-approach-option-a--inline)
+- [2026-05-28 — Sync engine defaults for the three design open questions](#2026-05-28--sync-engine-defaults-for-the-three-design-open-questions)
+- [2026-05-28 — Synchronous SQLAlchemy (not async) for the persistence layer](#2026-05-28--synchronous-sqlalchemy-not-async-for-the-persistence-layer)
+- [2026-05-28 — Spoolman extra fields: create on startup, JSON-decode values](#2026-05-28--spoolman-extra-fields-create-on-startup-json-decode-values)
+
+### Weight model
+
+- [2026-06-24 — Lowering a spool weight always goes through an FDB usage entry](#2026-06-24--lowering-a-spool-weight-always-goes-through-an-fdb-usage-entry-issue-28) — #28
+- [2026-06-10 — Weight model: net = totalWeight − tare (no usageHistory subtraction); refresh both snapshots after a weight push](#2026-06-10--weight-model-net--totalweight--tare-no-usagehistory-subtraction-refresh-both-snapshots-after-a-weight-push)
+
+### Wizard & variant model
+
+- [2026-06-28 — Reconcile orphaned spools instead of silently skipping them](#2026-06-28--reconcile-orphaned-spools-instead-of-silently-skipping-them-github-48) — #48
+- [2026-06-21 — `never_import_empties` is honored by the ongoing engine (not just the wizard)](#2026-06-21--never_import_empties-is-honored-by-the-ongoing-engine-not-just-the-wizard)
+- [2026-06-18 — Parent/variant + OpenPrintTag rework: PARKED, blocked on upstream](#2026-06-18--parentvariant--openprinttag-rework-parked-blocked-on-upstream)
+- [2026-06-13 — Reconcile: master/container parents are intentional; shown as variant annotation, never as missing](#2026-06-13--reconcile-mastercontainer-parents-are-intentional-shown-as-variant-annotation-never-as-missing)
+- [2026-06-13 — Reconcile page: read-only, on-demand, no fuzzy suggestions](#2026-06-13--reconcile-page-read-only-on-demand-no-fuzzy-suggestions)
+- [2026-06-13 — find-or-attach on 409 in `_execute_spoolman_to_fdb` (idempotent conflict Add)](#2026-06-13--find-or-attach-on-409-in-_execute_spoolman_to_fdb-idempotent-conflict-add)
+- [2026-06-13 — FilamentMapping.identity column + filament-only rows in Synced Records](#2026-06-13--filamentmappingidentity-column--filament-only-rows-in-synced-records)
+- [2026-06-11 — Filament-level dashboard counts + wizard execute per-type breakdown](#2026-06-11--filament-level-dashboard-counts--wizard-execute-per-type-breakdown)
+- [2026-06-11 — Archived Spoolman spools import as retired FDB spools (not silently dropped)](#2026-06-11--archived-spoolman-spools-import-as-retired-fdb-spools-not-silently-dropped)
+- [2026-06-11 — Fix wizard Pass-2.6 finish-tag wire format (CSV not JSON array)](#2026-06-11--fix-wizard-pass-26-finish-tag-wire-format-csv-not-json-array)
+- [2026-06-10 — Wizard planner validates mappings against live FDB; stale → recreate + replace](#2026-06-10--wizard-planner-validates-mappings-against-live-fdb-stale--recreate--replace)
+- [2026-06-10 — Wizard import: created FDB filament naming rule (variant + standalone)](#2026-06-10--wizard-import-created-fdb-filament-naming-rule-variant--standalone)
+- [2026-06-10 — Wizard execute response: added `label` field to `WizardExecuteRecord`](#2026-06-10--wizard-execute-response-added-label-field-to-wizardexecuterecord)
+- [2026-06-09 — Configurable container marker, Master/Parent badge, editable collision rename](#2026-06-09--configurable-container-marker-masterparent-badge-editable-collision-rename)
+- [2026-06-08 — Generic container parent mode for Bulk Import Wizard](#2026-06-08--generic-container-parent-mode-for-bulk-import-wizard)
+- [2026-06-08 — Container naming "Master" suffix + resilient 409 execute](#2026-06-08--container-naming-master-suffix--resilient-409-execute)
+- [2026-06-07 — Wizard pre-matches records by filamentdb_id cross-reference before fuzzy matching](#2026-06-07--wizard-pre-matches-records-by-filamentdb_id-cross-reference-before-fuzzy-matching)
+- [2026-06-07 — Renamed to Bulk Import Wizard; ongoing SoT removed from wizard step; never_import_empties global setting](#2026-06-07--renamed-to-bulk-import-wizard-ongoing-sot-removed-from-wizard-step-never_import_empties-global-setting)
+- [2026-06-06 — Name-collision detection is vendor-aware](#2026-06-06--name-collision-detection-is-vendor-aware)
+- [2026-06-06 — FDB create_spool returns the filament doc; extract spool _id by label match](#2026-06-06--fdb-create_spool-returns-the-filament-doc-extract-spool-_id-by-label-match)
+- [2026-06-06 — Stale cross-ref no longer skips spool creation; spoolWeight from resolved tare](#2026-06-06--stale-cross-ref-no-longer-skips-spool-creation-spoolweight-from-resolved-tare)
+- [2026-06-06 — Import now sets FDB netFilamentWeight from Spoolman filament weight](#2026-06-06--import-now-sets-fdb-netfilamentweight-from-spoolman-filament-weight)
+- [2026-06-06 — Dry-run preview lists in-sync pairs as "matched — no updates"](#2026-06-06--dry-run-preview-lists-in-sync-pairs-as-matched--no-updates)
+- [2026-06-06 — New-spool direction enforced; wizard writes new keys; old source-of-truth removed](#2026-06-06--new-spool-direction-enforced-wizard-writes-new-keys-old-source-of-truth-removed)
+- [2026-06-05 — Variances detail enrichment, per-field reconciliation, execute write-back, pre-flight summary](#2026-06-05--variances-detail-enrichment-per-field-reconciliation-execute-write-back-pre-flight-summary)
+- [2026-06-05 — Variances type/diameter/temps display](#2026-06-05--variances-typediametertemps-display)
+- [2026-06-05 — Reconcile canonical-key contract + editable master temps](#2026-06-05--reconcile-canonical-key-contract--editable-master-temps)
+- [2026-06-04 — variant_line_keywords user setting + Standalone "Move to existing group"](#2026-06-04--variant_line_keywords-user-setting--standalone-move-to-existing-group)
+- [2026-06-04 — Wizard per-member actions + finish-line auto-split (Part A/B)](#2026-06-04--wizard-per-member-actions--finish-line-auto-split-part-ab)
+- [2026-06-04 — Wizard variant-resolution redesign: D1 grouping key, D2 suggest-exclude, D3 FDB-parent attach, D4 empty-spool toggle](#2026-06-04--wizard-variant-resolution-redesign-d1-grouping-key-d2-suggest-exclude-d3-fdb-parent-attach-d4-empty-spool-toggle)
+- [2026-06-03 — Wizard: merged Variances step, downstream filtering, master-tare rule](#2026-06-03--wizard-merged-variances-step-downstream-filtering-master-tare-rule)
+- [2026-06-01 — Match-review v2: one unified table, Group-By Status default](#2026-06-01--match-review-v2-one-unified-table-group-by-status-default)
+- [2026-05-31 — Match-review redesign: grouped tables, checkboxes, rescan](#2026-05-31--match-review-redesign-grouped-tables-checkboxes-rescan)
+- [2026-05-31 — Wizard preview (FR-4 foundation): reconcile-flag keys + read-only UI step](#2026-05-31--wizard-preview-fr-4-foundation-reconcile-flag-keys--read-only-ui-step)
+- [2026-05-31 — Spoolman→FDB variant grouping: SM-keyed master-promote](#2026-05-31--spoolmanfdb-variant-grouping-sm-keyed-master-promote)
+- [2026-05-31 — Unified dry-run: shared planner, auto-decisions, orphan bucket](#2026-05-31--unified-dry-run-shared-planner-auto-decisions-orphan-bucket)
+- [2026-05-29 — Phase 3b wizard execute (FR-7): create order, idempotency, snapshot seed, fatal vs per-record](#2026-05-29--phase-3b-wizard-execute-fr-7-create-order-idempotency-snapshot-seed-fatal-vs-per-record)
+- [2026-05-29 — Phase 3 API: error envelope, conflict-resolve semantics, wizard state, backup format](#2026-05-29--phase-3-api-error-envelope-conflict-resolve-semantics-wizard-state-backup-format)
+- [2026-05-29 — Spoolman extra-field conflict-key definition (Phase 2)](#2026-05-29--spoolman-extra-field-conflict-key-definition-phase-2)
+- [2026-05-28 — Filament DB variant inheritance: read detail, strip computed fields](#2026-05-28--filament-db-variant-inheritance-read-detail-strip-computed-fields)
+
+### Conflicts & resolution
+
+- [2026-06-28 — `new_filament`/`new_spool` conflicts update in place (stable id)](#2026-06-28--new_filamentnew_spool-conflicts-update-in-place-stable-id-github-44) — #44
+- [2026-06-23 — Cross-system conflict resolution converges (writes both sides on resolve)](#2026-06-23--cross-system-conflict-resolution-converges-writes-both-sides-on-resolve-issue-21) — #21
+- [2026-06-11 — New-record handling: two-tier policy model (new_filament_policy / new_spool_policy)](#2026-06-11--new-record-handling-two-tier-policy-model-new_filament_policy--new_spool_policy)
+- [2026-06-10 — Phase B: master_divergence resolve→apply workflow](#2026-06-10--phase-b-master_divergence-resolveapply-workflow)
+- [2026-06-10 — Phase A: native shared-filament scalar sync + conflict_type column](#2026-06-10--phase-a-native-shared-filament-scalar-sync--conflict_type-column)
+- [2026-06-08 — Conflicts page rework + `ColorDisplay` + multicolor in `_conflict_identity` (`eb9af66`)](#2026-06-08--conflicts-page-rework--colordisplay--multicolor-in-_conflict_identity-eb9af66)
+- [2026-06-07 — new_spool conflicts: dedup + auto-resolve on map](#2026-06-07--new_spool-conflicts-dedup--auto-resolve-on-map)
+- [2026-06-06 — Conflict cards carry snapshot-derived identity](#2026-06-06--conflict-cards-carry-snapshot-derived-identity)
+- [2026-06-05 — Tare excluded from variant-prop conflicts; conflict badges name specific fields](#2026-06-05--tare-excluded-from-variant-prop-conflicts-conflict-badges-name-specific-fields)
+- [2026-06-05 — Conflicts page: client-side type filter](#2026-06-05--conflicts-page-client-side-type-filter)
+- [2026-06-05 — Upstream deletion detection → conflict queue](#2026-06-05--upstream-deletion-detection--conflict-queue)
+
+### OpenTag / OpenPrintTag
+
+- [2026-06-24 — OpenPrintTag drying time is minutes end-to-end](#2026-06-24--openprinttag-drying-time-is-minutes-end-to-end-issue-27) — #27
+- [2026-06-21 — OpenPrintTag material settings sync as TYPED Spoolman extras → FDB first-class fields](#2026-06-21--openprinttag-material-settings-sync-as-typed-spoolman-extras--fdb-first-class-fields)
+- [2026-06-19 — "Missing values" report audits OpenPrintTag, not the user's spools](#2026-06-19--missing-values-report-audits-openprinttag-not-the-users-spools)
+- [2026-06-19 — OpenPrintTag dataset: ingest the full supported schema (material + packages + containers)](#2026-06-19--openprinttag-dataset-ingest-the-full-supported-schema-material--packages--containers)
+- [2026-06-18 — OpenTag dataset: gate the heavy tarball download behind a commit-SHA check](#2026-06-18--opentag-dataset-gate-the-heavy-tarball-download-behind-a-commit-sha-check)
+- [2026-06-18 — OpenTag matching: offload CPU off the event loop + cache the last result](#2026-06-18--opentag-matching-offload-cpu-off-the-event-loop--cache-the-last-result)
+- [2026-06-18 — OpenTag inline unmatch/re-match: scoped FDB settings{} *removal* exception](#2026-06-18--opentag-inline-unmatchre-match-scoped-fdb-settings-removal-exception)
+- [2026-06-18 — OpenTag completeness report: assess the raw OPT record, not the lossy field path](#2026-06-18--opentag-completeness-report-assess-the-raw-opt-record-not-the-lossy-field-path)
+- [2026-06-18 — OpenTag Cleanup: toolbar view-switch in component state; Reprocess moves to banner](#2026-06-18--opentag-cleanup-toolbar-view-switch-in-component-state-reprocess-moves-to-banner)
+- [2026-06-13 — Debug: added POST /api/debug/clear-spoolman-opentag-ids](#2026-06-13--debug-added-post-apidebugclear-spoolman-opentag-ids)
+- [2026-06-13 — Remove `opentag_color_keywords` user-override feature](#2026-06-13--remove-opentag_color_keywords-user-override-feature)
+- [2026-06-13 — OpenTag apply: re-point this filament to exact-named canonical vendor](#2026-06-13--opentag-apply-re-point-this-filament-to-exact-named-canonical-vendor)
+- [2026-06-11 — OpenTag matcher v2.1: soften hard gates + capture fill-composite descriptors](#2026-06-11--opentag-matcher-v21-soften-hard-gates--capture-fill-composite-descriptors)
+- [2026-06-11 — OpenTag matcher v2: structured token decomposition + mined lexicons](#2026-06-11--opentag-matcher-v2-structured-token-decomposition--mined-lexicons)
+- [2026-06-11 — OpenTag "ignore future updates" flag stored as Spoolman extra field](#2026-06-11--opentag-ignore-future-updates-flag-stored-as-spoolman-extra-field)
+- [2026-06-11 — OpenTag dataset: direct GitHub tarball fetch (no FDB proxy)](#2026-06-11--opentag-dataset-direct-github-tarball-fetch-no-fdb-proxy)
+- [2026-06-08 — OpenTag matching fixes + unmatched-UI enrichment](#2026-06-08--opentag-matching-fixes--unmatched-ui-enrichment)
+- [2026-06-08 — Single-hex OpenTag entries use color_hex; multi_color_hexes requires ≥2](#2026-06-08--single-hex-opentag-entries-use-color_hex-multi_color_hexes-requires-2)
+- [2026-06-08 — OpenTag no-match reason taxonomy + group collapse UX](#2026-06-08--opentag-no-match-reason-taxonomy--group-collapse-ux)
+- [2026-06-07 — Wizard OpenPrintTag flag + filter (`db8a4c6`, `4b5db3f`)](#2026-06-07--wizard-openprinttag-flag--filter-db8a4c6-4b5db3f)
+- [2026-06-07 — OPT stamped badge on OpenTag Cleanup cards (`7eb5e98`)](#2026-06-07--opt-stamped-badge-on-opentag-cleanup-cards-7eb5e98)
+- [2026-06-07 — OpenTag cleanup lets the user pick from best + top-5 alternates; each candidate carries its own field comparison](#2026-06-07--opentag-cleanup-lets-the-user-pick-from-best--top-5-alternates-each-candidate-carries-its-own-field-comparison)
+- [2026-06-07 — OpenTag cleanup: reviewable Manufacturer field reassigns Spoolman vendor via find-or-create](#2026-06-07--opentag-cleanup-reviewable-manufacturer-field-reassigns-spoolman-vendor-via-find-or-create)
+- [2026-06-07 — Settings `opentag_vendor_aliases` maps Spoolman vendor names to OpenTag brand names](#2026-06-07--settings-opentag_vendor_aliases-maps-spoolman-vendor-names-to-opentag-brand-names)
+- [2026-06-07 — OpenTag review: exact-UUID match, existing identity display, reviewable name](#2026-06-07--opentag-review-exact-uuid-match-existing-identity-display-reviewable-name)
+- [2026-06-07 — OpenTag secondary_colors recovered from raw tarball; multicolor mismatch flag](#2026-06-07--opentag-secondary_colors-recovered-from-raw-tarball-multicolor-mismatch-flag)
+- [2026-06-07 — OpenTag apply no longer writes multi_color_direction when secondaryColors is empty](#2026-06-07--opentag-apply-no-longer-writes-multi_color_direction-when-secondarycolors-is-empty)
+- [2026-06-07 — OpenTag apply self-creates required extra fields; ensure_extra_fields is per-section resilient](#2026-06-07--opentag-apply-self-creates-required-extra-fields-ensure_extra_fields-is-per-section-resilient)
+- [2026-06-07 — filamentdb_material_tags stored as CSV string in Spoolman text extra field](#2026-06-07--filamentdb_material_tags-stored-as-csv-string-in-spoolman-text-extra-field)
+- [2026-06-06 — OpenTag matcher: arrangement-from-tags, polymer-family gate, finish-aware scoring](#2026-06-06--opentag-matcher-arrangement-from-tags-polymer-family-gate-finish-aware-scoring)
+- [2026-06-06 — OpenTag matching hard-filters by color profile; apply sets multi_color_direction + handles empty primary](#2026-06-06--opentag-matching-hard-filters-by-color-profile-apply-sets-multi_color_direction--handles-empty-primary)
+- [2026-06-06 — OpenTag matcher: color NAME is the key within-brand/material discriminator; hex demoted](#2026-06-06--opentag-matcher-color-name-is-the-key-within-brandmaterial-discriminator-hex-demoted)
+- [2026-06-06 — OpenTag cleanup: instant dataset banner + staged fetch/match progress](#2026-06-06--opentag-cleanup-instant-dataset-banner--staged-fetchmatch-progress)
+- [2026-06-06 — OpenTag matching pre-filters candidates by normalized brand for performance; progress logged](#2026-06-06--opentag-matching-pre-filters-candidates-by-normalized-brand-for-performance-progress-logged)
+- [2026-06-06 — FDB /api/openprinttag returns OPTDatabase wrapper; bridge extracts .materials; cache self-heals malformed data](#2026-06-06--fdb-apiopenprinttag-returns-optdatabase-wrapper-bridge-extracts-materials-cache-self-heals-malformed-data)
+- [2026-06-06 — OpenTag cleanup API renamed to /openprinttag/*; 120 s fetch timeout; structured fetch errors](#2026-06-06--opentag-cleanup-api-renamed-to-openprinttag-120-s-fetch-timeout-structured-fetch-errors)
+- [2026-06-06 — OpenTag cleanup tool + scoped FDB settings-bag exception](#2026-06-06--opentag-cleanup-tool--scoped-fdb-settings-bag-exception)
+- [2026-06-06 — OpenPrintTag finish-tag model adopted; `filamentdb_material_tags` Spoolman extra field](#2026-06-06--openprinttag-finish-tag-model-adopted-filamentdb_material_tags-spoolman-extra-field)
+
+### Backups
+
+- [2026-07-02 — Backup boundary excludes auth secrets and internal state](#2026-07-02--backup-boundary-excludes-auth-secrets-and-internal-state-github-57) — #57
+- [2026-06-23 — Scheduled nightly backups: bridge-state + FDB snapshot only, on by default](#2026-06-23--scheduled-nightly-backups-bridge-state--fdb-snapshot-only-on-by-default-issue-5) — #5
+- [2026-06-18 — BackupSafetyDialog made unconditionally friendly; debug clears moved to DebugConfirmDialog](#2026-06-18--backupsafetydialog-made-unconditionally-friendly-debug-clears-moved-to-debugconfirmdialog)
+- [2026-06-11 — Backup export/import fidelity: `is_synthetic_parent`, `conflict_type`, and auth secrets](#2026-06-11--backup-exportimport-fidelity-is_synthetic_parent-conflict_type-and-auth-secrets)
+- [2026-06-08 — Filament DB backup API correction](#2026-06-08--filament-db-backup-api-correction)
+- [2026-06-07 — Pre-write backup safeguard dialog gates destructive actions](#2026-06-07--pre-write-backup-safeguard-dialog-gates-destructive-actions)
+
+### Mobile & labels
+
+- [2026-06-24 — Configurable mobile-scan auth: `mobile_session_days` (0 = public, N = login TTL)](#2026-06-24--configurable-mobile-scan-auth-mobile_session_days-0--public-n--login-ttl)
+- [2026-06-23 — Mobile updates & labels (phase 3 — LabelForge label printing)](#2026-06-23--mobile-updates--labels-phase-3--labelforge-label-printing)
+- [2026-06-23 — Mobile updates & labels (phase 2 frontend mobile flow)](#2026-06-23--mobile-updates--labels-phase-2-frontend-mobile-flow)
+- [2026-06-23 — Mobile updates & labels (phase 1 backend foundation)](#2026-06-23--mobile-updates--labels-phase-1-backend-foundation)
+
+### Security & auth
+
+- [2026-07-02 — Proxy-aware Secure cookie flag + response security headers](#2026-07-02--proxy-aware-secure-cookie-flag--response-security-headers-github-58) — #58
+- [2026-06-09 — Single-account auth + API token + first-login required-settings gate](#2026-06-09--single-account-auth--api-token--first-login-required-settings-gate)
+
+### Locations & lifecycle
+
+- [2026-06-24 — Sync spool location in the continuous engine, compared by name (`location_sync`)](#2026-06-24--sync-spool-location-in-the-continuous-engine-compared-by-name-location_sync-github-29) — #29
+- [2026-06-17 — Archive/retire to sync bidirectionally for already-synced spools (FR-21 symmetric, design agreed)](#2026-06-17--archiveretire-to-sync-bidirectionally-for-already-synced-spools-fr-21-symmetric-design-agreed)
+- [2026-05-31 — FDB location semantics: locationId (ObjectId reference), pre-creation required](#2026-05-31--fdb-location-semantics-locationid-objectid-reference-pre-creation-required)
+
+### Multicolor & filament data
+
+- [2026-06-17 — Synced Records FDB color: capture a display hex for every mapped filament](#2026-06-17--synced-records-fdb-color-capture-a-display-hex-for-every-mapped-filament-github-2) — #2
+- [2026-06-08 — multicolor writes always include multi_color_direction (Spoolman 422 fix)](#2026-06-08--multicolor-writes-always-include-multi_color_direction-spoolman-422-fix)
+- [2026-06-07 — Spoolman multicolor: `multi_color_hexes` only; `color_hex` never set for multicolor](#2026-06-07--spoolman-multicolor-multi_color_hexes-only-color_hex-never-set-for-multicolor)
+- [2026-06-07 — Color-name tokens split on non-alphanumeric; multicolor descriptor noise dropped](#2026-06-07--color-name-tokens-split-on-non-alphanumeric-multicolor-descriptor-noise-dropped)
+- [2026-06-07 — PLA+/grade modeling: base polymer + grade in name; no material guard (`memory/pla-plus-modeling-decision.md`)](#2026-06-07--plagrade-modeling-base-polymer--grade-in-name-no-material-guard-memorypla-plus-modeling-decisionmd)
+- [2026-06-06 — Filament cost sync: spool-price-first, filament fallback; matprop SoT; snapshot merge](#2026-06-06--filament-cost-sync-spool-price-first-filament-fallback-matprop-sot-snapshot-merge)
+- [2026-05-31 — Structured multicolor sync supersedes the colorName projection](#2026-05-31--structured-multicolor-sync-supersedes-the-colorname-projection)
+- [2026-05-30 — Multicolor filament mapping (Spoolman ↔ Filament DB)](#2026-05-30--multicolor-filament-mapping-spoolman--filament-db)
+
+### UI, CI & infrastructure
+
+- [2026-06-22 — Changelog archiving is summarize-on-archive (release-prep-and-cut v1.1.0)](#2026-06-22--changelog-archiving-is-summarize-on-archive-release-prep-and-cut-v110)
+- [2026-06-21 — CI is push-only; CodeQL is PR-gated (no dual push+PR triggers)](#2026-06-21--ci-is-push-only-codeql-is-pr-gated-no-dual-pushpr-triggers)
+- [2026-06-19 — CodeQL log-injection FPs are int path params, not `scrub`; no model pack](#2026-06-19--codeql-log-injection-fps-are-int-path-params-not-scrub-no-model-pack)
+- [2026-06-19 — Defer the per-minor CHANGELOG archive (deviation from release-prep-and-cut)](#2026-06-19--defer-the-per-minor-changelog-archive-deviation-from-release-prep-and-cut)
+- [2026-06-17 — Dashboard counts: spools vs filaments are independent; break out master filaments](#2026-06-17--dashboard-counts-spools-vs-filaments-are-independent-break-out-master-filaments-github-3) — #3
+- [2026-06-11 — HelpTip component for in-place UI help](#2026-06-11--helptip-component-for-in-place-ui-help)
+- [2026-06-11 — In-app docs viewer at /docs/:slug](#2026-06-11--in-app-docs-viewer-at-docsslug)
+- [2026-06-11 — MappingRow carries `conflict_id`; Synced Records deep-links to Conflicts](#2026-06-11--mappingrow-carries-conflict_id-synced-records-deep-links-to-conflicts)
+- [2026-06-10 — Debug: added POST /api/debug/full-reset](#2026-06-10--debug-added-post-apidebugfull-reset)
+- [2026-06-09 — Light/dark/system theme infrastructure](#2026-06-09--lightdarksystem-theme-infrastructure)
+- [2026-06-09 — Version display, GitHub update check, dev channel marker](#2026-06-09--version-display-github-update-check-dev-channel-marker)
+- [2026-06-08 — gated Debug mode with reset tools for clean re-testing](#2026-06-08--gated-debug-mode-with-reset-tools-for-clean-re-testing)
+- [2026-06-08 — Browser-local timestamp rendering (`d22cad8`)](#2026-06-08--browser-local-timestamp-rendering-d22cad8)
+- [2026-06-08 — Sync-log windows view + `DELETE /sync-log` (`7b0361e`)](#2026-06-08--sync-log-windows-view--delete-sync-log-7b0361e)
+- [2026-06-08 — Synced Records enrichment: multicolor, weight, empty, conflict deep-link (`a870950`)](#2026-06-08--synced-records-enrichment-multicolor-weight-empty-conflict-deep-link-a870950)
+- [2026-06-08 — Entrypoint chown-then-gosu drop replaces static USER directive](#2026-06-08--entrypoint-chown-then-gosu-drop-replaces-static-user-directive)
+- [2026-06-08 — Container runs as non-root 1000:1000; /data chowned in image (superseded)](#2026-06-08--container-runs-as-non-root-10001000-data-chowned-in-image-superseded)
+- [2026-06-08 — docker-compose.yml ships bridge-only; full dev stack moved to docker-compose.dev.yml](#2026-06-08--docker-composeyml-ships-bridge-only-full-dev-stack-moved-to-docker-composedevyml)
+- [2026-06-03 — CI workflows, registry, and main branch protection](#2026-06-03--ci-workflows-registry-and-main-branch-protection)
+- [2026-06-01 — De-adopted the vexp-context-engine standard (sunset homelab-wide)](#2026-06-01--de-adopted-the-vexp-context-engine-standard-sunset-homelab-wide)
+- [2026-05-30 — Make docker-compose deployable + SPA route fallback](#2026-05-30--make-docker-compose-deployable--spa-route-fallback)
+- [2026-05-30 — Dashboard dry-run: SyncPreviewEntry shape and skip coverage](#2026-05-30--dashboard-dry-run-syncpreviewentry-shape-and-skip-coverage)
+- [2026-05-29 — Phase 4 Web UI: SPA scaffold, static mount, deep-link bases, hooks](#2026-05-29--phase-4-web-ui-spa-scaffold-static-mount-deep-link-bases-hooks)
+- [2026-05-28 — Canonical build-phase numbering (closes the skipped Phase 2)](#2026-05-28--canonical-build-phase-numbering-closes-the-skipped-phase-2)
+- [2026-05-28 — Deep-link routes (corrects PRD NFR-7 / CLAUDE.md)](#2026-05-28--deep-link-routes-corrects-prd-nfr-7--claudemd)
+- [2026-05-28 — Docker base images: node:22-alpine (build) + python:3.12-slim-bookworm (runtime)](#2026-05-28--docker-base-images-node22-alpine-build--python312-slim-bookworm-runtime)
+- [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
+
+<!-- decisions-topic-index-end -->
+
+
 ## 2026-07-02 — Proxy-aware Secure cookie flag + response security headers, GitHub #58
 
 **Context.** A security audit found the `fb_session` cookie's `Secure` flag was derived
