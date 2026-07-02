@@ -11,6 +11,13 @@ GitHub release.
 
 ### Security
 
+- **Full repository audit (Claude Fable 5)** — a comprehensive audit covering security
+  risks, Claude-context/token efficiency, and documentation gaps. The security fixes below
+  (backup secret boundary, proxy-aware `Secure` cookie flag + response security headers, and
+  login rate-limiting) came out of it; it also drove a large set of documentation and
+  tooling improvements (see the docs/tooling changes in this release). One item —
+  secrets stored plaintext in the local SQLite DB — was reviewed and accepted as a
+  deliberate tradeoff for the single-admin self-hosted model (see `docs/decisions.md`).
 - **Login rate-limiting added to `POST /api/auth/login`** — after 5 consecutive
   wrong-password attempts from the same client IP the endpoint returns HTTP 429 with a
   `Retry-After` header (5-minute cooldown). Tracking is per-IP (proxy-aware via
