@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.9-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.10-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,12 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.10 (2026-07-01)
+
+- **Unlink a pairing from the Synced Records page** — each expanded spool row now has an **Unlink** button (with a confirm dialog) to break the bridge's internal pairing. It's bridge-local: nothing in Filament DB or Spoolman is deleted or modified. (#40)
+- **Clearer weights in the Synced Records detail** — the expanded Weight row now labels the Spoolman value `(net)` and the Filament DB value `(gross)`, so the (legitimately different) numbers no longer look mismatched. (#55)
+- **Verified against Filament DB 1.62.0** (Spoolman 0.23.1 unchanged); minimum supported versions are unchanged.
 
 ### v0.6.9 (2026-06-30)
 

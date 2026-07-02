@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.10] — 2026-07-01
+
 ### Added
 
 - **Unlink a spool pairing directly from the Synced Records page** — each expanded spool
