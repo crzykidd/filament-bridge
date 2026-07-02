@@ -137,9 +137,9 @@ mark each line here when it ships.
   so behind a TLS proxy the cookie is never `Secure`. `labels.py:67` *does* trust
   `X-Forwarded-Proto` — inconsistent. Fix: `--proxy-headers` + small security-headers
   middleware (no CSP/XFO/HSTS today; CORS default is correctly same-origin).
-- [~] **M2** (dispatched 2026-07-02, in review) No rate-limit/lockout on
-  `/api/auth/login`. Per-IP in-memory throttle (5 attempts → 429 + Retry-After, 5-min
-  cooldown, reset on success, skipped when AUTH_ENABLED=false).
+- [x] **M2** (done 2026-07-02, #59) No rate-limit/lockout on `/api/auth/login`.
+  Per-IP in-memory throttle (5 attempts → 429 + Retry-After, 5-min cooldown, reset on
+  success, skipped when AUTH_ENABLED=false).
 - [x] **M3** (won't-fix, documented 2026-07-02) `api_token`/`labelforge_token` stored
   plaintext in SQLite and returned by `GET /api/config`. Accepted risk for a single-admin
   self-hosted LAN app — recorded in `docs/decisions.md` (2026-07-02 M3 entry). The

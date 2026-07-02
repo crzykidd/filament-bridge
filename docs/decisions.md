@@ -142,6 +142,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Security & auth
 
+- [2026-07-02 — Per-IP in-memory login rate-limiting](#2026-07-02--per-ip-in-memory-login-rate-limiting-github-59) — #59
 - [2026-07-02 — Secrets stored plaintext in SQLite is an accepted risk (M3 won't-fix)](#2026-07-02--secrets-stored-plaintext-in-sqlite-is-an-accepted-risk-m3-wont-fix)
 - [2026-07-02 — Proxy-aware Secure cookie flag + response security headers](#2026-07-02--proxy-aware-secure-cookie-flag--response-security-headers-github-58) — #58
 - [2026-06-09 — Single-account auth + API token + first-login required-settings gate](#2026-06-09--single-account-auth--api-token--first-login-required-settings-gate)
@@ -194,6 +195,28 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-07-02 — Per-IP in-memory login rate-limiting, GitHub #59
+
+**Context.** The 2026-07-02 security audit (M2) found `POST /api/auth/login` had no brute-force
+protection beyond bcrypt's work factor.
+
+**Decision.** A **per-IP, in-memory** throttle: after 5 consecutive wrong-password attempts from
+one client IP, the endpoint returns HTTP 429 + `Retry-After` for a 5-minute cooldown; a correct
+password resets the counter; the throttle is skipped entirely when `AUTH_ENABLED=false`.
+
+**Non-obvious choices.**
+- **Per-IP over global.** A single-admin app is often used from several devices; a global counter
+  would let one device with a cached wrong password lock out the admin elsewhere. The IP comes from
+  `request.client.host`, which uvicorn resolves from `X-Forwarded-For` under `--proxy-headers`.
+- **In-memory (not SQLite).** No new dependency; a restart clears it — acceptable, and a restart is
+  itself part of the documented recovery path (`AUTH_ENABLED=false` + restart).
+- **Throttle check runs BEFORE the password-exists lookup**, so a locked IP gets 429 even in the
+  `no_password_set` state (consistent, unbypassable). But **only `invalid_credentials` increments**
+  the counter — `no_password_set` does not — so first-time setup is never throttled.
+- **5-minute cooldown** over a shorter window: the de-facto standard; meaningfully slows scripted
+  brute force while a legitimate user recovers quickly.
 
 
 ## 2026-07-02 — Secrets stored plaintext in SQLite is an accepted risk (M3 won't-fix)

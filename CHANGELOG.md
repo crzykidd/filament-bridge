@@ -11,6 +11,11 @@ GitHub release.
 
 ### Security
 
+- **Login rate-limiting added to `POST /api/auth/login`** — after 5 consecutive
+  wrong-password attempts from the same client IP the endpoint returns HTTP 429 with a
+  `Retry-After` header (5-minute cooldown). Tracking is per-IP (proxy-aware via
+  `X-Forwarded-For`), in-memory, reset on success, and skipped entirely when
+  `AUTH_ENABLED=false`. Closes #59.
 - **Session cookie `Secure` flag now correct behind a TLS proxy** — `_is_https()` in
   `app/api/auth.py` previously checked only `request.url.scheme`, which uvicorn sees as
   `http` behind a TLS-terminating proxy, causing `fb_session` to be set without `Secure`.

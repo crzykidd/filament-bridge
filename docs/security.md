@@ -108,6 +108,25 @@ There is no in-app password reset. If locked out:
 Note: `change-password` and `api-token/regenerate` require an authenticated session
 when `AUTH_ENABLED=true` (a known current password alone is not sufficient).
 
+## Login rate-limiting
+
+`POST /api/auth/login` is protected by a per-IP in-memory rate-limiter:
+
+- **Threshold:** after **5 consecutive wrong-password attempts** from the same client IP,
+  the endpoint returns **HTTP 429** with a `Retry-After` header and the detail code
+  `too_many_attempts`. The correct password is also rejected during the cooldown window.
+- **Cooldown:** **5 minutes** from the moment the threshold is crossed.
+- **Reset on success:** a correct password before the threshold clears the counter for
+  that IP, so an honest user who mistyped a few times is not penalized.
+- **Per-IP scope:** tracking is per client IP (resolved from `X-Forwarded-For` when
+  behind a reverse proxy, via uvicorn `--proxy-headers`), so one device failing
+  repeatedly does not lock out the admin on a different device.
+- **In-memory only:** state lives in the Python process — a container restart clears it.
+  This is intentional: a restart is itself part of the documented lockout-recovery path
+  (`AUTH_ENABLED=false` + restart).
+- **Skipped when `AUTH_ENABLED=false`:** when auth is disabled globally, the throttle
+  is not applied (the endpoint is a no-op in that mode anyway).
+
 ## Crypto choices
 
 | Concern | Choice | Rationale |
@@ -171,6 +190,5 @@ at the TLS terminator.
 
 - Multi-user support
 - Password reset tokens / email flow
-- Account lockout after failed attempts (bcrypt cost blunts brute force)
 - Signed HTTPS enforcement (LAN deployment assumption)
 - CSRF protection (SameSite=Lax cookie + JSON-only API mitigate standard CSRF)
