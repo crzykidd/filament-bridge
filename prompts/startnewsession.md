@@ -97,21 +97,110 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.9** (mobile printer-slot AMS/MMU assignment — set/clear a spool's
-  printer slot from the mobile page, FDB-only one-way write #53; OpenTag Cleanup control
-  clarity — consolidated "Re-match", content-aware staleness, "Last matched X ago" badge #52).
-  Recent: v0.6.8 (OPT material properties — bed/chamber/preheat temps, nozzle diameter, cure
-  wavelength as Spoolman custom fields #50), v0.6.7 (orphan-spool reconcile #48), v0.6.6
-  (mobile dry-cycle log #45; stable conflict ids #44; tested-upstream baseline → Filament DB
-  1.59.3), v0.6.5 (sortable Synced Records columns #41; wizard Variances TDZ fix #42).
-- Open issues (see `docs/backlog.md`): **#47** read-only API token option, **#40** surface
-  mapping edit/unlink in Synced Records UI, **#24** Discord webhook notifications (FR-20),
-  **#25** print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync
-  batch (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), the
+- Latest release: **v0.6.10** (Unlink a spool pairing from the Synced Records page — bridge-local,
+  no upstream delete #40 *partial*; Synced Records detail Weight row now labeled (net)/(gross)
+  #55; tested-upstream baseline → Filament DB 1.62.0). Recent: v0.6.9 (mobile printer-slot AMS/MMU
+  assignment #53; OpenTag control clarity — "Re-match", content-aware staleness, freshness badge
+  #52), v0.6.8 (OPT material properties as Spoolman custom fields #50), v0.6.7 (orphan-spool
+  reconcile #48), v0.6.6 (mobile dry-cycle log #45; stable conflict ids #44).
+- Open issues (see `docs/backlog.md`): **#40** RELINK in Synced Records UI — Unlink shipped
+  (v0.6.10), relink still needs a `filament-suggestions-by-mapping` backend endpoint + ranked
+  picker (see the #40 comment); **#47** read-only API token option (needs a design call:
+  separate token vs per-token scope); **#24** Discord webhook notifications (FR-20); **#25**
+  print-history enrichment decision (FR-22, deferred). Shipped: the docs/PRD-sync batch
+  (#15–#19, #23), wizard UX (#13/#14), backup-status (#20), Tare Editor (#26), the
   conflict/mobile/orphan fixes (#44/#45/#48), OPT material-property tracking (#50), OpenTag
-  control clarity (#52), and mobile printer-slot assignment (#53).
+  control clarity (#52), mobile printer-slot assignment (#53), Synced Records Unlink (#40),
+  and net/gross weight labels (#55).
 - Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
   auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
+
+## 2026-07-02 repo audit findings (work queue — update as items ship)
+
+A three-track audit (security / token-usage / docs) on 2026-07-02 produced this
+prioritized queue. Work items **one at a time** via handoff prompts in `prompts/`;
+mark each line here when it ships.
+
+**Security — high**
+- [x] **H1** (done 2026-07-02, #57) `GET /api/backup/export` (and the nightly on-disk backup) serializes the
+  whole `BridgeConfig` table with no denylist (`api/backup.py:238` → `api/config.py:41-43`),
+  leaking `auth_secret` (cookie-signing key → session forgery), `admin_password_hash`,
+  `api_token`, `labelforge_token` in cleartext JSON.
+- [x] **H2** (done 2026-07-02, #57) `POST /api/backup/import` writes every `payload.config` key with no
+  allowlist (`api/backup.py:256-258`) — a crafted backup can overwrite
+  `admin_password_hash` / `auth_secret` (account takeover / offline cookie forgery).
+  Fix together with H1: auth material never crosses the backup boundary.
+
+**Security — medium**
+- [x] **M1** (done 2026-07-02, #58) Session cookie `Secure` flag derives from `request.url.scheme`
+  (`api/auth.py:112-113`) but uvicorn runs without `--proxy-headers` (Dockerfile CMD),
+  so behind a TLS proxy the cookie is never `Secure`. `labels.py:67` *does* trust
+  `X-Forwarded-Proto` — inconsistent. Fix: `--proxy-headers` + small security-headers
+  middleware (no CSP/XFO/HSTS today; CORS default is correctly same-origin).
+- [x] **M2** (done 2026-07-02, #59) No rate-limit/lockout on `/api/auth/login`.
+  Per-IP in-memory throttle (5 attempts → 429 + Retry-After, 5-min cooldown, reset on
+  success, skipped when AUTH_ENABLED=false).
+- [x] **M3** (won't-fix, documented 2026-07-02) `api_token`/`labelforge_token` stored
+  plaintext in SQLite and returned by `GET /api/config`. Accepted risk for a single-admin
+  self-hosted LAN app — recorded in `docs/decisions.md` (2026-07-02 M3 entry). The
+  damaging leak vector (backup export) was closed by H1.
+
+**Security — low / notes**
+- [x] **L1** (done 2026-07-02, folded into D1) `mobile_session_days=0` public mode allows unauthenticated weight/location
+  writes, printer-slot changes, inventory enumeration, and physical label prints —
+  by design, but undocumented as a security consequence (fold into D1).
+- Verified good: bcrypt+salt, timing-safe token compare, HttpOnly+SameSite=lax cookie
+  (CSRF-neutralizing), `/r/` open-redirect + SPA path-traversal defenses, no raw SQL,
+  no XSS sinks, no tokens in localStorage, non-root container, debug endpoints
+  double-gated. Deps modern.
+
+**Token usage (CLAUDE.md ~12–14k tokens/session; target ~3.5k)**
+CLAUDE.md restructure done 2026-07-02: 47,364 → 12,016 bytes (~11.8k → ~3.0k tokens, 75% cut).
+New `docs/upstream-apis.md` created + added to docs index.
+- [x] **T1** (done) Replace CLAUDE.md env-var + runtime-settings tables with a pointer to
+  `docs/configuration.md`; kept the 2 required vars + cross-ref field defaults.
+- [x] **T2** (done) Demoted "read `docs/prd.md` before writing any code" to "consult when
+  implementing a new FR".
+- [x] **T3** (done) Shrank the annotated file tree to a top-level directory map.
+- [x] **T4** (done) Sync internals: kept the hard invariants inline, point to
+  `docs/sync-model.md` for mechanics.
+- [x] **T5** (done) Moved upstream API endpoint lists + gotchas to new
+  `docs/upstream-apis.md`; kept `?limit=1000` and `?allow_archived=true` inline.
+- [x] **T6** (done) Release rules collapsed to a pointer line (`.claude/commands/release-*.md`
+  + standards.md).
+- [x] **T7** (done, fence-only) Added a "Historical / do-not-read-unprompted" section fencing
+  `prompts/done/`, `wizard-redesign.md`, `reconcile-backlog.md`, `CHANGELOG-0.*.md`, and
+  decisions.md-read-whole. **Did NOT physically move files** — they're referenced from
+  `docs/README.md`, `docs/decisions.md`, `CHANGELOG.md`, and ~8 handoff prompts; the fence
+  delivers the token savings without breaking those links.
+- [x] **T8** (done 2026-07-02) `docs/decisions.md` — prepended a 155-entry topic-grouped
+  index (11 areas) + `scripts/gen-decisions-index.py` (idempotent regen). Body byte-identical;
+  155/155 anchors resolve. NOTE: DocsViewer lacks `rehype-slug`, so in-app anchor jumps don't
+  work yet (fine on GitHub) — optional frontend follow-up to add `rehype-slug`.
+
+**Docs**
+- [x] **D1** (done 2026-07-02) `docs/security.md` stale (highest-impact doc gap): hard-coded "30-day
+  session" (now `mobile_session_days`, absent from the doc); protected-routes list
+  omits public `GET /api/version` and the `mobile_session_days=0` public scan surface.
+  README repeats the 30-day claim. Include the L1 warning here.
+- [x] **D2** (done 2026-07-02) Reconcile page — created `docs/reconcile.md` + indexed.
+- [x] **D3** (done 2026-07-02) Tare Editor — created `docs/tare-editor.md` + indexed.
+- [x] **D4** (done 2026-07-02) Added the orphan-spool re-adoption pass row to
+  `docs/sync-model.md` passes table.
+- [x] **D5** (done, absorbed by T1–T5) CLAUDE.md drift — resolved by the CLAUDE.md
+  restructure (tables → pointer to configuration.md; tree → top-level map).
+- [x] **D6** (done 2026-07-02) `docs/conflicts.md` — corrected the stale Relink claim
+  (only Unlink shipped; relink deferred).
+- [x] **D7** (done 2026-07-02) `docs/README.md` — added `backlog.md` to the index.
+- [x] Optional (done 2026-07-02): added `CONTRIBUTING.md` and `SECURITY.md`
+  (vuln-reporting). Also wired `rehype-slug` into the in-app DocsViewer so
+  decisions.md's topic-index anchors jump in-app (the T8 follow-up). Still open:
+  troubleshooting/FAQ doc (not done).
+- Verified clean: env-var docs full parity incl. defaults; CHANGELOG consistent;
+  wizard.md / mobile-updates.md / README accurate; LICENSE present.
+
+**Agreed dispatch order:** 1) H1+H2 → 2) M1 → 3) D1(+L1) → 4) CLAUDE.md restructure
+(T1–T8, absorbs D5) → 5) D2/D3/D4/D6/D7 → 6) optional M2, CONTRIBUTING/SECURITY.md.
 
 ## How to start a session
 

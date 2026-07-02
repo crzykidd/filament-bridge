@@ -15,10 +15,17 @@ Covers:
   - 401 with token when api_token_enabled=false
   - 401 with wrong token
 - required_settings_unset reports variant_parent_mode when "unset"
+- Login rate-limiter (throttle):
+  - N consecutive failures trigger 429 with Retry-After header and too_many_attempts code
+  - 429 fires even for the correct password when the IP is locked out
+  - A successful login before the threshold resets the counter
+  - AUTH_ENABLED=false is never throttled (no 429 regardless of failure count)
+  - Two different client IPs are tracked independently (per-IP design)
 """
 
 from __future__ import annotations
 
+import bcrypt
 from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
@@ -54,6 +61,18 @@ def db():
     session.commit()
     yield session
     session.close()
+
+
+@pytest.fixture(autouse=True)
+def reset_login_throttle():
+    """Clear in-memory throttle state before (and after) every test.
+
+    The throttle dict is module-level; without this fixture a failing test can
+    leave leftover state that causes the next test to receive unexpected 429s.
+    """
+    auth_module._throttle.clear()
+    yield
+    auth_module._throttle.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -377,3 +396,103 @@ def test_required_settings_unset_empty_when_mode_is_set(db):
         r = client.get("/api/config")
         assert r.status_code == 200
         assert r.json()["required_settings_unset"] == []
+
+
+# ---------------------------------------------------------------------------
+# Login rate-limiter (throttle)
+# ---------------------------------------------------------------------------
+
+_N = auth_module._MAX_ATTEMPTS  # 5 consecutive failures before lockout
+
+
+def _plant_password(db, password: str = "correct") -> None:
+    """Write a bcrypt hash directly to the DB — avoids going through the setup endpoint."""
+    set_config_value(
+        db,
+        "admin_password_hash",
+        bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(),
+    )
+    db.commit()
+
+
+def test_throttle_triggers_429_after_max_attempts(db):
+    """After N consecutive wrong-password attempts the next attempt returns 429."""
+    _plant_password(db)
+    with make_client(db) as client:
+        for _ in range(_N):
+            r = client.post("/api/auth/login", json={"password": "wrong"})
+            assert r.status_code == 401
+
+        # The (N+1)th attempt — still wrong — should be throttled
+        r = client.post("/api/auth/login", json={"password": "wrong"})
+        assert r.status_code == 429
+        body = r.json()
+        assert body["detail"]["code"] == "too_many_attempts"
+        assert "Retry-After" in r.headers
+        assert int(r.headers["Retry-After"]) > 0
+
+
+def test_throttle_blocks_correct_password_during_lockout(db):
+    """Once locked out, even the correct password is rejected with 429."""
+    _plant_password(db, "correct")
+    with make_client(db) as client:
+        for _ in range(_N):
+            client.post("/api/auth/login", json={"password": "wrong"})
+
+        r = client.post("/api/auth/login", json={"password": "correct"})
+        assert r.status_code == 429
+
+
+def test_throttle_success_resets_counter(db):
+    """A successful login before the threshold clears the counter.
+
+    After a correct password the caller can fail _N more times before locking
+    out again — demonstrating the counter was fully reset.
+    """
+    _plant_password(db, "correct")
+    with make_client(db) as client:
+        # Fail N-1 times (just under threshold)
+        for _ in range(_N - 1):
+            r = client.post("/api/auth/login", json={"password": "wrong"})
+            assert r.status_code == 401
+
+        # Successful login resets the counter
+        r = client.post("/api/auth/login", json={"password": "correct"})
+        assert r.status_code == 200
+
+        # Fail N-1 more times — still under threshold because counter was reset
+        for i in range(_N - 1):
+            r = client.post("/api/auth/login", json={"password": "wrong"})
+            assert r.status_code == 401, f"Expected 401 on attempt {i + 1} after reset, not 429"
+
+
+def test_throttle_bypassed_when_auth_disabled(db):
+    """When AUTH_ENABLED=false, failed logins never increment the throttle."""
+    _plant_password(db, "correct")
+    with make_client(db, auth_enabled=False) as client:
+        # Attempt more than _MAX_ATTEMPTS wrong passwords — should never see 429
+        for i in range(_N + 2):
+            r = client.post("/api/auth/login", json={"password": "wrong"})
+            assert r.status_code == 401, (
+                f"Expected 401 (not 429) on attempt {i + 1} with AUTH_ENABLED=false"
+            )
+
+
+def test_throttle_per_ip_independent(db):
+    """Two different client IPs are tracked independently.
+
+    IP A exhausting its quota does not affect IP B's counter.
+    """
+    _plant_password(db)
+    with make_client(db) as client:
+        # Exhaust IP A's quota
+        with patch("app.api.auth._get_client_ip", return_value="10.0.0.1"):
+            for _ in range(_N):
+                client.post("/api/auth/login", json={"password": "wrong"})
+            r = client.post("/api/auth/login", json={"password": "wrong"})
+            assert r.status_code == 429  # IP A is locked
+
+        # IP B should still get 401 (not 429) — independent counter
+        with patch("app.api.auth._get_client_ip", return_value="10.0.0.2"):
+            r = client.post("/api/auth/login", json={"password": "wrong"})
+            assert r.status_code == 401, "IP B must not be affected by IP A's lockout"

@@ -25,7 +25,7 @@ from typing import AsyncGenerator
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 
 from app import __version__
 from app.api import auth as auth_router
@@ -338,6 +338,24 @@ app = FastAPI(
     description="Bidirectional sync service between Filament DB and Spoolman",
     lifespan=_lifespan,
 )
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """Add defensive security headers to every response.
+
+    setdefault() never overwrites a header a route already set explicitly.
+    CSP is deferred: a strict policy for the Vite/React SPA + react-markdown
+    docs viewer needs care and risks breaking the app; configure at the proxy.
+    HSTS is deferred: harmful on plain-http LAN deployments; set at the TLS
+    terminator.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
+
 
 # Public: health + auth + version endpoints (no require_auth dependency)
 app.include_router(health_router.router, prefix="/api")

@@ -24,6 +24,23 @@ In **Settings → Backup**:
 This is the right tool for migrating the bridge to a new host or recovering from a
 corrupted SQLite database.
 
+### What the backup deliberately excludes
+
+Auth secrets and internal state are **not** included in any backup export (manual or
+scheduled), and are silently ignored if present in an imported file:
+
+| Excluded key | Reason |
+|---|---|
+| `auth_secret` | Cookie-signing key — exporting it would let anyone with the file forge session cookies |
+| `admin_password_hash` | bcrypt password hash — importing it would overwrite the target instance's password |
+| `api_token` | Bridge REST API token — kept per-instance |
+| `labelforge_token` | LabelForge bearer token — external-service credential, kept per-instance |
+| `backup_last_run` / `wizard_last_run` | Per-instance run summaries — meaningless on a different instance |
+
+A restored backup therefore keeps the **target instance's own credentials** intact. If
+you are migrating to a new host and want to carry over the admin password and API token,
+reset them via Settings after the restore.
+
 ## Upstream backup proxies (one-click)
 
 These let you trigger an upstream backup without leaving the bridge UI. Each is guarded by

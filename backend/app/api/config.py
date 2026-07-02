@@ -75,6 +75,37 @@ def set_config_value(db: Session, key: str, value: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Keys excluded from the backup boundary
+# ---------------------------------------------------------------------------
+
+# Config keys that must NEVER appear in a backup export or be accepted on import.
+#
+# Auth secrets — exporting them leaks material that enables session forgery or
+# account takeover; importing them would silently overwrite the target instance's
+# own credentials with the source's:
+#   auth_secret        → itsdangerous cookie-signing key (→ offline session forgery)
+#   admin_password_hash → bcrypt password hash (→ account takeover on import)
+#   api_token          → bridge REST API bearer token
+#   labelforge_token   → LabelForge external-service bearer token
+#
+# Write-only internal-state keys — these record per-instance run summaries
+# (timestamps, artifact paths) that carry no meaning outside the originating
+# instance; restoring stale values onto a different instance is confusing and
+# valueless:
+#   backup_last_run    → summary of the last nightly backup run
+#   wizard_last_run    → summary of the last wizard execute run
+SECRET_CONFIG_KEYS: frozenset[str] = frozenset({
+    "auth_secret",
+    "admin_password_hash",
+    "api_token",
+    "labelforge_token",
+    # Internal write-only state — meaningless outside the originating instance.
+    "backup_last_run",
+    "wizard_last_run",
+})
+
+
+# ---------------------------------------------------------------------------
 # Sync-log prune helper
 # ---------------------------------------------------------------------------
 

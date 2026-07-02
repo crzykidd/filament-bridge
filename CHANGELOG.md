@@ -9,6 +9,58 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.11] — 2026-07-02
+
+### Security
+
+- **Full repository audit (Claude Fable 5)** — a comprehensive audit covering security
+  risks, Claude-context/token efficiency, and documentation gaps. The security fixes below
+  (backup secret boundary, proxy-aware `Secure` cookie flag + response security headers, and
+  login rate-limiting) came out of it; it also drove the documentation improvements listed
+  under **Documentation** below. One item — secrets stored plaintext in the local SQLite DB
+  — was reviewed and accepted as a deliberate tradeoff for the single-admin self-hosted
+  model (see `docs/decisions.md`).
+- **Login rate-limiting added to `POST /api/auth/login`** — after 5 consecutive
+  wrong-password attempts from the same client IP the endpoint returns HTTP 429 with a
+  `Retry-After` header (5-minute cooldown). Tracking is per-IP (proxy-aware via
+  `X-Forwarded-For`), in-memory, reset on success, and skipped entirely when
+  `AUTH_ENABLED=false`. Closes #59.
+- **Session cookie `Secure` flag now correct behind a TLS proxy** — `_is_https()` in
+  `app/api/auth.py` previously checked only `request.url.scheme`, which uvicorn sees as
+  `http` behind a TLS-terminating proxy, causing `fb_session` to be set without `Secure`.
+  It now checks `X-Forwarded-Proto` first (mirroring the existing pattern in
+  `labels.py:_resolve_base_url`). Uvicorn is also started with `--proxy-headers
+  --forwarded-allow-ips=*` in the Dockerfile so `request.url.scheme` is correct at the
+  server layer too.
+- **Security headers added to every response** — the bridge now sets
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
+  `Referrer-Policy: same-origin` on all responses. CSP and HSTS are intentionally left to
+  the reverse proxy.
+- **Backup export/import no longer leaks or accepts auth secrets** — `GET /api/backup/export`
+  (and the nightly on-disk backup) now strip `auth_secret`, `admin_password_hash`,
+  `api_token`, and `labelforge_token` from the exported config so an exported file is not a
+  credential dump. `POST /api/backup/import` ignores those same keys if they appear in an
+  uploaded payload, so a crafted backup cannot overwrite the target instance's password or
+  session-signing key. Per-instance internal state (`backup_last_run`, `wizard_last_run`) is
+  also excluded from the backup boundary.
+
+### Documentation
+
+- **New user guides** — `docs/reconcile.md` (the read-only cross-system reconcile report)
+  and `docs/tare-editor.md` (bulk-editing empty-reel tare weight across mapped filaments),
+  both linked from the docs index.
+- **`docs/security.md` corrected and expanded** — removed the stale hard-coded "30-day
+  session" claim (session lifetime is governed by `mobile_session_days`), completed the
+  public-routes list, and added a **Mobile scan flow and public mode** section spelling out
+  exactly what `mobile_session_days=0` exposes and its LAN-only recommendation.
+- **`CONTRIBUTING.md` and `SECURITY.md` added** — contributor setup/conventions and a
+  private vulnerability-reporting policy.
+- **`docs/decisions.md` now has a topic index** at the top (with a regeneration script) so
+  the decision log is navigable; heading anchors also jump within the in-app docs viewer.
+- **Lower Claude-context usage** — `CLAUDE.md` was slimmed ~75% by moving reference material
+  (env-var tables, upstream API details) into `docs/` behind pointers, including a new
+  `docs/upstream-apis.md`.
+
 ## [0.6.10] — 2026-07-01
 
 ### Added

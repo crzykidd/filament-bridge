@@ -178,11 +178,14 @@ override should be handled individually via the per-conflict Add flow instead.
 Synced Records shows two kinds of rows:
 
 - **Spool rows** (`kind: "spool"`) — a linked Spoolman spool + Filament DB spool pair.
-  These show weight columns, relink/unlink actions, and the full detail grid when expanded.
+  These show weight columns, an **Unlink** action, and the full detail grid when expanded.
+  (Unlink only removes the bridge's internal cross-reference — it never creates, modifies, or
+  deletes any record in Filament DB or Spoolman. Re-linking from the UI is not yet available;
+  it is deferred pending a filament-suggestions-by-mapping endpoint.)
 - **Filament rows** (`kind: "filament"`) — a Spoolman filament that has a `FilamentMapping`
   but no spools yet. Common for filaments imported by the wizard before any spool is added
   in Spoolman. Displayed with a **(filament only)** hint, `—` for weight columns, and deep
-  links to each system's filament page. Relink/unlink are hidden for these rows. Once a
+  links to each system's filament page. The Unlink action is hidden for these rows. Once a
   spool appears in Spoolman the engine maps it and the row becomes a spool row on the next
   cycle.
 

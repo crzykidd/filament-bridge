@@ -9,6 +9,8 @@ Start with the top-level [README](../README.md) for what the bridge is and how t
 | [getting-started.md](getting-started.md) | Why the bridge exists, the two onboarding paths, and a first-run walkthrough of each |
 | [configuration.md](configuration.md) | Every environment variable and runtime setting |
 | [wizard.md](wizard.md) | The Bulk Import Wizard, step by step |
+| [reconcile.md](reconcile.md) | The read-only cross-system reconcile report (matched / only-in-one / ambiguous) |
+| [tare-editor.md](tare-editor.md) | Bulk-editing empty-reel tare weight across mapped filaments (writes both systems) |
 | [variant-parent-mode.md](variant-parent-mode.md) | `promote_color` vs `generic_container`, container naming, collision handling |
 | [conflicts.md](conflicts.md) | Conflict types and what each resolution actually does |
 | [opentag-cleanup.md](opentag-cleanup.md) | The OpenPrintTag matcher, review flow, and apply semantics |
@@ -23,10 +25,12 @@ Start with the top-level [README](../README.md) for what the bridge is and how t
 | Doc | What it covers |
 |---|---|
 | [sync-model.md](sync-model.md) | The sync engine: cycle anatomy, passes, snapshots, anti-ping-pong invariants, version gating |
+| [upstream-apis.md](upstream-apis.md) | Filament DB + Spoolman endpoints the bridge uses, data-model gotchas, and deep-link routes |
 | [spoolman-writes.md](spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [version-update-check.md](version-update-check.md) | Version badge, GitHub update check, dev channel builds |
 | [prd.md](prd.md) | The full product spec (functional requirements) |
-| [decisions.md](decisions.md) | The decision log — why things are the way they are |
+| [backlog.md](backlog.md) | The prioritized work queue (GitHub issues are the source of truth; this is the agreed order) |
+| [decisions.md](decisions.md) | The decision log — why things are the way they are (topic-indexed at the top) |
 
 `wizard-redesign.md` and `reconcile-backlog.md` are historical design documents kept for
 context; `decisions.md` is authoritative where they disagree.

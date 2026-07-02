@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import time
 
 import bcrypt
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
@@ -43,6 +44,83 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 _COOKIE_NAME = "fb_session"
 _DEFAULT_COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 days
 _SESSION_PAYLOAD = "admin"  # constant payload; the signature is the secret
+
+# ---------------------------------------------------------------------------
+# Login rate-limiter
+# ---------------------------------------------------------------------------
+# Per-IP in-memory throttle (vs. global) so that one device failing repeatedly —
+# e.g. a phone with a cached wrong password — does not lock out the real admin on
+# a different device. Since uvicorn is started with --proxy-headers, the ASGI
+# layer resolves request.client.host from X-Forwarded-For, giving the true
+# client IP behind a reverse proxy. A process restart clears all state, which is
+# acceptable for a single-admin self-hosted app and is itself part of the
+# documented lockout-recovery path (AUTH_ENABLED=false + restart).
+#
+# Throttle applies only to POST /api/auth/login and only when AUTH_ENABLED=true
+# (when auth is disabled the endpoint is a no-op anyway).
+
+_MAX_ATTEMPTS = 5       # consecutive wrong-password attempts before lockout
+_LOCKOUT_SECONDS = 300  # 5-minute cooldown window; deters scripted brute force
+
+
+class _ThrottleEntry:
+    """Per-IP mutable failure state (module-level, reset on process restart)."""
+
+    __slots__ = ("count", "locked_until")
+
+    def __init__(self) -> None:
+        self.count: int = 0
+        self.locked_until: float = 0.0  # monotonic timestamp; 0.0 = not locked
+
+
+# Maps client-IP string → _ThrottleEntry.  Reset between tests via fixture.
+_throttle: dict[str, _ThrottleEntry] = {}
+
+
+def _get_client_ip(request: Request) -> str:
+    """Return the proxy-aware client IP string for throttle keying.
+
+    Under uvicorn --proxy-headers the ASGI layer already resolves
+    request.client.host from X-Forwarded-For, so no manual header inspection
+    is needed here.  Falls back to "unknown" when request.client is None (e.g.
+    during unit tests that never wire a real transport).
+    """
+    return (request.client.host if request.client else "unknown") or "unknown"
+
+
+def _check_throttle(ip: str) -> None:
+    """Raise HTTP 429 with Retry-After if ip is currently locked out."""
+    entry = _throttle.get(ip)
+    if entry is None:
+        return
+    if entry.locked_until and time.monotonic() < entry.locked_until:
+        remaining = int(entry.locked_until - time.monotonic()) + 1
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "too_many_attempts",
+                "message": (
+                    f"Too many failed login attempts. "
+                    f"Try again in {remaining} second{'s' if remaining != 1 else ''}."
+                ),
+            },
+            headers={"Retry-After": str(remaining)},
+        )
+    # Lockout window has expired — the counter stays until the next
+    # successful login or another failure rearms the lock.
+
+
+def _record_failure(ip: str) -> None:
+    """Increment the consecutive-failure counter; lock out ip if threshold is reached."""
+    entry = _throttle.setdefault(ip, _ThrottleEntry())
+    entry.count += 1
+    if entry.count >= _MAX_ATTEMPTS:
+        entry.locked_until = time.monotonic() + _LOCKOUT_SECONDS
+
+
+def _record_success(ip: str) -> None:
+    """Clear throttle state for ip on a successful login."""
+    _throttle.pop(ip, None)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +188,14 @@ def _clear_session_cookie(response: Response) -> None:
 
 
 def _is_https(request: Request) -> bool:
-    return request.url.scheme == "https"
+    """Return True iff the request is (or was forwarded as) HTTPS.
+
+    Checks X-Forwarded-Proto first so the cookie Secure flag is correct behind a
+    TLS-terminating reverse proxy (where uvicorn sees the inner http:// URL).
+    Mirrors the same pattern used in labels.py:_resolve_base_url.
+    """
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    return proto == "https"
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +393,12 @@ def auth_login(
     db: Session = Depends(get_db),
 ) -> AuthStatusResponse:
     """Public — verify password; set session cookie on success."""
+    # Per-IP rate-limit: skip entirely when AUTH_ENABLED=false (login is a no-op anyway).
+    client_ip: str | None = None
+    if _settings.auth_enabled:
+        client_ip = _get_client_ip(request)
+        _check_throttle(client_ip)  # raises 429 if locked out
+
     stored_hash = get_config_value(db, "admin_password_hash", None)
     if not stored_hash:
         raise HTTPException(
@@ -317,10 +408,15 @@ def auth_login(
 
     # bcrypt.checkpw naturally provides the constant-time compare and work factor
     if not bcrypt.checkpw(payload.password.encode(), stored_hash.encode()):
+        if client_ip is not None:
+            _record_failure(client_ip)  # increment counter; may arm the lockout
         raise HTTPException(
             status_code=401,
             detail={"code": "invalid_credentials", "message": "Invalid password."},
         )
+
+    if client_ip is not None:
+        _record_success(client_ip)  # clear counter on successful login
 
     signer = _make_signer(db)
     _set_session_cookie(
