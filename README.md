@@ -457,9 +457,11 @@ Vendor-name and color-word mappings for the matcher are editable in Settings. Fu
 ## Security
 
 Authentication is **on by default**: the first visit asks you to set an admin password, after
-which the UI and API require a login (signed httpOnly session cookie, 30-day max-age). An
-optional **API token** (Settings → Security) allows machine access via
-`Authorization: Bearer <token>` or `X-API-Key`.
+which the UI and API require a login (signed httpOnly session cookie; lifetime is
+configurable via `mobile_session_days`, default 30 days). An optional **API token**
+(Settings → Security) allows machine access via `Authorization: Bearer <token>` or
+`X-API-Key`. The optional mobile scan flow can be made public with `mobile_session_days=0` —
+only do so on a trusted LAN (see [docs/security.md](docs/security.md)).
 
 Locked out? Set `AUTH_ENABLED=false`, restart, change the password in Settings → Security,
 then re-enable. The full model — crypto choices, protected routes, recovery — is in

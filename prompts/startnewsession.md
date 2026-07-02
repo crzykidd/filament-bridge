@@ -144,7 +144,7 @@ mark each line here when it ships.
   only if H1 fix doesn't feel sufficient.
 
 **Security — low / notes**
-- [ ] **L1** `mobile_session_days=0` public mode allows unauthenticated weight/location
+- [x] **L1** (done 2026-07-02, folded into D1) `mobile_session_days=0` public mode allows unauthenticated weight/location
   writes, printer-slot changes, inventory enumeration, and physical label prints —
   by design, but undocumented as a security consequence (fold into D1).
 - Verified good: bcrypt+salt, timing-safe token compare, HttpOnly+SameSite=lax cookie
@@ -174,7 +174,7 @@ mark each line here when it ships.
   index at the top (or split by area).
 
 **Docs**
-- [ ] **D1** `docs/security.md` stale (highest-impact doc gap): hard-coded "30-day
+- [x] **D1** (done 2026-07-02) `docs/security.md` stale (highest-impact doc gap): hard-coded "30-day
   session" (now `mobile_session_days`, absent from the doc); protected-routes list
   omits public `GET /api/version` and the `mobile_session_days=0` public scan surface.
   README repeats the 30-day claim. Include the L1 warning here.

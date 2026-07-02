@@ -15,23 +15,70 @@ When enabled:
    `BridgeConfig` (`admin_password_hash` key). Plaintext is never stored or logged.
 3. Subsequent visits show a **Login** screen. On success the backend sets an
    httpOnly, SameSite=Lax cookie named `fb_session` containing an itsdangerous
-   `TimestampSigner`-signed payload. The cookie is marked `Secure` only when the
-   request arrives over HTTPS (LAN deployments commonly use plain HTTP).
+   `TimestampSigner`-signed payload. The cookie is marked `Secure` when the request is
+   HTTPS — determined from `X-Forwarded-Proto` if present, else the request scheme (see
+   [Reverse proxy and TLS](#reverse-proxy-and-tls); LAN deployments commonly use plain
+   HTTP, where the cookie is correctly not `Secure`).
 4. Sessions are **stateless** — there is no sessions table or migration. The server
-   validates the signature and checks max-age (30 days) on every request.
+   validates the signature and checks max-age on every request. The lifetime is
+   **configurable via `mobile_session_days`**: when `>= 1` the cookie lives that many
+   days; when `0` (the default is `30`) it falls back to a **30-day** default. See the
+   [Mobile scan flow](#mobile-scan-flow-and-public-mode) section for what `0` also does.
 5. The signing secret (`auth_secret`) is auto-generated on first startup and persisted
    in `BridgeConfig` so sessions survive container restarts.
+6. `POST /api/auth/logout` clears the cookie and is itself public (no session needed).
 
 ## Protected routes
 
-All `/api/*` routes require authentication **except**:
+All `/api/*` routes require authentication (the global `require_auth` dependency)
+**except** the following always-public endpoints:
 - `GET /api/health`
+- `GET /api/version`
 - `GET /api/auth/status`
 - `POST /api/auth/login`
 - `POST /api/auth/setup`
+- `POST /api/auth/logout`
 
 The React SPA (`/`, `/assets/*`, and all client-side routes) is always public — the
 frontend renders the login/setup screen itself.
+
+A third group — the **mobile scan flow** (`/api/mobile/*`, `/api/labels/*`, and the
+`GET /r/{fil}/{spool}` QR redirect) — carries a *conditional* `mobile_auth` dependency
+instead of `require_auth`. It enforces the same check as every other protected route
+**unless `mobile_session_days` is `0`**, in which case those three surfaces become
+public. See the next section — this is the one place authentication can be relaxed for
+write-capable endpoints, so understand it before enabling it.
+
+## Mobile scan flow and public mode
+
+The mobile-updates & labels feature (off by default; gated by `mobile_labels_enabled`)
+is built so a phone can scan a spool's QR label and update it without a login. The auth
+behavior is governed by `mobile_session_days`:
+
+- **`mobile_session_days >= 1` (default `30`)** — the scan flow requires the normal app
+  login, exactly like the rest of the app. No auth is relaxed.
+- **`mobile_session_days = 0`** — the scan flow is **public**: `/api/mobile/*`,
+  `/api/labels/*`, and `/r/{fil}/{spool}` skip the app password entirely. The rest of the
+  app stays gated. (The `mobile_labels_enabled` 403 feature gate still applies — the
+  feature must also be turned on for anything to be reachable at all.)
+
+When public mode is enabled, anyone who can reach the port can, **without
+authenticating**, on already-mapped spools:
+
+- update spool weight (writing a usage entry to Filament DB and/or Spoolman) and change
+  its storage location (`PATCH /api/mobile/spool/{fil}/{spool}`),
+- change printer-slot (AMS/MMU) assignments (`PUT`/`DELETE .../assignment`),
+- log dry-cycle records (`POST .../dry-cycle`),
+- enumerate the mapped inventory, vendors, colors, locations, and printers
+  (`GET /api/mobile/spools`, `/locations`, `/printers`),
+- trigger a physical label print on the configured LabelForge printer
+  (`POST /api/labels/print`).
+
+These endpoints cannot delete records and only touch spools the bridge already maps, so
+the blast radius is bounded — but the writes are real. **Only enable `mobile_session_days
+= 0` when the bridge is reachable only from a trusted LAN** (or otherwise not exposed to
+the internet). If the bridge is internet-facing, keep `mobile_session_days >= 1` so the
+scan flow still requires the login.
 
 ## API token
 
@@ -65,7 +112,7 @@ when `AUTH_ENABLED=true` (a known current password alone is not sufficient).
 
 | Concern | Choice | Rationale |
 |---|---|---|
-| Session integrity | itsdangerous `TimestampSigner` (HMAC-SHA256) | Ships with Starlette; signed cookie expires via 30-day max-age |
+| Session integrity | itsdangerous `TimestampSigner` (HMAC-SHA256) | Ships with Starlette; signed cookie expires via a configurable max-age (`mobile_session_days` days, default 30) |
 | Password hashing | bcrypt (cost=12, auto-generated salt) | Industry standard for password storage; intentionally slow |
 | Secret generation | `secrets.token_urlsafe(32)` | Python stdlib CSPRNG |
 | Token comparison | `secrets.compare_digest` | Constant-time to prevent timing attacks |
