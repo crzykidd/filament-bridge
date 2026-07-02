@@ -153,25 +153,27 @@ mark each line here when it ships.
   double-gated. Deps modern.
 
 **Token usage (CLAUDE.md ~12–14k tokens/session; target ~3.5k)**
-- [ ] **T1** Replace CLAUDE.md env-var + runtime-settings tables (~4.3k tokens, 37% of
-  file) with a pointer to `docs/configuration.md` (already the superset); keep only the
-  2 required vars + cross-ref field defaults.
-- [ ] **T2** Demote "read `docs/prd.md` before writing any code" (58 KB ≈ 14.5k tokens)
-  to "consult when implementing a new FR".
-- [ ] **T3** Shrink the annotated file tree (~2k tokens, already stale) to a top-level
-  directory map.
-- [ ] **T4** Sync internals: keep the 5 hard invariants inline (net/gross; never
-  subtract usageHistory; refresh BOTH snapshots; lifecycle after weight; usage endpoint
-  not weight overwrite), point to `docs/sync-model.md` for the rest.
-- [ ] **T5** Move upstream API endpoint lists + gotchas to a new `docs/upstream-apis.md`
-  (keep `?limit=1000` and `?allow_archived=true` inline — nastiest gotchas).
-- [ ] **T6** Release-process rules are triplicated (CLAUDE.md / standards.md /
-  `.claude/commands/release-*.md`) — one pointer line in CLAUDE.md suffices.
-- [ ] **T7** Fence archives: one CLAUDE.md line that `prompts/done/` (1.4 MB) and
-  `docs/archive/` are historical, never read unprompted; move `wizard-redesign.md`,
-  `reconcile-backlog.md`, `CHANGELOG-0.x.md` to `docs/archive/`.
-- [ ] **T8** `docs/decisions.md` is 304 KB (~76k tokens/lookup) — add a dated topic
-  index at the top (or split by area).
+CLAUDE.md restructure done 2026-07-02: 47,364 → 12,016 bytes (~11.8k → ~3.0k tokens, 75% cut).
+New `docs/upstream-apis.md` created + added to docs index.
+- [x] **T1** (done) Replace CLAUDE.md env-var + runtime-settings tables with a pointer to
+  `docs/configuration.md`; kept the 2 required vars + cross-ref field defaults.
+- [x] **T2** (done) Demoted "read `docs/prd.md` before writing any code" to "consult when
+  implementing a new FR".
+- [x] **T3** (done) Shrank the annotated file tree to a top-level directory map.
+- [x] **T4** (done) Sync internals: kept the hard invariants inline, point to
+  `docs/sync-model.md` for mechanics.
+- [x] **T5** (done) Moved upstream API endpoint lists + gotchas to new
+  `docs/upstream-apis.md`; kept `?limit=1000` and `?allow_archived=true` inline.
+- [x] **T6** (done) Release rules collapsed to a pointer line (`.claude/commands/release-*.md`
+  + standards.md).
+- [x] **T7** (done, fence-only) Added a "Historical / do-not-read-unprompted" section fencing
+  `prompts/done/`, `wizard-redesign.md`, `reconcile-backlog.md`, `CHANGELOG-0.*.md`, and
+  decisions.md-read-whole. **Did NOT physically move files** — they're referenced from
+  `docs/README.md`, `docs/decisions.md`, `CHANGELOG.md`, and ~8 handoff prompts; the fence
+  delivers the token savings without breaking those links.
+- [ ] **T8** `docs/decisions.md` is 304 KB (~76k tokens/lookup) — add a dated topic index at
+  the top (or split by area). STILL PENDING — separate follow-up (fence line already tells
+  agents to search it, not read it whole).
 
 **Docs**
 - [x] **D1** (done 2026-07-02) `docs/security.md` stale (highest-impact doc gap): hard-coded "30-day

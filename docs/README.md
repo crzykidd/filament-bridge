@@ -23,6 +23,7 @@ Start with the top-level [README](../README.md) for what the bridge is and how t
 | Doc | What it covers |
 |---|---|
 | [sync-model.md](sync-model.md) | The sync engine: cycle anatomy, passes, snapshots, anti-ping-pong invariants, version gating |
+| [upstream-apis.md](upstream-apis.md) | Filament DB + Spoolman endpoints the bridge uses, data-model gotchas, and deep-link routes |
 | [spoolman-writes.md](spoolman-writes.md) | Every field the bridge writes to Spoolman, and when |
 | [version-update-check.md](version-update-check.md) | Version badge, GitHub update check, dev channel builds |
 | [prd.md](prd.md) | The full product spec (functional requirements) |
