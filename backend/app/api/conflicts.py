@@ -477,6 +477,7 @@ async def import_conflict_record(
                 db, cycle_id, spoolman, filamentdb,
                 fdb_fil_id,
                 precision=precision,
+                dry_run=payload.dry_run,
             )
             direction = "filamentdb_to_spoolman"
     except HTTPException:
