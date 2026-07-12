@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.12] — 2026-07-12
+
 ### Changed
 
 - **Verified against Filament DB 1.66.1 and Spoolman 0.24.0** — the "latest tested

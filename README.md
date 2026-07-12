@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.11-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.12-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,20 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.12 (2026-07-12)
+
+- **Fixed: importing a Filament DB master + variant into Spoolman** — a fresh
+  Filament DB → Spoolman import no longer fails with `422 Unprocessable Entity`. The
+  bridge now sends Spoolman's required `density`/`diameter` (defaulting to 1.24 / 1.75 mm
+  when Filament DB leaves them unset), and synthetic parent "master" records are skipped
+  instead of being pushed to Spoolman's flat model. (#61)
+- **Fixed: auto-sync erroring when a filament's density/diameter is unset** — the
+  material-scalar sync no longer tries to write a `null` into Spoolman's required
+  `density`/`diameter` fields (which 422'd every cycle); it leaves Spoolman's valid value
+  untouched. (#62)
+- **Verified against Filament DB 1.66.1 and Spoolman 0.24.0** — the latest-tested-upstreams
+  baseline moved up; no bridge-affecting API changes. Minimum supported versions unchanged.
 
 ### v0.6.11 (2026-07-02)
 
