@@ -9,6 +9,18 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **FDB→Spoolman import of a master + variant no longer fails with HTTP 422.** Two
+  problems in the `filamentdb` import direction: (1) the Spoolman create-filament payload
+  omitted `diameter` and dropped `density` when unset, but Spoolman *requires* both
+  (`> 0`) — the bridge now substitutes the standard FDM defaults (density 1.24, diameter
+  1.75) when FDB leaves them unset, with real FDB values still winning; and (2) synthetic
+  container/parent masters (`hasVariants`) were being sent to Spoolman (a master carries no
+  material/density/diameter → 422) and spuriously tripped the tare gate — masters are now
+  excluded from both the tare gate and the create loop and logged as `skipped`, since only
+  their variants sync to Spoolman's flat model. Fixes #61.
+
 ## [0.6.11] — 2026-07-02
 
 ### Security
