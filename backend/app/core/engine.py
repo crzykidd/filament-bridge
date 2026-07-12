@@ -1337,6 +1337,12 @@ MATERIAL_PROP_SCALAR_PAIRS = [
     ("net_filament_weight", "netFilamentWeight", "weight", _norm_float2),
 ]
 
+# Spoolman requires these two filament fields to be present and > 0 (POST and PATCH
+# both reject null with a 422). FDB frequently leaves them unset — diameter especially —
+# so an FDB→SM push of a None value must be skipped rather than clobbering SM's valid
+# value (and erroring). The other scalars (material/spool_weight/weight) are nullable.
+_SM_REQUIRED_SCALAR_FIELDS = frozenset({"density", "diameter"})
+
 
 async def _sync_material_props(
     db: Session,
@@ -1739,6 +1745,34 @@ async def _sync_material_scalars(
             if action == SyncAction.PUSH_FDB_TO_SM:
                 # FDB→SM — write to the native SM filament field.  No master concern:
                 # the SM side is flat; any resolved (inherited) FDB value is valid.
+                #
+                # Guard: Spoolman *requires* density and diameter (> 0) and rejects a
+                # null with a 422.  FDB frequently leaves them unset, so never clobber
+                # SM's valid value with None — skip the write and baseline the observed
+                # state so we don't retry (and re-error) every cycle.  A later real FDB
+                # value still propagates (fdb_changed fires again).
+                if fdb_now is None and sm_field in _SM_REQUIRED_SCALAR_FIELDS:
+                    logger.info(
+                        "Cycle %s: skip %s FDB→SM for SM filament %s — FDB value is unset "
+                        "and Spoolman requires %s (> 0); left SM value untouched",
+                        cycle_id, label, m.spoolman_filament_id, sm_field,
+                    )
+                    if not dry_run:
+                        _store(sm_now, fdb_now)
+                    else:
+                        result.preview.append({
+                            "action": "skip", "entity_type": "filament",
+                            "direction": "filamentdb_to_spoolman", "label": label_name,
+                            "field": label, "old": sm_now, "new": None,
+                            "reason": (
+                                f"FDB {label} is unset — Spoolman requires it (> 0), "
+                                "so SM's value is left untouched"
+                            ),
+                            "spoolman_id": m.spoolman_filament_id,
+                            "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                        })
+                    result.skipped += 1
+                    continue
                 if not dry_run:
                     try:
                         await spoolman.update_filament(m.spoolman_filament_id, {sm_field: fdb_now})

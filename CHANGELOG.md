@@ -20,6 +20,12 @@ GitHub release.
   material/density/diameter → 422) and spuriously tripped the tare gate — masters are now
   excluded from both the tare gate and the create loop and logged as `skipped`, since only
   their variants sync to Spoolman's flat model. Fixes #61.
+- **Auto-sync no longer errors when an FDB filament's `density`/`diameter` is unset.** The
+  material-scalar pass could PATCH a `null` into Spoolman's `density`/`diameter` (which
+  Spoolman requires to be `> 0`), 422-ing every cycle. It now skips pushing a `None` into
+  those required fields — SM's valid value is left untouched and a later real FDB value
+  still propagates. The nullable scalars (`material`/`spool_weight`/`weight`) are
+  unaffected. Fixes #62.
 
 ## [0.6.11] — 2026-07-02
 
