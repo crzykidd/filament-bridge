@@ -9,6 +9,45 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.12] — 2026-07-12
+
+### Changed
+
+- **Verified against Filament DB 1.66.1 and Spoolman 0.24.0** — the "latest tested
+  upstreams" baseline moved from Filament DB 1.62.0 / Spoolman 0.23.1 to Filament DB 1.66.1 /
+  Spoolman 0.24.0. Spoolman 0.24.0 brings no bridge-affecting REST changes: its WebSocket
+  "omit unset fields instead of null" change doesn't apply (the bridge polls REST, not the
+  WS), `allow_archived` is unchanged on `GET /api/v1/spool`, and the rest is
+  UI/deps/packaging/i18n. Filament DB releases 1.63.0–1.66.1
+  brought no bridge-affecting API changes: 1.63.0 added an optional `date` on the usage
+  endpoint (the bridge already sends today's `YYYY-MM-DD`, which satisfies the new
+  calendar-day + no-future-date rules); 1.64.0's spool/snapshot write-hardening leaves the
+  bridge's `label`/`totalWeight`/`retired`/`locationId` payloads intact and its
+  variant-inheritance round-trip fix only makes the `inherited_fields` the engine reads
+  more reliable; 1.64.1/1.64.2 (NFC), 1.65.0 (date format), 1.66.0 (number format), and
+  1.66.1 (`POST /api/spools/import` size cap) touch UI/display or endpoints the bridge does
+  not use (machine-readable API output is explicitly unchanged). Contracts confirmed against
+  a live 1.66.1 instance. Minimum supported versions are unchanged (FDB 1.33.0 /
+  Spoolman 0.22.0).
+
+### Fixed
+
+- **FDB→Spoolman import of a master + variant no longer fails with HTTP 422.** Two
+  problems in the `filamentdb` import direction: (1) the Spoolman create-filament payload
+  omitted `diameter` and dropped `density` when unset, but Spoolman *requires* both
+  (`> 0`) — the bridge now substitutes the standard FDM defaults (density 1.24, diameter
+  1.75) when FDB leaves them unset, with real FDB values still winning; and (2) synthetic
+  container/parent masters (`hasVariants`) were being sent to Spoolman (a master carries no
+  material/density/diameter → 422) and spuriously tripped the tare gate — masters are now
+  excluded from both the tare gate and the create loop and logged as `skipped`, since only
+  their variants sync to Spoolman's flat model. Fixes #61.
+- **Auto-sync no longer errors when an FDB filament's `density`/`diameter` is unset.** The
+  material-scalar pass could PATCH a `null` into Spoolman's `density`/`diameter` (which
+  Spoolman requires to be `> 0`), 422-ing every cycle. It now skips pushing a `None` into
+  those required fields — SM's valid value is left untouched and a later real FDB value
+  still propagates. The nullable scalars (`material`/`spool_weight`/`weight`) are
+  unaffected. Fixes #62.
+
 ## [0.6.11] — 2026-07-02
 
 ### Security

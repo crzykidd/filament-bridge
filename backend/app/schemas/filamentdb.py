@@ -107,6 +107,7 @@ class FDBFilament(BaseModel):
     secondaryColors: list[str] = Field(default_factory=list)
     cost: float | None = None
     density: float | None = None
+    diameter: float | None = None
     temperatures: FDBTemperatures | None = None
     spoolWeight: float | None = None
     netFilamentWeight: float | None = None

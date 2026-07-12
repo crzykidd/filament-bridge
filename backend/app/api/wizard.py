@@ -953,13 +953,29 @@ def _fdb_label(fdb: FDBFilament) -> str:
     return " ".join(p for p in parts if p)
 
 
+# Spoolman requires `density` and `diameter` (both > 0) on every filament, but FDB
+# frequently leaves them unset — diameter especially (FDB has no diameter field on the
+# list view; even the detail view is usually null). Substitute the standard FDM defaults
+# so a legitimate variant import doesn't fail with a 422 on POST /api/v1/filament.
+_SM_DEFAULT_DENSITY = 1.24   # generic PLA density (g/cm³)
+_SM_DEFAULT_DIAMETER = 1.75  # standard FDM filament diameter (mm)
+
+
 def _sm_filament_payload_from_fdb(fdb: FDBFilament, vendor_id: int | None) -> dict:
-    """Map an FDB filament onto the Spoolman create-filament body (core fields only)."""
+    """Map an FDB filament onto the Spoolman create-filament body (core fields only).
+
+    Spoolman requires `density` and `diameter` (both > 0) on every filament; FDB
+    frequently leaves them unset, so fall back to the standard FDM defaults rather
+    than omitting them (which Spoolman rejects with 422).
+    """
+    density = getattr(fdb, "density", None)
+    diameter = getattr(fdb, "diameter", None)
     payload: dict = {
         "name": fdb.name,
         "material": fdb.type,
         "color_hex": to_sm_color(fdb.color),
-        "density": fdb.density,
+        "density": density if density is not None else _SM_DEFAULT_DENSITY,
+        "diameter": diameter if diameter is not None else _SM_DEFAULT_DIAMETER,
         "spool_weight": fdb.spoolWeight,
     }
     if vendor_id is not None:
@@ -1927,6 +1943,7 @@ async def _execute_fdb_to_spoolman(
     decisions_by_sm: dict[int, dict],
     parent_of_fdb: dict[str, str],
     tare_by_fdb_spool: dict[str, float],
+    master_fdb_ids: set[str] | None = None,
     precision: int = 2,
 ) -> None:
     """Import direction "filamentdb": seed Spoolman from Filament DB.
@@ -1969,9 +1986,20 @@ async def _execute_fdb_to_spoolman(
         vendor_id_by_norm[norm] = created.id
         return created.id
 
+    master_fdb_ids = master_fdb_ids or set()
+
     for fdb_fil in fdb_filaments:
         parent_id = parent_of_fdb.get(fdb_fil.id)
         _fil_label = _fdb_label(fdb_fil)
+
+        # Synthetic/container parents (masters) never sync directly to Spoolman —
+        # SM is flat, one filament per colour, and a master carries no material/
+        # density/diameter, so creating it would 422. Its variants sync on their own.
+        if fdb_fil.id in master_fdb_ids:
+            res.add(db, "filament", "skipped",
+                    detail="parent/master — not synced directly to Spoolman",
+                    label=_fil_label, fdb_filament_id=fdb_fil.id)
+            continue
 
         # ---- resolve the Spoolman filament id (link to existing, or create) ----
         existing_map = fil_map_by_fdb.get(fdb_fil.id)
@@ -2609,6 +2637,22 @@ async def wizard_execute(
             "Could not read both systems to execute the initial sync; nothing was written.",
         )
 
+    # Synthetic/container parents (masters) never sync directly to Spoolman. In the
+    # FDB→SM direction they must be excluded from both the tare gate (a master has no
+    # spoolWeight and no spools, so it would spuriously trip "tare required") and the
+    # create loop (a master has no material/density/diameter → POST /filament 422s).
+    master_fdb_ids: set[str] = set()
+    if import_direction != "spoolman":
+        _exec_marker = _resolve_container_parent_marker(db)
+        _exec_synth_fdb_ids: set[str] = {
+            m.filamentdb_id
+            for m in db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
+        }
+        master_fdb_ids = {
+            f.id for f in fdb_filaments
+            if is_master_fdb(f, _exec_marker, _exec_synth_fdb_ids)
+        }
+
     # Tare gate: reject execute if any to-be-created filament/spool lacks a known tare.
     # This prevents the wizard from writing 200 g as a silent guess.
     if import_direction == "spoolman":
@@ -2651,6 +2695,8 @@ async def wizard_execute(
     else:
         _missing_tare_fdb: list[str] = []
         for _fdb_fil in fdb_filaments:
+            if _fdb_fil.id in master_fdb_ids:
+                continue  # masters never sync to Spoolman — no tare needed
             if _fdb_fil.spoolWeight is None:
                 # Check whether any spool of this filament has an override
                 _spool_overridden = any(
@@ -2691,6 +2737,7 @@ async def wizard_execute(
             db, res, spoolman, filamentdb,
             sm_filaments, fdb_filaments,
             decisions_by_sm, parent_of_fdb, tare_by_fdb_spool,
+            master_fdb_ids=master_fdb_ids,
             precision=precision,
         )
 

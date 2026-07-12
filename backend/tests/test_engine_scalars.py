@@ -470,6 +470,44 @@ async def test_scalar_fdb_to_sm_material_remap(db):
     fdb_client.update_filament.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_scalar_fdb_to_sm_none_required_field_skipped_not_pushed(db):
+    """FDB diameter cleared to None must NOT be PATCHed to Spoolman (it requires > 0).
+
+    Regression: pushing a null density/diameter 422s (Spoolman rejects it). The
+    pass must skip the write and leave SM's valid value untouched, refreshing the
+    baseline so it doesn't retry every cycle.
+    """
+    _add_fil_mapping(db)
+    _seed_matprop(db, direction="filamentdb_to_spoolman", policy="manual")
+
+    sm_fil = _sm_fil_scalar(diameter=1.75)                  # SM has a valid diameter
+    fdb_list = _fdb_list_scalar(diameter=None)              # FDB diameter now unset
+    fdb_detail = _fdb_detail_scalar(diameter=None, parent_id=None, inherited=[])
+
+    # Baseline: both sides previously agreed on 1.75 → FDB now "changed" to None.
+    _snap(db, "spoolman", "filament", str(SC_SM_FIL_ID), {"_mp_diameter": 1.75})
+    _snap(db, "filamentdb", "filament", SC_FDB_FIL_ID, {"_mp_diameter": 1.75})
+
+    spoolman = _fake_spoolman(filaments=[sm_fil])
+    fdb_client = _fake_fdb(filaments=[fdb_list], detail=fdb_detail)
+
+    with patch("app.core.engine._settings") as ms, \
+         patch("app.core.engine.resolve_field_map", return_value=[]):
+        _scalar_settings(ms)
+        result = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id=CYCLE_ID)
+
+    # No null diameter must ever reach Spoolman.
+    assert not any(
+        "diameter" in call.args[1] for call in spoolman.update_filament.call_args_list
+    ), f"unexpected diameter PATCH: {spoolman.update_filament.call_args_list}"
+    assert result.errors == 0
+    assert result.skipped >= 1
+    # SM's valid value stays in the baseline (not clobbered with None).
+    sm_snap = _get_snap_data(db, "spoolman", "filament", str(SC_SM_FIL_ID))
+    assert sm_snap.get("_mp_diameter") == 1.75
+
+
 # ---------------------------------------------------------------------------
 # Both changed → cross_system conflict (two_way + manual)
 # ---------------------------------------------------------------------------
