@@ -13,12 +13,15 @@ variant into Spoolman failed with HTTP 422 on POST /api/v1/filament:
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from app.api.config import set_config_value
 from app.api.wizard import (
     _SM_DEFAULT_DENSITY,
     _SM_DEFAULT_DIAMETER,
     _sm_filament_payload_from_fdb,
 )
+from app.core.single_record_import import import_single_fdb_filament
 from app.schemas.filamentdb import FDBFilament, FDBSpool
 
 from tests.test_variant_parent_mode import _client, _fake_filamentdb, _fake_spoolman
@@ -108,3 +111,66 @@ def test_execute_fdb_to_sm_skips_master_and_creates_variant(db):
                    if r["entity_type"] == "filament" and r["filamentdb_filament_id"] == "m1"]
     assert len(master_rows) == 1
     assert master_rows[0]["action"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# 3. Single-record import (Conflicts "Add") — the path that created junk masters
+#    in production: the dry-run "preview" was calling the real writer.
+# ---------------------------------------------------------------------------
+
+
+def _variant_with_spool() -> FDBFilament:
+    return FDBFilament(
+        _id="v1", name="Amolen PLA Pumpkin Orange", type="PLA",
+        density=1.27, color="#F26A1B", spoolWeight=150, parentId="m1",
+        spools=[FDBSpool(_id="s1", totalWeight=650.0)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_import_dry_run_writes_nothing_but_counts(db):
+    """A conflict-import PREVIEW (dry_run) must not touch Spoolman/FDB, yet still
+    report the filament + spool it would create (incl. the spool count)."""
+    sm = _fake_spoolman(filaments=[], spools=[])
+    fdb = _fake_filamentdb(filaments=[_variant_with_spool()])
+
+    res = await import_single_fdb_filament(db, "cyc", sm, fdb, "v1", dry_run=True)
+
+    # Not a single upstream write may happen during a preview.
+    sm.create_filament.assert_not_called()
+    sm.create_spool.assert_not_called()
+    sm.create_vendor.assert_not_called()
+    fdb.update_spool.assert_not_called()
+    # ...but the plan is still counted: 1 filament + 1 spool.
+    assert res.failed == 0
+    assert sum(1 for r in res.records if r.entity_type == "filament" and r.action == "created") == 1
+    assert sum(1 for r in res.records if r.entity_type == "spool" and r.action == "created") == 1
+
+
+@pytest.mark.asyncio
+async def test_single_import_real_run_writes(db):
+    """A real (non-dry) single-record import DOES create in Spoolman."""
+    sm = _fake_spoolman(filaments=[], spools=[])
+    fdb = _fake_filamentdb(filaments=[_variant_with_spool()])
+
+    res = await import_single_fdb_filament(db, "cyc", sm, fdb, "v1", dry_run=False)
+
+    sm.create_filament.assert_called_once()
+    sm.create_spool.assert_called_once()
+    assert res.failed == 0
+
+
+@pytest.mark.asyncio
+async def test_single_import_master_is_skipped_not_created(db):
+    """The exact production bug: importing a master must NOT create it in Spoolman."""
+    master = FDBFilament(_id="m1", name="Prusament Ultraglow (Master)", type="PETG",
+                         hasVariants=True)
+    sm = _fake_spoolman(filaments=[], spools=[])
+    fdb = _fake_filamentdb(filaments=[master])
+
+    res = await import_single_fdb_filament(db, "cyc", sm, fdb, "m1", dry_run=False)
+
+    sm.create_filament.assert_not_called()
+    assert res.failed == 0
+    fil_rows = [r for r in res.records if r.entity_type == "filament"]
+    assert len(fil_rows) == 1 and fil_rows[0].action == "skipped"

@@ -121,16 +121,21 @@ async def import_single_fdb_filament(
     spoolman_filament_id: int | None = None,  # for "link": existing SM filament id
     tare_override: float | None = None,
     precision: int = 2,
+    dry_run: bool = False,
 ) -> "Any":  # returns _ExecResult from wizard
     """Import a single FDB filament (and its spools) into Spoolman.
 
     Calls the wizard's _execute_fdb_to_spoolman scoped to one FDB filament.
-    Returns the _ExecResult accumulator.
+    Returns the _ExecResult accumulator. When ``dry_run`` is set, no upstream
+    writes are performed (the preview counts still reflect what a real run would do).
     """
+    from app.api.config import resolve_container_parent_marker
     from app.api.wizard import (
         _ExecResult,
         _execute_fdb_to_spoolman,
     )
+    from app.core.masters import is_master_fdb
+    from app.models.mapping import FilamentMapping
 
     direction = "filamentdb_to_spoolman"
     res = _ExecResult(cycle_id=cycle_id, direction=direction)
@@ -143,6 +148,17 @@ async def import_single_fdb_filament(
         raise ValueError(f"FDB filament {fdb_filament_id} not found")
 
     fdb_filaments = [fdb_fil]
+
+    # Synthetic/container parents (masters) never sync directly to Spoolman — a
+    # master carries no material/density/diameter and Spoolman is flat (one filament
+    # per colour). Exclude it so the create path skips it instead of writing a junk
+    # parent filament (its variants sync on their own).
+    _marker = resolve_container_parent_marker(db)
+    _synth_fdb_ids = {
+        m.filamentdb_id
+        for m in db.query(FilamentMapping).filter_by(is_synthetic_parent=True).all()
+    }
+    master_fdb_ids = {f.id for f in fdb_filaments if is_master_fdb(f, _marker, _synth_fdb_ids)}
 
     # Build decisions dict: if caller supplies spoolman_filament_id → "link".
     if spoolman_filament_id is not None:
@@ -166,6 +182,8 @@ async def import_single_fdb_filament(
         db, res, spoolman, filamentdb,
         sm_filaments_all, fdb_filaments,
         decisions_by_sm, parent_of_fdb, tare_by_fdb_spool,
+        master_fdb_ids=master_fdb_ids,
         precision=precision,
+        dry_run=dry_run,
     )
     return res

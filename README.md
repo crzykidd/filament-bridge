@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.12-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.13-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,14 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.13 (2026-07-12)
+
+- **Fixed: the Conflicts "Add" preview was writing to Spoolman.** Previewing a new-filament
+  import (Filament DB → Spoolman) actually created the filament in Spoolman despite the
+  "no changes written yet" label — a follow-on from the v0.6.12 create fix. Previews are now
+  genuinely read-only, and synthetic parent "master" records are skipped instead of being
+  created as empty filaments. (#64)
 
 ### v0.6.12 (2026-07-12)
 

@@ -9,6 +9,22 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.13] — 2026-07-12
+
+### Fixed
+
+- **The Conflicts "Add" preview no longer writes to Spoolman.** Previewing a `new_filament`
+  import in the Filament DB → Spoolman direction was calling the real single-record importer
+  (a live `POST /api/v1/filament`) and only rolling back the bridge's SQLite afterwards, so
+  the upstream create persisted despite the "no changes written yet" label. (This was latent
+  until v0.6.12 made the create succeed instead of 422.) The single-record import path now
+  has a true `dry_run` mode — a preview plans the same records (so the filament/spool counts
+  stay accurate) but performs no Spoolman/Filament DB writes. Additionally, synthetic
+  container/parent **masters are now skipped** in this path (they were being created as junk
+  parent filaments in Spoolman's flat model) — only their variants sync. Fixes #64. (The
+  Spoolman → Filament DB direction has the same latent preview-writes issue, tracked
+  separately in #65.)
+
 ## [0.6.12] — 2026-07-12
 
 ### Changed

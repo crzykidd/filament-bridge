@@ -1945,8 +1945,14 @@ async def _execute_fdb_to_spoolman(
     tare_by_fdb_spool: dict[str, float],
     master_fdb_ids: set[str] | None = None,
     precision: int = 2,
+    dry_run: bool = False,
 ) -> None:
     """Import direction "filamentdb": seed Spoolman from Filament DB.
+
+    When ``dry_run`` is set, NO upstream writes are performed — the pass plans the
+    same records (so the preview counts match a real run) but never calls Spoolman
+    or Filament DB write endpoints. SQLite mapping rows may still be added; the
+    caller is expected to roll the session back.
 
     The persisted match decisions are Spoolman-keyed, so they describe `link`
     pairs (both ids) and `skip`s of *existing* Spoolman filaments. Filament DB
@@ -1982,6 +1988,8 @@ async def _execute_fdb_to_spoolman(
         norm = normalize_vendor(name)
         if norm in vendor_id_by_norm:
             return vendor_id_by_norm[norm]
+        if dry_run:
+            return -1  # would create a vendor — never write during a preview
         created = await spoolman.create_vendor({"name": name})
         vendor_id_by_norm[norm] = created.id
         return created.id
@@ -2017,10 +2025,13 @@ async def _execute_fdb_to_spoolman(
                             label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
                 else:
                     vendor_id = await _ensure_vendor(fdb_fil.vendor)
-                    created = await spoolman.create_filament(
-                        _sm_filament_payload_from_fdb(fdb_fil, vendor_id)
-                    )
-                    sm_filament_id = created.id
+                    if dry_run:
+                        sm_filament_id = -1  # planned create — no write during preview
+                    else:
+                        created = await spoolman.create_filament(
+                            _sm_filament_payload_from_fdb(fdb_fil, vendor_id)
+                        )
+                        sm_filament_id = created.id
                     res.add(db, "filament", "created",
                             label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
             except Exception as exc:
@@ -2064,24 +2075,29 @@ async def _execute_fdb_to_spoolman(
                 continue
             net_res = fdb_to_spoolman_net(fdb_spool.totalWeight or 0.0, tare, precision=precision)
             try:
-                new_sm_spool = await spoolman.create_spool({
-                    "filament_id": sm_filament_id,
-                    "remaining_weight": net_res.remaining_weight,
-                    "extra": _cross_ref_extra(fdb_fil.id, fdb_spool.id, parent_id),
-                })
-                await filamentdb.update_spool(
-                    fdb_fil.id, fdb_spool.id, {fdb_field_name: str(new_sm_spool.id)}
-                )
-                db.add(SpoolMapping(
-                    spoolman_spool_id=new_sm_spool.id,
-                    filamentdb_filament_id=fdb_fil.id,
-                    filamentdb_spool_id=fdb_spool.id,
-                    filament_mapping_id=fil_map.id,
-                ))
-                mapped_fdb_spool_ids.add(fdb_spool.id)
-                _seed_snapshots(db, new_sm_spool, fdb_spool)
+                if dry_run:
+                    # Planned spool create — no Spoolman/FDB writes during a preview.
+                    new_sm_spool_id = -1
+                else:
+                    new_sm_spool = await spoolman.create_spool({
+                        "filament_id": sm_filament_id,
+                        "remaining_weight": net_res.remaining_weight,
+                        "extra": _cross_ref_extra(fdb_fil.id, fdb_spool.id, parent_id),
+                    })
+                    new_sm_spool_id = new_sm_spool.id
+                    await filamentdb.update_spool(
+                        fdb_fil.id, fdb_spool.id, {fdb_field_name: str(new_sm_spool_id)}
+                    )
+                    db.add(SpoolMapping(
+                        spoolman_spool_id=new_sm_spool_id,
+                        filamentdb_filament_id=fdb_fil.id,
+                        filamentdb_spool_id=fdb_spool.id,
+                        filament_mapping_id=fil_map.id,
+                    ))
+                    mapped_fdb_spool_ids.add(fdb_spool.id)
+                    _seed_snapshots(db, new_sm_spool, fdb_spool)
                 res.add(db, "spool", "created", label=_spool_label,
-                        sm_spool_id=new_sm_spool.id,
+                        sm_spool_id=new_sm_spool_id,
                         fdb_filament_id=fdb_fil.id, fdb_spool_id=fdb_spool.id)
             except Exception as exc:
                 logger.error("wizard execute %s: seed Spoolman spool from FDB spool %s failed: %s",
