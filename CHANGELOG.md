@@ -9,6 +9,21 @@ GitHub release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Verified against Filament DB 1.66.1** — the "latest tested upstreams" baseline moved
+  from Filament DB 1.62.0 to 1.66.1 (Spoolman 0.23.1 unchanged). Releases 1.63.0–1.66.1
+  brought no bridge-affecting API changes: 1.63.0 added an optional `date` on the usage
+  endpoint (the bridge already sends today's `YYYY-MM-DD`, which satisfies the new
+  calendar-day + no-future-date rules); 1.64.0's spool/snapshot write-hardening leaves the
+  bridge's `label`/`totalWeight`/`retired`/`locationId` payloads intact and its
+  variant-inheritance round-trip fix only makes the `inherited_fields` the engine reads
+  more reliable; 1.64.1/1.64.2 (NFC), 1.65.0 (date format), 1.66.0 (number format), and
+  1.66.1 (`POST /api/spools/import` size cap) touch UI/display or endpoints the bridge does
+  not use (machine-readable API output is explicitly unchanged). Contracts confirmed against
+  a live 1.66.1 instance. Minimum supported versions are unchanged (FDB 1.33.0 /
+  Spoolman 0.22.0).
+
 ### Fixed
 
 - **FDB→Spoolman import of a master + variant no longer fails with HTTP 422.** Two
