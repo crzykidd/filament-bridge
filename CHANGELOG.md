@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.13] — 2026-07-12
+
 ### Fixed
 
 - **The Conflicts "Add" preview no longer writes to Spoolman.** Previewing a `new_filament`
