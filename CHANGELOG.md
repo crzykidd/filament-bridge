@@ -11,8 +11,12 @@ GitHub release.
 
 ### Changed
 
-- **Verified against Filament DB 1.66.1** — the "latest tested upstreams" baseline moved
-  from Filament DB 1.62.0 to 1.66.1 (Spoolman 0.23.1 unchanged). Releases 1.63.0–1.66.1
+- **Verified against Filament DB 1.66.1 and Spoolman 0.24.0** — the "latest tested
+  upstreams" baseline moved from Filament DB 1.62.0 / Spoolman 0.23.1 to Filament DB 1.66.1 /
+  Spoolman 0.24.0. Spoolman 0.24.0 brings no bridge-affecting REST changes: its WebSocket
+  "omit unset fields instead of null" change doesn't apply (the bridge polls REST, not the
+  WS), `allow_archived` is unchanged on `GET /api/v1/spool`, and the rest is
+  UI/deps/packaging/i18n. Filament DB releases 1.63.0–1.66.1
   brought no bridge-affecting API changes: 1.63.0 added an optional `date` on the usage
   endpoint (the bridge already sends today's `YYYY-MM-DD`, which satisfies the new
   calendar-day + no-future-date rules); 1.64.0's spool/snapshot write-hardening leaves the
