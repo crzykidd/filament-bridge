@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.14] — 2026-07-12
+
 ### Fixed
 
 - **FDB→Spoolman import no longer 400s on the spool.** The filament was being created
