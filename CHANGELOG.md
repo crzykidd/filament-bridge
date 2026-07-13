@@ -9,6 +9,22 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.14] — 2026-07-12
+
+### Fixed
+
+- **FDB→Spoolman import no longer 400s on the spool.** The filament was being created
+  without a `weight`, and Spoolman rejects a spool's `remaining_weight` unless its filament
+  has a weight set — so the filament imported but its spool failed with
+  `400 Bad Request` on `POST /api/v1/spool`. The create payload now sends `weight`, computed
+  as the **maximum** of Filament DB's `netFilamentWeight` and the largest actual net
+  (gross − tare) across the filament's spools. Using the max matters: a spool can hold more
+  than the nominal (overfilled reels), and Spoolman clamps a spool's remaining weight down to
+  the filament weight — so a too-low weight would silently lose filament. The importer also
+  **backfills a missing weight on an already-linked filament** before seeding spools, so a
+  filament an earlier (pre-fix) import left weight-less self-heals on the next run instead of
+  needing a manual unlink. Fixes #67.
+
 ## [0.6.13] — 2026-07-12
 
 ### Fixed

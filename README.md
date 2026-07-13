@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.13-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.14-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,15 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.14 (2026-07-12)
+
+- **Fixed: importing a filament into Spoolman failed on the spool with a 400.** The filament
+  was created but Spoolman rejected its spool because the filament had no `weight` set. The
+  bridge now sets the filament weight (from Filament DB's net weight, or the largest amount
+  actually on a spool — whichever is greater, so overfilled spools aren't clamped and no
+  filament is lost). A filament an earlier build imported without a weight self-heals on the
+  next import. (#67)
 
 ### v0.6.13 (2026-07-12)
 
