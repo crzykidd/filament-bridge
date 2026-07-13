@@ -45,8 +45,12 @@ search, and filter. Per row:
 - **Matched** — checked rows will be linked; uncheck to skip.
 - **Ambiguous** — pick the right Filament DB candidate, or choose create/skip.
 - **Unmatched (SM)** — checked rows will be created in Filament DB.
-- **Unmatched (FDB)** — informational; Filament DB records with no Spoolman counterpart.
-- **Master / Parent** (purple) — bridge-owned container parents; nothing to do here.
+- **Unmatched (FDB)** — in the **Filament DB → Spoolman** direction these are per-record
+  **"create in Spoolman"** picks (checkboxes start unchecked — tick the ones to import; only
+  ticked filaments are created, the rest are skipped). In the Spoolman → Filament DB
+  direction they're informational (Filament DB records with no Spoolman counterpart).
+- **Master / Parent** (purple) — bridge-owned container parents; nothing to do here (they
+  never sync to Spoolman directly — only their colour variants do).
 
 Tri-state checkboxes on the header and group rows bulk-include/exclude. **Rescan**
 re-reads both systems (e.g. after you fix something upstream) and prunes decisions for

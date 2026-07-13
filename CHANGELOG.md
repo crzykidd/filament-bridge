@@ -9,6 +9,19 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Pick which Filament DB filaments to bulk-import into Spoolman.** In the wizard's
+  Filament DB → Spoolman direction, unmatched Filament DB filaments now get a per-record
+  **"create in Spoolman"** checkbox in the Match review step (with the group/table
+  "select all" toggles), instead of every unmatched record being imported automatically.
+  This makes bulk import symmetric with the Spoolman → Filament DB direction and lets you
+  import just the filaments you want. Checkboxes start **unchecked** — tick the ones to
+  import; container/parent "masters" remain non-importable. On execute, unticked filaments
+  are logged `skipped` ("not selected for import") and never created. The single-record
+  imports (Conflicts "Add", engine auto-import) are unaffected — they still create the one
+  record they were asked to.
+
 ## [0.6.14] — 2026-07-12
 
 ### Fixed

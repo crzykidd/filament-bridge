@@ -80,13 +80,23 @@ function sortVal(r: FlatRow, col: SortCol): string | number {
 // synthetic-master, and id-less rows. This MUST be the denominator for the select-all and
 // group tri-state checkboxes so they match what bulkSet toggles; otherwise unselectable rows
 // keep the box permanently indeterminate and "select all" can only ever select, never clear.
-function isSelectable(r: FlatRow): boolean {
-  return r.status !== 'unmatched_fdb' && r.status !== 'master_fdb' && r.smId != null
+function isSelectable(r: FlatRow, isFdb: boolean): boolean {
+  if (r.status === 'master_fdb') return false
+  // Unmatched FDB filaments are selectable only in the FDB→Spoolman direction
+  // (there they're "create in Spoolman" picks); a master is never selectable.
+  if (r.status === 'unmatched_fdb') return isFdb && r.fdbId != null
+  return r.smId != null
 }
 
-function isIncluded(r: FlatRow, decisions: Record<number, MatchDecision>): boolean {
-  if (!isSelectable(r)) return false
-  const d = decisions[r.smId]
+function isIncluded(
+  r: FlatRow,
+  decisions: Record<number, MatchDecision>,
+  fdbSelected: Set<string>,
+  isFdb: boolean,
+): boolean {
+  if (!isSelectable(r, isFdb)) return false
+  if (r.status === 'unmatched_fdb') return r.fdbId != null && fdbSelected.has(r.fdbId)
+  const d = decisions[r.smId!]
   if (r.status === 'matched') return (d?.action ?? 'link') !== 'skip'
   if (r.status === 'unmatched_sm') return (d?.action ?? 'create') !== 'skip'
   if (r.status === 'ambiguous') return d?.action === 'link'
@@ -187,9 +197,12 @@ interface MRProps {
   showStatus: boolean
   setDec: (id: number, action: MatchDecision['action'], fdbId?: string | null) => void
   setDecisions: Dispatch<SetStateAction<Record<number, MatchDecision>>>
+  fdbSelectable: boolean
+  fdbChecked: boolean
+  onFdbToggle: (v: boolean) => void
 }
 
-function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps) {
+function MemberRow({ row, decision, showStatus, setDec, setDecisions, fdbSelectable, fdbChecked, onFdbToggle }: MRProps) {
   const smId = row.smId ?? 0
 
   if (row.status === 'matched') {
@@ -250,10 +263,17 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
   }
 
   if (row.status === 'unmatched_fdb' || row.status === 'master_fdb') {
+    // In the FDB→Spoolman direction, an unmatched FDB filament is a per-record
+    // "create in Spoolman" pick. Masters are never selectable.
+    const showFdbCheckbox = fdbSelectable && row.status === 'unmatched_fdb'
     return (
       <div className={`${G} py-3 items-start`}>
-        <div />
-        <span className="text-xs text-gray-300 pt-0.5">—</span>
+        {showFdbCheckbox
+          ? <TriCheckbox checked={fdbChecked} indeterminate={false} onChange={onFdbToggle} />
+          : <div />}
+        <span className={`text-xs pt-0.5 ${showFdbCheckbox && fdbChecked ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-300'}`}>
+          {showFdbCheckbox ? (fdbChecked ? 'Will create in Spoolman' : 'Skip') : '—'}
+        </span>
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <FTag f={row.fdb} side="fdb" />
           <DeepLinks filamentdbFilamentId={row.fdb?.filamentdb_filament_id} />
@@ -333,6 +353,9 @@ function MemberRow({ row, decision, showStatus, setDec, setDecisions }: MRProps)
 export default function Step3Matches({ next, prev }: WizardCtx) {
   const { data, loading, error, reload } = useApi(getWizardMatches)
   const [decisions, setDecisions] = useState<Record<number, MatchDecision>>({})
+  // FDB→Spoolman: which unmatched Filament DB filaments the user ticked to create.
+  const [fdbSelected, setFdbSelected] = useState<Set<string>>(new Set())
+  const isFdb = data?.import_direction === 'filamentdb_to_spoolman'
   const [rescanning, setRescanning] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
@@ -357,6 +380,7 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
       const init: Record<number, MatchDecision> = {}
       for (const d of data.saved_decisions) init[d.spoolman_filament_id] = d
       setDecisions(init)
+      setFdbSelected(new Set(data.saved_fdb_selection ?? []))
     } else {
       const valid = new Set([
         ...data.matched.map(p => p.spoolman.spoolman_filament_id!),
@@ -370,6 +394,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
         }
         return next
       })
+      const validFdb = new Set(data.unmatched_filamentdb.map(f => f.filamentdb_filament_id))
+      setFdbSelected(prev => new Set([...prev].filter(id => validFdb.has(id))))
     }
   }, [data])
 
@@ -449,7 +475,24 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     setDecisions(d => ({ ...d, [smId]: { spoolman_filament_id: smId, action, filamentdb_id: fdbId } }))
   }
 
+  function toggleFdb(fdbId: string, include: boolean) {
+    setFdbSelected(s => {
+      const n = new Set(s)
+      include ? n.add(fdbId) : n.delete(fdbId)
+      return n
+    })
+  }
+
   function bulkSet(rows: FlatRow[], include: boolean) {
+    // FDB→SM: fold the unmatched-FDB "create in Spoolman" picks into the same bulk toggle.
+    const fdbIds = rows.filter(r => r.status === 'unmatched_fdb' && r.fdbId != null).map(r => r.fdbId!)
+    if (fdbIds.length) {
+      setFdbSelected(s => {
+        const n = new Set(s)
+        for (const id of fdbIds) include ? n.add(id) : n.delete(id)
+        return n
+      })
+    }
     setDecisions(d => {
       const n = { ...d }
       for (const r of rows) {
@@ -487,7 +530,9 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
     if (!data) return
     setSaving(true); setSaveErr(null)
     const all = buildSaveDecisions(data, decisions)
-    try { await postWizardMatches({ decisions: all }); next() }
+    // Only send fdb_selection in the FDB→SM direction (else leave the saved value alone).
+    const body = isFdb ? { decisions: all, fdb_selection: [...fdbSelected] } : { decisions: all }
+    try { await postWizardMatches(body); next() }
     catch (e) { setSaveErr(e instanceof Error ? e.message : String(e)) }
     finally { setSaving(false) }
   }
@@ -496,8 +541,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
   if (error) return <p className="text-red-600 dark:text-red-400">{error}</p>
   if (!data) return null
 
-  const actionable = sorted.filter(isSelectable)
-  const tableTri = triState(actionable.map(r => isIncluded(r, decisions)))
+  const actionable = sorted.filter(r => isSelectable(r, isFdb))
+  const tableTri = triState(actionable.map(r => isIncluded(r, decisions, fdbSelected, isFdb)))
 
   const rescanButton = (
     <button onClick={handleRescan} disabled={rescanning || (loading && !saving)}
@@ -652,8 +697,8 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
         {groups.map(([gKey, rows]) => {
           const isStatusGrouping = groupBy === 'status'
           const gStatus = isStatusGrouping ? gKey as RowStatus : null
-          const actionableInGroup = rows.filter(isSelectable)
-          const gTri = triState(actionableInGroup.map(r => isIncluded(r, decisions)))
+          const actionableInGroup = rows.filter(r => isSelectable(r, isFdb))
+          const gTri = triState(actionableInGroup.map(r => isIncluded(r, decisions, fdbSelected, isFdb)))
           const ambUnresolved = rows.filter(
             r => r.status === 'ambiguous' && decisions[r.smId!]?.action !== 'link'
           ).length
@@ -706,6 +751,9 @@ export default function Step3Matches({ next, prev }: WizardCtx) {
                       showStatus={!isStatusGrouping}
                       setDec={setDec}
                       setDecisions={setDecisions}
+                      fdbSelectable={isFdb}
+                      fdbChecked={r.fdbId != null && fdbSelected.has(r.fdbId)}
+                      onFdbToggle={v => r.fdbId && toggleFdb(r.fdbId, v)}
                     />
                   ))}
                 </div>

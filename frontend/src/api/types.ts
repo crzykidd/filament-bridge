@@ -466,6 +466,8 @@ export interface WizardMatchesResponse {
   unmatched_filamentdb: FilamentRef[]
   ambiguous: AmbiguousRow[]
   saved_decisions: MatchDecision[]
+  import_direction: string
+  saved_fdb_selection: string[]
 }
 
 export interface MatchDecision {
@@ -476,6 +478,8 @@ export interface MatchDecision {
 
 export interface WizardMatchesRequest {
   decisions: MatchDecision[]
+  // FDB→Spoolman only: Filament DB filament ids the user ticked to create in Spoolman.
+  fdb_selection?: string[]
 }
 
 export interface WizardDecisionAck {
