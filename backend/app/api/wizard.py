@@ -961,12 +961,42 @@ _SM_DEFAULT_DENSITY = 1.24   # generic PLA density (g/cm³)
 _SM_DEFAULT_DIAMETER = 1.75  # standard FDM filament diameter (mm)
 
 
+def _sm_filament_weight_from_fdb(fdb: FDBFilament) -> float | None:
+    """Filament ``weight`` (SM ``weight`` ↔ FDB ``netFilamentWeight``) for a create.
+
+    Spoolman **requires the filament's ``weight`` to be set before a spool can carry
+    a ``remaining_weight``** — otherwise ``POST /api/v1/spool`` fails with 400. Spoolman
+    also derives ``used_weight = weight − remaining_weight`` and refuses a negative
+    "used", so if ``weight`` is *below* what's actually on a spool it silently clamps
+    the remaining weight down (losing real filament).
+
+    A spool can legitimately hold more than the manufacturer's nominal net (overfilled
+    reels, generous tolerances), so use the **maximum** of FDB ``netFilamentWeight`` and
+    the largest actual net on any of the filament's spools (gross − tare). That keeps the
+    filament weight high enough that no spool's remaining is ever clamped, while still
+    honouring the nominal when it's the larger value. Returns ``None`` only when nothing
+    is known (no nominal, no computable spool net) — then no spool is created anyway.
+    """
+    tare = getattr(fdb, "spoolWeight", None)
+    nets: list[float] = []
+    if tare is not None:
+        nets = [
+            s.totalWeight - tare
+            for s in getattr(fdb, "spools", []) or []
+            if getattr(s, "totalWeight", None) is not None and s.totalWeight - tare > 0
+        ]
+    candidates = [w for w in ([getattr(fdb, "netFilamentWeight", None)] + nets) if w is not None]
+    return max(candidates) if candidates else None
+
+
 def _sm_filament_payload_from_fdb(fdb: FDBFilament, vendor_id: int | None) -> dict:
     """Map an FDB filament onto the Spoolman create-filament body (core fields only).
 
     Spoolman requires `density` and `diameter` (both > 0) on every filament; FDB
     frequently leaves them unset, so fall back to the standard FDM defaults rather
-    than omitting them (which Spoolman rejects with 422).
+    than omitting them (which Spoolman rejects with 422). It also needs the filament
+    `weight` set before any spool can record a remaining_weight (else the spool
+    create 400s) — see `_sm_filament_weight_from_fdb`.
     """
     density = getattr(fdb, "density", None)
     diameter = getattr(fdb, "diameter", None)
@@ -977,6 +1007,7 @@ def _sm_filament_payload_from_fdb(fdb: FDBFilament, vendor_id: int | None) -> di
         "density": density if density is not None else _SM_DEFAULT_DENSITY,
         "diameter": diameter if diameter is not None else _SM_DEFAULT_DIAMETER,
         "spool_weight": fdb.spoolWeight,
+        "weight": _sm_filament_weight_from_fdb(fdb),
     }
     if vendor_id is not None:
         payload["vendor_id"] = vendor_id
@@ -2050,6 +2081,24 @@ async def _execute_fdb_to_spoolman(
             db.add(fil_map)
             db.flush()
             fil_map_by_fdb[fdb_fil.id] = fil_map
+
+        # Spoolman rejects a spool's remaining_weight unless the filament has a
+        # `weight` set. A fresh create carries it (payload above), but an existing
+        # link — including one an earlier (pre-fix) import created weight-less — may
+        # not, which 400s every spool. Self-heal: fill a MISSING weight before seeding
+        # spools (never overwrite a value the user/sync already set).
+        if not dry_run and fdb_fil.spools:
+            _cur = sm_filament_by_id.get(sm_filament_id)
+            if _cur is not None and getattr(_cur, "weight", None) is None:
+                _w = _sm_filament_weight_from_fdb(fdb_fil)
+                if _w is not None:
+                    try:
+                        await spoolman.update_filament(sm_filament_id, {"weight": _w})
+                    except Exception as exc:
+                        logger.warning(
+                            "wizard execute %s: could not backfill weight on SM filament %s: %s",
+                            res.cycle_id, sm_filament_id, exc,
+                        )
 
         # ---- seed spools ----
         for fdb_spool in fdb_fil.spools:

@@ -77,6 +77,13 @@ Spoolman's extra-field system only.
   bridge matcher handles this.
 - Spoolman spool has `remaining_weight` (current net) and `used_weight` (total consumed).
   OctoPrint calls `PUT /api/v1/spool/{id}/use` which decrements remaining and increments used.
+- **A spool's `remaining_weight` can only be set if its filament has a `weight` (net full-spool
+  weight) set** — otherwise `POST /api/v1/spool` fails with `400`. Spoolman also derives
+  `used_weight = weight − remaining_weight` and refuses a negative "used", so if the filament
+  `weight` is *below* a spool's actual net it **clamps** the remaining down (losing filament).
+  When creating a Spoolman filament from FDB, send `weight` = **max**(FDB `netFilamentWeight`,
+  largest net gross−tare across its spools) — a spool can legitimately hold more than the
+  nominal (overfilled reels), so the max keeps every spool's remaining from being clamped.
 - Spoolman filament has `spool_weight` (tare) which may or may not be set. Default to ~200 g if
   missing during weight conversion.
 

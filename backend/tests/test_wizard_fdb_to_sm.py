@@ -64,6 +64,39 @@ def test_payload_preserves_real_values():
     assert payload["spool_weight"] == 180
 
 
+def test_payload_includes_weight_from_net_filament_weight():
+    """SM `weight` (needed so a spool's remaining_weight is accepted) ← FDB netFilamentWeight."""
+    fdb = FDBFilament(_id="v", name="Ultraglow Green", type="PETG", density=1.5,
+                      netFilamentWeight=800, spoolWeight=277)
+    payload = _sm_filament_payload_from_fdb(fdb, vendor_id=None)
+    assert payload["weight"] == 800
+
+
+def test_payload_weight_falls_back_to_max_spool_net():
+    """No netFilamentWeight → use the largest net (gross − tare) across the spools."""
+    fdb = FDBFilament(_id="v", name="X", type="PETG", spoolWeight=277,
+                      spools=[FDBSpool(_id="s1", totalWeight=1126)])
+    payload = _sm_filament_payload_from_fdb(fdb, vendor_id=None)
+    assert payload["weight"] == 1126 - 277  # 849
+
+
+def test_payload_weight_not_clamped_when_spool_exceeds_nominal():
+    """A spool holding more than the nominal net (overfilled reel) must NOT be clamped —
+    weight is the max of netFilamentWeight and the largest actual spool net."""
+    fdb = FDBFilament(_id="v", name="Ultraglow Green", type="PETG", density=1.5,
+                      netFilamentWeight=800, spoolWeight=277,
+                      spools=[FDBSpool(_id="s1", totalWeight=1126)])  # net 849 > 800
+    payload = _sm_filament_payload_from_fdb(fdb, vendor_id=None)
+    assert payload["weight"] == 849  # not clamped to the 800 nominal
+
+
+def test_payload_omits_weight_when_unknown():
+    """No netFilamentWeight, no tare, no spools → weight simply omitted (no spool to create)."""
+    fdb = FDBFilament(_id="v", name="X", type="PETG")
+    payload = _sm_filament_payload_from_fdb(fdb, vendor_id=None)
+    assert "weight" not in payload
+
+
 # ---------------------------------------------------------------------------
 # 2. Execute (FDB→SM) — masters skipped, variants created with valid payload
 # ---------------------------------------------------------------------------
@@ -174,3 +207,32 @@ async def test_single_import_master_is_skipped_not_created(db):
     assert res.failed == 0
     fil_rows = [r for r in res.records if r.entity_type == "filament"]
     assert len(fil_rows) == 1 and fil_rows[0].action == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_execute_backfills_missing_weight_before_spool(db):
+    """An existing link whose SM filament has no `weight` (pre-fix orphan) is
+    healed — weight is set before the spool create so it doesn't 400."""
+    from app.api.wizard import _ExecResult, _execute_fdb_to_spoolman
+    from app.models.mapping import FilamentMapping
+    from app.schemas.spoolman import SpoolmanFilament
+
+    db.add(FilamentMapping(spoolman_filament_id=178, filamentdb_id="v1"))
+    db.commit()
+
+    sm_fil = SpoolmanFilament(id=178, name="Ultraglow Green", weight=None, spool_weight=277)
+    fdb = FDBFilament(_id="v1", name="Ultraglow Green", type="PETG", density=1.5,
+                      netFilamentWeight=800, spoolWeight=277,
+                      spools=[FDBSpool(_id="s1", totalWeight=1126)])
+
+    sm = _fake_spoolman(filaments=[sm_fil], spools=[])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+    res = _ExecResult(cycle_id="c", direction="filamentdb_to_spoolman")
+
+    await _execute_fdb_to_spoolman(db, res, sm, fdb_client, [sm_fil], [fdb],
+                                   {}, {}, {}, precision=2)
+
+    # Backfilled with max(nominal 800, spool net 849) so the 849 g isn't clamped.
+    sm.update_filament.assert_any_call(178, {"weight": 849})
+    sm.create_spool.assert_called_once()
+    assert res.failed == 0
