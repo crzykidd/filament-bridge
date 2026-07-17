@@ -95,25 +95,58 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
+## ⏸️ PICK UP HERE (paused 2026-07-12, mid-session, host reboot)
+
+**Where things stand — repo is synced, one feature awaits release:**
+- On branch `dev`, HEAD = **`ebd474a`** (`feat: let users pick which FDB filaments to
+  bulk-import into Spoolman`, **issue #69**). **Pushed** — `dev` == `origin/dev`, `main` ==
+  `origin/main`, clean tree. Nothing stranded. The feature is committed but **not yet
+  released**. First thing on return: cut **0.6.15** for it (`/release-prep 0.6.15` → merge
+  the PR when CI is green → `/release-cut 0.6.15`).
+- That feature (the last thing built): FDB→Spoolman wizard now has a per-record "create in
+  Spoolman" checkbox for unmatched Filament DB filaments (unchecked by default — check to
+  include; masters non-selectable), instead of auto-importing all. Backend
+  `wizard_fdb_import_selection` + `_execute_fdb_to_spoolman(fdb_create_ids=…)`; single-record
+  import (Conflicts "Add") + engine auto-import unchanged (`fdb_create_ids=None`=create all).
+  Tests green (backend 1425 + ruff; frontend 188 + tsc). Docs + CHANGELOG done.
+
+**The FDB→Spoolman import saga (this session) — all shipped except #69:** importing a Filament
+DB master+variant into Spoolman was broken in *four* stacked layers, fixed one per release:
+- **#61** (v0.6.12): create payload omitted required `diameter`/`density` → 422; also skip
+  synthetic "masters" (they don't sync to Spoolman's flat model).
+- **#62** (v0.6.12): auto-sync PATCHed null `density`/`diameter` → 422 every cycle.
+- **#64** (v0.6.13): the Conflicts "Add" **preview was writing to Spoolman** (dry-run called
+  the real importer, only rolled back SQLite). Real `dry_run` mode added. **#65 still OPEN** —
+  the SM→FDB direction has the same latent preview-writes bug (masked by find-or-attach;
+  needs the same `dry_run` on the bigger `_execute_spoolman_to_fdb`).
+- **#67** (v0.6.14): filament created without `weight` → Spoolman rejected the spool
+  (`remaining_weight` needs a filament weight) → 400. weight = max(netFilamentWeight, largest
+  spool net) so overfilled spools aren't clamped; self-heals weight-less filaments on re-import.
+- **#69** (unreleased, `ebd474a`): the selectable-import UI above.
+- **Prod cleanup done:** deleted orphan Spoolman filaments the buggy preview created
+  (`spoolman.crzynet.com` #178/#179 masters). Verified fixes e2e against live crzydev
+  (FDB 1.66.1 / Spoolman 0.24.0) with real bridge code + cleanup.
+
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.11** — a full repo audit (security / Claude-token-efficiency / docs),
-  see the audit summary below. Security: backup secret boundary (#57), proxy-aware `Secure`
-  flag + security headers (#58), login rate-limiting (#59). Plus CLAUDE.md slimmed ~75%,
-  decisions.md topic index, security.md corrected, new Reconcile & Tare Editor docs,
-  CONTRIBUTING/SECURITY.md. Recent: v0.6.10 (Synced Records Unlink #40 *partial*; net/gross
-  labels #55; FDB 1.62.0 baseline), v0.6.9 (mobile printer-slot #53; OpenTag control clarity
-  #52), v0.6.8 (OPT material properties #50), v0.6.7 (orphan-spool reconcile #48).
-- Open issues (see `docs/backlog.md`): **#40** RELINK in Synced Records UI — Unlink shipped
-  (v0.6.10), relink still needs a `filament-suggestions-by-mapping` backend endpoint + ranked
-  picker (see the #40 comment); **#47** read-only API token option (needs a design call:
-  separate token vs per-token scope); **#24** Discord webhook notifications (FR-20); **#25**
-  print-history enrichment decision (FR-22, deferred). Recently closed via **v0.6.11**:
-  #57/#58/#59 (audit security fixes). Also shipped earlier: Tare Editor (#26), OPT
-  material-property tracking (#50), mobile printer-slot assignment (#53), Synced Records
-  Unlink (#40), net/gross weight labels (#55).
+- Latest release: **v0.6.14** (2026-07-12) — FDB→SM spool-create 400 fix (#67). Chain:
+  v0.6.13 (#64 preview-writes), v0.6.12 (#61 diameter-422 + #62 null-scalar-PATCH). Baseline
+  bumped to **FDB 1.66.1 / Spoolman 0.24.0** (verified, no bridge-affecting changes). Earlier:
+  v0.6.11 (repo audit — see below), v0.6.10 (Synced Records Unlink #40 *partial*; net/gross
+  labels #55), v0.6.9 (mobile printer-slot #53; OpenTag clarity #52).
+- Open issues (see `docs/backlog.md`): **#69** selectable FDB import — *code done, `ebd474a`
+  unpushed, needs release*; **#65** SM→FDB preview-writes (same class as #64, bigger fix);
+  **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink needs a
+  `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API token
+  (design call); **#24** Discord webhooks (FR-20); **#25** print-history enrichment (FR-22,
+  deferred).
+- **Branch-tangle gotcha:** `/release-cut` leaves you on `main`; if you then commit, it lands
+  on local `main` by mistake. After any release-cut, `git checkout dev` and
+  `git branch -f main origin/main` before doing more work (happened 3× this session).
 - Live prod inspection: see the `prod-bridge-instance` memory (URL + read-only API-token
-  auth) and `get-only-on-production` (GET-only; the shared token is full read-write).
+  auth) and `get-only-on-production` (GET-only; the shared token is full read-write). The
+  test upstreams `crzydev.home.arpa:3000` (FDB) / `:7912` (SM) are writable and were used for
+  e2e — clean up any `zzz-*` test records you create.
 
 ## 2026-07-02 repo audit — shipped in v0.6.11
 
