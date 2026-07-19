@@ -86,6 +86,13 @@ Spoolman's extra-field system only.
   nominal (overfilled reels), so the max keeps every spool's remaining from being clamped.
 - Spoolman filament has `spool_weight` (tare) which may or may not be set. Default to ~200 g if
   missing during weight conversion.
+- **Spoolman reuses deleted integer ids.** Filaments/spools use a plain SQLite integer primary
+  key (no `AUTOINCREMENT`), so deleting the *highest* id makes the next create reissue it. If the
+  bridge ever deletes an upstream record but leaves its cross-reference mapping behind, a later
+  create can be handed the reused id and collide on `UNIQUE(spoolman_filament_id)`. The
+  FDB→Spoolman create path clears any stale mapping on a just-minted id before inserting the new
+  one (`_execute_fdb_to_spoolman`); when cleaning up orphan Spoolman records, also drop the
+  corresponding bridge mapping so it can't be resurrected onto a reused id.
 
 ## Deep links (UI requirement)
 

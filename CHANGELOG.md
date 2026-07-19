@@ -9,6 +9,18 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **FDB→Spoolman import no longer crashes when Spoolman reuses a filament id.** Spoolman
+  stores filaments in SQLite with a plain integer primary key (no `AUTOINCREMENT`), so it
+  reissues the highest deleted id on the next create. If a prior orphan-cleanup deleted a
+  Spoolman filament but left the bridge's cross-reference mapping behind, a freshly-created
+  filament handed that same id collided with the leftover mapping and the import aborted with
+  `UNIQUE constraint failed: filament_mappings.spoolman_filament_id` (the filament was created
+  upstream but its spool failed and the conflict stayed open). The create path now detects a
+  stale mapping on the just-minted id and clears it before inserting the new one — it
+  self-heals instead of crashing. Fixes #70.
+
 ### Added
 
 - **Pick which Filament DB filaments to bulk-import into Spoolman.** In the wizard's

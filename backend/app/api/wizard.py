@@ -2085,6 +2085,19 @@ async def _execute_fdb_to_spoolman(
                             _sm_filament_payload_from_fdb(fdb_fil, vendor_id)
                         )
                         sm_filament_id = created.id
+                        # Spoolman stores filaments in SQLite with a plain integer
+                        # PK (no AUTOINCREMENT), so it reissues the highest deleted
+                        # id on the next insert. If an earlier orphan-cleanup deleted
+                        # the Spoolman filament but left our FilamentMapping behind,
+                        # this freshly-created filament can be handed that same id,
+                        # colliding with the stale row on UNIQUE(spoolman_filament_id).
+                        # We just minted this id, so any mapping already on it is
+                        # definitionally stale — drop it before inserting the new one.
+                        _stale_map = db.query(FilamentMapping).filter_by(
+                            spoolman_filament_id=sm_filament_id
+                        ).first()
+                        if _stale_map is not None:
+                            _delete_stale_filament_mapping(db, _stale_map)
                     res.add(db, "filament", "created",
                             label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
             except Exception as exc:
