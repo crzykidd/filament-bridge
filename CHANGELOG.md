@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.15] — 2026-07-19
+
 ### Fixed
 
 - **FDB→Spoolman import no longer crashes when Spoolman reuses a filament id.** Spoolman

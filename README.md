@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.14-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.15-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,23 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.15 (2026-07-19)
+
+- **Pick which Filament DB filaments to bulk-import into Spoolman.** In the wizard's
+  Filament DB → Spoolman direction, unmatched filaments now get a per-record **"create in
+  Spoolman"** checkbox in the Match review step (unchecked by default — tick the ones you
+  want), instead of importing every unmatched record automatically. Container/parent
+  "masters" stay non-importable. (#69)
+- **Fixed: adding a filament to Spoolman could crash with a `UNIQUE constraint` error.**
+  Spoolman reuses deleted integer ids, so a leftover bridge mapping from a previously-deleted
+  filament could collide with a freshly-created one. The import now clears the stale mapping
+  on a reused id, and — the root cause — the sync cycle drops a filament's mapping the moment
+  its Spoolman filament is deleted, so a stale row can never be silently re-pointed at an
+  unrelated filament that later reuses the id. (#70)
+- **Latest tested upstreams: Filament DB 1.67.0** (Spoolman unchanged at 0.24.0) — reviewed
+  against every Filament DB field the bridge uses; no bridge-affecting changes. Minimum
+  supported versions unchanged.
 
 ### v0.6.14 (2026-07-12)
 
