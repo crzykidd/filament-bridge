@@ -95,23 +95,24 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-07-12, mid-session, host reboot)
+## ⏸️ PICK UP HERE (paused 2026-07-19, clean — v0.6.15 shipped)
 
-**Where things stand — repo is synced, one feature awaits release:**
-- On branch `dev`, HEAD = **`ebd474a`** (`feat: let users pick which FDB filaments to
-  bulk-import into Spoolman`, **issue #69**). **Pushed** — `dev` == `origin/dev`, `main` ==
-  `origin/main`, clean tree. Nothing stranded. The feature is committed but **not yet
-  released**. First thing on return: cut **0.6.15** for it (`/release-prep 0.6.15` → merge
-  the PR when CI is green → `/release-cut 0.6.15`).
-- That feature (the last thing built): FDB→Spoolman wizard now has a per-record "create in
-  Spoolman" checkbox for unmatched Filament DB filaments (unchecked by default — check to
-  include; masters non-selectable), instead of auto-importing all. Backend
-  `wizard_fdb_import_selection` + `_execute_fdb_to_spoolman(fdb_create_ids=…)`; single-record
-  import (Conflicts "Add") + engine auto-import unchanged (`fdb_create_ids=None`=create all).
-  Tests green (backend 1425 + ruff; frontend 188 + tsc). Docs + CHANGELOG done.
+**Where things stand — everything is released and synced, nothing stranded:**
+- **v0.6.15 is live** (tag `v0.6.15`, GitHub release published, prod image build succeeded).
+  `main` == `origin/main` (HEAD `fcd13f9`, the #71 merge); `dev` == `origin/dev`; clean tree.
+  It shipped **#69** (selectable FDB import), **#70** (reused-Spoolman-id crash fix + stale-
+  mapping GC), and the **FDB 1.67.0** latest-tested bump. Both issues auto-closed.
+- Prod picks up the fix on its next `:latest` pull/restart. **No prod surgery was done this
+  session** (by user's call — treat the leftover as a real self-heal test): there's still an
+  inert orphan Spoolman filament **#179** ("ELEGOO RAPID PLA Plus Orange", empty) + a stale
+  bridge mapping `179→<master>` on `spoolman.crzynet.com`. It's harmless (a master isn't
+  sync'd) and the new GC clears that mapping automatically the moment 179 is ever deleted.
+- **First natural next work: #65** — the SM→FDB direction still has the latent preview-writes
+  bug (same class as #64; needs a real `dry_run` on the bigger `_execute_spoolman_to_fdb`).
+  As always: **ask the user which issue to work before starting.**
 
-**The FDB→Spoolman import saga (this session) — all shipped except #69:** importing a Filament
-DB master+variant into Spoolman was broken in *four* stacked layers, fixed one per release:
+**The FDB→Spoolman import saga — ALL SHIPPED:** importing a Filament DB master+variant into
+Spoolman was broken in stacked layers, fixed one per release:
 - **#61** (v0.6.12): create payload omitted required `diameter`/`density` → 422; also skip
   synthetic "masters" (they don't sync to Spoolman's flat model).
 - **#62** (v0.6.12): auto-sync PATCHed null `density`/`diameter` → 422 every cycle.
@@ -122,24 +123,29 @@ DB master+variant into Spoolman was broken in *four* stacked layers, fixed one p
 - **#67** (v0.6.14): filament created without `weight` → Spoolman rejected the spool
   (`remaining_weight` needs a filament weight) → 400. weight = max(netFilamentWeight, largest
   spool net) so overfilled spools aren't clamped; self-heals weight-less filaments on re-import.
-- **#69** (unreleased, `ebd474a`): the selectable-import UI above.
-- **Prod cleanup done:** deleted orphan Spoolman filaments the buggy preview created
-  (`spoolman.crzynet.com` #178/#179 masters). Verified fixes e2e against live crzydev
-  (FDB 1.66.1 / Spoolman 0.24.0) with real bridge code + cleanup.
+- **#69** (v0.6.15): the selectable-import UI (per-record "create in Spoolman" checkbox).
+- **#70** (v0.6.15): adding a filament crashed with `UNIQUE constraint failed:
+  filament_mappings.spoolman_filament_id`. Root cause = **Spoolman reuses deleted integer ids**
+  (SQLite rowid, no AUTOINCREMENT), so a stale bridge mapping left by an earlier orphan-cleanup
+  collided with a freshly-created filament handed the reused id. Two-part fix: (1) the FDB→SM
+  create path clears a stale mapping on the just-minted id; (2) root cause — the sync cycle
+  **purges a filament mapping the cycle its Spoolman filament is deleted**
+  (`_purge_stale_filament_mappings` in engine.py). Deliberately does NOT auto-purge on identity
+  mismatch (would false-positive on user-renamed filaments). See decisions.md 2026-07-19.
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.14** (2026-07-12) — FDB→SM spool-create 400 fix (#67). Chain:
-  v0.6.13 (#64 preview-writes), v0.6.12 (#61 diameter-422 + #62 null-scalar-PATCH). Baseline
-  bumped to **FDB 1.66.1 / Spoolman 0.24.0** (verified, no bridge-affecting changes). Earlier:
-  v0.6.11 (repo audit — see below), v0.6.10 (Synced Records Unlink #40 *partial*; net/gross
-  labels #55), v0.6.9 (mobile printer-slot #53; OpenTag clarity #52).
-- Open issues (see `docs/backlog.md`): **#69** selectable FDB import — *code done, `ebd474a`
-  unpushed, needs release*; **#65** SM→FDB preview-writes (same class as #64, bigger fix);
-  **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink needs a
-  `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API token
-  (design call); **#24** Discord webhooks (FR-20); **#25** print-history enrichment (FR-22,
-  deferred).
+- Latest release: **v0.6.15** (2026-07-19) — #69 selectable FDB import + #70 reused-id crash
+  fix / stale-mapping GC + **FDB 1.67.0** latest-tested bump (reviewed, no bridge-affecting
+  changes). Chain: v0.6.14 (#67 spool-create 400), v0.6.13 (#64 preview-writes), v0.6.12
+  (#61 diameter-422 + #62 null-scalar-PATCH). Earlier: v0.6.11 (repo audit — see below),
+  v0.6.10 (Synced Records Unlink #40 *partial*; net/gross labels #55), v0.6.9 (mobile
+  printer-slot #53; OpenTag clarity #52).
+- Open issues (see `docs/backlog.md`): **#65** SM→FDB preview-writes (same class as #64, bigger
+  fix — the natural next task); **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink
+  needs a `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API
+  token (design call); **#24** Discord webhooks (FR-20); **#25** print-history enrichment
+  (FR-22, deferred). (#69 + #70 closed in v0.6.15.)
 - **Branch-tangle gotcha:** `/release-cut` leaves you on `main`; if you then commit, it lands
   on local `main` by mistake. After any release-cut, `git checkout dev` and
   `git branch -f main origin/main` before doing more work (happened 3× this session).
