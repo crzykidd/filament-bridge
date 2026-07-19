@@ -38,6 +38,15 @@ GitHub release.
   imports (Conflicts "Add", engine auto-import) are unaffected — they still create the one
   record they were asked to.
 
+### Changed
+
+- **Latest-tested-upstreams bumped to Filament DB 1.67.0** (Spoolman unchanged at 0.24.0).
+  1.67.0 is an audit-remediation release (slicer round-trips, print-history weight refunds,
+  hybrid-sync field propagation, CSV-import zombie/tombstone repair, UI fixes); reviewed
+  against every Filament DB field the bridge reads/writes — no renamed or removed fields, so
+  nothing bridge-affecting. Minimum supported versions are unchanged (FDB 1.33.0 / Spoolman
+  0.22.0).
+
 ## [0.6.14] — 2026-07-12
 
 ### Fixed
