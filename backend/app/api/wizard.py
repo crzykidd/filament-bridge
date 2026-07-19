@@ -417,6 +417,8 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
     ]
     raw_decisions = get_config_value(db, "wizard_match_decisions", []) or []
     saved_decisions = [MatchDecision.model_validate(d) for d in raw_decisions]
+    _import_direction = get_config_value(db, "import_direction", "spoolman") or "spoolman"
+    _saved_fdb_selection = [str(x) for x in (get_config_value(db, "wizard_fdb_import_selection", []) or [])]
     return WizardMatchesResponse(
         matched=matched,
         unmatched_spoolman=[
@@ -428,12 +430,18 @@ async def wizard_matches(request: Request, db: Session = Depends(get_db)) -> Wiz
         ],
         ambiguous=ambiguous,
         saved_decisions=saved_decisions,
+        import_direction=_import_direction,
+        saved_fdb_selection=_saved_fdb_selection,
     )
 
 
 @router.post("/wizard/matches", response_model=WizardDecisionAck)
 def wizard_save_matches(payload: WizardMatchesRequest, db: Session = Depends(get_db)) -> WizardDecisionAck:
     set_config_value(db, "wizard_match_decisions", [d.model_dump() for d in payload.decisions])
+    # FDB→SM bulk-import selection (which unmatched FDB filaments to create). Only
+    # persist when the client sent it, so an SM-direction save never clears it.
+    if payload.fdb_selection is not None:
+        set_config_value(db, "wizard_fdb_import_selection", [str(x) for x in payload.fdb_selection])
     db.commit()
     return WizardDecisionAck(persisted=len(payload.decisions))
 
@@ -1975,6 +1983,7 @@ async def _execute_fdb_to_spoolman(
     parent_of_fdb: dict[str, str],
     tare_by_fdb_spool: dict[str, float],
     master_fdb_ids: set[str] | None = None,
+    fdb_create_ids: set[str] | None = None,
     precision: int = 2,
     dry_run: bool = False,
 ) -> None:
@@ -1986,10 +1995,14 @@ async def _execute_fdb_to_spoolman(
     caller is expected to roll the session back.
 
     The persisted match decisions are Spoolman-keyed, so they describe `link`
-    pairs (both ids) and `skip`s of *existing* Spoolman filaments. Filament DB
-    filaments with no `link` decision are created in Spoolman (the FR-4 per-record
-    skip of an unmatched FDB filament isn't representable in the Spoolman-keyed
-    decision model — see docs/decisions.md).
+    pairs (both ids) and `skip`s of *existing* Spoolman filaments.
+
+    ``fdb_create_ids`` is the bulk-import selection for unmatched Filament DB
+    filaments (the FDB→SM analogue of the SM-side per-record create/skip): only
+    unmatched FDB filaments whose id is in the set are created; the rest are logged
+    ``skipped``. ``None`` means "create every unmatched FDB filament" — used by the
+    single-record import (Conflicts "Add") and the engine's auto-import, whose caller
+    has already decided to create exactly one record.
     """
     fdb_field_name = _settings.filamentdb_spoolman_id_field
 
@@ -2049,6 +2062,15 @@ async def _execute_fdb_to_spoolman(
                     label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
         else:
             linked_sm_id = linked_sm_by_fdb.get(fdb_fil.id)
+            # Bulk-import selection gate: in the wizard the user picks which unmatched
+            # FDB filaments to create. Skip an unmatched (not user-linked) filament that
+            # wasn't selected. fdb_create_ids is None → create all (single-record import
+            # / engine auto-import, which have already chosen the one record to create).
+            if (linked_sm_id is None and fdb_create_ids is not None
+                    and fdb_fil.id not in fdb_create_ids):
+                res.add(db, "filament", "skipped", detail="not selected for import",
+                        label=_fil_label, fdb_filament_id=fdb_fil.id)
+                continue
             try:
                 if linked_sm_id is not None and linked_sm_id in sm_filament_by_id:
                     sm_filament_id = linked_sm_id
@@ -2063,6 +2085,19 @@ async def _execute_fdb_to_spoolman(
                             _sm_filament_payload_from_fdb(fdb_fil, vendor_id)
                         )
                         sm_filament_id = created.id
+                        # Spoolman stores filaments in SQLite with a plain integer
+                        # PK (no AUTOINCREMENT), so it reissues the highest deleted
+                        # id on the next insert. If an earlier orphan-cleanup deleted
+                        # the Spoolman filament but left our FilamentMapping behind,
+                        # this freshly-created filament can be handed that same id,
+                        # colliding with the stale row on UNIQUE(spoolman_filament_id).
+                        # We just minted this id, so any mapping already on it is
+                        # definitionally stale — drop it before inserting the new one.
+                        _stale_map = db.query(FilamentMapping).filter_by(
+                            spoolman_filament_id=sm_filament_id
+                        ).first()
+                        if _stale_map is not None:
+                            _delete_stale_filament_mapping(db, _stale_map)
                     res.add(db, "filament", "created",
                             label=_fil_label, sm_filament_id=sm_filament_id, fdb_filament_id=fdb_fil.id)
             except Exception as exc:
@@ -2707,6 +2742,10 @@ async def wizard_execute(
     # spoolWeight and no spools, so it would spuriously trip "tare required") and the
     # create loop (a master has no material/density/diameter → POST /filament 422s).
     master_fdb_ids: set[str] = set()
+    # Bulk-import selection: which unmatched FDB filaments the user ticked to create.
+    # None = create every unmatched FDB filament (unset config → legacy behaviour); a
+    # set (even empty) means honour the user's explicit picks.
+    fdb_create_ids: set[str] | None = None
     if import_direction != "spoolman":
         _exec_marker = _resolve_container_parent_marker(db)
         _exec_synth_fdb_ids: set[str] = {
@@ -2717,6 +2756,9 @@ async def wizard_execute(
             f.id for f in fdb_filaments
             if is_master_fdb(f, _exec_marker, _exec_synth_fdb_ids)
         }
+        _saved_sel = get_config_value(db, "wizard_fdb_import_selection", None)
+        if _saved_sel is not None:
+            fdb_create_ids = {str(x) for x in _saved_sel}
 
     # Tare gate: reject execute if any to-be-created filament/spool lacks a known tare.
     # This prevents the wizard from writing 200 g as a silent guess.
@@ -2762,6 +2804,8 @@ async def wizard_execute(
         for _fdb_fil in fdb_filaments:
             if _fdb_fil.id in master_fdb_ids:
                 continue  # masters never sync to Spoolman — no tare needed
+            if fdb_create_ids is not None and _fdb_fil.id not in fdb_create_ids:
+                continue  # not selected for import — won't be created, no tare needed
             if _fdb_fil.spoolWeight is None:
                 # Check whether any spool of this filament has an override
                 _spool_overridden = any(
@@ -2803,6 +2847,7 @@ async def wizard_execute(
             sm_filaments, fdb_filaments,
             decisions_by_sm, parent_of_fdb, tare_by_fdb_spool,
             master_fdb_ids=master_fdb_ids,
+            fdb_create_ids=fdb_create_ids,
             precision=precision,
         )
 

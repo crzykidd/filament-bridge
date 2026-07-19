@@ -509,6 +509,11 @@ class WizardMatchesResponse(BaseModel):
     unmatched_filamentdb: list[FilamentRef]
     ambiguous: list[AmbiguousRow]
     saved_decisions: list[MatchDecision] = Field(default_factory=list)
+    # Active import direction, so the UI knows whether to offer per-record "create in
+    # Spoolman" checkboxes for unmatched Filament DB filaments (FDB→SM direction only).
+    import_direction: str = "spoolman"
+    # FDB→SM: the previously-saved set of FDB filament ids ticked for import.
+    saved_fdb_selection: list[str] = Field(default_factory=list)
 
 
 class MatchDecision(BaseModel):
@@ -519,6 +524,10 @@ class MatchDecision(BaseModel):
 
 class WizardMatchesRequest(BaseModel):
     decisions: list[MatchDecision]
+    # FDB→Spoolman only: the Filament DB filament ids the user ticked to create in
+    # Spoolman (unmatched FDB filaments are otherwise not created). None = not sent
+    # (leave the saved selection untouched); [] = explicitly import nothing unmatched.
+    fdb_selection: list[str] | None = None
 
 
 class WizardDecisionAck(BaseModel):

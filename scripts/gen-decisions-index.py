@@ -39,6 +39,7 @@ MAINTENANCE_NOTE = (
 CATEGORIES = [
     ("Sync engine & anti-ping-pong", [
         # Core engine mechanics, polling loop, snapshot management, scheduler
+        "2026-07-19 — Purge stale filament mappings when Spoolman reuses an id, GitHub #70",
         "2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)",
         "2026-06-11 — Honor configured cross-reference field names in ensure_extra_fields + engine orphan guard",
         "2026-06-11 — Durable `changes.log` file (`CHANGES_LOG_ENABLED` / `CHANGES_LOG_PATH`)",

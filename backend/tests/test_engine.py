@@ -61,10 +61,22 @@ def _fdb_detail_with_usage(fid: str, spool_id: str, total_weight: float, tare: f
     })
 
 
+def _spools_filaments(spools, filaments):
+    """Filaments a spool set implies. Spoolman never returns a spool without a live
+    filament, so union the filaments embedded on the spools with any explicit ones —
+    otherwise the engine's stale-mapping GC treats a mapped filament as deleted."""
+    fils = {f.id: f for f in (filaments or [])}
+    for s in spools or []:
+        f = getattr(s, "filament", None)
+        if f is not None and f.id not in fils:
+            fils[f.id] = f
+    return list(fils.values())
+
+
 def _fake_spoolman(spools=None, filaments=None, field_defs=None) -> AsyncMock:
     client = AsyncMock()
     client.get_spools = AsyncMock(return_value=spools or [])
-    client.get_filaments = AsyncMock(return_value=filaments or [])
+    client.get_filaments = AsyncMock(return_value=_spools_filaments(spools, filaments))
     client.get_field_definitions = AsyncMock(return_value=field_defs or [])
     client.update_spool = AsyncMock(return_value=MagicMock())
     client.update_filament = AsyncMock(return_value=MagicMock())

@@ -68,9 +68,18 @@ def _client(db, spoolman, filamentdb) -> TestClient:
 
 def _fake_spoolman(spools=None, filaments=None) -> AsyncMock:
     client = AsyncMock()
+    # Spoolman never returns a spool without a live filament — union the filaments
+    # embedded on the spools with any explicit ones so the engine's stale-mapping GC
+    # doesn't treat a mapped filament as deleted.
+    fils = {f.id: f for f in (filaments or [])}
+    for s in spools or []:
+        f = getattr(s, "filament", None)
+        if f is not None and f.id not in fils:
+            fils[f.id] = f
+    live_filaments = list(fils.values())
     client.get_spools = AsyncMock(return_value=spools or [])
-    client.get_filaments = AsyncMock(return_value=filaments or [])
-    client.get_filament = AsyncMock(return_value=(filaments or [None])[0])
+    client.get_filaments = AsyncMock(return_value=live_filaments)
+    client.get_filament = AsyncMock(return_value=(live_filaments or [None])[0])
     client.get_field_definitions = AsyncMock(return_value=[])
     client.update_spool = AsyncMock(return_value=MagicMock())
     client.update_filament = AsyncMock(return_value=MagicMock())

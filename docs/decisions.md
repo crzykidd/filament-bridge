@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-07-19 — Purge stale filament mappings when Spoolman reuses an id](#2026-07-19--purge-stale-filament-mappings-when-spoolman-reuses-an-id-github-70) — #70
 - [2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)](#2026-06-11--small-fix-batch-compose-image-interval-pagination-dry-run-settings-copy)
 - [2026-06-11 — Honor configured cross-reference field names in ensure_extra_fields + engine orphan guard](#2026-06-11--honor-configured-cross-reference-field-names-in-ensure_extra_fields--engine-orphan-guard)
 - [2026-06-11 — Durable `changes.log` file (`CHANGES_LOG_ENABLED` / `CHANGES_LOG_PATH`)](#2026-06-11--durable-changeslog-file-changes_log_enabled--changes_log_path)
@@ -195,6 +196,38 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-07-19 — Purge stale filament mappings when Spoolman reuses an id, GitHub #70
+
+**Context.** Adding a Filament DB filament to Spoolman crashed with
+`UNIQUE constraint failed: filament_mappings.spoolman_filament_id`. Root cause: Spoolman stores
+filaments with a plain SQLite integer PK (no `AUTOINCREMENT`), so it **reissues the highest
+deleted id** on the next create. A prior manual orphan-cleanup had deleted Spoolman filaments
+but left the bridge's `FilamentMapping` rows behind; a freshly-created filament was handed a
+reused id and collided with the leftover mapping.
+
+**Decision.** Two layers, both bridge-local (no upstream deletes):
+1. **Crash guard (symptom).** The FDB→Spoolman create path drops any pre-existing mapping on a
+   just-minted Spoolman id before inserting the new one — since we just created that id, any
+   mapping already on it is definitionally stale.
+2. **GC (root cause).** The sync cycle purges any `FilamentMapping` whose Spoolman filament is
+   absent from the fetched set (plus that filament's now-defunct spool mappings), so a stale row
+   never survives long enough to be silently re-pointed at an unrelated filament that reuses the
+   freed id.
+
+**Non-obvious choices.**
+- **No auto-purge on identity mismatch.** The one case neither layer heals automatically is a
+  mapping whose id was *already* reused to a live-but-unrelated filament (both sides present).
+  Detecting that needs a fuzzy identity comparison, which would **false-positive on a filament the
+  user legitimately renamed upstream** — purging a valid mapping and re-importing/duplicating,
+  worse than the original bug. Deliberately left to explicit user action.
+- **GC runs only after a successful upstream fetch.** `run_sync_cycle` early-returns on fetch
+  failure, so a partial/empty fetch can never be mistaken for "all filaments deleted" and wipe
+  live mappings.
+- **Test-fake realism.** Exposed that some engine test fakes returned `get_filaments() == []`
+  while a spool referenced a filament (impossible in real Spoolman) — fakes now derive filaments
+  from the spools' embedded records.
 
 
 ## 2026-07-02 — Per-IP in-memory login rate-limiting, GitHub #59

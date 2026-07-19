@@ -236,3 +236,101 @@ async def test_execute_backfills_missing_weight_before_spool(db):
     sm.update_filament.assert_any_call(178, {"weight": 849})
     sm.create_spool.assert_called_once()
     assert res.failed == 0
+
+
+# ---------------------------------------------------------------------------
+# 4. Bulk-import selection (FDB→SM) — only ticked unmatched filaments are created
+# ---------------------------------------------------------------------------
+
+
+def _fdb_importable(id_: str, name: str) -> FDBFilament:
+    return FDBFilament(_id=id_, name=name, type="PLA", density=1.2, spoolWeight=200,
+                       netFilamentWeight=1000, spools=[FDBSpool(_id=f"s{id_}", totalWeight=1100)])
+
+
+@pytest.mark.asyncio
+async def test_execute_fdb_selection_creates_only_selected(db):
+    """With fdb_create_ids, an unmatched FDB filament NOT selected is skipped, not created."""
+    from app.api.wizard import _ExecResult, _execute_fdb_to_spoolman
+
+    keep, skip = _fdb_importable("a", "Keep A"), _fdb_importable("b", "Skip B")
+    created: list[str] = []
+
+    async def _cf(payload):
+        created.append(payload["name"])
+        return MagicMock(id=len(created))
+
+    sm = _fake_spoolman(filaments=[], spools=[])
+    sm.create_filament = AsyncMock(side_effect=_cf)
+    fdbc = _fake_filamentdb(filaments=[keep, skip])
+    res = _ExecResult(cycle_id="c", direction="filamentdb_to_spoolman")
+
+    await _execute_fdb_to_spoolman(db, res, sm, fdbc, [], [keep, skip],
+                                   {}, {}, {}, fdb_create_ids={"a"}, precision=2)
+
+    assert created == ["Keep A"]  # only the ticked one
+    b_rows = [r for r in res.records if r.entity_type == "filament" and r.filamentdb_filament_id == "b"]
+    assert len(b_rows) == 1 and b_rows[0].action == "skipped"
+    assert b_rows[0].detail == "not selected for import"
+
+
+@pytest.mark.asyncio
+async def test_execute_fdb_create_ids_none_creates_all(db):
+    """fdb_create_ids=None (single-record import / engine auto-import) → create every one."""
+    from app.api.wizard import _ExecResult, _execute_fdb_to_spoolman
+
+    a, b = _fdb_importable("a", "A"), _fdb_importable("b", "B")
+    _n = [0]
+
+    async def _cf(payload):
+        _n[0] += 1
+        return MagicMock(id=_n[0])  # distinct ids, like real Spoolman
+
+    sm = _fake_spoolman(filaments=[], spools=[])
+    sm.create_filament = AsyncMock(side_effect=_cf)
+    fdbc = _fake_filamentdb(filaments=[a, b])
+    res = _ExecResult(cycle_id="c", direction="filamentdb_to_spoolman")
+
+    await _execute_fdb_to_spoolman(db, res, sm, fdbc, [], [a, b],
+                                   {}, {}, {}, fdb_create_ids=None, precision=2)
+
+    assert sm.create_filament.call_count == 2  # both created (legacy behaviour preserved)
+
+
+# ---------------------------------------------------------------------------
+# 5. Spoolman id-reuse collision — stale mapping on a reissued id is cleared
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_clears_stale_mapping_on_reused_sm_id(db):
+    """Spoolman reissues a deleted top id (SQLite rowid, no AUTOINCREMENT). When a
+    prior orphan-cleanup deleted the SM filament but left our FilamentMapping, a
+    freshly-created filament handed that same id used to crash on
+    UNIQUE(spoolman_filament_id). The create path must drop the stale mapping first.
+    """
+    from app.api.wizard import _ExecResult, _execute_fdb_to_spoolman
+    from app.models.mapping import FilamentMapping
+
+    # Leftover mapping from a deleted SM filament 179, still pointing at an old FDB id.
+    db.add(FilamentMapping(spoolman_filament_id=179, filamentdb_id="old-deleted"))
+    db.commit()
+
+    fresh = _fdb_importable("6a5d37b5", "ELEGOO RAPID PLA Plus Orange")
+
+    async def _cf(payload):
+        return MagicMock(id=179)  # Spoolman reissues the deleted top id
+
+    sm = _fake_spoolman(filaments=[], spools=[])
+    sm.create_filament = AsyncMock(side_effect=_cf)
+    fdbc = _fake_filamentdb(filaments=[fresh])
+    res = _ExecResult(cycle_id="c", direction="filamentdb_to_spoolman")
+
+    # Without the fix this raises sqlite3.IntegrityError on the mapping flush.
+    await _execute_fdb_to_spoolman(db, res, sm, fdbc, [fresh], [fresh],
+                                   {}, {}, {}, fdb_create_ids=None, precision=2)
+
+    assert res.failed == 0
+    maps = db.query(FilamentMapping).filter_by(spoolman_filament_id=179).all()
+    assert len(maps) == 1  # the stale row was replaced, not duplicated
+    assert maps[0].filamentdb_id == "6a5d37b5"  # now the new filament owns id 179

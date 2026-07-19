@@ -9,6 +9,46 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.15] — 2026-07-19
+
+### Fixed
+
+- **FDB→Spoolman import no longer crashes when Spoolman reuses a filament id.** Spoolman
+  stores filaments in SQLite with a plain integer primary key (no `AUTOINCREMENT`), so it
+  reissues the highest deleted id on the next create. If a prior orphan-cleanup deleted a
+  Spoolman filament but left the bridge's cross-reference mapping behind, a freshly-created
+  filament handed that same id collided with the leftover mapping and the import aborted with
+  `UNIQUE constraint failed: filament_mappings.spoolman_filament_id` (the filament was created
+  upstream but its spool failed and the conflict stayed open). Two-part fix: (1) the create
+  path now detects a stale mapping on the just-minted id and clears it before inserting the
+  new one, so the import self-heals instead of crashing; and (2) — the root cause — the sync
+  cycle now **purges a filament mapping the cycle its Spoolman filament is deleted** (along
+  with the filament's now-defunct spool mappings), so a stale row can never survive to be
+  silently re-pointed at an unrelated filament that later reuses the freed id. Both are
+  bridge-local only (no upstream deletes). Fixes #70.
+
+### Added
+
+- **Pick which Filament DB filaments to bulk-import into Spoolman.** In the wizard's
+  Filament DB → Spoolman direction, unmatched Filament DB filaments now get a per-record
+  **"create in Spoolman"** checkbox in the Match review step (with the group/table
+  "select all" toggles), instead of every unmatched record being imported automatically.
+  This makes bulk import symmetric with the Spoolman → Filament DB direction and lets you
+  import just the filaments you want. Checkboxes start **unchecked** — tick the ones to
+  import; container/parent "masters" remain non-importable. On execute, unticked filaments
+  are logged `skipped` ("not selected for import") and never created. The single-record
+  imports (Conflicts "Add", engine auto-import) are unaffected — they still create the one
+  record they were asked to.
+
+### Changed
+
+- **Latest-tested-upstreams bumped to Filament DB 1.67.0** (Spoolman unchanged at 0.24.0).
+  1.67.0 is an audit-remediation release (slicer round-trips, print-history weight refunds,
+  hybrid-sync field propagation, CSV-import zombie/tombstone repair, UI fixes); reviewed
+  against every Filament DB field the bridge reads/writes — no renamed or removed fields, so
+  nothing bridge-affecting. Minimum supported versions are unchanged (FDB 1.33.0 / Spoolman
+  0.22.0).
+
 ## [0.6.14] — 2026-07-12
 
 ### Fixed
