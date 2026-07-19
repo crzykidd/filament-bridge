@@ -18,21 +18,28 @@ Every cycle (scheduled, or via **Sync now**):
    auto-imported — the wizard import gate is preserved), while *mapped-pair diffing* uses
    the active + archived set (so a mapped spool that flips to archived still reaches the
    differ and its lifecycle state can be mirrored).
-3. **Mapped-pair processing.** For every `SpoolMapping`, the pair's current values are
+3. **Stale-filament-mapping GC.** Any `FilamentMapping` whose Spoolman filament is no longer
+   in the fetched set is purged (with the filament's now-defunct spool mappings). Spoolman
+   reuses deleted integer ids (SQLite rowid, no `AUTOINCREMENT`), so a mapping kept past its
+   filament's deletion could later be silently re-pointed at an unrelated filament that reuses
+   the freed id — this drops it before that can happen. Bridge-local only; runs only after a
+   successful upstream fetch (a partial fetch never triggers a purge). See
+   [upstream-apis.md](upstream-apis.md) (Spoolman id reuse) and decisions.md 2026-07-19 (#70).
+4. **Mapped-pair processing.** For every `SpoolMapping`, the pair's current values are
    diffed against the last stored snapshots. First sight of a pair just stores a baseline
    (no writes). Then the weight pass, the **lifecycle (archive/retire) pass** (after
    weight — see below), the **location pass**, and the field-mapping pass run per pair.
-4. **Stale-link handling.** A mapped record missing upstream either queues a deletion
+5. **Stale-link handling.** A mapped record missing upstream either queues a deletion
    conflict (a live, still-linked counterpart exists) or purges the bridge-local mapping
    (nothing left to protect). See [conflicts.md](conflicts.md).
-5. **Filament-level passes.** Multicolor, cost, temperatures, native scalars, and finish
+6. **Filament-level passes.** Multicolor, cost, temperatures, native scalars, and finish
    tags run over filament mappings.
-6. **New-record detection.** The engine detects unmapped filaments and spools on both sides
+7. **New-record detection.** The engine detects unmapped filaments and spools on both sides
    and handles them according to the two-tier new-record policy (see below).
-7. **OpenTag identity push.** `openprinttag_slug`/`uuid` from Spoolman extras are merged
+8. **OpenTag identity push.** `openprinttag_slug`/`uuid` from Spoolman extras are merged
    into the linked FDB filament's `settings{}` bag (the one approved exception to the
    "never touch settings" rule).
-8. Everything is written to the sync log under one cycle ID.
+9. Everything is written to the sync log under one cycle ID.
 
 A **dry run** computes the same changeset without writing or advancing snapshots, and the
 Dashboard dry-run additionally plans what the wizard would do for unlinked records.

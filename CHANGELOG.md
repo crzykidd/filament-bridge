@@ -17,9 +17,13 @@ GitHub release.
   Spoolman filament but left the bridge's cross-reference mapping behind, a freshly-created
   filament handed that same id collided with the leftover mapping and the import aborted with
   `UNIQUE constraint failed: filament_mappings.spoolman_filament_id` (the filament was created
-  upstream but its spool failed and the conflict stayed open). The create path now detects a
-  stale mapping on the just-minted id and clears it before inserting the new one — it
-  self-heals instead of crashing. Fixes #70.
+  upstream but its spool failed and the conflict stayed open). Two-part fix: (1) the create
+  path now detects a stale mapping on the just-minted id and clears it before inserting the
+  new one, so the import self-heals instead of crashing; and (2) — the root cause — the sync
+  cycle now **purges a filament mapping the cycle its Spoolman filament is deleted** (along
+  with the filament's now-defunct spool mappings), so a stale row can never survive to be
+  silently re-pointed at an unrelated filament that later reuses the freed id. Both are
+  bridge-local only (no upstream deletes). Fixes #70.
 
 ### Added
 

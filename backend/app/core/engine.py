@@ -336,6 +336,82 @@ def _purge_stale_mapping(
     )
 
 
+def _purge_stale_filament_mapping(
+    db: Session,
+    cycle_id: str,
+    mapping: FilamentMapping,
+) -> None:
+    """Purge a stale bridge-local FilamentMapping + its Snapshots.
+
+    Called when the mapping's Spoolman filament no longer exists (deleted
+    upstream).  Bridge-local rows ONLY — never deletes upstream records.
+    """
+    if mapping.spoolman_filament_id is not None:
+        db.query(Snapshot).filter_by(
+            source="spoolman", entity_type="filament",
+            entity_id=str(mapping.spoolman_filament_id),
+        ).delete()
+    if mapping.filamentdb_id:
+        db.query(Snapshot).filter_by(
+            source="filamentdb", entity_type="filament",
+            entity_id=mapping.filamentdb_id,
+        ).delete()
+    db.delete(mapping)
+    _log(
+        db, cycle_id, "auto", "info", "filament",
+        spoolman_id=mapping.spoolman_filament_id,
+        fdb_filament_id=mapping.filamentdb_id,
+        error_message="stale connection — Spoolman filament deleted; mapping purged",
+    )
+
+
+def _purge_stale_filament_mappings(
+    db: Session,
+    cycle_id: str,
+    sm_filaments: dict[int, Any],
+    filament_mappings: list[FilamentMapping],
+    spool_mappings: list[SpoolMapping],
+) -> int:
+    """Drop filament mappings whose Spoolman filament is gone, plus their spool maps.
+
+    Root-cause guard for Spoolman id reuse: Spoolman stores filaments with a plain
+    SQLite integer PK (no AUTOINCREMENT), so a deleted top id is reissued on the
+    next create.  A FilamentMapping kept after its Spoolman filament is deleted
+    (e.g. a manual orphan-cleanup) can later be silently re-pointed at an unrelated
+    filament that reuses the freed id — worse than a crash.  Dropping the mapping
+    the cycle its filament disappears stops any stale row from surviving to be
+    reused.  The filament's Spoolman spools went with it, so its dependent spool
+    mappings are purged too.
+
+    Mutates ``filament_mappings`` / ``spool_mappings`` in place; returns the count
+    of filament mappings purged.  The caller MUST pass a complete Spoolman filament
+    fetch (a partial/failed fetch would wrongly purge live mappings) — run_sync_cycle
+    early-returns on fetch failure before reaching here.  Bridge-local only.
+    """
+    spool_maps_by_fil_map: dict[int, list[SpoolMapping]] = {}
+    for sp in spool_mappings:
+        if sp.filament_mapping_id is not None:
+            spool_maps_by_fil_map.setdefault(sp.filament_mapping_id, []).append(sp)
+
+    purged = 0
+    for fm in list(filament_mappings):
+        # Synthetic parents have no Spoolman counterpart (id is NULL) — never touched.
+        if fm.is_synthetic_parent or fm.spoolman_filament_id is None:
+            continue
+        if fm.spoolman_filament_id in sm_filaments:
+            continue  # Spoolman filament still live — mapping is valid.
+        for sp in spool_maps_by_fil_map.get(fm.id, []):
+            _purge_stale_mapping(
+                db, cycle_id, sp,
+                reason="stale connection — Spoolman filament deleted (parent mapping purged)",
+            )
+            spool_mappings.remove(sp)
+        _purge_stale_filament_mapping(db, cycle_id, fm)
+        filament_mappings.remove(fm)
+        purged += 1
+    return purged
+
+
 # ---------------------------------------------------------------------------
 # Conflict dedup helper
 # ---------------------------------------------------------------------------
@@ -3028,6 +3104,21 @@ async def run_sync_cycle(
     # Load mappings
     spool_mappings: list[SpoolMapping] = db.query(SpoolMapping).all()
     filament_mappings: list[FilamentMapping] = db.query(FilamentMapping).all()
+
+    # ---- Purge stale filament mappings whose Spoolman filament is gone ----
+    # Root-cause guard for Spoolman id reuse (see _purge_stale_filament_mappings).
+    # Runs before the mapped-spool sets and by-id dicts below are built so purged
+    # rows drop out of the rest of the cycle.  The upstream fetch is guarded above
+    # (early-return on failure), so sm_filaments here is a complete set — a partial
+    # fetch can never trigger a purge.  Skipped in dry_run (no bridge writes).
+    if not dry_run and filament_mappings:
+        _purged = _purge_stale_filament_mappings(
+            db, cycle_id, sm_filaments, filament_mappings, spool_mappings
+        )
+        if _purged:
+            db.flush()
+            logger.info("Cycle %s: purged %d stale filament mapping(s) "
+                        "(Spoolman filament deleted)", cycle_id, _purged)
 
     mapped_sm_spool_ids: set[int] = {m.spoolman_spool_id for m in spool_mappings}
     mapped_fdb_spool_ids: set[str] = {m.filamentdb_spool_id for m in spool_mappings}

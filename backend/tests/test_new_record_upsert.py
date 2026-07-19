@@ -80,7 +80,15 @@ def _fdb_filament_rich(fid: str, spool_id: str, vendor: str, name: str, color: s
 def _fake_spoolman(spools: list[SpoolmanSpool]):
     mock = AsyncMock()
     mock.get_spools.return_value = spools
-    mock.get_filaments.return_value = []
+    # Spoolman never returns a spool without a live filament — expose the filaments
+    # embedded on the spools so the engine's stale-mapping GC doesn't treat a mapped
+    # filament as deleted.
+    _fils: dict[int, object] = {}
+    for s in spools:
+        f = getattr(s, "filament", None)
+        if f is not None and f.id not in _fils:
+            _fils[f.id] = f
+    mock.get_filaments.return_value = list(_fils.values())
     mock.create_spool = AsyncMock(return_value={"id": 999})
     mock.update_spool = AsyncMock()
     mock.health = AsyncMock(return_value={"version": "0.22.0"})

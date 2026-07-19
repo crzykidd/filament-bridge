@@ -36,7 +36,15 @@ def _fdb_fil(fid: str) -> FDBFilament:
 def _fake_spoolman(spools):
     m = AsyncMock()
     m.get_spools.return_value = spools
-    m.get_filaments.return_value = []
+    # Spoolman never returns a spool without a live filament — expose the filaments
+    # embedded on the spools so the engine's stale-mapping GC (which purges a mapping
+    # whose Spoolman filament is gone) doesn't treat a mapped filament as deleted.
+    fils: dict[int, object] = {}
+    for s in spools:
+        f = getattr(s, "filament", None)
+        if f is not None and f.id not in fils:
+            fils[f.id] = f
+    m.get_filaments.return_value = list(fils.values())
     m.health = AsyncMock(return_value={"version": "0.22.0"})
     return m
 
