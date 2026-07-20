@@ -1394,7 +1394,7 @@ export default function Settings() {
                 className={`${inputCls} disabled:cursor-not-allowed`}
               />
               <span className={subTextCls}>
-                Which fields to send. Available: <code>brand</code>, <code>color</code>, <code>color_hex</code>, <code>number</code>, <code>material</code>, <code>qr_url</code>. Unknown names are skipped.
+                Which fields to send. Available: <code>brand</code>, <code>color</code>, <code>color_hex</code>, <code>number</code>, <code>material</code>, <code>name</code>, <code>spool_id</code>, <code>qr_url</code>. <code>name</code> is the Filament DB filament name; <code>spool_id</code> is the Filament DB spool id. Unknown names are skipped.
               </span>
             </label>
 

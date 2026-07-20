@@ -305,6 +305,24 @@ def test_print_sends_only_csv_fields_with_request_derived_qr(monkeypatch):
     assert media is None
 
 
+def test_print_sends_fdb_name_and_spool_id_fields(monkeypatch):
+    """The Filament DB full `name` and FDB `spool_id` are selectable label fields (#74)."""
+    db = _make_db()
+    db.add(SpoolMapping(spoolman_spool_id=42, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))
+    client = _client(db)
+    set_config_value(db, "labelforge_fields", "name,spool_id,number")
+    db.commit()
+    inner = _mock_lfc(monkeypatch)
+
+    r = client.post("/api/labels/print", json={"fil": "fil-1", "spool": "spool-1"})
+    assert r.status_code == 200
+    _name, fields, *_ = inner.print_template.await_args.args
+    assert set(fields.keys()) == {"name", "spool_id", "number"}
+    assert fields["name"] == "PLA"            # FDB filament full name
+    assert fields["spool_id"] == "spool-1"    # FDB spool id
+    assert fields["number"] == "42"           # Spoolman spool id
+
+
 def test_print_qr_url_uses_bridge_public_url_when_set(monkeypatch):
     db = _make_db()
     db.add(SpoolMapping(spoolman_spool_id=42, filamentdb_filament_id="fil-1", filamentdb_spool_id="spool-1"))

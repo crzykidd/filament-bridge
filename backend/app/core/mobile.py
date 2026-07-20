@@ -102,6 +102,7 @@ async def assemble_spool_detail(
         spoolman_spool_id=sm_spool_id,
         spoolman_filament_id=sm_fil.id,
         number=sm_spool_id,
+        filamentdb_name=fdb_detail.name,
         brand=brand,
         color_name=color_name,
         color_hex=color_hex,

@@ -9,6 +9,13 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Two new label-print fields: the Filament DB spool id (`spool_id`) and the Filament DB
+  filament's full name (`name`).** Add either to the `labelforge_fields` CSV to include it on
+  printed labels, alongside the existing `brand`/`color`/`color_hex`/`number`/`material`/`qr_url`.
+  Closes #74.
+
 ### Performance
 
 - **Sync Log loads far faster.** It was re-fetching the *entire* Spoolman catalog (two API
