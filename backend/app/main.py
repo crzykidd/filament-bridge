@@ -340,6 +340,35 @@ app = FastAPI(
 )
 
 
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Return a structured, diagnosable 500 instead of FastAPI's opaque
+    ``{"detail": "Internal Server Error"}``.
+
+    The full traceback is logged server-side; the response carries the exception
+    type + a scrubbed (single-line, control-char-free) message so the UI can show
+    something actionable — matching the bridge's ``{"detail": {code, message}}``
+    envelope. HTTPException/validation errors keep their own handlers; this only
+    catches otherwise-unhandled exceptions.
+    """
+    from fastapi.responses import JSONResponse
+
+    from app.core.log_safe import scrub
+
+    logging.getLogger(__name__).exception(
+        "Unhandled error on %s %s", request.method, request.url.path
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "internal_error",
+                "message": f"{type(exc).__name__}: {scrub(str(exc))}",
+            }
+        },
+    )
+
+
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
     """Add defensive security headers to every response.

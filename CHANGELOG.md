@@ -20,8 +20,20 @@ GitHub release.
   `sync_log.timestamp` and `sync_log.cycle_id` (the newest-first ordering, window grouping, and
   retention prune), `conflicts.resolved_at` (the ubiquitous open-conflict filter),
   `filament_mappings.filamentdb_id`, and `spool_mappings.filament_mapping_id`. Part of #73.
+- **Added an index on `spool_mappings.filamentdb_spool_id`** — looked up on the mobile-scan
+  resolve path (per request) and the orphan-spool re-adoption pass (per spool per sync cycle),
+  and it previously led no index. From an index deep-dive; other candidates were either already
+  covered (e.g. `snapshots` by its unique constraint) or too low-cardinality to help. Part of #73.
 
 ### Fixed
+
+- **"Sync now" now surfaces the real error instead of an opaque 500.** A manual sync runs the
+  whole cycle inside the request; if it raised, the endpoint had no error handling and there
+  was no global handler, so it returned FastAPI's bare `{"detail":"Internal Server Error"}`
+  with no detail. The trigger now catches failures and returns a structured
+  `{"detail":{"code":"sync_failed","message":"…"}}` (exception type + a scrubbed, single-line
+  message), and a global handler gives every otherwise-unhandled 500 the same diagnosable
+  envelope. The full traceback is logged server-side. Part of #73.
 
 - **Conflicts "Add" (Filament DB → Spoolman) now requires and uses the empty-reel weight
   when the filament has none.** Previously the tare you typed into the Add dialog was silently

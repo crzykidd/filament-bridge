@@ -35,7 +35,7 @@ class SpoolMapping(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     spoolman_spool_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     filamentdb_filament_id: Mapped[str] = mapped_column(String(24), nullable=False)
-    filamentdb_spool_id: Mapped[str] = mapped_column(String(24), nullable=False)
+    filamentdb_spool_id: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     filament_mapping_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("filament_mappings.id", ondelete="SET NULL"),

@@ -4780,6 +4780,51 @@ def test_sync_trigger_prunes_old_sync_log(db):
     assert db.query(SyncLog).filter(SyncLog.cycle_id == "old").count() == 0
 
 
+def test_sync_trigger_surfaces_error_detail(db):
+    """A manual sync that raises returns a structured 500 (code + scrubbed message),
+    not FastAPI's opaque 'Internal Server Error' with no detail."""
+    from unittest.mock import patch
+
+    app = FastAPI()
+    for mod in _ROUTERS:
+        app.include_router(mod.router, prefix="/api")
+    app.dependency_overrides[get_db] = lambda: db
+    app.state.spoolman = _fake_spoolman()
+    app.state.filamentdb = _fake_filamentdb()
+    client = TestClient(app)
+
+    with patch("app.api.sync.run_sync_cycle",
+               AsyncMock(side_effect=RuntimeError("boom\nline2"))):
+        resp = client.post("/api/sync/trigger")
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["code"] == "sync_failed"
+    assert "RuntimeError" in detail["message"] and "boom" in detail["message"]
+    assert "\n" not in detail["message"]  # scrubbed to a single line
+
+
+def test_global_exception_handler_returns_structured_500():
+    """The app's unhandled-exception handler returns {detail:{code,message}} with the
+    exception type + scrubbed message instead of a bare Internal Server Error."""
+    from app.main import _unhandled_exception_handler
+
+    app = FastAPI()
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
+
+    @app.get("/boom")
+    def _boom():
+        raise RuntimeError("kaboom\r\ninjected")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.get("/boom")
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["code"] == "internal_error"
+    assert "RuntimeError" in detail["message"] and "kaboom" in detail["message"]
+    assert "\n" not in detail["message"] and "\r" not in detail["message"]
+
+
 def test_update_config_reschedules_when_scheduler_present(db):
     """update_config calls scheduler.reschedule_job when app.state.scheduler is set."""
     from unittest.mock import MagicMock
