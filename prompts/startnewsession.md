@@ -95,21 +95,35 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-07-19, clean — v0.6.15 shipped)
+## ⏸️ PICK UP HERE (paused 2026-07-19 overnight — READY FOR `/release-prep 0.6.16`)
 
-**Where things stand — everything is released and synced, nothing stranded:**
-- **v0.6.15 is live** (tag `v0.6.15`, GitHub release published, prod image build succeeded).
-  `main` == `origin/main` (HEAD `fcd13f9`, the #71 merge); `dev` == `origin/dev`; clean tree.
-  It shipped **#69** (selectable FDB import), **#70** (reused-Spoolman-id crash fix + stale-
-  mapping GC), and the **FDB 1.67.0** latest-tested bump. Both issues auto-closed.
-- Prod picks up the fix on its next `:latest` pull/restart. **No prod surgery was done this
-  session** (by user's call — treat the leftover as a real self-heal test): there's still an
-  inert orphan Spoolman filament **#179** ("ELEGOO RAPID PLA Plus Orange", empty) + a stale
-  bridge mapping `179→<master>` on `spoolman.crzynet.com`. It's harmless (a master isn't
-  sync'd) and the new GC clears that mapping automatically the moment 179 is ever deleted.
-- **First natural next work: #65** — the SM→FDB direction still has the latent preview-writes
-  bug (same class as #64; needs a real `dry_run` on the bigger `_execute_spoolman_to_fdb`).
-  As always: **ask the user which issue to work before starting.**
+**FIRST THING THIS MORNING: run `/release-prep 0.6.16`.** A batch of work is committed +
+pushed on `dev` (HEAD **`7313d0a`**, `dev` == `origin/dev`, clean tree) with a full
+`CHANGELOG [Unreleased]` section, all tests green (backend 1436 + ruff; frontend 189 + tsc).
+Nothing stranded. Latest release is still **v0.6.15**; this next one is **0.6.16**.
+
+**What's queued in `[Unreleased]` for 0.6.16:**
+- **#72** (Fixed) — Conflicts "Add" (FDB→Spoolman) now **requires** the empty-reel (tare)
+  weight when the FDB filament has none, **uses** it (the tare was being silently dropped),
+  and **writes it back** to the FDB filament. Backend gate (422 `tare_required`) + frontend
+  required-field. Commit `56271c2`.
+- **#73** (Performance/Fixed, *partial* — see open items) — three prod perf/reliability wins:
+  (a) **Sync Log** no longer re-fetches the whole Spoolman catalog per load (lazy + 60s cache);
+  (b) **DB indexes** added (6 across migrations `d4e6f8a1b3c5` + `e5f7a2c4b6d8`:
+  `sync_log.timestamp`/`cycle_id`, `conflicts.resolved_at`, `filament_mappings.filamentdb_id`,
+  `spool_mappings.filament_mapping_id` + `.filamentdb_spool_id`); (c) **"Sync now" 500** now
+  returns a structured, diagnosable error (+ a global 500 handler). Commits `fc88314`, `7313d0a`.
+- **Prod leftover (still there, inert):** orphan Spoolman filament **#179** + stale mapping
+  `179→<master>` on `spoolman.crzynet.com` — harmless; the #70 GC clears it when 179 is deleted.
+
+**Open / next work (ask the user which to take):**
+- **#73 remaining** — **Dashboard (5-10s)** double filament N+1 in `/sync/status` + sequential
+  health checks; and if "Sync now" is *timing out* (not erroring), consider backgrounding the
+  blocking cycle. Issue left OPEN with a progress comment.
+- **#74** — label print: add FDB `spool_id` **and** the FDB full `name` as selectable label
+  fields (`_build_field_catalog` in `app/api/labels.py`).
+- **#65** — SM→FDB latent preview-writes bug (same class as #64; needs real `dry_run` on the
+  bigger `_execute_spoolman_to_fdb`).
 
 **The FDB→Spoolman import saga — ALL SHIPPED:** importing a Filament DB master+variant into
 Spoolman was broken in stacked layers, fixed one per release:
@@ -141,11 +155,14 @@ Spoolman was broken in stacked layers, fixed one per release:
   (#61 diameter-422 + #62 null-scalar-PATCH). Earlier: v0.6.11 (repo audit — see below),
   v0.6.10 (Synced Records Unlink #40 *partial*; net/gross labels #55), v0.6.9 (mobile
   printer-slot #53; OpenTag clarity #52).
-- Open issues (see `docs/backlog.md`): **#65** SM→FDB preview-writes (same class as #64, bigger
-  fix — the natural next task); **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink
-  needs a `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API
-  token (design call); **#24** Discord webhooks (FR-20); **#25** print-history enrichment
-  (FR-22, deferred). (#69 + #70 closed in v0.6.15.)
+- **Queued on `dev` for 0.6.16** (unreleased, see the PICK-UP block): **#72** tare-required
+  Add fix; **#73** *partial* (Sync Log speed + DB indexes + Sync-now 500 diagnosability).
+- Open issues (see `docs/backlog.md`): **#73** *remaining* — Dashboard N+1 + (maybe) background
+  the blocking "Sync now"; **#74** label print add FDB `spool_id` + full `name` fields; **#65**
+  SM→FDB preview-writes (same class as #64); **#40** RELINK in Synced Records (Unlink shipped
+  v0.6.10; relink needs a `filament-suggestions-by-mapping` endpoint + ranked picker); **#47**
+  read-only API token (design call); **#24** Discord webhooks (FR-20); **#25** print-history
+  enrichment (FR-22, deferred). (#69 + #70 closed in v0.6.15.)
 - **Branch-tangle gotcha:** `/release-cut` leaves you on `main`; if you then commit, it lands
   on local `main` by mistake. After any release-cut, `git checkout dev` and
   `git branch -f main origin/main` before doing more work (happened 3× this session).
