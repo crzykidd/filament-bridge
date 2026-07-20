@@ -37,6 +37,13 @@ GitHub release.
 
 ### Fixed
 
+- **Conflicts "Add" preview (Spoolman → Filament DB) no longer writes to your upstreams.**
+  The preview for the SM→FDB direction was calling the real importer — it created Filament DB
+  filaments/spools and patched Spoolman even though it was labelled "no changes written yet"
+  (only the bridge's own SQLite bookkeeping was rolled back). This was the SM→FDB twin of the
+  FDB→SM preview bug fixed in v0.6.13. The importer now has a real dry-run mode that plans the
+  same records (so the preview counts match) without performing any of its upstream writes.
+  Fixes #65.
 - **"Sync now" now surfaces the real error instead of an opaque 500.** A manual sync runs the
   whole cycle inside the request; if it raised, the endpoint had no error handling and there
   was no global handler, so it returned FastAPI's bare `{"detail":"Internal Server Error"}`

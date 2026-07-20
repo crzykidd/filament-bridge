@@ -470,6 +470,7 @@ async def import_conflict_record(
                 variant_keywords=variant_keywords,
                 container_parent_marker=container_marker,
                 precision=precision,
+                dry_run=payload.dry_run,
             )
             direction = "spoolman_to_filamentdb"
         else:

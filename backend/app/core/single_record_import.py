@@ -45,11 +45,13 @@ async def import_single_sm_filament(
     container_parent_marker: str = "(Master)",
     precision: int = 2,
     include_empty_spools: bool = True,
+    dry_run: bool = False,
 ) -> "Any":  # returns _ExecResult from wizard
     """Import a single Spoolman filament (and its spools) into Filament DB.
 
     Calls the wizard's _execute_spoolman_to_fdb scoped to one SM filament.
-    Returns the _ExecResult accumulator.
+    Returns the _ExecResult accumulator. When ``dry_run`` is set, no upstream
+    writes are performed (the preview counts still reflect what a real run would do).
 
     Raises on any unrecoverable setup failure (upstream fetch, unknown filament).
     Per-record write failures are captured in the _ExecResult (action="failed").
@@ -118,6 +120,7 @@ async def import_single_sm_filament(
         variant_keywords=variant_keywords,
         container_parent_marker=container_parent_marker,
         container_name_overrides=None,
+        dry_run=dry_run,
     )
     return res
 
