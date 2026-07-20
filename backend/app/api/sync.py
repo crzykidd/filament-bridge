@@ -6,6 +6,7 @@ triggers it and shapes the responses.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 
@@ -31,6 +32,7 @@ from app.core.version import incompatibilities
 from app.db import get_db
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
+from app.models.snapshot import Snapshot
 from app.models.sync_log import SyncLog
 from app.schemas.api import (
     AutoSyncRequest,
@@ -136,8 +138,11 @@ async def set_auto_sync(
 @router.get("/sync/status", response_model=SyncStatusResponse)
 async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncStatusResponse:
     """Dashboard payload: connectivity, counts, last/next sync, pending conflicts (FR-15)."""
-    spoolman_health = await _check_spoolman(request)
-    filamentdb_health = await _check_filamentdb(request)
+    # Both health checks hit a live upstream — run them concurrently, not back-to-back
+    # (they were the dominant cost of the dashboard load).
+    spoolman_health, filamentdb_health = await asyncio.gather(
+        _check_spoolman(request), _check_filamentdb(request)
+    )
     systems = {
         "spoolman": SystemStatus(**spoolman_health.model_dump()),
         "filamentdb": SystemStatus(**filamentdb_health.model_dump()),
@@ -167,9 +172,25 @@ async def sync_status(request: Request, db: Session = Depends(get_db)) -> SyncSt
         .filter(FilamentMapping.spoolman_filament_id.is_not(None))
         .all()
     )
+    # Pre-load the existing filament-snapshot ids once (two queries) so the status
+    # check below is O(1) per mapping instead of two per-row snapshot queries.
+    _sm_fil_snap_ids: set[str] = {
+        e for (e,) in db.query(Snapshot.entity_id).filter(
+            Snapshot.source == "spoolman", Snapshot.entity_type == "filament"
+        ).all()
+    }
+    _fdb_fil_snap_ids: set[str] = {
+        e for (e,) in db.query(Snapshot.entity_id).filter(
+            Snapshot.source == "filamentdb", Snapshot.entity_type == "filament"
+        ).all()
+    }
     for fm in real_filament_mappings:
         filament_counts["total"] += 1
-        status = filament_mapping_status(db, fm, open_conflict_fdb_ids)
+        status = filament_mapping_status(
+            db, fm, open_conflict_fdb_ids,
+            sm_filament_snapshot_ids=_sm_fil_snap_ids,
+            fdb_filament_snapshot_ids=_fdb_fil_snap_ids,
+        )
         filament_counts[status] += 1
 
     pending_conflicts = db.query(Conflict).filter(Conflict.resolved_at.is_(None)).count()

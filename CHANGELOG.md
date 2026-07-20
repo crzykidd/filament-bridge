@@ -31,6 +31,9 @@ GitHub release.
   resolve path (per request) and the orphan-spool re-adoption pass (per spool per sync cycle),
   and it previously led no index. From an index deep-dive; other candidates were either already
   covered (e.g. `snapshots` by its unique constraint) or too low-cardinality to help. Part of #73.
+- **Dashboard loads faster.** Its two upstream health checks now run **concurrently** instead of
+  back-to-back (they were the dominant cost), and the filament-status counts pre-load snapshot
+  existence once instead of two queries per filament mapping. Part of #73.
 
 ### Fixed
 
