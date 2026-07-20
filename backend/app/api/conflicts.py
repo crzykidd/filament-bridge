@@ -381,6 +381,7 @@ async def import_conflict_record(
     """
     from app.core.compat import sync_compatibility_errors
     from app.core.single_record_import import (
+        TareRequiredError,
         import_single_fdb_filament,
         import_single_sm_filament,
     )
@@ -476,12 +477,16 @@ async def import_conflict_record(
             import_res = await import_single_fdb_filament(
                 db, cycle_id, spoolman, filamentdb,
                 fdb_fil_id,
+                tare_override=payload.tare_override,
+                require_tare=True,
                 precision=precision,
                 dry_run=payload.dry_run,
             )
             direction = "filamentdb_to_spoolman"
     except HTTPException:
         raise
+    except TareRequiredError as exc:
+        raise api_error(422, "tare_required", str(exc))
     except Exception as exc:
         import logging as _logging
         _logging.getLogger(__name__).error(

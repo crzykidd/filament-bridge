@@ -104,6 +104,13 @@ function isStaleConflict(e: unknown): boolean {
 const STALE_CONFLICT_MSG =
   'This conflict was refreshed by a background sync. The list has been reloaded — reopen Add and try again.'
 
+// The FDB→Spoolman import needs an empty-reel (tare) weight to convert the spool's
+// gross weight to Spoolman's net model. When the Filament DB filament has none, the
+// backend returns 422 tare_required so the Add flow can require it (and write it back).
+function isTareRequired(e: unknown): boolean {
+  return e instanceof BridgeApiError && e.status === 422 && e.code === 'tare_required'
+}
+
 function deletedSideLabel(conflict: ConflictResponse): string {
   const descriptor = (conflict.spoolman_value ?? conflict.filamentdb_value) as { deleted_side?: string } | null
   if (descriptor?.deleted_side === 'filamentdb') return 'Filament DB'
@@ -239,6 +246,9 @@ function NewRecordAddFlow({
   // Manual 24-char override (takes precedence when filled and valid)
   const [manualId, setManualId] = useState('')
   const [tare, setTare] = useState('')
+  // Set when the backend reports the FDB filament has no tare — the tare input then
+  // becomes required before Preview/Confirm can proceed.
+  const [tareRequired, setTareRequired] = useState(false)
   const [step, setStep] = useState<ImportStep>('form')
   const [preview, setPreview] = useState<WizardExecuteResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -290,6 +300,9 @@ function NewRecordAddFlow({
       if (isStaleConflict(e)) {
         setErr(STALE_CONFLICT_MSG)
         onResolved()
+      } else if (isTareRequired(e)) {
+        setTareRequired(true)
+        setErr(e instanceof Error ? e.message : String(e))
       } else {
         setErr(e instanceof Error ? e.message : String(e))
       }
@@ -314,6 +327,10 @@ function NewRecordAddFlow({
       if (isStaleConflict(e)) {
         setErr(STALE_CONFLICT_MSG)
         onResolved()
+      } else if (isTareRequired(e)) {
+        setTareRequired(true)
+        setErr(e instanceof Error ? e.message : String(e))
+        setStep('form')  // send them back to fill in the tare
       } else {
         setErr(e instanceof Error ? e.message : String(e))
       }
@@ -447,24 +464,37 @@ function NewRecordAddFlow({
       )}
 
       <div className="flex items-center gap-2">
-        <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">Tare override (g)</label>
+        <label className="text-sm text-gray-600 dark:text-gray-300 shrink-0">
+          {tareRequired ? 'Empty-reel weight (g) *' : 'Tare override (g)'}
+        </label>
         <input
           type="number"
-          placeholder="Optional, e.g. 200"
+          placeholder={tareRequired ? 'Required, e.g. 200' : 'Optional, e.g. 200'}
           value={tare}
           onChange={e => setTare(e.target.value)}
           min={0}
-          className="w-40 border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className={`w-40 border rounded px-3 py-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${
+            tareRequired && !tare.trim()
+              ? 'border-red-400 dark:border-red-500'
+              : 'border-gray-300 dark:border-gray-600'
+          }`}
         />
-        <HelpTip text="Overrides the filament's spool_weight for the weight conversion. Leave blank to use the default from Spoolman." />
+        <HelpTip text="Overrides the filament's empty-reel (tare) weight for the net-weight conversion. Leave blank to use the spool weight already set in Filament DB." />
       </div>
+      {tareRequired && (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          This filament has no empty-reel weight in Filament DB, so its spool can't be
+          converted to Spoolman's net weight. Enter the empty spool weight to import — it
+          will be saved back to the Filament DB filament so you won't be asked again.
+        </p>
+      )}
 
       {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
 
       <div className="flex gap-2">
         <button
           onClick={runPreview}
-          disabled={loading || !linkReady || (manualId.trim() !== '' && !is24Hex(manualId))}
+          disabled={loading || !linkReady || (manualId.trim() !== '' && !is24Hex(manualId)) || (tareRequired && !tare.trim())}
           className="px-4 py-1.5 bg-emerald-600 text-white rounded text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
         >
           {loading ? 'Loading…' : 'Preview import'}

@@ -209,6 +209,67 @@ async def test_single_import_master_is_skipped_not_created(db):
     assert len(fil_rows) == 1 and fil_rows[0].action == "skipped"
 
 
+# ---------------------------------------------------------------------------
+# Tare handling on the conflict-import (require_tare) path — GitHub #72
+# ---------------------------------------------------------------------------
+
+
+def _tareless_with_spool() -> FDBFilament:
+    """An FDB filament with a spool but NO empty-reel weight (spoolWeight)."""
+    return FDBFilament(_id="v1", name="ELEGOO RAPID PLA Plus Orange", type="PLA",
+                       density=1.23, color="#ff8e24",
+                       spools=[FDBSpool(_id="s1", totalWeight=1000.0)])
+
+
+@pytest.mark.asyncio
+async def test_single_import_requires_tare_when_fdb_has_none(db):
+    """require_tare + no spoolWeight + no override → TareRequiredError, nothing created."""
+    from app.core.single_record_import import TareRequiredError
+
+    sm = _fake_spoolman(filaments=[], spools=[])
+    fdb = _fake_filamentdb(filaments=[_tareless_with_spool()])
+
+    with pytest.raises(TareRequiredError):
+        await import_single_fdb_filament(db, "cyc", sm, fdb, "v1",
+                                         require_tare=True, dry_run=True)
+
+    # Gated before the import — no orphan filament is created.
+    sm.create_filament.assert_not_called()
+    fdb.update_filament.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_single_import_tare_override_writes_back_to_fdb_and_imports(db):
+    """A supplied tare fills the missing FDB spoolWeight (written back) and imports."""
+    sm = _fake_spoolman(filaments=[], spools=[])
+    fdb = _fake_filamentdb(filaments=[_tareless_with_spool()])
+
+    res = await import_single_fdb_filament(db, "cyc", sm, fdb, "v1",
+                                           tare_override=200.0, require_tare=True,
+                                           dry_run=False)
+
+    fdb.update_filament.assert_called_once_with("v1", {"spoolWeight": 200.0})
+    sm.create_filament.assert_called_once()
+    sm.create_spool.assert_called_once()
+    assert res.failed == 0
+
+
+@pytest.mark.asyncio
+async def test_single_import_tare_override_dry_run_no_writeback(db):
+    """A PREVIEW with a tare override plans the spool but writes nothing to FDB."""
+    sm = _fake_spoolman(filaments=[], spools=[])
+    fdb = _fake_filamentdb(filaments=[_tareless_with_spool()])
+
+    res = await import_single_fdb_filament(db, "cyc", sm, fdb, "v1",
+                                           tare_override=200.0, require_tare=True,
+                                           dry_run=True)
+
+    fdb.update_filament.assert_not_called()   # preview: no FDB write
+    sm.create_filament.assert_not_called()
+    assert res.failed == 0
+    assert sum(1 for r in res.records if r.entity_type == "spool" and r.action == "created") == 1
+
+
 @pytest.mark.asyncio
 async def test_execute_backfills_missing_weight_before_spool(db):
     """An existing link whose SM filament has no `weight` (pre-fix orphan) is

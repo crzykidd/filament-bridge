@@ -2151,7 +2151,7 @@ async def _execute_fdb_to_spoolman(
                 # Should not reach here — the execute gate rejects when tare is unknown.
                 # Fail this spool explicitly rather than writing a silent 200 g guess.
                 _spool_label = f"{_fil_label} (spool {fdb_spool.id[:8]})"
-                _err = "tare unknown — enter empty-reel weight in the Variances step and re-execute"
+                _err = "tare unknown — set the filament's empty-reel (tare) weight and re-import"
                 logger.error("wizard execute %s: tare unknown for FDB spool %s (filament %s) — skipping",
                              res.cycle_id, fdb_spool.id, fdb_fil.id)
                 res.add(db, "spool", "failed", error=_err,

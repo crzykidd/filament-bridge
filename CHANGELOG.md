@@ -9,6 +9,19 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conflicts "Add" (Filament DB → Spoolman) now requires and uses the empty-reel weight
+  when the filament has none.** Previously the tare you typed into the Add dialog was silently
+  dropped (the FDB→Spoolman path never forwarded it), so a Filament DB filament with no
+  empty-reel (tare) weight always failed on the spool — with a message pointing at the wizard's
+  "Variances step," which doesn't exist in this flow, and leaving an orphan Spoolman filament.
+  Now: the entered tare is actually applied; when the filament has no tare the Add dialog
+  **requires** the empty-reel weight before you can preview or confirm (the backend also gates
+  it with a `422` so nothing is created without one); and the supplied tare is **written back
+  to the Filament DB filament** so its other spools import cleanly and you're not asked again.
+  Fixes #72.
+
 ## [0.6.15] — 2026-07-19
 
 ### Fixed
