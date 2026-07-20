@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.16] — 2026-07-20
+
 ### Added
 
 - **Two new label-print fields: the Filament DB spool id (`spool_id`) and the Filament DB
