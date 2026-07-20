@@ -9,6 +9,18 @@ GitHub release.
 
 ## [Unreleased]
 
+### Performance
+
+- **Sync Log loads far faster.** It was re-fetching the *entire* Spoolman catalog (two API
+  calls) on every page load — just to label rows — even when every row could be named from the
+  bridge's own mappings. Now that live lookup is **skipped entirely when the page resolves from
+  mappings**, and when it is needed (unmapped rows, e.g. new-filament conflicts) the result is
+  **cached briefly** so paging/filtering doesn't re-fetch. Part of #73.
+- **Added database indexes** for the hot query paths that were doing full-table scans:
+  `sync_log.timestamp` and `sync_log.cycle_id` (the newest-first ordering, window grouping, and
+  retention prune), `conflicts.resolved_at` (the ubiquitous open-conflict filter),
+  `filament_mappings.filamentdb_id`, and `spool_mappings.filament_mapping_id`. Part of #73.
+
 ### Fixed
 
 - **Conflicts "Add" (Filament DB → Spoolman) now requires and uses the empty-reel weight

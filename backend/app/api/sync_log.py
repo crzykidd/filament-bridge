@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func
@@ -57,22 +58,20 @@ def _vendor_name_label(vendor: str | None, name: str | None) -> str | None:
     return label or None
 
 
-def _build_label_resolver(
-    db: Session,
-    sm_fil_labels: dict[int, str | None] | None = None,
-    sm_spool_labels: dict[int, str | None] | None = None,
-):
+def _build_label_resolver(db: Session):
     """Resolve a human-readable record name for sync_log rows.
 
     Primary source is FilamentMapping.identity (a {vendor, name, color_hex, material}
     blob written at mapping creation) — authoritative for already-synced records, works
-    for existing rows, no schema change. For UNMAPPED records (e.g. new_filament conflicts
-    on filaments not yet imported), there is no mapping, so the caller may pass best-effort
-    live-Spoolman name maps (sm_fil_labels by SM filament id, sm_spool_labels by SM spool id)
-    as a fallback. Returns None when nothing resolves.
+    for existing rows, no schema change. The returned ``resolve(row, sm_fil_labels,
+    sm_spool_labels)`` takes optional best-effort live-Spoolman name maps as a fallback
+    for UNMAPPED records (e.g. new_filament conflicts on filaments not yet imported);
+    the caller only fetches those (an expensive pair of live Spoolman calls) when a page
+    actually has rows that mappings can't resolve. Returns None when nothing resolves.
+
+    The mapping tables are read ONCE here; the live-label fallback is passed per call so
+    the (cached) Spoolman lookup can be deferred until it is known to be needed.
     """
-    sm_fil_labels = sm_fil_labels or {}
-    sm_spool_labels = sm_spool_labels or {}
     fil_by_fdb_id: dict[str, str | None] = {}
     fil_by_sm_id: dict[int, str | None] = {}
     fil_by_pk: dict[int, str | None] = {}
@@ -89,7 +88,11 @@ def _build_label_resolver(
     for s in db.query(SpoolMapping).all():
         spool_label_by_sm_spool[s.spoolman_spool_id] = fil_by_pk.get(s.filament_mapping_id)
 
-    def resolve(row: SyncLog) -> str | None:
+    def resolve(
+        row: SyncLog,
+        sm_fil_labels: dict[int, str | None] | None = None,
+        sm_spool_labels: dict[int, str | None] | None = None,
+    ) -> str | None:
         # 1) Mapping identity (authoritative for synced records).
         if row.filamentdb_filament_id and fil_by_fdb_id.get(row.filamentdb_filament_id):
             return fil_by_fdb_id[row.filamentdb_filament_id]
@@ -100,6 +103,8 @@ def _build_label_resolver(
         if fil_by_sm_id.get(row.spoolman_id):  # unmapped spool on a mapped filament
             return fil_by_sm_id[row.spoolman_id]
         # 2) Best-effort live Spoolman fallback (unmapped records — e.g. new_filament conflicts).
+        sm_fil_labels = sm_fil_labels or {}
+        sm_spool_labels = sm_spool_labels or {}
         if row.entity_type == "filament" and sm_fil_labels.get(row.spoolman_id):
             return sm_fil_labels[row.spoolman_id]
         if row.entity_type == "spool" and sm_spool_labels.get(row.spoolman_id):
@@ -109,14 +114,29 @@ def _build_label_resolver(
     return resolve
 
 
+# Short in-process TTL for the live Spoolman label maps. The lookup fetches the whole
+# Spoolman catalog (two calls), so caching stops every sync-log page load / pagination /
+# filter change from re-fetching it. Labels are a best-effort display convenience, so a
+# few seconds of staleness is fine.
+_LIVE_LABELS_TTL_SECONDS = 60.0
+
+
 async def _live_spoolman_labels(request: Request) -> tuple[dict[int, str | None], dict[int, str | None]]:
     """Best-effort id→name maps from live Spoolman, to label rows for records that aren't
-    mapped yet (e.g. new_filament conflicts). Never raises — returns empty maps on any error."""
-    fil_labels: dict[int, str | None] = {}
-    spool_labels: dict[int, str | None] = {}
+    mapped yet (e.g. new_filament conflicts). Never raises — returns empty maps on any error.
+
+    Cached on app.state for ``_LIVE_LABELS_TTL_SECONDS`` so repeated sync-log views don't
+    re-fetch the entire Spoolman catalog each time."""
     spoolman = getattr(request.app.state, "spoolman", None)
     if spoolman is None:
-        return fil_labels, spool_labels
+        return {}, {}
+
+    cached = getattr(request.app.state, "_sync_log_label_cache", None)
+    if cached is not None and (time.monotonic() - cached[0]) < _LIVE_LABELS_TTL_SECONDS:
+        return cached[1], cached[2]
+
+    fil_labels: dict[int, str | None] = {}
+    spool_labels: dict[int, str | None] = {}
     try:
         for f in await spoolman.get_filaments():
             fil_labels[f.id] = _vendor_name_label(f.vendor.name if f.vendor else None, f.name)
@@ -126,6 +146,9 @@ async def _live_spoolman_labels(request: Request) -> tuple[dict[int, str | None]
     except Exception as exc:  # noqa: BLE001 — labels are a best-effort convenience
         from app.core.log_safe import scrub
         logger.info("sync-log: live Spoolman label lookup failed (using mappings only): %s", scrub(exc))
+        return fil_labels, spool_labels  # don't cache a failed/partial fetch
+
+    request.app.state._sync_log_label_cache = (time.monotonic(), fil_labels, spool_labels)
     return fil_labels, spool_labels
 
 
@@ -171,8 +194,19 @@ async def get_sync_log(
             .all()
         )
 
-    sm_fil_labels, sm_spool_labels = await _live_spoolman_labels(request)
-    resolve_label = _build_label_resolver(db, sm_fil_labels, sm_spool_labels)
+    resolve_label = _build_label_resolver(db)
+    # First pass resolves labels from mappings only — no upstream IO.
+    labels: dict[int, str | None] = {r.id: resolve_label(r) for r in rows}
+    # Only pay for the live Spoolman catalog lookup when this page has rows that
+    # mappings couldn't resolve (e.g. unmapped new_filament conflicts). This makes the
+    # common all-mapped page skip the two Spoolman calls entirely; the lookup is also
+    # cached briefly so pagination/filtering don't re-fetch.
+    if any(v is None for v in labels.values()):
+        sm_fil_labels, sm_spool_labels = await _live_spoolman_labels(request)
+        if sm_fil_labels or sm_spool_labels:
+            for r in rows:
+                if labels[r.id] is None:
+                    labels[r.id] = resolve_label(r, sm_fil_labels, sm_spool_labels)
     items = [
         SyncLogEntry(
             id=r.id,
@@ -181,7 +215,7 @@ async def get_sync_log(
             direction=r.direction,
             action=r.action,
             entity_type=r.entity_type,
-            label=resolve_label(r),
+            label=labels[r.id],
             spoolman_id=r.spoolman_id,
             filamentdb_filament_id=r.filamentdb_filament_id,
             filamentdb_spool_id=r.filamentdb_spool_id,

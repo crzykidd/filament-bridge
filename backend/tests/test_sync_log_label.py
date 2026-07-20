@@ -112,3 +112,43 @@ def test_label_for_unmapped_spool_via_live_spoolman(db):
     )
     entry = _client(db, spoolman).get("/api/sync-log").json()["items"][0]
     assert entry["label"] == "Prusament Matte Charcoal"
+
+
+def test_all_mapped_page_skips_live_spoolman_lookup(db):
+    """Perf: when every displayed row resolves from mappings, the sync-log view must NOT
+    make the expensive live Spoolman catalog calls."""
+    db.add(FilamentMapping(
+        spoolman_filament_id=170,
+        filamentdb_id="fdb-amolen-cream",
+        identity=json.dumps({"vendor": "Amolen", "name": "Cream Yellow", "material": "PLA"}),
+    ))
+    db.commit()
+    _add_log(db, action="update", entity_type="filament", spoolman_id=170,
+             filamentdb_filament_id="fdb-amolen-cream")
+
+    spoolman = AsyncMock(get_filaments=AsyncMock(return_value=[]),
+                         get_spools=AsyncMock(return_value=[]))
+    resp = _client(db, spoolman).get("/api/sync-log")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["items"][0]["label"] == "Amolen Cream Yellow"
+    spoolman.get_filaments.assert_not_called()
+    spoolman.get_spools.assert_not_called()
+
+
+def test_live_spoolman_labels_cached_across_requests(db):
+    """Perf: the live Spoolman catalog lookup is cached, so a second sync-log view (within
+    the TTL) does not re-fetch it."""
+    _add_log(db, action="conflict", entity_type="filament", spoolman_id=55, field_name="new_filament")
+
+    spoolman = AsyncMock(
+        get_filaments=AsyncMock(return_value=[
+            SpoolmanFilament(id=55, name="Galaxy Black", vendor=SpoolmanVendor(id=1, name="Bambu Lab")),
+        ]),
+        get_spools=AsyncMock(return_value=[]),
+    )
+    client = _client(db, spoolman)  # one app → shared app.state cache
+    r1 = client.get("/api/sync-log")
+    r2 = client.get("/api/sync-log")
+    assert r1.json()["items"][0]["label"] == "Bambu Lab Galaxy Black"
+    assert r2.json()["items"][0]["label"] == "Bambu Lab Galaxy Black"
+    assert spoolman.get_filaments.call_count == 1  # 2nd request served from cache

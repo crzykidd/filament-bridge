@@ -19,7 +19,7 @@ class Conflict(Base):
     spoolman_value: Mapped[str | None] = mapped_column(Text, nullable=True)   # JSON-encoded
     filamentdb_value: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-encoded
     detected_at: Mapped[object] = mapped_column(DateTime, nullable=False, default=func.now())
-    resolved_at: Mapped[object | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[object | None] = mapped_column(DateTime, nullable=True, index=True)
     resolution: Mapped[str | None] = mapped_column(String, nullable=True)  # "spoolman" | "filamentdb" | "manual"
     resolved_value: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-encoded
     # "cross_system" (default) — both sides changed the same field.
