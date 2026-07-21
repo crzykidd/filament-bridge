@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.15-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.16-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -66,6 +66,24 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.16 (2026-07-20)
+
+- **Performance:** several prod slowness fixes — the **Sync Log** no longer re-fetches the whole
+  Spoolman catalog on every load (and caches labels briefly), the **Dashboard** runs its two
+  upstream health checks concurrently, and **database indexes** were added for the hot query
+  paths (sync log, conflicts, mappings). (#73)
+- **Fixed: the Conflicts "Add" preview (Spoolman → Filament DB) no longer writes to your
+  upstreams.** The preview was creating real Filament DB records despite the "no changes written
+  yet" label; it now has a true read-only dry-run (the Filament DB → Spoolman twin of this was
+  fixed in v0.6.13). (#65)
+- **Fixed: "Sync now" errors are no longer opaque.** A failed manual sync now returns the real
+  error detail instead of a bare `Internal Server Error`. (#73)
+- **Fixed: adding a filament with no empty-reel weight.** The Conflicts "Add" flow now **requires**
+  the empty-reel (tare) weight when the Filament DB filament has none, actually uses it (it was
+  being dropped), and **saves it back** to Filament DB so you're not asked again. (#72)
+- **New label fields:** the Filament DB spool id (`spool_id`) and full filament `name` can now be
+  added to your LabelForge label layout via the fields setting. (#74)
 
 ### v0.6.15 (2026-07-19)
 

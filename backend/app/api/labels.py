@@ -79,6 +79,9 @@ def _build_field_catalog(detail, qr_url: str) -> dict[str, str]:
         "color_hex": str(detail.color_hex) if detail.color_hex is not None else "",
         "number": str(detail.number),
         "material": str(detail.material) if detail.material is not None else "",
+        # Filament DB identifiers/name (opt-in via labelforge_fields).
+        "name": str(detail.filamentdb_name) if detail.filamentdb_name is not None else "",
+        "spool_id": str(detail.filamentdb_spool_id) if detail.filamentdb_spool_id else "",
         "qr_url": qr_url,
     }
 

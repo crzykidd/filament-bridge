@@ -1042,6 +1042,7 @@ class MobileSpoolDetail(BaseModel):
     # Human-facing label number (= Spoolman spool id)
     number: int
     # Display fields
+    filamentdb_name: str | None = None  # the Filament DB filament's full `name`
     brand: str | None = None
     color_name: str | None = None
     color_hex: str | None = None

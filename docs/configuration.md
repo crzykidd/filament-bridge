@@ -177,7 +177,7 @@ vars are the start-up fallback — the matching runtime setting wins when set. S
 | `LABELFORGE_URL` | No | — | Base URL of the LabelForge instance used for printing. Blank = not configured. Runtime-editable. |
 | `LABELFORGE_TOKEN` | No | — | LabelForge bearer token (secret). Blank = no auth header. Runtime-editable. |
 | `LABELFORGE_TEMPLATE` | No | — | Name of the user-created LabelForge template to print. Blank = not configured. Runtime-editable. |
-| `LABELFORGE_FIELDS` | No | — | CSV of catalog field names to send to LabelForge (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`), e.g. `brand,color,number,qr_url`. Unknown names are skipped with a warning. Runtime-editable. |
+| `LABELFORGE_FIELDS` | No | — | CSV of catalog field names to send to LabelForge (`brand`, `color`, `color_hex`, `number`, `material`, `name`, `spool_id`, `qr_url`), e.g. `brand,color,number,qr_url`. `name` is the Filament DB filament's full name; `spool_id` is the Filament DB spool id. Unknown names are skipped with a warning. Runtime-editable. |
 | `LABELFORGE_LABEL_MEDIA` | No | — | Optional per-print media/size hint passed to LabelForge. Blank = the template's stored media. Runtime-editable. |
 
 ---
@@ -221,7 +221,7 @@ Stored in SQLite (`BridgeConfig`); changes take effect without a restart.
 | `labelforge_url` | env (`""`) | Mobile & Labels | LabelForge base URL. Blank = printing not configured (`400 labelforge_not_configured`). |
 | `labelforge_token` | env (`""`) | Mobile & Labels | LabelForge bearer token (secret; masked input). Blank = no auth header. |
 | `labelforge_template` | env (`""`) | Mobile & Labels | Name of the user-created LabelForge template to print. |
-| `labelforge_fields` | env (`""`) | Mobile & Labels | CSV of catalog fields to send (`brand`, `color`, `color_hex`, `number`, `material`, `qr_url`). Unknown names are skipped with a warning. |
+| `labelforge_fields` | env (`""`) | Mobile & Labels | CSV of catalog fields to send (`brand`, `color`, `color_hex`, `number`, `material`, `name`, `spool_id`, `qr_url`; `name` = Filament DB full name, `spool_id` = Filament DB spool id). Unknown names are skipped with a warning. |
 | `labelforge_label_media` | env (`""`) | Mobile & Labels | Optional per-print media hint; blank = template default. |
 
 The wizard also persists its own decision state in BridgeConfig

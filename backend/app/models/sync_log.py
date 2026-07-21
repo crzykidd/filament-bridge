@@ -9,8 +9,8 @@ class SyncLog(Base):
     __tablename__ = "sync_log"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    cycle_id: Mapped[str] = mapped_column(String, nullable=False)  # UUID grouping one sync run
-    timestamp: Mapped[object] = mapped_column(DateTime, nullable=False, default=func.now())
+    cycle_id: Mapped[str] = mapped_column(String, nullable=False, index=True)  # UUID grouping one sync run
+    timestamp: Mapped[object] = mapped_column(DateTime, nullable=False, default=func.now(), index=True)
     direction: Mapped[str] = mapped_column(String, nullable=False)  # "spoolman_to_filamentdb" | "filamentdb_to_spoolman"
     action: Mapped[str] = mapped_column(String, nullable=False)     # "create" | "update" | "conflict" | "skip" | "error"
     entity_type: Mapped[str] = mapped_column(String, nullable=False)  # "spool" | "filament"

@@ -1037,3 +1037,69 @@ describe('Conflicts page — identity on new_filament / new_spool cards', () => 
     expect(screen.queryByText(/·/)).not.toBeInTheDocument()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Tests — FDB→Spoolman Add requires an empty-reel weight when the filament
+// has none (GitHub #72)
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — FDB→Spoolman Add requires a tare when the filament has none', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+    vi.mocked(resolveConflict).mockResolvedValue({
+      ...makeNewFilamentConflict(),
+      status: 'resolved',
+      resolution: 'filamentdb',
+    })
+  })
+
+  function fdbToSmFilamentConflict(): ConflictResponse {
+    // spoolman_id null + filamentdb_filament_id set → FDB→Spoolman direction.
+    return makeNewFilamentConflict({
+      id: 9,
+      spoolman_id: null,
+      filamentdb_filament_id: 'fdb-elegoo-1',
+      label: 'ELEGOO Rapid PLA Orange',
+      vendor: 'ELEGOO',
+      name: 'ELEGOO Rapid PLA Orange',
+    })
+  }
+
+  it('requires the empty-reel weight after a tare_required 422, then previews once entered', async () => {
+    vi.mocked(importConflictRecord)
+      .mockRejectedValueOnce(new BridgeApiError(
+        422, 'tare_required',
+        'This Filament DB filament has no empty-reel (tare) weight; enter it to import the spool into Spoolman.',
+      ))
+      .mockResolvedValue(mockImportResponse)
+
+    renderConflictsWithData([fdbToSmFilamentConflict()])
+
+    const row = screen.getByText('ELEGOO Rapid PLA Orange').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+    await waitFor(() => expect(screen.getByText('Preview import')).toBeInTheDocument())
+
+    // First preview with no tare → backend 422 tare_required → the field becomes required.
+    fireEvent.click(screen.getByText('Preview import'))
+    await waitFor(() => {
+      expect(screen.getByText(/empty-reel weight in Filament DB/i)).toBeInTheDocument()
+      expect(screen.getByText(/Empty-reel weight \(g\) \*/)).toBeInTheDocument()
+    })
+    // Preview is blocked while the now-required tare is empty.
+    expect(screen.getByText('Preview import').closest('button')).toBeDisabled()
+
+    // Enter the tare → Preview re-enabled; the retry carries tare_override and succeeds.
+    fireEvent.change(screen.getByPlaceholderText('Required, e.g. 200'), { target: { value: '200' } })
+    fireEvent.click(screen.getByText('Preview import'))
+
+    await waitFor(() => {
+      expect(importConflictRecord).toHaveBeenLastCalledWith(
+        9, expect.objectContaining({ dry_run: true, tare_override: 200 }),
+      )
+      expect(screen.getByText('Confirm import')).toBeInTheDocument()
+    })
+  })
+})

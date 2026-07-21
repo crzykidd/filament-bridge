@@ -13,7 +13,7 @@ class FilamentMapping(Base):
     # multiple NULLs under a UNIQUE constraint, so the uniqueness invariant holds
     # for all real (non-null) Spoolman filament ids.
     spoolman_filament_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
-    filamentdb_id: Mapped[str] = mapped_column(String(24), nullable=False)
+    filamentdb_id: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     filamentdb_parent_id: Mapped[str | None] = mapped_column(String(24), nullable=True)
     # True when this mapping represents a bridge-owned synthetic container parent
     # (created in generic_container variant_parent_mode).  Synthetic parents have
@@ -35,11 +35,12 @@ class SpoolMapping(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     spoolman_spool_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
     filamentdb_filament_id: Mapped[str] = mapped_column(String(24), nullable=False)
-    filamentdb_spool_id: Mapped[str] = mapped_column(String(24), nullable=False)
+    filamentdb_spool_id: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
     filament_mapping_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("filament_mappings.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
     created_at: Mapped[object] = mapped_column(DateTime, nullable=False, default=func.now())
     updated_at: Mapped[object] = mapped_column(

@@ -23,6 +23,8 @@ async def ensure_fdb_location(
     filamentdb: FilamentDBClient,
     name: str,
     cache: dict[str, str] | None = None,
+    *,
+    dry_run: bool = False,
 ) -> str | None:
     """Return the FDB location id for ``name``, creating the location if absent.
 
@@ -31,6 +33,11 @@ async def ensure_fdb_location(
     When ``cache`` is provided it is consulted first and updated in place so a
     subsequent call for the same name needs no upstream request. When it is not
     provided the helper fetches the current locations once to look for a match.
+
+    When ``dry_run`` is set and the name is not already known (no cache hit / no
+    match among the fetched locations), no location is created — a sentinel id
+    (``"dry-run-location"``) is returned instead so a preview never performs the
+    upstream write.
 
     Raises on upstream failure (the caller decides how to degrade).
     """
@@ -50,6 +57,11 @@ async def ensure_fdb_location(
                 cache[loc_name] = loc_id
         if name in cache:
             return cache[name]
+
+    if dry_run:
+        sentinel = "dry-run-location"
+        cache[name] = sentinel
+        return sentinel
 
     created = await filamentdb.create_location(name)
     loc_id = created["_id"]

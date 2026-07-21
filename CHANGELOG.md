@@ -9,6 +9,62 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.16] — 2026-07-20
+
+### Added
+
+- **Two new label-print fields: the Filament DB spool id (`spool_id`) and the Filament DB
+  filament's full name (`name`).** Add either to the `labelforge_fields` CSV to include it on
+  printed labels, alongside the existing `brand`/`color`/`color_hex`/`number`/`material`/`qr_url`.
+  Closes #74.
+
+### Performance
+
+- **Sync Log loads far faster.** It was re-fetching the *entire* Spoolman catalog (two API
+  calls) on every page load — just to label rows — even when every row could be named from the
+  bridge's own mappings. Now that live lookup is **skipped entirely when the page resolves from
+  mappings**, and when it is needed (unmapped rows, e.g. new-filament conflicts) the result is
+  **cached briefly** so paging/filtering doesn't re-fetch. Part of #73.
+- **Added database indexes** for the hot query paths that were doing full-table scans:
+  `sync_log.timestamp` and `sync_log.cycle_id` (the newest-first ordering, window grouping, and
+  retention prune), `conflicts.resolved_at` (the ubiquitous open-conflict filter),
+  `filament_mappings.filamentdb_id`, and `spool_mappings.filament_mapping_id`. Part of #73.
+- **Added an index on `spool_mappings.filamentdb_spool_id`** — looked up on the mobile-scan
+  resolve path (per request) and the orphan-spool re-adoption pass (per spool per sync cycle),
+  and it previously led no index. From an index deep-dive; other candidates were either already
+  covered (e.g. `snapshots` by its unique constraint) or too low-cardinality to help. Part of #73.
+- **Dashboard loads faster.** Its two upstream health checks now run **concurrently** instead of
+  back-to-back (they were the dominant cost), and the filament-status counts pre-load snapshot
+  existence once instead of two queries per filament mapping. Part of #73.
+
+### Fixed
+
+- **Conflicts "Add" preview (Spoolman → Filament DB) no longer writes to your upstreams.**
+  The preview for the SM→FDB direction was calling the real importer — it created Filament DB
+  filaments/spools and patched Spoolman even though it was labelled "no changes written yet"
+  (only the bridge's own SQLite bookkeeping was rolled back). This was the SM→FDB twin of the
+  FDB→SM preview bug fixed in v0.6.13. The importer now has a real dry-run mode that plans the
+  same records (so the preview counts match) without performing any of its upstream writes.
+  Fixes #65.
+- **"Sync now" now surfaces the real error instead of an opaque 500.** A manual sync runs the
+  whole cycle inside the request; if it raised, the endpoint had no error handling and there
+  was no global handler, so it returned FastAPI's bare `{"detail":"Internal Server Error"}`
+  with no detail. The trigger now catches failures and returns a structured
+  `{"detail":{"code":"sync_failed","message":"…"}}` (exception type + a scrubbed, single-line
+  message), and a global handler gives every otherwise-unhandled 500 the same diagnosable
+  envelope. The full traceback is logged server-side. Part of #73.
+
+- **Conflicts "Add" (Filament DB → Spoolman) now requires and uses the empty-reel weight
+  when the filament has none.** Previously the tare you typed into the Add dialog was silently
+  dropped (the FDB→Spoolman path never forwarded it), so a Filament DB filament with no
+  empty-reel (tare) weight always failed on the spool — with a message pointing at the wizard's
+  "Variances step," which doesn't exist in this flow, and leaving an orphan Spoolman filament.
+  Now: the entered tare is actually applied; when the filament has no tare the Add dialog
+  **requires** the empty-reel weight before you can preview or confirm (the backend also gates
+  it with a `422` so nothing is created without one); and the supplied tare is **written back
+  to the Filament DB filament** so its other spools import cleanly and you're not asked again.
+  Fixes #72.
+
 ## [0.6.15] — 2026-07-19
 
 ### Fixed

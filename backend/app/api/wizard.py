@@ -1196,6 +1196,7 @@ async def _execute_spoolman_to_fdb(
     variant_keywords: list[str] | None = None,
     container_parent_marker: str = "(Master)",
     container_name_overrides: dict[str, dict] | None = None,
+    dry_run: bool = False,
 ) -> None:
     """Import direction "spoolman": seed Filament DB from Spoolman.
 
@@ -1208,6 +1209,11 @@ async def _execute_spoolman_to_fdb(
     container is bridge-owned (spoolman_filament_id = NULL, is_synthetic_parent=True)
     and never participates in sync.  When variant_parent_mode == "promote_color",
     existing behavior (one color promoted to parent) applies unchanged.
+
+    When ``dry_run`` is set, NO upstream writes are performed — the pass plans the
+    same records (so the preview counts match a real run) but never calls Spoolman
+    or Filament DB write endpoints. SQLite mapping rows may still be added; the
+    caller is expected to roll the session back.
     """
     plan = _plan_spoolman_to_fdb(
         db, sm_filaments, sm_spools, fdb_filaments,
@@ -1372,10 +1378,11 @@ async def _execute_spoolman_to_fdb(
                     new_tags = existing_opt_tags | _shared_ids_reuse
                     if new_tags != existing_opt_tags:
                         try:
-                            await filamentdb.update_filament(
-                                existing_fdb_parent_id,
-                                {"optTags": sorted(new_tags)},
-                            )
+                            if not dry_run:
+                                await filamentdb.update_filament(
+                                    existing_fdb_parent_id,
+                                    {"optTags": sorted(new_tags)},
+                                )
                             logger.info(
                                 "wizard execute %s: patched optTags %s onto existing container %s",
                                 res.cycle_id, sorted(new_tags), existing_fdb_parent_id,
@@ -1417,9 +1424,13 @@ async def _execute_spoolman_to_fdb(
                 }
                 _synth_mapping_registered = False  # set True when mapping is handled in 409 path
                 try:
-                    created_container = await filamentdb.create_filament(container_payload_clean)
-                    container_fdb_id = created_container.id
-                    fdb_by_id[container_fdb_id] = created_container
+                    if dry_run:
+                        # Planned container create — no FDB write during a preview.
+                        container_fdb_id = "dry-run"
+                    else:
+                        created_container = await filamentdb.create_filament(container_payload_clean)
+                        container_fdb_id = created_container.id
+                        fdb_by_id[container_fdb_id] = created_container
                     res.add(
                         db, "filament", "created",
                         fdb_filament_id=container_fdb_id,
@@ -1529,7 +1540,8 @@ async def _execute_spoolman_to_fdb(
             if attach_parent:
                 # D3 attach: set parentId on the linked filament too
                 try:
-                    await filamentdb.update_filament(item.fdb_id, {"parentId": attach_parent})
+                    if not dry_run:
+                        await filamentdb.update_filament(item.fdb_id, {"parentId": attach_parent})
                     res.add(db, "filament", "updated", detail="variant parent set (attach)",
                             label=_sm_label(item.sm_filament),
                             sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
@@ -1558,13 +1570,18 @@ async def _execute_spoolman_to_fdb(
             if reconcile_fields:
                 payload = _overlay_reconcile_on_fdb_payload(payload, reconcile_fields)
             try:
-                created = await filamentdb.create_filament(payload)
-                item.fdb_id = created.id
-                fdb_by_id[created.id] = created
-                just_created_fdb_ids.add(created.id)
+                if dry_run:
+                    # Planned create — no FDB write during a preview.
+                    item.fdb_id = "dry-run"
+                    just_created_fdb_ids.add(item.fdb_id)
+                else:
+                    created = await filamentdb.create_filament(payload)
+                    item.fdb_id = created.id
+                    fdb_by_id[created.id] = created
+                    just_created_fdb_ids.add(created.id)
                 res.add(db, "filament", "created",
                         label=_sm_label(item.sm_filament),
-                        sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
+                        sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
             except Exception as exc:
                 if _is_409(exc):
                     # find-or-attach: the FDB filament already exists (prior Add / wizard
@@ -1589,9 +1606,10 @@ async def _execute_spoolman_to_fdb(
                         # If this filament needs a container parent, set it now.
                         if attach_parent and found_fil.parentId != attach_parent:
                             try:
-                                await filamentdb.update_filament(
-                                    found_fil.id, {"parentId": attach_parent}
-                                )
+                                if not dry_run:
+                                    await filamentdb.update_filament(
+                                        found_fil.id, {"parentId": attach_parent}
+                                    )
                             except Exception as _patch_exc:
                                 logger.warning(
                                     "wizard execute %s: parentId patch on found FDB filament "
@@ -1654,7 +1672,8 @@ async def _execute_spoolman_to_fdb(
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
         elif item.action == "link":
             try:
-                await filamentdb.update_filament(item.fdb_id, {"parentId": master_fdb_id})
+                if not dry_run:
+                    await filamentdb.update_filament(item.fdb_id, {"parentId": master_fdb_id})
                 res.add(db, "filament", "updated", detail="variant parent set",
                         label=_sm_label(item.sm_filament),
                         sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
@@ -1673,13 +1692,18 @@ async def _execute_spoolman_to_fdb(
                 _finish_ids_by_sm[item.sm_filament.id] = sm_finish_ids
             payload["parentId"] = master_fdb_id
             try:
-                created = await filamentdb.create_filament(payload)
-                item.fdb_id = created.id
-                fdb_by_id[created.id] = created
-                just_created_fdb_ids.add(created.id)
+                if dry_run:
+                    # Planned create — no FDB write during a preview.
+                    item.fdb_id = "dry-run"
+                    just_created_fdb_ids.add(item.fdb_id)
+                else:
+                    created = await filamentdb.create_filament(payload)
+                    item.fdb_id = created.id
+                    fdb_by_id[created.id] = created
+                    just_created_fdb_ids.add(created.id)
                 res.add(db, "filament", "created",
                         label=_sm_label(item.sm_filament),
-                        sm_filament_id=item.sm_filament.id, fdb_filament_id=created.id)
+                        sm_filament_id=item.sm_filament.id, fdb_filament_id=item.fdb_id)
             except Exception as exc:
                 if _is_409(exc):
                     # find-or-attach: variant already exists (prior Add / wizard run).
@@ -1699,9 +1723,10 @@ async def _execute_spoolman_to_fdb(
                         # Ensure the parentId is set to the correct container.
                         if found_var.parentId != master_fdb_id:
                             try:
-                                await filamentdb.update_filament(
-                                    found_var.id, {"parentId": master_fdb_id}
-                                )
+                                if not dry_run:
+                                    await filamentdb.update_filament(
+                                        found_var.id, {"parentId": master_fdb_id}
+                                    )
                             except Exception as _patch_exc:
                                 logger.warning(
                                     "wizard execute %s: parentId patch on found variant FDB "
@@ -1758,7 +1783,8 @@ async def _execute_spoolman_to_fdb(
             if not patch:
                 continue
             try:
-                await spoolman.update_filament(item.sm_filament.id, patch)
+                if not dry_run:
+                    await spoolman.update_filament(item.sm_filament.id, patch)
                 _log(
                     db, res.cycle_id, res.direction, "update", "filament",
                     spoolman_id=item.sm_filament.id,
@@ -1788,7 +1814,8 @@ async def _execute_spoolman_to_fdb(
         for sm_fil_id, finish_ids in _finish_ids_by_sm.items():
             encoded = encode_extra_value(serialize_material_tags(finish_ids))
             try:
-                await spoolman.update_filament(sm_fil_id, {"extra": {mt_field: encoded}})
+                if not dry_run:
+                    await spoolman.update_filament(sm_fil_id, {"extra": {mt_field: encoded}})
                 logger.info(
                     "wizard execute %s: wrote finish tags %s to SM filament %s",
                     res.cycle_id, finish_ids, sm_fil_id,
@@ -1828,7 +1855,8 @@ async def _execute_spoolman_to_fdb(
         if not keys_to_merge:
             continue
         try:
-            await filamentdb.merge_filament_settings(item.fdb_id, keys_to_merge)
+            if not dry_run:
+                await filamentdb.merge_filament_settings(item.fdb_id, keys_to_merge)
             logger.info(
                 "wizard execute %s: merged OpenTag identity into FDB filament %s: %s",
                 res.cycle_id, item.fdb_id, list(keys_to_merge.keys()),
@@ -1871,11 +1899,12 @@ async def _execute_spoolman_to_fdb(
                 existing_opt_tags=existing.optTags if existing else None,
             )
             try:
-                await filamentdb.update_filament(fdb_id, {
-                    "color": mc["color"],
-                    "secondaryColors": mc["secondaryColors"],
-                    "optTags": mc["optTags"],
-                })
+                if not dry_run:
+                    await filamentdb.update_filament(fdb_id, {
+                        "color": mc["color"],
+                        "secondaryColors": mc["secondaryColors"],
+                        "optTags": mc["optTags"],
+                    })
             except Exception as exc:
                 logger.warning(
                     "wizard execute %s: multicolor update for FDB filament %s failed: %s",
@@ -1915,7 +1944,9 @@ async def _execute_spoolman_to_fdb(
                 continue
             try:
                 sm_location = spool_item.sm_spool.location
-                loc_id = await ensure_fdb_location(filamentdb, sm_location, _fdb_loc_cache)
+                loc_id = await ensure_fdb_location(
+                    filamentdb, sm_location, _fdb_loc_cache, dry_run=dry_run
+                )
                 spool_payload: dict = {
                     "totalWeight": spool_item.planned_gross,
                     fdb_field_name: str(spool_item.sm_spool.id),
@@ -1928,17 +1959,21 @@ async def _execute_spoolman_to_fdb(
                 # The FILAMENT is always a normal, non-retired filament — only the spool is retired.
                 if spool_item.retired:
                     spool_payload["retired"] = True
-                # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
-                raw = await filamentdb.create_spool(fdb_id, spool_payload)
-                new_fdb_spool_id = extract_created_spool_id(
-                    raw,
-                    label_field=fdb_field_name,
-                    label_value=str(spool_item.sm_spool.id),
-                )
-                await spoolman.update_spool(
-                    spool_item.sm_spool.id,
-                    {"extra": _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_fdb_id)}
-                )
+                if dry_run:
+                    # Planned spool create — no FDB/Spoolman writes during a preview.
+                    new_fdb_spool_id = "dry-run"
+                else:
+                    # Seed weight is SET on create — never a usage entry (FR-9 is for decrements).
+                    raw = await filamentdb.create_spool(fdb_id, spool_payload)
+                    new_fdb_spool_id = extract_created_spool_id(
+                        raw,
+                        label_field=fdb_field_name,
+                        label_value=str(spool_item.sm_spool.id),
+                    )
+                    await spoolman.update_spool(
+                        spool_item.sm_spool.id,
+                        {"extra": _cross_ref_extra(fdb_id, new_fdb_spool_id, parent_fdb_id)}
+                    )
                 # Clean up stale SpoolMapping (FDB spool target was deleted) before writing fresh one.
                 if spool_item.stale_spool_mapping is not None:
                     _delete_stale_spool_mapping(db, spool_item.stale_spool_mapping)
@@ -2151,7 +2186,7 @@ async def _execute_fdb_to_spoolman(
                 # Should not reach here — the execute gate rejects when tare is unknown.
                 # Fail this spool explicitly rather than writing a silent 200 g guess.
                 _spool_label = f"{_fil_label} (spool {fdb_spool.id[:8]})"
-                _err = "tare unknown — enter empty-reel weight in the Variances step and re-execute"
+                _err = "tare unknown — set the filament's empty-reel (tare) weight and re-import"
                 logger.error("wizard execute %s: tare unknown for FDB spool %s (filament %s) — skipping",
                              res.cycle_id, fdb_spool.id, fdb_fil.id)
                 res.add(db, "spool", "failed", error=_err,

@@ -277,3 +277,27 @@ class TestExecutePerTypeBreakdown:
         assert resp.skipped_spools == 0
         assert resp.failed_filaments == 0
         assert resp.failed_spools == 0
+
+
+def test_filament_mapping_status_batched_matches_per_row(db):
+    """The preloaded-snapshot-id path returns the same status as the per-row query path."""
+    from app.core.filament_status import filament_mapping_status
+
+    fm_sync = _add_filament_mapping(db, spoolman_filament_id=10, filamentdb_id="fdb-sync")
+    _add_snapshot(db, source="spoolman", entity_type="filament", entity_id="10")
+    _add_snapshot(db, source="filamentdb", entity_type="filament", entity_id="fdb-sync")
+    fm_pending = _add_filament_mapping(db, spoolman_filament_id=11, filamentdb_id="fdb-pending")
+    _add_snapshot(db, source="spoolman", entity_type="filament", entity_id="11")
+    fm_conflict = _add_filament_mapping(db, spoolman_filament_id=12, filamentdb_id="fdb-conflict")
+    db.commit()
+
+    open_ids = {"fdb-conflict"}
+    sm_ids = {"10", "11"}
+    fdb_ids = {"fdb-sync"}
+
+    for fm, expected in [(fm_sync, "in_sync"), (fm_pending, "pending"), (fm_conflict, "conflict")]:
+        assert filament_mapping_status(db, fm, open_ids) == expected
+        assert filament_mapping_status(
+            db, fm, open_ids,
+            sm_filament_snapshot_ids=sm_ids, fdb_filament_snapshot_ids=fdb_ids,
+        ) == expected
