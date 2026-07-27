@@ -64,6 +64,7 @@ CATEGORIES = [
 
     ("Wizard & variant model", [
         # Bulk Import Wizard, variant hierarchy, naming, reconcile, planner
+        "2026-07-26 — Master-level group defaults: shared helper, tie-break, synthetic-vs-real snapshot handling, GitHub #76",
         "2026-06-28 — Reconcile orphaned spools instead of silently skipping them, GitHub #48",
         "2026-06-21 — `never_import_empties` is honored by the ongoing engine (not just the wizard)",
         "2026-06-18 — Parent/variant + OpenPrintTag rework: PARKED, blocked on upstream",

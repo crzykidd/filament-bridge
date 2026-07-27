@@ -24,6 +24,16 @@ GitHub release.
   one-click "use this" to correct source→family before importing. A family merge that knows
   neither now requires the tare explicitly (`422 tare_required`) instead of silently writing a
   guessed 200 g; a standalone create with no family context is unchanged. Part of #76.
+- **New Master Defaults screen** (nav: *Master Defaults*, `/master-defaults`) backfills the six
+  shared-property fields (tare, nozzle/bed temp, density, diameter, material) onto master/container
+  filaments created before the seed-on-creation feature above. One card per master (real
+  `hasVariants` parent or synthetic container) proposes the family's mode value for any field the
+  master is missing and its variants agree on; nothing writes until you tick fields and Apply.
+  Fill-null-only (never overwrites a value the master already holds, on either side), writes both
+  Filament DB and — when the master has a live Spoolman counterpart — Spoolman, and refreshes both
+  sync snapshots so the fill isn't re-detected as drift. `GET /api/masters/defaults` /
+  `POST /api/masters/defaults/apply`. See [docs/master-defaults.md](docs/master-defaults.md).
+  Closes #76.
 
 ## [0.6.16] — 2026-07-20
 

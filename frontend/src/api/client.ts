@@ -23,6 +23,9 @@ import type {
   HealthResponse,
   MappingRow,
   MappingUpdateRequest,
+  MasterDefaultsApplyResponse,
+  MasterDefaultsResponse,
+  MasterDefaultsUpdate,
   MobileAssignmentRequest,
   MobileSpoolAssignment,
   MobileSpoolDetail,
@@ -181,6 +184,14 @@ export const deleteMapping = (id: number) =>
 export const getTareRows = () => request<TareListResponse>('/tare')
 export const bulkSetTare = (updates: TareUpdate[]) =>
   json<TareBulkResponse>('/tare/bulk', 'POST', { updates })
+
+// ---------------------------------------------------------------------------
+// Master-defaults backfill (issue #76)
+// ---------------------------------------------------------------------------
+
+export const getMasterDefaults = () => request<MasterDefaultsResponse>('/masters/defaults')
+export const applyMasterDefaults = (updates: MasterDefaultsUpdate[]) =>
+  json<MasterDefaultsApplyResponse>('/masters/defaults/apply', 'POST', { updates })
 
 // ---------------------------------------------------------------------------
 // Mobile updates (phase 2 — scan/update page + in-nav page)

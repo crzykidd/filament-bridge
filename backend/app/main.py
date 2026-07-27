@@ -37,6 +37,7 @@ from app.api import health as health_router
 from app.api import labels as labels_router
 from app.api import version as version_router
 from app.api import mappings as mappings_router
+from app.api import masters as masters_router
 from app.api import mobile as mobile_router
 from app.api import reconcile as reconcile_router
 from app.api import opentag as opentag_router
@@ -403,6 +404,7 @@ app.include_router(opentag_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(backup_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(sync_log_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(tare_router.router, prefix="/api", dependencies=_auth_dep)
+app.include_router(masters_router.router, prefix="/api", dependencies=_auth_dep)
 app.include_router(debug_router.router, prefix="/api", dependencies=_auth_dep)
 
 # Conditional auth: the mobile + labels routers (and the /r/ redirect below) carry

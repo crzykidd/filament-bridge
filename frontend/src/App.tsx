@@ -16,6 +16,7 @@ import Settings from './pages/Settings'
 import OpenTagCleanup from './pages/OpenTagCleanup'
 import Reconcile from './pages/Reconcile'
 import TareEditor from './pages/TareEditor'
+import MasterDefaults from './pages/MasterDefaults'
 import DocsViewer from './pages/DocsViewer'
 import { WizardShell } from './pages/Wizard'
 import WizardFailureReport from './pages/WizardFailureReport'
@@ -50,6 +51,7 @@ const router = createBrowserRouter(
         <Route path="opentag-cleanup" element={<OpenTagCleanup />} />
         <Route path="reconcile" element={<Reconcile />} />
         <Route path="tare-editor" element={<TareEditor />} />
+        <Route path="master-defaults" element={<MasterDefaults />} />
         <Route path="mobile-updates" element={<MobileUpdates />} />
         <Route path="wizard/report" element={<WizardFailureReport />} />
         <Route path="wizard/*" element={<WizardShell />} />
