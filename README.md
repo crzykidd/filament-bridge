@@ -11,12 +11,14 @@
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
 
-> ## ⚠️ BETA — back up your databases before any writes
+> ## Back up before major changes
 >
-> filament-bridge is **beta** software that writes to both **Spoolman** and **Filament DB**.
-> **Before** running the Bulk Import Wizard, applying an OpenPrintTag cleanup, or enabling
-> auto-sync, **back up all three databases** (Spoolman, Filament DB, and the bridge). See
-> [Backups](#backups). Test against non-critical data first.
+> filament-bridge is in active use — currently keeping **200+ spools** in sync between
+> **Filament DB** and **Spoolman**. Because it writes to both systems, we recommend backing
+> up all three — **Filament DB, Spoolman, and the bridge** — before any major change, such as
+> running the Bulk Import Wizard, applying an OpenPrintTag cleanup, or enabling auto-sync. The
+> bridge can back up Filament DB and Spoolman for you (see [Backups](#backups)); test against
+> non-critical data first.
 
 <p align="center">
   <img src="docs/images/dashboard.png" alt="filament-bridge Dashboard — in-sync spool and filament counts, connected-system health with versions, and sync controls" width="820">
