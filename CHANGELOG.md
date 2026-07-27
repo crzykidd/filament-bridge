@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.17] — 2026-07-26
+
 ### Added
 
 - **Master/container filaments are seeded with the family's shared defaults on creation.**

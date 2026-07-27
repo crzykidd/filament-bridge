@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.16-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.17-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,19 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.17 (2026-07-26)
+
+- **Master filaments now carry the family's shared defaults.** When a variant family's master
+  (a real parent or a colorless container) is created, its tare, nozzle/bed temperature, density,
+  diameter, and material are seeded from the family's most-common value, so new variants inherit
+  real values instead of blanks. (#76)
+- **New Master Defaults screen** (nav: *Master Defaults*) backfills those same fields onto masters
+  created before the above — review each proposed value per master and fill only what's missing; it
+  never overwrites a value you already set. (#76)
+- **Merging a Spoolman spool into an existing family pre-fills the tare** from the incoming spool
+  and shows the family's already-known value with a one-click "use this," so you can correct it
+  before importing instead of re-entering a tare the family already knows. (#76)
 
 ### v0.6.16 (2026-07-20)
 
