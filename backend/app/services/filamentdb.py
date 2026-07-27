@@ -326,7 +326,10 @@ class FilamentDBClient:
 
         Returns the raw snapshot dict: ``{version, createdAt, collections}``.
         The snapshot includes all collections (filaments, nozzles, printers,
-        locations, print history, catalogs, tombstones) at schema v4.
+        locations, print history, catalogs, tombstones); its schema version has
+        risen over time (v4, then v5 as of FDB 1.68.0). The bridge stores the
+        blob opaquely and never asserts a schema version, so newer snapshots are
+        handled without changes here.
 
         Restore via ``POST /api/snapshot`` (destructive — not exposed by the bridge).
 
