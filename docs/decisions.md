@@ -29,6 +29,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Wizard & variant model
 
+- [2026-07-26 — Master-level group defaults: shared helper, tie-break, synthetic-vs-real snapshot handling](#2026-07-26--master-level-group-defaults-shared-helper-tie-break-synthetic-vs-real-snapshot-handling-github-76) — #76
 - [2026-06-28 — Reconcile orphaned spools instead of silently skipping them](#2026-06-28--reconcile-orphaned-spools-instead-of-silently-skipping-them-github-48) — #48
 - [2026-06-21 — `never_import_empties` is honored by the ongoing engine (not just the wizard)](#2026-06-21--never_import_empties-is-honored-by-the-ongoing-engine-not-just-the-wizard)
 - [2026-06-18 — Parent/variant + OpenPrintTag rework: PARKED, blocked on upstream](#2026-06-18--parentvariant--openprinttag-rework-parked-blocked-on-upstream)
@@ -196,6 +197,57 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-07-26 — Master-level group defaults: shared helper, tie-break, synthetic-vs-real snapshot handling, GitHub #76
+
+**Context.** FDB masters (variant-family parents) had no shared defaults of their own for the six
+`_RECONCILE_FIELD_MAP` fields (tare, nozzle/bed temp, density, diameter, material) — variants
+inherit a null master field as null, so a family that collectively agreed on a tare still got
+re-asked for one on every merge. Three independent pieces: seed new masters at creation, pre-fill
+the Conflicts "Add" merge tare from source + family, and a manual backfill screen for masters that
+predate the feature.
+
+**Decision — shared helper location.** `core/masters_defaults.py` (new module) holds
+`group_mode_defaults()` (pure, data-only: `{field: [values]}` → `{field: mode_value}`, used by both
+the SM-side wizard seeding path and the FDB-side backfill) and `resolve_family_tare()` (the merge-tare
+lookup). It imports only from `masters.py`, never from `wizard.py`/`planner.py`, so both directions
+can import it without a cycle. `core/masters_backfill.py` (separate module, imports
+`_RECONCILE_FIELD_MAP` from `wizard.py` — safe, `wizard.py` never imports back) holds the
+backfill-screen row builder + apply/apply-bulk, mirroring `tare.py`'s `apply_tare`/`apply_tare_bulk`
+shape.
+
+**Non-obvious choices.**
+- **Mode tie-break: lowest value wins.** When two+ values tie for most-common, `group_mode_defaults`
+  picks the lowest (`min()` over the tied candidates) — arbitrary but deterministic, so a cluster's
+  proposed default doesn't flap between runs depending on dict/list iteration order. Applies to
+  numeric fields; for `type` (a string), "lowest" is alphabetical — also deterministic, if not
+  semantically meaningful. Never revisited since it's tie-break-only (majority already decided the
+  common case).
+- **Snapshot refresh: synthetic masters skip the SM side entirely, not just the SM write.** A real
+  (`promote_color`) master has a live Spoolman filament and both sides get written + both `_mp_*`
+  snapshots refreshed, exactly like `tare.py:apply_tare`. A synthetic (`generic_container`) master
+  has no Spoolman counterpart, so its SM-side write AND SM-side snapshot refresh are both skipped —
+  there's no `spoolman_filament_id` to key a snapshot on, and synthetic parents never enter the
+  material-scalar sync pass anyway (no SM filament to pair them with), so the omitted SM snapshot is
+  provably inert, not just "probably fine."
+- **Backfill apply never overwrites an already-set SM value, even though `would_fill` is FDB-only.**
+  `would_fill` (row-builder) checks only the FDB master's own field, per the agreed spec. But at
+  *apply* time, if the master's live SM counterpart already has its own non-null value for that
+  field (a state that can arise from drift/manual edits), writing the proposal there would silently
+  clobber it — worse than the blank-master problem being fixed. `apply_master_defaults` re-checks
+  `current_sm is None` before including the SM side in the PATCH; the FDB side still gets the fill.
+- **Merge-tare `422 tare_required` is scoped to a family merge, not every create.** The Conflicts Add
+  endpoint had no tare gate for the SM→FDB direction before this (a truly standalone create with no
+  known tare anywhere silently wrote the 200 g default — long-standing, unrelated to #76, and several
+  existing tests depend on that leniency). The new gate only fires when the request resolves a family
+  context (`master_filamentdb_id`, or a "link" `filamentdb_id`) — i.e., exactly the "merging into a
+  family" scenario the design decisions describe — and only when *neither* `source_tare` nor
+  `master_tare` resolves. A genuinely standalone create is unaffected by design, not by omission.
+- **Family lookup follows a variant's `parentId`.** Linking to an existing *variant* (not the master
+  itself) still resolves `master_tare` correctly — the endpoint walks the link target's `parentId` up
+  to the master before calling `resolve_family_tare`, so the hint works regardless of which family
+  member the user picked from the suggestions dropdown.
 
 
 ## 2026-07-19 — Purge stale filament mappings when Spoolman reuses an id, GitHub #70

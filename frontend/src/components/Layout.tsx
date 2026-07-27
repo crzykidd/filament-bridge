@@ -347,6 +347,7 @@ const NAV_ITEMS = [
   { to: '/sync-log', label: 'Sync Log', exact: false },
   { to: '/wizard', label: 'Bulk Import Wizard', exact: false },
   { to: '/tare-editor', label: 'Tare Editor', exact: false },
+  { to: '/master-defaults', label: 'Master Defaults', exact: false },
   { to: '/opentag-cleanup', label: 'OpenPrintTag Cleanup', exact: false },
 ]
 

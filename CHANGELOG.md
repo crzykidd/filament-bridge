@@ -9,6 +9,34 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.17] — 2026-07-26
+
+### Added
+
+- **Master/container filaments are seeded with the family's shared defaults on creation.**
+  When a `generic_container` cluster's master is created, its tare (empty-reel weight),
+  nozzle/bed temp, density, diameter, and material are seeded from the **mode** (most-common
+  value) across the cluster's Spoolman members, so new variants inherit real family defaults
+  instead of starting blank. A field is only seeded when the cluster actually agrees on one; an
+  explicit Variances-step reconcile decision still wins over the seeded default. Part of #76.
+- **The Conflicts "Add" dialog pre-fills tare from the source and shows the family's tare.**
+  For a Spoolman→Filament DB import, the tare field now pre-fills from the incoming filament's
+  own resolvable tare, and — when merging into an existing FDB master/variant family — shows the
+  family's already-known tare (master's own value, else the mode across its variants) with a
+  one-click "use this" to correct source→family before importing. A family merge that knows
+  neither now requires the tare explicitly (`422 tare_required`) instead of silently writing a
+  guessed 200 g; a standalone create with no family context is unchanged. Part of #76.
+- **New Master Defaults screen** (nav: *Master Defaults*, `/master-defaults`) backfills the six
+  shared-property fields (tare, nozzle/bed temp, density, diameter, material) onto master/container
+  filaments created before the seed-on-creation feature above. One card per master (real
+  `hasVariants` parent or synthetic container) proposes the family's mode value for any field the
+  master is missing and its variants agree on; nothing writes until you tick fields and Apply.
+  Fill-null-only (never overwrites a value the master already holds, on either side), writes both
+  Filament DB and — when the master has a live Spoolman counterpart — Spoolman, and refreshes both
+  sync snapshots so the fill isn't re-detected as drift. `GET /api/masters/defaults` /
+  `POST /api/masters/defaults/apply`. See [docs/master-defaults.md](docs/master-defaults.md).
+  Closes #76.
+
 ## [0.6.16] — 2026-07-20
 
 ### Added

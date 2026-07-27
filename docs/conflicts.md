@@ -123,7 +123,15 @@ created before this feature shipped may lack it.
    Filament DB id directly into the override field. If you select a variant's parent
    container, the import uses that parent as the explicit parent for single-record import
    — it does **not** detach or regroup any existing variants.
-3. **Optional tare override** — overrides the spool_weight used for weight conversion.
+3. **Optional tare override** — overrides the spool_weight used for weight conversion. For a
+   Spoolman→Filament DB import, the field pre-fills from the incoming filament's own resolvable
+   tare (`source_tare`) as soon as it's known; when merging into an existing FDB master/variant
+   family (via "Link to existing" or an existing-parent attach), the family's already-known tare
+   (`master_tare` — the master's own value, else the mode across its variants) is shown alongside
+   it with a **use this** shortcut, so you can correct source→family before importing. If a
+   family merge has *neither* a source nor a family tare, the tare field becomes required
+   (`422 tare_required`) rather than silently guessing 200 g — a genuinely standalone create with
+   no family context is unaffected and still defaults quietly.
 4. **Preview** (`dry_run=true`) — shows what would be created/updated without writing.
 5. **Confirm import** — executes the import (`POST /api/conflicts/{id}/import`), creates the
    filament in the target system, writes cross-reference IDs, and marks the conflict resolved.

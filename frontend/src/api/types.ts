@@ -274,6 +274,60 @@ export interface TareBulkResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Master-defaults backfill (issue #76)
+// ---------------------------------------------------------------------------
+
+/** Canonical shared-property field keys — matches backend _RECONCILE_FIELD_MAP. */
+export type MasterDefaultField = 'type' | 'density' | 'diameter' | 'nozzle_temp' | 'bed_temp' | 'spool_weight'
+
+export interface MasterDefaultBreakdownEntry {
+  filamentdb_id: string
+  name: string | null
+  value: unknown
+}
+
+export interface MasterFieldRow {
+  current: unknown
+  current_sm: unknown
+  proposal: unknown
+  would_fill: boolean
+  breakdown: MasterDefaultBreakdownEntry[]
+}
+
+export interface MasterDefaultRow {
+  filamentdb_id: string
+  name: string | null
+  vendor: string | null
+  is_synthetic: boolean
+  spoolman_filament_id: number | null
+  variant_count: number
+  fields: Record<MasterDefaultField, MasterFieldRow>
+}
+
+export interface MasterDefaultsResponse {
+  rows: MasterDefaultRow[]
+}
+
+export interface MasterDefaultsUpdate {
+  filamentdb_id: string
+  fields: MasterDefaultField[]
+}
+
+export interface MasterDefaultsApplyRequest {
+  updates: MasterDefaultsUpdate[]
+}
+
+export interface MasterDefaultsFailure {
+  filamentdb_id: string | null
+  error: string
+}
+
+export interface MasterDefaultsApplyResponse {
+  updated: number
+  failed: MasterDefaultsFailure[]
+}
+
+// ---------------------------------------------------------------------------
 // Filament suggestions (conflict Add "link" UX)
 // ---------------------------------------------------------------------------
 
@@ -655,6 +709,13 @@ export interface WizardExecuteResponse {
   skipped_spools: number
   failed_filaments: number
   failed_spools: number
+  /** SM→FDB "Add" preview only (issue #76): the incoming Spoolman filament's own
+   *  resolvable tare. Null for every other direction/scenario. */
+  source_tare?: number | null
+  /** SM→FDB "Add" preview only: the target FDB master/variant family's already-known
+   *  tare (master's own value, else the mode across its variant children). Null when
+   *  not merging into a family, or the family has no known tare either. */
+  master_tare?: number | null
 }
 
 export interface WizardLastRunResponse {

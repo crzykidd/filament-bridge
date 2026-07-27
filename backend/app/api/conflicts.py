@@ -380,6 +380,8 @@ async def import_conflict_record(
     Accepted for conflict types: new_filament, new_spool.
     """
     from app.core.compat import sync_compatibility_errors
+    from app.core.masters_defaults import resolve_family_tare
+    from app.core.planner import _resolve_filament_tare
     from app.core.single_record_import import (
         TareRequiredError,
         import_single_fdb_filament,
@@ -428,6 +430,12 @@ async def import_conflict_record(
                         "Cannot determine import direction from conflict ids")
 
     sm_filament_id: int | None = None  # set in SM→FDB branch; used for paired-conflict cleanup
+    # SM→FDB merge-tare UX (issue #76): the incoming filament's own tare, and — when
+    # merging into an existing FDB family — the family's already-known tare. Surfaced
+    # in the dry-run preview response so the Add dialog can pre-fill from source while
+    # showing the family value.
+    source_tare: float | None = None
+    master_tare: float | None = None
 
     try:
         if is_sm_to_fdb:
@@ -458,6 +466,51 @@ async def import_conflict_record(
             variant_parent_mode = _resolve_variant_parent_mode(db)
             variant_keywords = _resolve_variant_keywords(db)
             container_marker = _resolve_container_parent_marker(db)
+
+            # ---- Merge-tare resolution (issue #76) ----
+            # "Family" here means the target this filament is being merged into: an
+            # explicit master_filamentdb_id (create-as-variant) or, for a "link"
+            # action, the link target itself (resolved to ITS parent when it is a
+            # variant, so the family lookup always starts from the master).
+            _master_candidate = payload.master_filamentdb_id
+            if not _master_candidate and payload.filament_action == "link":
+                _master_candidate = payload.filamentdb_id
+
+            _sm_filaments_probe = await spoolman.get_filaments()
+            _sm_spools_probe = await spoolman.get_spools()
+            _sm_fil_probe = next((f for f in _sm_filaments_probe if f.id == sm_filament_id), None)
+            _fil_spools_probe = [
+                s for s in _sm_spools_probe if s.filament and s.filament.id == sm_filament_id
+            ]
+            if _sm_fil_probe is not None:
+                source_tare = _resolve_filament_tare(_sm_fil_probe, _fil_spools_probe, {})
+
+            if _master_candidate:
+                _fdb_filaments_probe = await filamentdb.get_filaments()
+                _fdb_by_id_probe = {f.id: f for f in _fdb_filaments_probe}
+                _cand_fdb = _fdb_by_id_probe.get(_master_candidate)
+                _resolved_master_id = (
+                    (getattr(_cand_fdb, "parentId", None) or _master_candidate)
+                    if _cand_fdb is not None else _master_candidate
+                )
+                master_tare = resolve_family_tare(_fdb_filaments_probe, _resolved_master_id)
+
+            # Only a family merge is gated: a genuinely standalone create has no
+            # family to know a tare, so it keeps the existing default-tare behavior
+            # unchanged. Merging into a family that knows NEITHER a source nor a
+            # family tare would otherwise silently write a guessed tare onto a
+            # record two other family members already have a real value for.
+            if (
+                _master_candidate
+                and payload.tare_override is None
+                and source_tare is None
+                and master_tare is None
+                and _fil_spools_probe
+            ):
+                raise TareRequiredError(
+                    "Neither the incoming Spoolman filament nor the target family has "
+                    "a known empty-reel (tare) weight; enter one to import."
+                )
 
             import_res = await import_single_sm_filament(
                 db, cycle_id, spoolman, filamentdb,
@@ -522,6 +575,8 @@ async def import_conflict_record(
             skipped_spools=_type_action_counts.get(("spool", "skipped"), 0),
             failed_filaments=_type_action_counts.get(("filament", "failed"), 0),
             failed_spools=_type_action_counts.get(("spool", "failed"), 0),
+            source_tare=source_tare if is_sm_to_fdb else None,
+            master_tare=master_tare if is_sm_to_fdb else None,
         )
 
     if import_res.failed > 0:

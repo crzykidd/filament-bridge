@@ -540,3 +540,165 @@ def test_container_409_no_existing_match_fails_cleanly():
     db.expire_all()
     c_after = db.query(Conflict).filter_by(id=conflict_id).first()
     assert c_after.resolved_at is None, "Conflict must stay open when container create fails"
+
+
+# ---------------------------------------------------------------------------
+# Tests: merge-tare preview (issue #76) — source_tare / master_tare surfacing
+# and the family-only tare_required gate.
+# ---------------------------------------------------------------------------
+
+
+def test_preview_surfaces_source_tare_standalone_create():
+    """A standalone create (no family context) surfaces source_tare from the SM
+    filament's own spool_weight; master_tare stays None (no family to know one)."""
+    from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor, SpoolmanSpool
+
+    db = _make_session()
+    sm_fil = SpoolmanFilament(id=31, name="PLA Orange", material="PLA",
+                               vendor=SpoolmanVendor(id=1, name="Acme"),
+                               spool_weight=180.0, extra={})
+    sm_spool = SpoolmanSpool(id=301, filament=sm_fil, remaining_weight=500.0,
+                              archived=False, extra={})
+    c = Conflict(entity_type="filament", field_name="new_filament", spoolman_id=31,
+                 spoolman_value=json.dumps("SM filament 31 has no FDB match"))
+    db.add(c)
+    db.commit()
+
+    sm = _fake_spoolman(filaments=[sm_fil], spools=[sm_spool])
+    fdb = _fake_filamentdb(filaments=[])
+    client = TestClient(_make_app(db, sm, fdb))
+
+    r = client.post(f"/api/conflicts/{c.id}/import", json={"dry_run": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source_tare"] == 180.0
+    assert body["master_tare"] is None
+
+
+def test_preview_surfaces_master_tare_when_linking_to_existing_master():
+    """Linking a new SM filament to an existing FDB master with a known tare
+    surfaces that value as master_tare, even though the SM side has none."""
+    from app.schemas.filamentdb import FDBFilament
+    from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor, SpoolmanSpool
+
+    db = _make_session()
+    sm_fil = SpoolmanFilament(id=32, name="PLA Purple", material="PLA",
+                               vendor=SpoolmanVendor(id=1, name="Acme"), extra={})
+    sm_spool = SpoolmanSpool(id=302, filament=sm_fil, remaining_weight=500.0,
+                              archived=False, extra={})
+    c = Conflict(entity_type="filament", field_name="new_filament", spoolman_id=32,
+                 spoolman_value=json.dumps("SM filament 32 has no FDB match"))
+    db.add(c)
+    db.commit()
+
+    master = FDBFilament(_id="fdb-master-1", name="Acme PLA (Master)",
+                          hasVariants=True, spoolWeight=154.0)
+    sm = _fake_spoolman(filaments=[sm_fil], spools=[sm_spool])
+    fdb = _fake_filamentdb(filaments=[master])
+    client = TestClient(_make_app(db, sm, fdb))
+
+    r = client.post(f"/api/conflicts/{c.id}/import", json={
+        "dry_run": True, "filament_action": "link", "filamentdb_id": "fdb-master-1",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source_tare"] is None
+    assert body["master_tare"] == 154.0
+
+
+def test_preview_master_tare_falls_back_to_variant_mode_via_parent():
+    """Linking to an existing VARIANT (not the master itself) resolves the family
+    tare through the variant's parentId — the master's null value falls back to
+    the mode across its variant children."""
+    from app.schemas.filamentdb import FDBFilament
+    from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor, SpoolmanSpool
+
+    db = _make_session()
+    sm_fil = SpoolmanFilament(id=33, name="PLA Teal", material="PLA",
+                               vendor=SpoolmanVendor(id=1, name="Acme"), extra={})
+    sm_spool = SpoolmanSpool(id=303, filament=sm_fil, remaining_weight=500.0,
+                              archived=False, extra={})
+    c = Conflict(entity_type="filament", field_name="new_filament", spoolman_id=33,
+                 spoolman_value=json.dumps("SM filament 33 has no FDB match"))
+    db.add(c)
+    db.commit()
+
+    master = FDBFilament(_id="fdb-master-2", name="Acme PLA (Master)",
+                          hasVariants=True, spoolWeight=None)
+    variant_a = FDBFilament(_id="fdb-var-a", name="Acme PLA Red",
+                             parentId="fdb-master-2", spoolWeight=200.0)
+    variant_b = FDBFilament(_id="fdb-var-b", name="Acme PLA Blue",
+                             parentId="fdb-master-2", spoolWeight=200.0)
+    sm = _fake_spoolman(filaments=[sm_fil], spools=[sm_spool])
+    fdb = _fake_filamentdb(filaments=[master, variant_a, variant_b])
+    client = TestClient(_make_app(db, sm, fdb))
+
+    # Link to variant_a (not the master) — family lookup must follow parentId.
+    r = client.post(f"/api/conflicts/{c.id}/import", json={
+        "dry_run": True, "filament_action": "link", "filamentdb_id": "fdb-var-a",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["master_tare"] == 200.0
+
+
+def test_import_tare_required_when_merging_into_family_with_no_known_tare():
+    """Merging into a family gates on BOTH source and family tare being unknown —
+    unlike a standalone create (unchanged, still defaults quietly)."""
+    from app.schemas.filamentdb import FDBFilament
+    from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor, SpoolmanSpool
+
+    db = _make_session()
+    sm_fil = SpoolmanFilament(id=34, name="PLA Gray", material="PLA",
+                               vendor=SpoolmanVendor(id=1, name="Acme"), extra={})
+    sm_spool = SpoolmanSpool(id=304, filament=sm_fil, remaining_weight=500.0,
+                              archived=False, extra={})
+    c = Conflict(entity_type="filament", field_name="new_filament", spoolman_id=34,
+                 spoolman_value=json.dumps("SM filament 34 has no FDB match"))
+    db.add(c)
+    db.commit()
+
+    # Family exists but knows no tare either (master null, no variant children).
+    master = FDBFilament(_id="fdb-master-3", name="Acme PLA (Master)",
+                          hasVariants=True, spoolWeight=None)
+    sm = _fake_spoolman(filaments=[sm_fil], spools=[sm_spool])
+    fdb = _fake_filamentdb(filaments=[master])
+    client = TestClient(_make_app(db, sm, fdb))
+
+    r = client.post(f"/api/conflicts/{c.id}/import", json={
+        "dry_run": True, "filament_action": "link", "filamentdb_id": "fdb-master-3",
+    })
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["code"] == "tare_required"
+
+    # Conflict stays open.
+    db.expire_all()
+    assert db.query(Conflict).filter_by(id=c.id).first().resolved_at is None
+
+
+def test_import_tare_override_bypasses_family_tare_gate():
+    """Supplying tare_override satisfies the gate even when neither source nor
+    family has a known tare."""
+    from app.schemas.filamentdb import FDBFilament
+    from app.schemas.spoolman import SpoolmanFilament, SpoolmanVendor, SpoolmanSpool
+
+    db = _make_session()
+    sm_fil = SpoolmanFilament(id=35, name="PLA Beige", material="PLA",
+                               vendor=SpoolmanVendor(id=1, name="Acme"), extra={})
+    sm_spool = SpoolmanSpool(id=305, filament=sm_fil, remaining_weight=500.0,
+                              archived=False, extra={})
+    c = Conflict(entity_type="filament", field_name="new_filament", spoolman_id=35,
+                 spoolman_value=json.dumps("SM filament 35 has no FDB match"))
+    db.add(c)
+    db.commit()
+
+    master = FDBFilament(_id="fdb-master-4", name="Acme PLA (Master)",
+                          hasVariants=True, spoolWeight=None)
+    sm = _fake_spoolman(filaments=[sm_fil], spools=[sm_spool])
+    fdb = _fake_filamentdb(filaments=[master])
+    client = TestClient(_make_app(db, sm, fdb))
+
+    r = client.post(f"/api/conflicts/{c.id}/import", json={
+        "dry_run": True, "filament_action": "link", "filamentdb_id": "fdb-master-4",
+        "tare_override": 210.0,
+    })
+    assert r.status_code == 200, r.text

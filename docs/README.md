@@ -11,6 +11,7 @@ Start with the top-level [README](../README.md) for what the bridge is and how t
 | [wizard.md](wizard.md) | The Bulk Import Wizard, step by step |
 | [reconcile.md](reconcile.md) | The read-only cross-system reconcile report (matched / only-in-one / ambiguous) |
 | [tare-editor.md](tare-editor.md) | Bulk-editing empty-reel tare weight across mapped filaments (writes both systems) |
+| [master-defaults.md](master-defaults.md) | Backfilling shared-property defaults (tare/temps/density/diameter/material) onto existing master/container filaments |
 | [variant-parent-mode.md](variant-parent-mode.md) | `promote_color` vs `generic_container`, container naming, collision handling |
 | [conflicts.md](conflicts.md) | Conflict types and what each resolution actually does |
 | [opentag-cleanup.md](opentag-cleanup.md) | The OpenPrintTag matcher, review flow, and apply semantics |
