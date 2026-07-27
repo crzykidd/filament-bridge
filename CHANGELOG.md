@@ -17,6 +17,13 @@ GitHub release.
   value) across the cluster's Spoolman members, so new variants inherit real family defaults
   instead of starting blank. A field is only seeded when the cluster actually agrees on one; an
   explicit Variances-step reconcile decision still wins over the seeded default. Part of #76.
+- **The Conflicts "Add" dialog pre-fills tare from the source and shows the family's tare.**
+  For a Spoolman→Filament DB import, the tare field now pre-fills from the incoming filament's
+  own resolvable tare, and — when merging into an existing FDB master/variant family — shows the
+  family's already-known tare (master's own value, else the mode across its variants) with a
+  one-click "use this" to correct source→family before importing. A family merge that knows
+  neither now requires the tare explicitly (`422 tare_required`) instead of silently writing a
+  guessed 200 g; a standalone create with no family context is unchanged. Part of #76.
 
 ## [0.6.16] — 2026-07-20
 

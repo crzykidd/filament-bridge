@@ -284,6 +284,48 @@ function NewRecordAddFlow({
 
   const linkReady = filamentAction !== 'link' || effectiveFilamentdbId != null
 
+  // Merge-tare hint (issue #76): the incoming Spoolman filament's own tare, and —
+  // when linking into an existing FDB master/variant family — the family's
+  // already-known tare (master's own value, else the mode across its variants).
+  const [sourceTare, setSourceTare] = useState<number | null>(null)
+  const [masterTare, setMasterTare] = useState<number | null>(null)
+
+  // Fetch the hint (a lightweight dry-run preview) whenever the link target
+  // settles, so the tare input can pre-fill from the source while the family
+  // value is shown as a one-click correction — before the user reaches the full
+  // "Preview import" step. Best-effort only: a hard error here just leaves the
+  // hints blank (except tare_required, which the form already surfaces).
+  useEffect(() => {
+    if (!isSmToFdb || (filamentAction === 'link' && !linkReady)) {
+      setSourceTare(null)
+      setMasterTare(null)
+      return
+    }
+    let cancelled = false
+    importConflictRecord(conflict.id, {
+      dry_run: true,
+      filament_action: filamentAction,
+      filamentdb_id: filamentAction === 'link' ? effectiveFilamentdbId : null,
+      tare_override: null,
+    })
+      .then(res => {
+        if (cancelled) return
+        setSourceTare(res.source_tare ?? null)
+        setMasterTare(res.master_tare ?? null)
+        // Pre-fill from the source value, but never clobber something the user
+        // already typed.
+        if (res.source_tare != null) {
+          setTare(prev => (prev.trim() === '' ? String(res.source_tare) : prev))
+        }
+      })
+      .catch(e => {
+        if (cancelled) return
+        if (isTareRequired(e)) setTareRequired(true)
+      })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSmToFdb, filamentAction, effectiveFilamentdbId, linkReady, conflict.id])
+
   async function runPreview() {
     setLoading(true)
     setErr(null)
@@ -481,11 +523,28 @@ function NewRecordAddFlow({
         />
         <HelpTip text="Overrides the filament's empty-reel (tare) weight for the net-weight conversion. Leave blank to use the spool weight already set in Filament DB." />
       </div>
+      {isSmToFdb && masterTare != null && String(masterTare) !== tare.trim() && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Family master already has a tare:{' '}
+          <span className="font-mono text-gray-700 dark:text-gray-200">{masterTare} g</span>
+          {' — '}
+          <button
+            type="button"
+            onClick={() => setTare(String(masterTare))}
+            className="text-indigo-600 dark:text-indigo-400 underline hover:no-underline"
+          >
+            use this
+          </button>
+        </p>
+      )}
       {tareRequired && (
         <p className="text-xs text-amber-600 dark:text-amber-400">
-          This filament has no empty-reel weight in Filament DB, so its spool can't be
-          converted to Spoolman's net weight. Enter the empty spool weight to import — it
-          will be saved back to the Filament DB filament so you won't be asked again.
+          {isSmToFdb
+            ? 'Neither this filament nor the family you’re merging it into has a known ' +
+              'empty-reel (tare) weight. Enter one to import.'
+            : "This filament has no empty-reel weight in Filament DB, so its spool can't be " +
+              'converted to Spoolman’s net weight. Enter the empty spool weight to import — it ' +
+              'will be saved back to the Filament DB filament so you won’t be asked again.'}
         </p>
       )}
 

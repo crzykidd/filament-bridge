@@ -744,6 +744,13 @@ class WizardExecuteResponse(BaseModel):
     skipped_spools: int = 0
     failed_filaments: int = 0
     failed_spools: int = 0
+    # SM→FDB "Add" preview only (issue #76 merge-tare UX): the incoming Spoolman
+    # filament's own resolvable tare, and — when merging into an existing FDB
+    # master/variant family — the family's already-known tare, so the Add dialog
+    # can pre-fill from the source while showing the family value to correct into.
+    # Both None for every other direction/scenario.
+    source_tare: float | None = None
+    master_tare: float | None = None
 
 
 class WizardLastRunResponse(BaseModel):

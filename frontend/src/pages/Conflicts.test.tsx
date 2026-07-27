@@ -913,6 +913,95 @@ describe('Conflicts page — Add "link" suggestions dropdown', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Merge-tare hint (issue #76) — pre-fill from source_tare, show master_tare
+// ---------------------------------------------------------------------------
+
+describe('Conflicts page — merge-tare hint (issue #76)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearchParams = new URLSearchParams()
+  })
+
+  it('pre-fills the tare input from source_tare once the background hint resolves', async () => {
+    vi.mocked(importConflictRecord).mockResolvedValue({
+      ...mockImportResponse,
+      source_tare: 180,
+      master_tare: null,
+    })
+
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    await waitFor(() => {
+      const tareInput = screen.getByPlaceholderText('Optional, e.g. 200') as HTMLInputElement
+      expect(tareInput.value).toBe('180')
+    })
+  })
+
+  it('shows the family master tare hint with a "use this" button', async () => {
+    vi.mocked(importConflictRecord).mockResolvedValue({
+      ...mockImportResponse,
+      source_tare: null,
+      master_tare: 154,
+    })
+    vi.mocked(getFilamentSuggestions).mockResolvedValue(mockSuggestionsResponse)
+
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+    await waitFor(() => expect(screen.getByText('Link to existing filament')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Link to existing filament'))
+
+    await waitFor(() => expect(screen.getByRole('combobox')).toBeInTheDocument())
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'aaaaaaaaaaaaaaaaaaaaaaaa' },
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText(/Family master already has a tare/i)).toBeInTheDocument()
+      expect(screen.getByText('154 g')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByText('use this'))
+
+    await waitFor(() => {
+      const tareInput = screen.getByPlaceholderText('Optional, e.g. 200') as HTMLInputElement
+      expect(tareInput.value).toBe('154')
+    })
+  })
+
+  it('does not pre-fill over a value the user already typed', async () => {
+    vi.mocked(importConflictRecord).mockResolvedValue({
+      ...mockImportResponse,
+      source_tare: 180,
+      master_tare: null,
+    })
+
+    renderConflictsWithData([makeNewFilamentConflict()])
+
+    const row = screen.getByText('Bambu PLA Basic Blue').closest('[class*="flex items-center"]')
+    if (row) fireEvent.click(row)
+    await waitFor(() => expect(screen.getByText('Add')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Add'))
+
+    const tareInput = await screen.findByPlaceholderText('Optional, e.g. 200') as HTMLInputElement
+    fireEvent.change(tareInput, { target: { value: '999' } })
+
+    // Give the background hint fetch a tick to resolve — it must not clobber
+    // the user's own entry.
+    await waitFor(() => expect(importConflictRecord).toHaveBeenCalled())
+    expect(tareInput.value).toBe('999')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Highlight deep-link (from Synced Records "See conflict" button)
 // ---------------------------------------------------------------------------
 

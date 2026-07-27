@@ -655,6 +655,13 @@ export interface WizardExecuteResponse {
   skipped_spools: number
   failed_filaments: number
   failed_spools: number
+  /** SM→FDB "Add" preview only (issue #76): the incoming Spoolman filament's own
+   *  resolvable tare. Null for every other direction/scenario. */
+  source_tare?: number | null
+  /** SM→FDB "Add" preview only: the target FDB master/variant family's already-known
+   *  tare (master's own value, else the mode across its variant children). Null when
+   *  not merging into a family, or the family has no known tare either. */
+  master_tare?: number | null
 }
 
 export interface WizardLastRunResponse {
