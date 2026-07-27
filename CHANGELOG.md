@@ -9,6 +9,20 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bulk Import Wizard Variances step now resolves tare from an existing Filament DB master,
+  not just Spoolman.** A new Spoolman color attaching to an existing FDB master/family that
+  already knows a tare (e.g. via #76's backfill) previously still showed "required" and, if
+  forced through, could reject execute or write the wrong gross weight — because the wizard
+  resolved the empty-reel tare from the Spoolman side only. The Variances preview, the execute
+  tare gate, and the planner's gross-weight computation now all fall back to the same
+  existing-FDB-parent family tare (via `resolve_family_tare`, reusing the same (vendor,
+  material, finish) clustering everywhere so preview and execute never disagree) before
+  requiring input — surfaced in the UI as "from the Filament DB master" (`tare_source:
+  "filamentdb_master"`). The "never guess a default" invariant is unchanged: a master with no
+  tare anywhere still requires input. Fixes #78.
+
 ## [0.6.17] — 2026-07-26
 
 ### Added

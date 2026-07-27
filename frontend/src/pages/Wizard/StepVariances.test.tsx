@@ -125,4 +125,42 @@ describe('StepVariances — SM variances step renders without TDZ (#14 regressio
     render(<StepVariances {...CTX} />)
     expect(screen.getAllByText(/Save & Next/).length).toBeGreaterThan(0)
   })
+
+  it('issue #78: a group attaching to an existing FDB master with a known tare pre-fills from it, not "required"', () => {
+    // Mirrors the bug report: "CC3D PLA (Master)" — Spoolman side has no spool_weight
+    // (tare_source would be needs_input), but the group attaches to an existing FDB
+    // master that already has a tare (#76 backfill) — the backend resolves it via
+    // resolve_family_tare and returns tare_source: "filamentdb_master".
+    const data: VariancesResponse = {
+      direction: 'spoolman',
+      groups: [
+        {
+          base_name: 'CC3D PLA',
+          vendor: 'CC3D',
+          material: 'PLA',
+          suggested_master: fil(2, 'CC3D PLA Purple').ref,
+          members: [
+            fil(2, 'CC3D PLA Purple', { is_master: true, tare: 154, tare_source: 'filamentdb_master', spool_weight: null }),
+          ],
+          existing_fdb_parent: {
+            spoolman_filament_id: null,
+            filamentdb_filament_id: 'fdb-cc3d-pla',
+            name: 'CC3D PLA (Master)',
+            vendor: 'CC3D',
+            color: null,
+            material: 'PLA',
+          },
+        },
+      ],
+      ungrouped: [],
+    }
+    vi.mocked(useApi).mockReturnValue({ data, loading: false, error: null, reload: vi.fn(), refetch: vi.fn() })
+    render(<StepVariances {...CTX} />)
+    // Pre-filled from the family tare — no "required" badge anywhere.
+    expect(screen.queryByText(/required/i)).not.toBeInTheDocument()
+    // Distinct source label so the user knows the value came from the FDB master.
+    expect(screen.getAllByText(/from the Filament DB master/i).length).toBeGreaterThan(0)
+    // The tare input itself is pre-filled with the resolved family value.
+    expect(screen.getByDisplayValue('154')).toBeInTheDocument()
+  })
 })

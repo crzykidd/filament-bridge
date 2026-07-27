@@ -1262,6 +1262,50 @@ def test_wizard_weights_spoolman_direction(db):
     assert row["tare_source"] == "spoolman"
 
 
+def test_wizard_variances_group_uses_existing_fdb_master_tare(db):
+    """Issue #78: a Spoolman color with no spool_weight, attaching to an existing
+    FDB master that already has a tare (e.g. via #76 backfill), must resolve that
+    tare in the preview instead of surfacing 'needs_input'/'required'."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 50, "action": "create"}])
+    db.commit()
+
+    # Existing FDB master with a known tare (154 g) and no Spoolman counterpart.
+    fdb_master = FDBFilament.model_validate({
+        "_id": "fdb-cc3d-pla",
+        "name": "CC3D PLA (Master)",
+        "vendor": "CC3D",
+        "type": "PLA",
+        "spoolWeight": 154.0,
+        "hasVariants": True,
+    })
+
+    # New Spoolman color with the SAME (vendor, material, finish) cluster key, but
+    # no spool_weight anywhere — the Spoolman-only resolution would return needs_input.
+    sm_filament = SpoolmanFilament(
+        id=50, name="CC3D PLA Purple",
+        vendor=SpoolmanVendor(id=7, name="CC3D"),
+        material="PLA", spool_weight=None,
+    )
+    sm_spool = SpoolmanSpool(
+        id=500, filament=sm_filament, remaining_weight=800.0, archived=False, extra={},
+    )
+    spoolman = _fake_spoolman(filaments=[sm_filament], spools=[sm_spool])
+    filamentdb = _fake_filamentdb(filaments=[fdb_master])
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.get("/api/wizard/variances").json()
+    assert body["direction"] == "spoolman"
+    assert len(body["groups"]) == 1
+    group = body["groups"][0]
+    assert group["existing_fdb_parent"]["filamentdb_filament_id"] == "fdb-cc3d-pla"
+    assert len(group["members"]) == 1
+    member = group["members"][0]
+    assert member["tare"] == 154.0
+    assert member["tare_source"] == "filamentdb_master"
+
+
 def test_wizard_connectivity_blocked_when_down(db):
     spoolman = _fake_spoolman()
     spoolman.health = AsyncMock(side_effect=RuntimeError("unreachable"))
@@ -1647,6 +1691,53 @@ def test_wizard_execute_sm_proceeds_when_tare_provided_as_override(db):
     filamentdb.create_filament.assert_awaited_once()
     payload = filamentdb.create_filament.await_args.args[0]
     assert payload.get("spoolWeight") == 175.0
+
+
+def test_wizard_execute_sm_family_tare_not_rejected_and_used_for_gross(db):
+    """Issue #78: a 'create' filament with no Spoolman spool_weight, but whose
+    (vendor, material, finish) cluster attaches to an existing FDB master with a
+    KNOWN tare, must NOT trip the tare gate — and the created spool's gross weight
+    (and the new filament's own spoolWeight) must use that family tare, entirely
+    server-side (no tare_overrides in the request)."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "wizard_match_decisions",
+                     [{"spoolman_filament_id": 50, "action": "create"}])
+    db.commit()
+
+    fdb_master = FDBFilament.model_validate({
+        "_id": "fdb-cc3d-pla",
+        "name": "CC3D PLA (Master)",
+        "vendor": "CC3D",
+        "type": "PLA",
+        "spoolWeight": 154.0,
+        "hasVariants": True,
+    })
+    sm_filament = SpoolmanFilament(
+        id=50, name="CC3D PLA Purple",
+        vendor=SpoolmanVendor(id=7, name="CC3D"),
+        material="PLA", spool_weight=None,
+    )
+    sm_spool = SpoolmanSpool(
+        id=500, filament=sm_filament, remaining_weight=800.0, archived=False, extra={},
+    )
+    spoolman = _fake_spoolman(filaments=[sm_filament], spools=[sm_spool])
+    filamentdb = _fake_filamentdb(filaments=[fdb_master])
+    filamentdb.create_filament = AsyncMock(return_value=MagicMock(id="new-fil"))
+    filamentdb.create_spool = AsyncMock(return_value={"_id": "new-spool"})
+    client = _client(db, spoolman, filamentdb)
+
+    resp = client.post("/api/wizard/execute")  # no tare_overrides — server resolves it
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["failed"] == 0
+
+    filamentdb.create_filament.assert_awaited_once()
+    fil_payload = filamentdb.create_filament.await_args.args[0]
+    assert fil_payload.get("spoolWeight") == 154.0
+
+    filamentdb.create_spool.assert_awaited_once()
+    spool_payload = filamentdb.create_spool.await_args.args[1]
+    assert spool_payload["totalWeight"] == 954.0  # 800 net + 154 family tare
 
 
 def test_wizard_execute_rejects_when_fdb_tare_unknown(db):

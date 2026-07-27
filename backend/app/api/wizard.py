@@ -44,10 +44,12 @@ from app.core.engine import (
 )
 from app.core.locations import ensure_fdb_location
 from app.core.masters import is_master_fdb
-from app.core.masters_defaults import group_mode_defaults
+from app.core.masters_defaults import group_mode_defaults, resolve_family_tare
 from app.core.material_tags import finish_ids_from_text, serialize_material_tags
 from app.core.matcher import (
-    extract_finish_line,
+    build_family_tare_by_sm_id,
+    build_fdb_parent_key_map,
+    existing_fdb_parent_id_for_sm,
     match_filaments,
     normalize_name,
     normalize_vendor,
@@ -738,24 +740,20 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
         if not s.archived and s.filament:
             spools_per_filament[s.filament.id] = spools_per_filament.get(s.filament.id, 0) + 1
 
-    # D3 — build FDB parent tree: (vendor_norm, material_norm, finish_norm) → FilamentRef
+    # D3 — build FDB parent tree: (vendor_norm, material_norm, finish_norm) → FilamentRef.
     # Finish is extracted from the FDB filament name so Silk parents match Silk SM groups.
-    _parent_ids: set[str] = {f.parentId for f in fdb_filaments if f.parentId}
-    fdb_parent_by_key: dict[tuple[str, str, str], FilamentRef] = {}
-    for f in fdb_filaments:
-        if f.id in _parent_ids or f.hasVariants:
-            key = (
-                normalize_vendor(f.vendor),
-                normalize_name(f.type or ""),
-                extract_finish_line(f.name or "", f.type, keywords=variant_keywords),
-            )
-            if key not in fdb_parent_by_key:
-                fdb_parent_by_key[key] = FilamentRef(
-                    filamentdb_filament_id=f.id,
-                    name=f.name,
-                    vendor=f.vendor,
-                    material=f.type,
-                )
+    # The key→id map is the SAME shared clustering the execute tare gate and planner use
+    # (issue #78) so all three agree on which existing FDB parent a group attaches to.
+    _fdb_parent_id_by_key = build_fdb_parent_key_map(fdb_filaments, variant_keywords)
+    fdb_parent_by_key: dict[tuple[str, str, str], FilamentRef] = {
+        key: FilamentRef(
+            filamentdb_filament_id=fdb_id,
+            name=fdb_by_id[fdb_id].name,
+            vendor=fdb_by_id[fdb_id].vendor,
+            material=fdb_by_id[fdb_id].type,
+        )
+        for key, fdb_id in _fdb_parent_id_by_key.items()
+    }
 
     # D1/B — cluster included filaments by (vendor, material, finish)
     clusters: dict[tuple[str, str, str], list[SpoolmanFilament]] = {}
@@ -783,6 +781,15 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
                 VariantPropConflict(**c) for c in sm_prop_conflicts(master, m)
             ]
             tare, tare_source = _sm_filament_tare(m)
+            if tare_source == "needs_input" and existing_fdb_parent is not None:
+                # Issue #78: the Spoolman side has no tare, but this group attaches to an
+                # existing FDB master/family that already knows one (#76 backfill or an
+                # earlier import) — use it instead of blocking on "required".
+                family_tare = resolve_family_tare(
+                    fdb_filaments, existing_fdb_parent.filamentdb_filament_id,
+                )
+                if family_tare is not None:
+                    tare, tare_source = family_tare, "filamentdb_master"
             member_rows.append(VariancesFilament(
                 ref=_sm_ref(m),
                 spool_ids=spool_ids_per_filament.get(m.id, []),
@@ -819,6 +826,18 @@ async def wizard_variances(request: Request, db: Session = Depends(get_db)) -> V
     for sm in included_filaments:
         if sm.id not in grouped_ids:
             tare, tare_source = _sm_filament_tare(sm)
+            if tare_source == "needs_input":
+                # Same #78 fallback as the grouped branch above. Ungrouped singletons are
+                # only ever added here when their cluster has NO existing_fdb_parent match
+                # (a match would have kept them in `groups` above), so this is normally a
+                # no-op — kept for symmetry / defensiveness against future clustering changes.
+                _ungrouped_parent_id = existing_fdb_parent_id_for_sm(
+                    sm, _fdb_parent_id_by_key, variant_keywords,
+                )
+                if _ungrouped_parent_id:
+                    family_tare = resolve_family_tare(fdb_filaments, _ungrouped_parent_id)
+                    if family_tare is not None:
+                        tare, tare_source = family_tare, "filamentdb_master"
             ungrouped.append(VariancesFilament(
                 ref=_sm_ref(sm),
                 spool_ids=spool_ids_per_filament.get(sm.id, []),
@@ -2835,6 +2854,11 @@ async def wizard_execute(
     # Tare gate: reject execute if any to-be-created filament/spool lacks a known tare.
     # This prevents the wizard from writing 200 g as a silent guess.
     if import_direction == "spoolman":
+        exec_variant_keywords = _resolve_variant_keywords(db)
+        # Issue #78: resolve the same existing-FDB-family tare fallback the preview and
+        # planner use, so a group attaching to a master with a KNOWN tare is not rejected
+        # here — regardless of whether the frontend re-sent the pre-filled value.
+        _family_tare_by_sm_id = build_family_tare_by_sm_id(sm_filaments, fdb_filaments, exec_variant_keywords)
         _missing_tare_names: list[str] = []
         _sm_spools_by_fil: dict[int, list] = {}
         for _sp in sm_spools:
@@ -2858,7 +2882,9 @@ async def wizard_execute(
                 ]
             if not _importable_spools:
                 continue  # no spools will be created — skip tare gate for this filament
-            _resolved = _resolve_filament_tare(_sm_fil, _fil_spools, tare_by_sm_spool)
+            _resolved = _resolve_filament_tare(
+                _sm_fil, _fil_spools, tare_by_sm_spool, _family_tare_by_sm_id.get(_sm_fil.id),
+            )
             if _resolved is None:
                 _missing_tare_names.append(_sm_label(_sm_fil))
         if _missing_tare_names:
@@ -2898,7 +2924,6 @@ async def wizard_execute(
 
     if import_direction == "spoolman":
         exec_variant_mode = _resolve_variant_parent_mode(db)
-        exec_variant_keywords = _resolve_variant_keywords(db)
         exec_container_marker = _resolve_container_parent_marker(db)
         exec_container_overrides: dict[str, dict] = get_config_value(db, "wizard_container_name_overrides", {}) or {}
         await _execute_spoolman_to_fdb(

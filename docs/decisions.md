@@ -29,6 +29,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Wizard & variant model
 
+- [2026-07-27 — Wizard variances: existing-FDB-master tare fallback, shared clustering helper](#2026-07-27--wizard-variances-existing-fdb-master-tare-fallback-shared-clustering-helper-github-78) — #78
 - [2026-07-26 — Master-level group defaults: shared helper, tie-break, synthetic-vs-real snapshot handling](#2026-07-26--master-level-group-defaults-shared-helper-tie-break-synthetic-vs-real-snapshot-handling-github-76) — #76
 - [2026-06-28 — Reconcile orphaned spools instead of silently skipping them](#2026-06-28--reconcile-orphaned-spools-instead-of-silently-skipping-them-github-48) — #48
 - [2026-06-21 — `never_import_empties` is honored by the ongoing engine (not just the wizard)](#2026-06-21--never_import_empties-is-honored-by-the-ongoing-engine-not-just-the-wizard)
@@ -197,6 +198,57 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-07-27 — Wizard variances: existing-FDB-master tare fallback, shared clustering helper, GitHub #78
+
+**Context.** #76 taught the Conflicts "Add" path (and the master-defaults backfill/seed paths) to
+resolve tare from an existing FDB family via `resolve_family_tare()`, but never wired the same
+fallback into the Bulk Import Wizard. A new Spoolman color attaching to an existing FDB
+master/family that already had a tare still showed "required" in the Variances preview and, if
+somehow pushed through, would either trip the execute tare gate or (if it slipped past) write the
+wrong gross using an unresolved/blank tare — because all three wizard sites (`wizard_variances`
+preview, the execute tare gate, `_plan_spoolman_to_fdb`'s per-spool gross) resolved tare from the
+Spoolman side only.
+
+**Decision — one clustering helper, three call sites, same answer.** Added
+`app/core/matcher.py:build_fdb_parent_key_map()` (extracted verbatim from the inline
+`(vendor_norm, material_norm, finish_norm) → FDB parent/master id` map `wizard_variances` already
+built), `existing_fdb_parent_id_for_sm()` (looks up one SM filament's cluster key in that map), and
+`build_family_tare_by_sm_id()` (combines both with `masters_defaults.resolve_family_tare()` into
+`{sm_filament_id: family_tare}`, entries present only when a tare was actually resolved). All three
+wizard call sites now build the SAME map from the SAME `fdb_filaments`/`variant_keywords` inputs, so
+preview and execute can never disagree about which existing FDB parent a group attaches to (or what
+tare it contributes) — the literal risk called out in the issue ("regardless of whether the frontend
+re-sent the pre-filled value").
+
+- **Preview** (`wizard_variances`): grouped members and the (structurally unreachable today, kept for
+  symmetry) ungrouped branch fall back to the group's `existing_fdb_parent`'s family tare when the
+  Spoolman-only resolution is `needs_input`, surfaced as a new `tare_source` value
+  `"filamentdb_master"` (added to the `VariancesFilament.tare_source` Literal).
+  `wizard_parent_by_key` itself is now just `build_fdb_parent_key_map()` wrapped in `FilamentRef`s.
+- **Execute tare gate**: `_resolve_filament_tare()` (`core/planner.py`) grew a 4th resolution step —
+  an optional `family_tare` parameter, checked after the existing 3 Spoolman-side steps and before
+  returning `None`. The gate precomputes `build_family_tare_by_sm_id(...)` once and passes each
+  filament's entry in; a group whose family has a known tare is no longer rejected, independent of
+  what (if anything) the frontend echoed back as an override.
+- **Planner gross** (`_plan_spoolman_to_fdb`): precomputes the same `family_tare_by_sm_id` map once
+  at the top and threads it into both Phase A (the new FDB filament's own `spoolWeight`, via the
+  same `_resolve_filament_tare` 4th step) and Phase C (per-spool `planned_gross`, which has its own
+  inline resolution chain — not `_resolve_filament_tare` — so the fallback was added directly there,
+  setting `tare_source = "filamentdb_master"` on the `_SpoolPlanItem`). Seeding the *new filament's*
+  `spoolWeight` (not just the spool's gross) matters because the ongoing sync engine
+  (`core/engine.py`) reads `fdb_filament.spoolWeight` directly per-filament with no family fallback
+  of its own — leaving it blank would just move the "used_default" guess to the next auto-sync cycle.
+- **Invariant preserved.** `family_tare_by_sm_id` only ever contains entries where
+  `resolve_family_tare` returned a non-`None`, already-known value — never `DEFAULT_TARE_GRAMS`. A
+  cluster whose family has no tare anywhere still resolves to `None` everywhere and still gates.
+- **Module placement:** `build_family_tare_by_sm_id` lives in `matcher.py` (not `masters_defaults.py`)
+  even though it calls `resolve_family_tare` — `masters_defaults.py`'s "never import from
+  wizard.py/planner.py" constraint only prevents cycles in that direction; `matcher.py` already
+  imports FDB/SM schema types and is imported by both `wizard.py` and `planner.py`, and
+  `masters_defaults.py` has zero `app.*` imports of its own, so `matcher → masters_defaults` is a
+  safe one-way edge.
 
 
 ## 2026-07-26 — Master-level group defaults: shared helper, tie-break, synthetic-vs-real snapshot handling, GitHub #76

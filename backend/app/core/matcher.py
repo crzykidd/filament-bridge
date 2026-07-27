@@ -8,6 +8,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.masters_defaults import resolve_family_tare
 from app.schemas.filamentdb import FDBFilament
 from app.schemas.spoolman import SpoolmanFilament
 
@@ -180,6 +181,75 @@ def sm_variant_cluster_key(
     material = normalize_name(sm.material or "")
     finish = extract_finish_line(sm.name or "", sm.material, keywords)
     return (vendor, material, finish)
+
+
+def build_fdb_parent_key_map(
+    fdb_filaments: list[FDBFilament],
+    variant_keywords: list[str] | None = None,
+) -> dict[tuple[str, str, str], str]:
+    """Map (vendor_norm, material_norm, finish_norm) -> the existing FDB parent/master id.
+
+    A "parent" is any FDB filament pointed to by another filament's ``parentId`` (a real
+    variant-family parent) or one that has ``hasVariants`` set (a master with no children
+    yet). This is the SAME (vendor, material, finish) clustering used to group Spoolman
+    variant colors — used here to detect that a Spoolman filament/cluster attaches to an
+    existing Filament DB line.
+
+    Shared by the wizard variances preview, the execute tare gate, and the planner's
+    family-tare fallback (issue #78) so all three resolve the same existing FDB parent
+    — and therefore the same family tare — for a given Spoolman filament.
+    """
+    parent_ids = {f.parentId for f in fdb_filaments if f.parentId}
+    result: dict[tuple[str, str, str], str] = {}
+    for f in fdb_filaments:
+        if f.id in parent_ids or f.hasVariants:
+            key = (
+                normalize_vendor(f.vendor),
+                normalize_name(f.type or ""),
+                extract_finish_line(f.name or "", f.type, keywords=variant_keywords),
+            )
+            if key not in result:
+                result[key] = f.id
+    return result
+
+
+def existing_fdb_parent_id_for_sm(
+    sm: SpoolmanFilament,
+    fdb_parent_by_key: dict[tuple[str, str, str], str],
+    variant_keywords: list[str] | None = None,
+) -> str | None:
+    """Look up the id of the existing FDB parent/master a Spoolman filament's cluster attaches to.
+
+    ``fdb_parent_by_key`` is the output of ``build_fdb_parent_key_map`` — build it once
+    per request/plan and reuse across all Spoolman filaments (O(1) lookup per filament).
+    """
+    return fdb_parent_by_key.get(sm_variant_cluster_key(sm, keywords=variant_keywords))
+
+
+def build_family_tare_by_sm_id(
+    sm_filaments: list[SpoolmanFilament],
+    fdb_filaments: list[FDBFilament],
+    variant_keywords: list[str] | None = None,
+) -> dict[int, float]:
+    """Precompute {sm_filament_id: family_tare} for every SM filament whose cluster matches
+    an existing FDB parent/master with a KNOWN tare (issue #78).
+
+    Only includes entries with a resolved, non-``None`` tare (via
+    ``masters_defaults.resolve_family_tare`` — the master's own ``spoolWeight``, else the
+    mode of its variant children's own ``spoolWeight``). A missing key means "no family
+    tare known" — callers must still treat that as unresolved (never guess a default),
+    same invariant as ``planner._resolve_filament_tare``.
+    """
+    fdb_parent_by_key = build_fdb_parent_key_map(fdb_filaments, variant_keywords)
+    result: dict[int, float] = {}
+    for sm in sm_filaments:
+        parent_id = existing_fdb_parent_id_for_sm(sm, fdb_parent_by_key, variant_keywords)
+        if not parent_id:
+            continue
+        tare = resolve_family_tare(fdb_filaments, parent_id)
+        if tare is not None:
+            result[sm.id] = tare
+    return result
 
 
 def sm_prop_conflicts(master: SpoolmanFilament, member: SpoolmanFilament) -> list[dict[str, Any]]:
