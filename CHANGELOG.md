@@ -9,6 +9,15 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Master/container filaments are seeded with the family's shared defaults on creation.**
+  When a `generic_container` cluster's master is created, its tare (empty-reel weight),
+  nozzle/bed temp, density, diameter, and material are seeded from the **mode** (most-common
+  value) across the cluster's Spoolman members, so new variants inherit real family defaults
+  instead of starting blank. A field is only seeded when the cluster actually agrees on one; an
+  explicit Variances-step reconcile decision still wins over the seeded default. Part of #76.
+
 ## [0.6.16] — 2026-07-20
 
 ### Added

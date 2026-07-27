@@ -44,6 +44,7 @@ from app.core.engine import (
 )
 from app.core.locations import ensure_fdb_location
 from app.core.masters import is_master_fdb
+from app.core.masters_defaults import group_mode_defaults
 from app.core.material_tags import finish_ids_from_text, serialize_material_tags
 from app.core.matcher import (
     extract_finish_line,
@@ -1417,6 +1418,42 @@ async def _execute_spoolman_to_fdb(
                 )
                 if _shared_finish_ids:
                     container_payload["optTags"] = sorted(_shared_finish_ids)
+
+                # Issue #76 — seed the master with the family's shared defaults
+                # (tare, nozzle/bed temp, density, diameter, material) so variants
+                # inherit them instead of the family being re-asked for e.g. a tare
+                # it already collectively knows. Computed as the per-field mode
+                # across the cluster's SM members via _RECONCILE_FIELD_MAP so the
+                # canonical→FDB/SM mapping can never drift from the reconcile path.
+                # A field is only added when the mode helper resolves a value.
+                _member_values_by_field = {
+                    _canonical: [getattr(m, _sm_key, None) for m in members]
+                    for _canonical, (_fdb_key, _sm_key) in _RECONCILE_FIELD_MAP.items()
+                }
+                _mode_defaults = group_mode_defaults(_member_values_by_field)
+                for _canonical, _value in _mode_defaults.items():
+                    _fdb_key, _ = _RECONCILE_FIELD_MAP[_canonical]
+                    if "." in _fdb_key:
+                        _top, _sub = _fdb_key.split(".", 1)
+                        _nested = dict(container_payload.get(_top) or {})
+                        _nested[_sub] = _value
+                        container_payload[_top] = _nested
+                    else:
+                        container_payload[_fdb_key] = _value
+
+                # A reconcile decision (Phase 2 Variances step) for this cluster still
+                # wins over the seeded mode default — it is an explicit user choice.
+                _container_reconcile_fields: list[dict] = []
+                for _m in members:
+                    _rf = (reconcile_by_master or {}).get(_m.id)
+                    if _rf:
+                        _container_reconcile_fields = _rf
+                        break
+                if _container_reconcile_fields:
+                    container_payload = _overlay_reconcile_on_fdb_payload(
+                        container_payload, _container_reconcile_fields
+                    )
+
                 # Filter out None values but keep color: None explicitly
                 container_payload_clean = {
                     k: v for k, v in container_payload.items()

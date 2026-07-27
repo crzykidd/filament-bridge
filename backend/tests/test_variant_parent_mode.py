@@ -377,6 +377,97 @@ def test_wizard_execute_generic_container_two_separate_clusters_two_containers(d
 
 
 # ---------------------------------------------------------------------------
+# 3b. Master default seeding (issue #76)
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_execute_generic_container_seeds_mode_defaults(db):
+    """generic_container: a freshly-created container is seeded with the cluster's
+    per-field mode (majority) value for tare/temps/density/diameter — so variants
+    inherit real family defaults instead of starting blank."""
+    set_config_value(db, "import_direction", "spoolman")
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    set_config_value(db, "wizard_match_decisions", [
+        {"spoolman_filament_id": 10, "action": "create"},
+        {"spoolman_filament_id": 11, "action": "create"},
+        {"spoolman_filament_id": 12, "action": "create"},
+    ])
+    db.commit()
+
+    def _member(fid, name, *, nozzle, bed, density, spool_weight):
+        return SpoolmanFilament(
+            id=fid, name=name, material="PLA",
+            vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+            settings_extruder_temp=nozzle, settings_bed_temp=bed,
+            density=density, diameter=1.75, spool_weight=spool_weight,
+        )
+
+    sm_filaments = [
+        _member(10, "PLA Red", nozzle=220, bed=60, density=1.24, spool_weight=200.0),
+        _member(11, "PLA Blue", nozzle=220, bed=60, density=1.24, spool_weight=200.0),
+        _member(12, "PLA Green", nozzle=230, bed=60, density=1.25, spool_weight=210.0),
+    ]
+    spoolman = _fake_spoolman(filaments=sm_filaments, spools=[])
+
+    create_calls: list[dict] = []
+    call_counter = 0
+
+    async def _create(payload):
+        nonlocal call_counter
+        call_counter += 1
+        create_calls.append(dict(payload))
+        return MagicMock(id=f"fdb-{call_counter}")
+
+    filamentdb = _fake_filamentdb()
+    filamentdb.create_filament = AsyncMock(side_effect=_create)
+    client = _client(db, spoolman, filamentdb)
+
+    body = client.post("/api/wizard/execute").json()
+    assert body["failed"] == 0
+
+    containers = [c for c in create_calls if c.get("color") is None and "parentId" not in c]
+    assert len(containers) == 1
+    container = containers[0]
+
+    # Mode across the 3 members: nozzle 220 (2/3), bed 60 (3/3), density 1.24 (2/3),
+    # diameter 1.75 (3/3), spoolWeight 200.0 (2/3).
+    assert container["spoolWeight"] == 200.0
+    assert container["temperatures"] == {"nozzle": 220, "bed": 60}
+    assert container["density"] == 1.24
+    assert container["diameter"] == 1.75
+
+
+@pytest.mark.asyncio
+async def test_sm_to_fdb_generic_container_dry_run_seeds_no_writes(db):
+    """dry_run must still compute the mode-seeded container plan without touching
+    FDB (mirrors the #65 dry-run regression coverage) even with default seeding
+    added to the container create payload."""
+    from app.core.single_record_import import import_single_sm_filament
+
+    set_config_value(db, "variant_parent_mode", "generic_container")
+    db.commit()
+
+    sm = SpoolmanFilament(
+        id=10, name="PLA Black", material="PLA",
+        vendor=SpoolmanVendor(id=1, name="ELEGOO"),
+        spool_weight=200.0,
+    )
+    spoolman = _fake_spoolman(filaments=[sm], spools=[])
+    filamentdb = _fake_filamentdb(filaments=[])
+
+    res = await import_single_sm_filament(
+        db, "cyc", spoolman, filamentdb, sm.id,
+        filament_action="create",
+        variant_parent_mode="generic_container",
+        dry_run=True,
+    )
+
+    filamentdb.create_filament.assert_not_called()
+    filamentdb.update_filament.assert_not_called()
+    assert res.failed == 0
+
+
+# ---------------------------------------------------------------------------
 # 4. Re-run idempotency — no duplicate container parent
 # ---------------------------------------------------------------------------
 
