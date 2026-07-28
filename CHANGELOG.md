@@ -9,6 +9,14 @@ GitHub release.
 
 ## [Unreleased]
 
+### Added
+
+- **Mobile Updates lookup defaults to the number keypad.** On the Mobile Updates page the spool
+  lookup field now opens the numeric keypad by default (spool-number lookups dominate on a
+  phone, and iOS/iPadOS has no "letters + number row" keyboard), with a small `#`/`Abc` toggle
+  to switch to a full text keyboard for name/vendor/color search. The field stays a text search
+  either way — only the on-screen keyboard changes. Closes #79.
+
 ### Fixed
 
 - **Bulk Import Wizard Variances step now resolves tare from an existing Filament DB master,
