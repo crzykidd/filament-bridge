@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-07-27 — OpenPrintTag identity sync made bidirectional](#2026-07-27--openprinttag-identity-sync-made-bidirectional-github-81) — #81
 - [2026-07-19 — Purge stale filament mappings when Spoolman reuses an id](#2026-07-19--purge-stale-filament-mappings-when-spoolman-reuses-an-id-github-70) — #70
 - [2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)](#2026-06-11--small-fix-batch-compose-image-interval-pagination-dry-run-settings-copy)
 - [2026-06-11 — Honor configured cross-reference field names in ensure_extra_fields + engine orphan guard](#2026-06-11--honor-configured-cross-reference-field-names-in-ensure_extra_fields--engine-orphan-guard)
@@ -249,6 +250,54 @@ re-sent the pre-filled value").
   imports FDB/SM schema types and is imported by both `wizard.py` and `planner.py`, and
   `masters_defaults.py` has zero `app.*` imports of its own, so `matcher → masters_defaults` is a
   safe one-way edge.
+
+
+## 2026-07-27 — OpenPrintTag identity sync made bidirectional, GitHub #81
+
+**Context.** `_sync_opentag_identity` only pushed the OpenPrintTag identity
+(`openprinttag_slug`/`openprinttag_uuid`) Spoolman → Filament DB, merging into FDB's `settings{}`
+bag via the approved scoped exception. A filament matched to OpenPrintTag **on the FDB side**
+(FDB's native OPT matching writes the same two keys into the same bag) never had its identity
+flow back to Spoolman, so under an otherwise-bidirectional sync the OpenTag Cleanup tool treated
+those filaments as unmatched — Spoolman's `openprinttag_uuid` stayed empty forever.
+
+**Decision — stateless bidirectional reconciliation, keyed on `openprinttag_uuid`.** Rewrote
+`_sync_opentag_identity` to read both sides' current identity every cycle (no snapshot baseline
+needed) and reconcile:
+- One side has an identity, the other doesn't → fill the empty side. FDB→SM is the new leg (a
+  plain `spoolman.update_filament(..., {"extra": {...}})`); SM→FDB is unchanged (still exclusively
+  through `FilamentDBClient.merge_filament_settings()` — the ONE permitted writer to FDB's
+  `settings{}` bag, scoped to those two keys, per CLAUDE.md).
+- Both set and equal → no-op (a slug-only mismatch with matching uuid is left alone, kept simple).
+- Both set and **different** → routed through `resolve_sync_action` (same `material_properties`
+  direction + conflict policy as the OPT material-setting extras) — `QUEUE_CONFLICT` (the `manual`
+  default) queues a deduped `cross_system` conflict (`field_name="OpenPrintTag identity"`) and
+  **never overwrites**; a one-way direction still lets the source side win outright, matching
+  every other pass's established one-way semantics (drift on the locked side is not "conflicting,"
+  it's just ignored).
+
+**Non-obvious choices.**
+- **No new settings write path.** FDB `settings{}` writes remain exclusively through
+  `merge_filament_settings()`; this task only adds a *read* of `settings.openprinttag_uuid`/`slug`
+  (reading the bag was always permitted) plus a new Spoolman-side write, which was never
+  restricted.
+- **Read the filament's own `settings`, not `_hasOwnOptLink`.** Pydantic v2 does not surface
+  underscore-prefixed keys as model attributes even under `extra: "allow"` (unlike ordinary
+  unknown fields — see the FDB-schemas-extra-allow decision), so that FDB-internal flag isn't
+  reliably readable off `FDBFilamentDetail`. Presence of `settings.openprinttag_uuid` is used as
+  the signal instead; a variant with no own identity is not treated as having one via inheritance
+  (inherited-variant identity propagation is out of scope, left as a follow-up).
+- **Direction-gated on `material_properties`, not a new axis.** The identity has no dedicated
+  sync-direction setting; it rides the same axis as the OPT material-setting extras it's adjacent
+  to, so a deployment that's already restricted material-property flow (e.g. FDB→SM only) gets
+  consistent identity behavior for free.
+- **No ping-pong risk without a snapshot.** Filling the empty side makes both sides equal, so the
+  very next cycle's direct comparison naturally falls into the equal-branch no-op — no baseline
+  bookkeeping needed, unlike every snapshot-diffed pass.
+- **Verified the identity keys are NOT in `OPENTAG_EXTRA_FIELDS`** (those are the seven typed
+  material-setting extras, a separate concern with their own snapshot-diffed pass,
+  `_sync_opentag_material_fields`) — confirms this pass and that one never fight over the same
+  keys.
 
 
 ## 2026-07-26 — Master-level group defaults: shared helper, tie-break, synthetic-vs-real snapshot handling, GitHub #76
