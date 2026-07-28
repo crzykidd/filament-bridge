@@ -16,7 +16,7 @@ from app.config import settings as _settings
 from app.core.color import apply_finish_tags, sm_multicolor_to_fdb
 from app.core.fields import resolve_effective_cost
 from app.core.material_tags import finish_ids_from_text, strip_finish_words
-from app.core.matcher import extract_finish_line, sm_prop_conflicts
+from app.core.matcher import build_family_tare_by_sm_id, extract_finish_line, sm_prop_conflicts
 from app.core.weight import spoolman_to_fdb_gross
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.schemas.filamentdb import FDBFilament
@@ -126,6 +126,7 @@ def _resolve_filament_tare(
     sm_filament: SpoolmanFilament,
     fil_spools: list,
     tare_by_sm_spool: dict[int, float],
+    family_tare: float | None = None,
 ) -> float | None:
     """Resolve the wizard-canonical tare for a Spoolman filament.
 
@@ -134,7 +135,12 @@ def _resolve_filament_tare(
        by id, same deterministic tie-break used elsewhere).
     2. Spoolman spool-level spool_weight (first spool by id with a non-null value).
     3. Spoolman filament-level spool_weight.
-    4. None — tare is unknown; the wizard execute path rejects rather than guessing.
+    4. ``family_tare`` — the tare of an existing Filament DB parent/master this filament
+       attaches to, when the caller has already resolved one (issue #78; see
+       ``app.core.matcher.build_family_tare_by_sm_id``). Only ever a KNOWN family tare,
+       never a default — callers that pass ``None`` here (the common case: no matching
+       family, or a family with no tare of its own) see no change in behavior.
+    5. None — tare is unknown; the wizard execute path rejects rather than guessing.
 
     Never falls back to DEFAULT_TARE_GRAMS (200 g).  The wizard gates execute on
     all filaments where this returns None — the user must supply a tare first.
@@ -152,7 +158,10 @@ def _resolve_filament_tare(
     # 3. Filament-level spool_weight.
     if sm_filament.spool_weight is not None:
         return sm_filament.spool_weight
-    # 4. Unknown — caller must reject; never write 200 g as a guess.
+    # 4. Existing FDB family's known tare (never a guessed default).
+    if family_tare is not None:
+        return family_tare
+    # 5. Unknown — caller must reject; never write 200 g as a guess.
     return None
 
 
@@ -181,7 +190,7 @@ class _SpoolPlanItem:
     skip_fdb_spool_id: str | None = None  # xref for already-linked spools
     fdb_filament_id: str | None = None  # known (link/skip-linked), None for create
     planned_gross: float = 0.0
-    tare_source: str = "needs_input"  # "spoolman" | "needs_input"
+    tare_source: str = "needs_input"  # "spoolman" | "filamentdb_master" | "needs_input"
     used_tare: float = 0.0
     detail: str | None = None
     retired: bool = False  # True when the SM spool is archived → import as FDB retired spool
@@ -317,6 +326,13 @@ def _plan_spoolman_to_fdb(
 
     fdb_by_id: dict[str, FDBFilament] = {f.id: f for f in fdb_filaments}
 
+    # Issue #78: {sm_filament_id: family_tare} for filaments whose (vendor, material,
+    # finish) cluster attaches to an existing FDB parent/master that already knows a
+    # tare — same clustering the wizard variances preview and execute tare gate use, so
+    # preview ≡ execute for this fallback too. Only has entries where a KNOWN family
+    # tare was resolved (never a default); .get() elsewhere returns None otherwise.
+    family_tare_by_sm_id = build_family_tare_by_sm_id(sm_filaments, fdb_filaments, variant_keywords)
+
     sm_spools_by_filament: dict[int, list] = {}
     for s in sm_spools:
         # Include ALL spools (active + archived); archived ones import as retired FDB spools.
@@ -386,7 +402,9 @@ def _plan_spoolman_to_fdb(
         elif action == "create":
             fil_spools = sm_spools_by_filament.get(sm_fil.id, [])
             cost = resolve_effective_cost(sm_fil.price, fil_spools)
-            tare = _resolve_filament_tare(sm_fil, fil_spools, tare_by_sm_spool)
+            tare = _resolve_filament_tare(
+                sm_fil, fil_spools, tare_by_sm_spool, family_tare_by_sm_id.get(sm_fil.id),
+            )
             payload = _fdb_filament_payload_from_sm(
                 sm_fil, effective_cost=cost, spools=fil_spools, resolved_tare=tare,
             )
@@ -511,8 +529,17 @@ def _plan_spoolman_to_fdb(
                 tare = sm_spool.spool_weight if sm_spool.spool_weight is not None else (
                     sm_spool.filament.spool_weight if sm_spool.filament else None
                 )
+            _spool_tare_source = "spoolman"
             if tare is None:
-                # No tare known and no user override — mark as needs_input.
+                # Issue #78: fall back to the existing FDB family's KNOWN tare (never a
+                # guessed default) before giving up — same fallback Phase A uses for the
+                # filament's own spoolWeight, keeping the created filament and its spools
+                # in agreement.
+                tare = family_tare_by_sm_id.get(item.sm_filament.id)
+                if tare is not None:
+                    _spool_tare_source = "filamentdb_master"
+            if tare is None:
+                # No tare known anywhere (not even the family) — mark as needs_input.
                 # The execute gate will reject before writing; planned_gross is approximate
                 # (uses DEFAULT_TARE_GRAMS internally) but is never written.
                 gross_res = spoolman_to_fdb_gross(sm_spool.remaining_weight or 0.0, None, precision=precision)
@@ -531,7 +558,7 @@ def _plan_spoolman_to_fdb(
                     sm_spool=sm_spool, fil_item=item, action="create",
                     fdb_filament_id=item.fdb_id,  # None for new creates; filled post-write in execute
                     planned_gross=gross_res.total_weight,
-                    tare_source="spoolman",
+                    tare_source=_spool_tare_source,
                     used_tare=tare,
                     retired=_spool_retired,
                     stale_spool_mapping=_stale_spool_mapping,

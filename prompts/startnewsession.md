@@ -95,22 +95,32 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-07-25, clean — v0.6.16 shipped)
+## ⏸️ PICK UP HERE (paused 2026-07-27 — v0.6.17 shipped; #78 fix in flight on `dev`)
 
-**Everything is released and synced — nothing in flight, nothing stranded.**
-- **v0.6.16 is live** (tag `v0.6.16`, GitHub release published, prod image build succeeded).
-  `main` == `origin/main`; `dev` == `origin/dev`; clean tree. On return you're on `dev`.
-- v0.6.16 shipped four issues: **#65** (SM→FDB "Add" preview no longer writes upstream — real
-  `dry_run` on `_execute_spoolman_to_fdb`), **#72** (Conflicts "Add" requires + uses + writes-back
-  the empty-reel tare), **#74** (label fields `spool_id` + full `name`), and **#73** (the prod
-  perf pass: Sync Log lazy/cached labels, 7 DB indexes, structured "Sync now" 500 + global
-  handler, concurrent Dashboard health checks). #65/#72/#74 auto-closed; **#73 stays OPEN** for
-  one optional follow-up only.
-- **Prod picks up all of it on its next `:latest` pull/restart.** The old inert leftover on
-  `spoolman.crzynet.com` — orphan filament **#179** + stale mapping `179→<master>` — is harmless;
-  the #70 GC (now released) clears the mapping the moment 179 is deleted.
+- **v0.6.17 is live** (tag `v0.6.17`, GitHub release published 2026-07-27, prod image build
+  fired on the `release` event). `main` == `origin/main`. On return you're on `dev`.
+- v0.6.17 shipped **#76** (master-level group defaults, now closed): (1) new masters/containers
+  are **seeded** with the family's mode tare/nozzle+bed temp/density/diameter/material on create
+  (`_execute_spoolman_to_fdb`); (2) the Conflicts "Add" dialog **pre-fills tare from the source
+  and shows the family's tare** (`resolve_family_tare` in `core/masters_defaults.py`); (3) a new
+  **Master Defaults** screen (`/master-defaults`, `core/masters_backfill.py` +
+  `api/masters.py`) backfills those six fields onto existing masters (fill-null-only, both-side
+  write + `_mp_*` snapshot refresh). Also: FDB **1.68.1** compat verified (no breaking changes;
+  `MIN_FDB` unchanged 1.33.0), and **CI ruff pinned to 0.15.17** (unpinned `pip install ruff`
+  was turning Lint red on unchanged code — see `.github/workflows/ci.yml`).
+
+- **#78 — LANDED on `dev`, reviewed, tests green; ready to ship as v0.6.18** (not pushed): the
+  **Bulk Import Wizard variances** step showed tare "required" when attaching new Spoolman colors
+  to an **existing FDB master that already has a tare**, because the wizard resolved tare
+  **Spoolman-side only** in three spots (preview `_sm_filament_tare`; execute gate
+  `_resolve_filament_tare`; planner `planned_gross`). Fix (`8ef54b4`) feeds the existing
+  `existing_fdb_parent`'s tare in via `resolve_family_tare` through a shared matcher helper
+  (`build_family_tare_by_sm_id`), new `tare_source "filamentdb_master"`, preserving the
+  never-guess-200 g rule. Handoff moved to `prompts/done/`. On return: **push `dev` + run
+  `/release-prep 0.6.18` (PR body must carry `Fixes #78`).**
 
 **Open / next work (ALWAYS ask the user which to take before starting):**
+- **#78** — push `dev` and release v0.6.18 (fix already reviewed + green).
 - **#73** *optional remainder* — background the blocking "Sync now" cycle **only if** it turns out
   to be *timing out* rather than erroring (the new structured 500 will confirm which). Not worth
   doing speculatively.
@@ -143,18 +153,19 @@ Spoolman was broken in stacked layers, fixed one per release:
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.16** (2026-07-21) — #65 SM→FDB preview no-write + #72 tare-required Add
-  + #74 label `spool_id`/`name` fields + #73 prod perf pass (Sync Log speed, 7 DB indexes,
-  structured Sync-now 500, concurrent Dashboard). Chain: v0.6.15 (#69 selectable FDB import +
-  #70 reused-id crash/stale-mapping GC + FDB 1.67.0 bump), v0.6.14 (#67 spool-create 400),
-  v0.6.13 (#64 preview-writes), v0.6.12 (#61 diameter-422 + #62 null-scalar-PATCH). Earlier:
-  v0.6.11 (repo audit — see below), v0.6.10 (Synced Records Unlink #40 *partial*; net/gross
-  labels #55), v0.6.9 (mobile printer-slot #53; OpenTag clarity #52).
-- Open issues (see `docs/backlog.md`): **#73** *optional* — background the blocking "Sync now"
-  only if it's timing out; **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink
-  needs a `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API
-  token (design call); **#24** Discord webhooks (FR-20); **#25** print-history enrichment
-  (FR-22, deferred). (#65/#69/#70/#72/#74 all closed and released.)
+- Latest release: **v0.6.17** (2026-07-27) — #76 master-level group defaults (seed-on-create +
+  Master Defaults backfill screen + Conflicts "Add" tare pre-fill), FDB 1.68.1 compat verified,
+  CI ruff pinned. Chain: v0.6.16 (#65 SM→FDB preview no-write + #72 tare-required Add + #74 label
+  `spool_id`/`name` + #73 prod perf pass), v0.6.15 (#69 selectable FDB import + #70 reused-id
+  crash/stale-mapping GC + FDB 1.67.0 bump), v0.6.14 (#67 spool-create 400), v0.6.13 (#64
+  preview-writes), v0.6.12 (#61 diameter-422 + #62 null-scalar-PATCH). Earlier: v0.6.11 (repo
+  audit — see below), v0.6.10 (Synced Records Unlink #40 *partial*; net/gross labels #55).
+- Open issues (see `docs/backlog.md`): **#78** *in flight* — wizard variances re-asks for a tare
+  the FDB master already has (Sonnet fix on `dev`, review + ship as v0.6.18); **#73** *optional* —
+  background the blocking "Sync now" only if it's timing out; **#40** RELINK in Synced Records
+  (Unlink shipped v0.6.10; relink needs a `filament-suggestions-by-mapping` endpoint + ranked
+  picker); **#47** read-only API token (design call); **#24** Discord webhooks (FR-20); **#25**
+  print-history enrichment (FR-22, deferred). (#76 closed and released.)
 - **Branch-tangle gotcha:** `/release-cut` leaves you on `main`; if you then commit, it lands
   on local `main` by mistake. After any release-cut, `git checkout dev` and
   `git branch -f main origin/main` before doing more work (happened 3× this session).

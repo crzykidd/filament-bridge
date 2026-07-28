@@ -9,6 +9,30 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.18] — 2026-07-27
+
+### Added
+
+- **Mobile Updates lookup defaults to the number keypad.** On the Mobile Updates page the spool
+  lookup field now opens the numeric keypad by default (spool-number lookups dominate on a
+  phone, and iOS/iPadOS has no "letters + number row" keyboard), with a small `#`/`Abc` toggle
+  to switch to a full text keyboard for name/vendor/color search. The field stays a text search
+  either way — only the on-screen keyboard changes. Closes #79.
+
+### Fixed
+
+- **Bulk Import Wizard Variances step now resolves tare from an existing Filament DB master,
+  not just Spoolman.** A new Spoolman color attaching to an existing FDB master/family that
+  already knows a tare (e.g. via #76's backfill) previously still showed "required" and, if
+  forced through, could reject execute or write the wrong gross weight — because the wizard
+  resolved the empty-reel tare from the Spoolman side only. The Variances preview, the execute
+  tare gate, and the planner's gross-weight computation now all fall back to the same
+  existing-FDB-parent family tare (via `resolve_family_tare`, reusing the same (vendor,
+  material, finish) clustering everywhere so preview and execute never disagree) before
+  requiring input — surfaced in the UI as "from the Filament DB master" (`tare_source:
+  "filamentdb_master"`). The "never guess a default" invariant is unchanged: a master with no
+  tare anywhere still requires input. Fixes #78.
+
 ## [0.6.17] — 2026-07-26
 
 ### Added

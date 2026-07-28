@@ -609,7 +609,7 @@ export interface VariancesFilament {
   ref: FilamentRef
   spool_ids: number[]
   tare: number | null
-  tare_source: 'spoolman' | 'default' | 'needs_input'
+  tare_source: 'spoolman' | 'filamentdb_master' | 'default' | 'needs_input'
   is_master: boolean
   conflicts: VariantPropConflict[]
   suggest_exclude: boolean

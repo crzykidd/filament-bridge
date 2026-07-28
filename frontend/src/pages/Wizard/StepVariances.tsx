@@ -636,16 +636,23 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                           : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'
                       }`}
                     />
-                    {tareNeedsInput && (
+                    {tareNeedsInput ? (
                       <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">required</span>
+                    ) : masterData?.tare_source === 'filamentdb_master' && (
+                      <span
+                        className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded"
+                        title="No Spoolman spool_weight — pre-filled from the existing Filament DB master's empty-reel tare"
+                      >
+                        from the Filament DB master
+                      </span>
                     )}
                   </div>
                 </div>
 
                 <div className="mb-3 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded px-3 py-2">
                   {attaching
-                    ? <>All colors here attach to «{group.existing_fdb_parent!.name}» and use this empty-reel tare: <strong>{masterTareVal} g</strong>. Filament DB stores one tare per filament.</>
-                    : <>All variants in this group will use the master's empty-reel tare: <strong>{masterTareVal} g</strong>. Filament DB stores one tare per filament.</>}
+                    ? <>All colors here attach to «{group.existing_fdb_parent!.name}» and use this empty-reel tare: <strong>{masterTareVal} g</strong>{masterData?.tare_source === 'filamentdb_master' && ' (from the Filament DB master)'}. Filament DB stores one tare per filament.</>
+                    : <>All variants in this group will use the master's empty-reel tare: <strong>{masterTareVal} g</strong>{masterData?.tare_source === 'filamentdb_master' && ' (from the Filament DB master)'}. Filament DB stores one tare per filament.</>}
                 </div>
 
                 {/* Per-member rows with labeled action buttons */}
@@ -1073,8 +1080,15 @@ function SMVariancesStep({ data, next, prev, setTareOverrides }: SMProps) {
                                 : 'border-gray-300 dark:border-gray-600 focus:ring-indigo-400'
                             }`}
                           />
-                          {standaloneTareNeedsInput && (
+                          {standaloneTareNeedsInput ? (
                             <span className="text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded">required</span>
+                          ) : f.tare_source === 'filamentdb_master' && (
+                            <span
+                              className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded"
+                              title="No Spoolman spool_weight — pre-filled from the existing Filament DB master's empty-reel tare"
+                            >
+                              from the Filament DB master
+                            </span>
                           )}
                         </>
                       )

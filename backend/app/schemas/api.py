@@ -613,7 +613,7 @@ class VariancesFilament(BaseModel):
     ref: FilamentRef
     spool_ids: list[int] = Field(default_factory=list)
     tare: float | None = None
-    tare_source: Literal["spoolman", "default", "needs_input"]
+    tare_source: Literal["spoolman", "filamentdb_master", "default", "needs_input"]
     is_master: bool = False
     conflicts: list[VariantPropConflict] = Field(default_factory=list)
     suggest_exclude: bool = False

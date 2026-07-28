@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.17-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.18-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,16 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.18 (2026-07-27)
+
+- **Fixed: the Bulk Import Wizard no longer re-asks for a tare the family already knows.** When
+  a new Spoolman color attaches to an existing Filament DB master that already has an empty-reel
+  tare (e.g. one you set via Master Defaults), the Variances step now uses that tare — shown as
+  "from the Filament DB master" — instead of showing "required." (#78)
+- **Mobile Updates lookup opens the number keypad.** The spool lookup field now defaults to the
+  numeric keypad on phones/tablets (number lookups are the common case), with a `#`/`Abc` toggle
+  to switch to a full text keyboard for name/vendor/color search. (#79)
 
 ### v0.6.17 (2026-07-26)
 

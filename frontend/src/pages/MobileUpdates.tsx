@@ -11,7 +11,7 @@
  * surfaces the message inline.
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { getMappings } from '../api/client'
 import { useApi } from '../api/hooks'
 import { ColorDisplay } from '../components/ColorDisplay'
@@ -31,6 +31,24 @@ export default function MobileUpdates() {
   const { data, loading, error } = useApi(getMappings)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Selected | null>(null)
+  // Spool number is by far the most common way to look one up on a phone, and iOS/iPadOS
+  // gives no "letters + number row" keyboard — so default to the numeric keypad and offer a
+  // toggle back to a full text keyboard for the occasional name/vendor/color search. `type`
+  // stays "text" (the filter below matches numbers and text alike); only the on-screen
+  // keyboard changes. (#79)
+  const [numericKeypad, setNumericKeypad] = useState(true)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const toggleKeypad = () => {
+    setNumericKeypad(m => !m)
+    // iOS only re-renders the on-screen keyboard on a focus change, so blur + refocus to
+    // actually swap it when the field is already focused.
+    const el = searchRef.current
+    if (el) {
+      el.blur()
+      requestAnimationFrame(() => el.focus())
+    }
+  }
 
   let rows: MappingRow[] = (data ?? []).filter(isSelectable)
   if (search.trim()) {
@@ -54,13 +72,26 @@ export default function MobileUpdates() {
       </div>
 
       <div className="max-w-md space-y-3">
-        <input
-          type="text"
-          placeholder="Search name / vendor / color / # …"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setSelected(null) }}
-          className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        />
+        <div className="relative">
+          <input
+            ref={searchRef}
+            type="text"
+            inputMode={numericKeypad ? 'numeric' : 'text'}
+            placeholder={numericKeypad ? 'Search by # …' : 'Search name / vendor / color …'}
+            value={search}
+            onChange={e => { setSearch(e.target.value); setSelected(null) }}
+            className="w-full border border-gray-300 dark:border-gray-600 rounded pl-3 pr-14 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+          <button
+            type="button"
+            onClick={toggleKeypad}
+            aria-label={numericKeypad ? 'Switch to text keyboard' : 'Switch to number keypad'}
+            title={numericKeypad ? 'Switch to text keyboard' : 'Switch to number keypad'}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-1 text-xs font-medium rounded border border-gray-300 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          >
+            {numericKeypad ? 'Abc' : '123'}
+          </button>
+        </div>
 
         {loading && <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>}
         {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
