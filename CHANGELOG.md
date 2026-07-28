@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.18] — 2026-07-27
+
 ### Added
 
 - **Mobile Updates lookup defaults to the number keypad.** On the Mobile Updates page the spool
