@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.19] — 2026-07-30
+
 ### Fixed
 
 - **OpenPrintTag identity now syncs Filament DB → Spoolman as well (previously one-way).**

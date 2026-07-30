@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.18-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.19-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,14 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.19 (2026-07-30)
+
+- **Fixed: OpenPrintTag identity now syncs both ways.** A filament matched to OpenPrintTag on the
+  Filament DB side previously never flowed that identity back to Spoolman, so the OpenTag Cleanup
+  tool showed it as unmatched. The identity (slug + UUID) now reconciles bidirectionally — whichever
+  side has it fills the empty side, and a genuine UUID conflict is queued for you rather than
+  overwritten. (#81)
 
 ### v0.6.18 (2026-07-27)
 
