@@ -4206,18 +4206,20 @@ async def run_sync_cycle(
                     new_spool_policy=new_spool_policy,
                 )
 
-    # ---- OpenTag identity push (scoped exception: merge slug/uuid into FDB settings bag) ----
-    # For each FilamentMapping whose Spoolman filament has openprinttag_slug/uuid extra fields set,
-    # ensure the same two keys appear in the FDB filament's settings{} bag.  Idempotent: the
-    # merge helper skips the write when FDB already has the same values.  Non-fatal per-pair.
-    # Dry-run aware: no writes in dry-run mode.
-    if not dry_run:
-        await _sync_opentag_identity(
-            db, cycle_id, result,
-            filament_mappings=filament_mappings,
-            sm_filaments=sm_filaments,
-            filamentdb=filamentdb,
-        )
+    # ---- OpenTag identity sync (bidirectional; FDB leg is the scoped settings{} exception) ----
+    # Keyed on the canonical openprinttag_uuid: whichever side has an identity and the other
+    # doesn't, fills the empty side; a genuine uuid divergence queues a conflict (never
+    # auto-resolved). Direction-gated on the same material_properties axis as the OPT material
+    # fields. Always called (including dry-run) so the wizard/trigger dry run previews it.
+    await _sync_opentag_identity(
+        db, cycle_id, result, dry_run,
+        filament_mappings=filament_mappings,
+        sm_filaments=sm_filaments,
+        spoolman=spoolman,
+        filamentdb=filamentdb,
+        matprop_direction=matprop_direction,
+        matprop_policy=matprop_policy,
+    )
 
     if not dry_run:
         db.commit()
@@ -4234,28 +4236,124 @@ async def _sync_opentag_identity(
     db: Session,
     cycle_id: str,
     result: CycleResult,
+    dry_run: bool,
     *,
     filament_mappings: list[FilamentMapping],
     sm_filaments: dict[int, Any],
+    spoolman: SpoolmanClient,
     filamentdb: FilamentDBClient,
+    matprop_direction: str = "filamentdb_to_spoolman",
+    matprop_policy: str = "manual",
 ) -> None:
-    """Phase 5 (scoped exception): push openprinttag_slug/uuid from SM extras into FDB settings bag.
+    """Bidirectional, stateless reconciliation of the OpenPrintTag identity.
 
-    APPROVED SCOPED EXCEPTION — only merges the two OpenTag identity keys into
-    FDB's settings{} bag.  Never modifies or removes any other settings key.
-    See CLAUDE.md and docs/decisions.md for the approved exception record.
+    Keyed on the canonical ``openprinttag_uuid`` (slug carried alongside so the
+    pair stays consistent). Unlike the OPT material-setting extras, this pass
+    has no snapshot baseline — the two current values are compared directly on
+    every cycle, which is safe because filling the empty side makes both sides
+    equal, so the next cycle's comparison is a no-op (no ping-pong).
 
-    Logic per pair:
-    - Read openprinttag_slug and openprinttag_uuid from Spoolman filament extra fields.
-    - If both are absent/empty: skip (nothing to push).
-    - Call filamentdb.merge_filament_settings() which:
-        * fetches current FDB filament,
-        * checks if the values are already equal (idempotent — no HTTP write if equal),
-        * merges only those two keys, preserving all other settings keys.
-    - Non-fatal per-pair: log and continue on error.
+    Per mapping (skipping synthetic container parents, which have no Spoolman
+    counterpart):
+    - SM has an identity, FDB doesn't → merge into FDB's settings{} bag via the
+      APPROVED SCOPED EXCEPTION ``FilamentDBClient.merge_filament_settings()``
+      (only the two OpenTag identity keys — see CLAUDE.md / docs/decisions.md).
+      Gated on ``allow_sm_to_fdb``. This is the original one-way behavior.
+    - FDB has an identity, SM doesn't → write both keys into the Spoolman
+      filament's extra fields (the new leg). Gated on ``allow_fdb_to_sm``.
+    - Both set and equal → in sync, no-op.
+    - Both set and different → genuine divergence. Routed through
+      ``resolve_sync_action`` (same material_properties direction + conflict
+      policy as the OPT material fields) — QUEUE_CONFLICT is deduped via
+      ``_has_open_conflict`` and NEVER auto-overwrites; PUSH_* actions perform
+      the same write as the corresponding one-sided leg above.
+
+    Dry-run: no writes/queues — only ``result.preview`` rows (and increments to
+    ``result.updated``/``result.conflicts``) so the wizard/trigger dry run shows
+    the planned fills/conflicts.
     """
     slug_field = _settings.spoolman_field_openprinttag_slug
     uuid_field = _settings.spoolman_field_openprinttag_uuid
+    field_label = "OpenPrintTag identity"
+
+    allow_fdb_to_sm = matprop_direction in ("two_way", "filamentdb_to_spoolman")
+    allow_sm_to_fdb = matprop_direction in ("two_way", "spoolman_to_filamentdb")
+
+    async def _push_sm_to_fdb(m: FilamentMapping, sm_slug: Any, sm_uuid: Any, fdb_uuid: Any, label_name: Any) -> None:
+        keys_to_merge: dict[str, str] = {}
+        if sm_slug and isinstance(sm_slug, str):
+            keys_to_merge["openprinttag_slug"] = sm_slug
+        if sm_uuid and isinstance(sm_uuid, str):
+            keys_to_merge["openprinttag_uuid"] = sm_uuid
+        if not keys_to_merge:
+            return
+        if dry_run:
+            result.preview.append({
+                "action": "update", "entity_type": "filament",
+                "direction": "spoolman_to_filamentdb", "label": label_name,
+                "field": field_label, "old": fdb_uuid, "new": sm_uuid, "reason": None,
+                "spoolman_id": m.spoolman_filament_id,
+                "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+            })
+            result.updated += 1
+            return
+        try:
+            await filamentdb.merge_filament_settings(m.filamentdb_id, keys_to_merge)
+            _log(
+                db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, old_value=fdb_uuid, new_value=sm_uuid,
+            )
+            result.updated += 1
+        except Exception as exc:
+            logger.warning(
+                "Cycle %s: opentag identity push to FDB filament %s failed: %s",
+                cycle_id, m.filamentdb_id, exc,
+            )
+            _log(
+                db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, error_message=str(exc),
+            )
+            result.errors += 1
+
+    async def _push_fdb_to_sm(m: FilamentMapping, fdb_slug: Any, fdb_uuid: Any, sm_uuid: Any, label_name: Any) -> None:
+        extra_payload: dict[str, Any] = {}
+        if fdb_slug and isinstance(fdb_slug, str):
+            extra_payload[slug_field] = encode_extra_value(fdb_slug)
+        if fdb_uuid and isinstance(fdb_uuid, str):
+            extra_payload[uuid_field] = encode_extra_value(fdb_uuid)
+        if not extra_payload:
+            return
+        if dry_run:
+            result.preview.append({
+                "action": "update", "entity_type": "filament",
+                "direction": "filamentdb_to_spoolman", "label": label_name,
+                "field": field_label, "old": sm_uuid, "new": fdb_uuid, "reason": None,
+                "spoolman_id": m.spoolman_filament_id,
+                "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+            })
+            result.updated += 1
+            return
+        try:
+            await spoolman.update_filament(m.spoolman_filament_id, {"extra": extra_payload})
+            _log(
+                db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, old_value=sm_uuid, new_value=fdb_uuid,
+            )
+            result.updated += 1
+        except Exception as exc:
+            logger.error(
+                "Cycle %s: opentag identity push to SM filament %s failed: %s",
+                cycle_id, m.spoolman_filament_id, exc,
+            )
+            _log(
+                db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, error_message=str(exc),
+            )
+            result.errors += 1
 
     for m in filament_mappings:
         # Synthetic container parents have no Spoolman counterpart — skip.
@@ -4267,24 +4365,84 @@ async def _sync_opentag_identity(
 
         slug_raw = sm_fil.extra.get(slug_field) if hasattr(sm_fil, "extra") else None
         uuid_raw = sm_fil.extra.get(uuid_field) if hasattr(sm_fil, "extra") else None
-
-        slug = decode_extra_value(slug_raw)
-        uuid_val = decode_extra_value(uuid_raw)
-
-        # Only push when at least one key is non-empty
-        keys_to_merge: dict[str, str] = {}
-        if slug and isinstance(slug, str):
-            keys_to_merge["openprinttag_slug"] = slug
-        if uuid_val and isinstance(uuid_val, str):
-            keys_to_merge["openprinttag_uuid"] = uuid_val
-
-        if not keys_to_merge:
-            continue
+        sm_slug = decode_extra_value(slug_raw)
+        sm_uuid = decode_extra_value(uuid_raw)
 
         try:
-            await filamentdb.merge_filament_settings(m.filamentdb_id, keys_to_merge)
+            fdb_detail = await filamentdb.get_filament(m.filamentdb_id)
         except Exception as exc:
-            logger.warning(
-                "Cycle %s: opentag identity push to FDB filament %s failed: %s",
+            logger.error(
+                "Cycle %s: opentag identity detail fetch failed %s: %s",
                 cycle_id, m.filamentdb_id, exc,
             )
+            result.errors += 1
+            continue
+
+        # Read the filament's OWN settings — presence of openprinttag_uuid is the signal.
+        # Do not fabricate an inherited identity for variants missing their own settings.
+        fdb_settings = getattr(fdb_detail, "settings", None) or {}
+        fdb_slug = fdb_settings.get("openprinttag_slug")
+        fdb_uuid = fdb_settings.get("openprinttag_uuid")
+
+        sm_has = bool(sm_uuid)
+        fdb_has = bool(fdb_uuid)
+        label_name = getattr(sm_fil, "name", None) or getattr(fdb_detail, "name", None)
+
+        if not sm_has and not fdb_has:
+            continue
+
+        if sm_has and not fdb_has:
+            if allow_sm_to_fdb:
+                await _push_sm_to_fdb(m, sm_slug, sm_uuid, fdb_uuid, label_name)
+            continue
+
+        if fdb_has and not sm_has:
+            if allow_fdb_to_sm:
+                await _push_fdb_to_sm(m, fdb_slug, fdb_uuid, sm_uuid, label_name)
+            continue
+
+        # Both set.
+        if sm_uuid == fdb_uuid:
+            continue  # in sync — a slug-only mismatch is left alone
+
+        # Genuine divergence — never auto-overwrite; route through the same
+        # direction/policy resolver as every other bidirectional pass.
+        action = resolve_sync_action(
+            sm_changed=True, fdb_changed=True,
+            direction=matprop_direction, policy=matprop_policy,
+        )
+
+        if action == SyncAction.NOOP:
+            continue
+
+        if action == SyncAction.QUEUE_CONFLICT:
+            if dry_run:
+                result.preview.append({
+                    "action": "conflict", "entity_type": "filament", "direction": None,
+                    "label": label_name, "field": field_label, "old": sm_uuid, "new": fdb_uuid,
+                    "reason": "both sides have a different OpenPrintTag identity",
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                })
+                result.conflicts += 1
+            else:
+                if not _has_open_conflict(
+                    db, "filament", field_label,
+                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                    conflict_type="cross_system",
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "filament", field_label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        spoolman_value=sm_uuid, filamentdb_value=fdb_uuid,
+                        conflict_type="cross_system",
+                    )
+                    result.conflicts += 1
+            continue
+
+        if action == SyncAction.PUSH_FDB_TO_SM:
+            await _push_fdb_to_sm(m, fdb_slug, fdb_uuid, sm_uuid, label_name)
+            continue
+
+        if action == SyncAction.PUSH_SM_TO_FDB:
+            await _push_sm_to_fdb(m, sm_slug, sm_uuid, fdb_uuid, label_name)

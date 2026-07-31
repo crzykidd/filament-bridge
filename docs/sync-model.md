@@ -36,9 +36,10 @@ Every cycle (scheduled, or via **Sync now**):
    tags run over filament mappings.
 7. **New-record detection.** The engine detects unmapped filaments and spools on both sides
    and handles them according to the two-tier new-record policy (see below).
-8. **OpenTag identity push.** `openprinttag_slug`/`uuid` from Spoolman extras are merged
-   into the linked FDB filament's `settings{}` bag (the one approved exception to the
-   "never touch settings" rule).
+8. **OpenTag identity sync.** `openprinttag_slug`/`uuid` reconcile bidirectionally between
+   the linked Spoolman filament's extras and the FDB filament's `settings{}` bag (the one
+   approved exception to the "never touch settings" rule). Whichever side has an identity
+   fills the empty side; a genuine `uuid` divergence queues a conflict instead of overwriting.
 9. Everything is written to the sync log under one cycle ID.
 
 A **dry run** computes the same changeset without writing or advancing snapshots, and the
@@ -87,7 +88,7 @@ writes nothing but still refreshes both snapshots so it doesn't re-fire next cyc
 | **Finish tags** | FDB `optTags` (managed finish subset) ↔ SM extra `filamentdb_material_tags` | Managed IDs only (silk/matte/CF/…); arrangement tags (28/29) and unknown tags pass through untouched. Requires FDB ≥ 1.33.0. |
 | **New spools** | spool creation in the opposite system | Carries weight (converted), cross-reference IDs, and purchase/opened provenance dates. |
 | **Orphan re-adoption** | a Spoolman spool that has a live FDB cross-reference (`filamentdb_spool_id`) but **no bridge `SpoolMapping`** | Runs inside the new-SM-spool handling (`engine.py:_reconcile_orphan_spool`). Instead of silently skipping such an *orphan* (which had made it invisible to Synced Records / Mobile forever), the engine **recreates the missing mapping** when the target FDB spool is unclaimed — so pre-existing orphans (e.g. after a bridge-state reset that clears mappings while upstream cross-refs survive) auto-heal each cycle, logged as a `link`. If the target FDB spool is already mapped to a *different* SM spool (collision), it is **not** adopted — it falls through to normal new-spool handling (a visible `new_spool` conflict or its own FDB spool). A stale cross-ref (target spool gone) also falls through, and the re-import overwrites the dangling id. See decisions.md 2026-06-28 (#48). |
-| **OpenTag identity** | SM extras `openprinttag_slug`/`uuid` → FDB `settings{}` | Merge-only, idempotent, scoped to those two keys. |
+| **OpenTag identity** | SM extras `openprinttag_slug`/`uuid` ↔ FDB `settings{}` | Bidirectional, stateless (no snapshot baseline — the two current values are compared directly each cycle). Whichever side has the identity fills the empty side; FDB writes stay scoped to `merge_filament_settings()` (those two keys only). A genuine `uuid` divergence queues a `cross_system` conflict (`field_name="OpenPrintTag identity"`, deduped) — never auto-overwritten. Direction-gated on the `material_properties` category, same as the OPT material-setting extras. |
 
 ## Weight model
 

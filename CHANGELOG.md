@@ -9,6 +9,20 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.19] — 2026-07-30
+
+### Fixed
+
+- **OpenPrintTag identity now syncs Filament DB → Spoolman as well (previously one-way).**
+  Matches made on the Filament DB side (native OPT matching writing `settings.openprinttag_uuid`/
+  `slug`) never flowed back to Spoolman, so the OpenTag Cleanup tool treated FDB-native matches as
+  unmatched. `_sync_opentag_identity` is now a stateless bidirectional reconciliation, keyed on
+  `openprinttag_uuid`: whichever side has an identity fills the empty side (FDB writes still go
+  exclusively through the scoped `merge_filament_settings()` exception); a genuine `uuid`
+  divergence queues a conflict instead of overwriting. Direction-gated on the same
+  `material_properties` axis as the other OPT material fields; surfaces in dry-run previews.
+  Fixes #81.
+
 ## [0.6.18] — 2026-07-27
 
 ### Added
