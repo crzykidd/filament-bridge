@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.20] — 2026-07-31
+
 ### Fixed
 
 - **Stale `new_filament` conflicts no longer linger for filaments whose spools are all
