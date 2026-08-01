@@ -95,27 +95,36 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-07-27, clean — v0.6.18 shipped)
+## ⏸️ PICK UP HERE (paused 2026-07-30, clean — v0.6.19 shipped)
 
 **Everything is released and synced — nothing in flight, nothing stranded.**
-- **v0.6.18 is live** (tag `v0.6.18`, GitHub release published 2026-07-27, prod image build
-  fired on the `release` event). `main` == `origin/main`; `dev` == `origin/dev`; clean tree.
-  On return you're on `dev`.
-- **v0.6.18** shipped two issues (both closed): **#78** — the Bulk Import Wizard Variances step
-  now resolves an existing FDB master's tare (preview `_sm_filament_tare` + execute gate
-  `_resolve_filament_tare` + planner `planned_gross` all fall back to `resolve_family_tare` via
-  the shared `matcher.build_family_tare_by_sm_id`; new `tare_source "filamentdb_master"`), so
-  attaching a new color to a master that already has a tare no longer shows "required"; **#79** —
-  the Mobile Updates lookup defaults to the numeric keypad with a `#`/`Abc` toggle (iOS has no
-  letters+number-row keyboard, so this is the practical fix — frontend only).
-- **v0.6.17** shipped **#76** (master-level group defaults): (1) new masters/containers are
-  **seeded** with the family's mode tare/nozzle+bed temp/density/diameter/material on create;
-  (2) the Conflicts "Add" dialog **pre-fills tare from source, shows the family's tare**
-  (`resolve_family_tare` in `core/masters_defaults.py`); (3) the **Master Defaults** screen
-  (`/master-defaults`, `core/masters_backfill.py` + `api/masters.py`) backfills those six fields
-  onto existing masters (fill-null-only, both-side write + `_mp_*` snapshot refresh). Also that
-  release: FDB **1.68.1** compat verified (`MIN_FDB` unchanged 1.33.0), **CI ruff pinned to
-  0.15.17** (unpinned `pip install ruff` was turning Lint red on unchanged code).
+- **v0.6.19 is live** (tag `v0.6.19`, GitHub release published, prod image build fired on the
+  `release` event). PR #82 (`dev → main`) merged; `main` == `origin/main`; `dev` == `origin/dev`;
+  clean tree. On return you're on `dev`. (Reminder: main accumulates the PR merge commits, so
+  `dev..main` shows a handful of commits — that's expected divergence, content is identical.)
+- **v0.6.19** shipped **#81** (closed): OpenPrintTag identity sync made **bidirectional**.
+  `_sync_opentag_identity` (core/engine.py) was one-way (Spoolman→FDB), so a filament matched to
+  OpenPrintTag *natively on the FDB side* (`settings.openprinttag_slug`/`uuid`) never flowed back
+  to Spoolman → OpenTag Cleanup saw it as unmatched. Now a **stateless bidirectional
+  reconciliation keyed on `openprinttag_uuid`**: whichever side has an identity fills the empty
+  side (FDB writes still ONLY via the scoped `merge_filament_settings()` exception), a genuine
+  `uuid` divergence **queues a deduped `cross_system` conflict** (`field_name="OpenPrintTag
+  identity"`) instead of overwriting. Direction-gated on the `material_properties` axis
+  (`resolve_sync_action`, dir value `"two_way"`). Dry-run aware. Verified with a **live E2E**
+  against the dev upstreams (FDB→SM fill / idempotent / divergence→conflict-no-overwrite /
+  direction-gating all pass; `zzz-*` test records cleaned up). 7 unit tests in
+  `test_engine_opentag_identity.py`. Decisions.md 2026-07-27 entry.
+- **Upstream compat reviewed 2026-07-30 (no impact):** FDB latest **1.69.0** (new `Location.
+  desiccantChangedAt` additive field + dry-box label printing — nothing the bridge reads),
+  Spoolman latest **0.25.0** (0.24.0's null-omit change is websockets-only; bridge polls REST).
+  `MIN_FDB` 1.33.0 / `MIN_SPOOLMAN` 0.22.0 unchanged. FDB schemas are `extra="allow"`, so
+  additive fields never break parsing. No code change needed.
+- **v0.6.18** shipped **#78** (Bulk Import Wizard Variances resolves an existing FDB master's
+  tare — `resolve_family_tare` via shared `matcher.build_family_tare_by_sm_id`, `tare_source
+  "filamentdb_master"`) + **#79** (Mobile Updates lookup defaults to numeric keypad with `#`/`Abc`
+  toggle). **v0.6.17** shipped **#76** (master-level group defaults: seed-on-create + Master
+  Defaults backfill screen at `/master-defaults` + Conflicts "Add" tare pre-fill; FDB 1.68.1
+  compat; CI ruff pinned to 0.15.17).
 
 **Open / next work (ALWAYS ask the user which to take before starting):**
 - **#73** *optional remainder* — background the blocking "Sync now" cycle **only if** it turns out
@@ -150,9 +159,11 @@ Spoolman was broken in stacked layers, fixed one per release:
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.18** (2026-07-27) — #78 wizard variances resolves the existing FDB
+- Latest release: **v0.6.19** (2026-07-30) — #81 OpenPrintTag identity sync made bidirectional
+  (FDB-native matches now flow back to Spoolman; divergence queues a `cross_system` conflict).
+  Prior: v0.6.18 (2026-07-27) — #78 wizard variances resolves the existing FDB
   master's tare (no more spurious "required" when attaching to a master that has one) + #79 mobile
-  lookup numeric-keypad default. Prior: v0.6.17 (#76 master-level group defaults: seed-on-create +
+  lookup numeric-keypad default. v0.6.17 (#76 master-level group defaults: seed-on-create +
   Master Defaults backfill screen + Conflicts "Add" tare pre-fill; FDB 1.68.1 compat; CI ruff
   pinned), v0.6.16 (#65 SM→FDB preview no-write + #72 tare-required Add + #74 label
   `spool_id`/`name` + #73 prod perf pass), v0.6.15 (#69 selectable FDB import + #70 reused-id

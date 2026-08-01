@@ -9,6 +9,22 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.20] — 2026-07-31
+
+### Fixed
+
+- **Stale `new_filament` conflicts no longer linger for filaments whose spools are all
+  archived/retired.** The stale-conflict cleanup pass (which already auto-resolved orphaned
+  `new_spool` conflicts) never handled `new_filament` — a filament whose only Spoolman spool
+  went archived, or whose only Filament DB spool was retired, would sit in the conflict queue
+  forever with no way to ever be imported. The cleanup pass now also auto-resolves an open
+  `new_filament` conflict once its filament has no active (non-archived / non-retired) spool
+  left, purely on lifecycle state — a spool at 0 g remaining still counts as active and keeps
+  the conflict open. Separately, the Filament DB → Spoolman new-spool detection loop now skips
+  retired FDB spools, so a retired-only FDB orphan filament no longer re-queues a fresh
+  `new_filament` conflict every cycle (mirrors the existing archived-spool exclusion on the
+  Spoolman side). Fixes #83.
+
 ## [0.6.19] — 2026-07-30
 
 ### Fixed

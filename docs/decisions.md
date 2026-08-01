@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight](#2026-07-31--stale-new_filament-conflicts-auto-resolve-on-lifecycle-state-not-weight-github-83) — #83
 - [2026-07-27 — OpenPrintTag identity sync made bidirectional](#2026-07-27--openprinttag-identity-sync-made-bidirectional-github-81) — #81
 - [2026-07-19 — Purge stale filament mappings when Spoolman reuses an id](#2026-07-19--purge-stale-filament-mappings-when-spoolman-reuses-an-id-github-70) — #70
 - [2026-06-11 — Small-fix batch (compose image, interval, pagination, dry-run, Settings copy)](#2026-06-11--small-fix-batch-compose-image-interval-pagination-dry-run-settings-copy)
@@ -199,6 +200,59 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight, GitHub #83
+
+**Context.** The stale-conflict cleanup pass (`engine.py`, runs each cycle before detection) only
+ever handled `new_spool` — a `new_filament` conflict (queued by `_queue_if_new_filament` on the SM
+side, or inline in `_handle_new_fdb_spool` on the FDB side) had no cleanup path at all. Once every
+spool on an unmapped filament went archived (SM) or retired (FDB), the filament could never be
+imported, yet its `new_filament` conflict lingered in the queue forever. Separately, the FDB→SM
+new-spool detection loop (`for fdb_spool in fdb_f.spools:`) didn't skip retired spools, so a
+retired-only FDB orphan filament re-queued a fresh `new_filament` conflict every single cycle even
+after a user tried to dismiss it.
+
+**Decision — two-part fix, both lifecycle-state based, both in `engine.py`.**
+
+1. **Reactive cleanup.** Added a sibling branch to the stale-conflict pass: for each open
+   `entity_type="filament" / field_name="new_filament"` conflict, resolve direction by which id is
+   set (`spoolman_id` vs `filamentdb_filament_id` — mirrors how `_upsert_new_record_conflict`
+   matches). SM side: `has_active = spoolman_id in {sp.filament.id for sp in sm_spools.values()}` —
+   `sm_spools` is already the active-only (non-archived) dict built earlier in the cycle, so
+   membership *is* "has ≥1 active spool". FDB side: look up the FDB filament and check
+   `any(not sp.retired for sp in fdb_f.spools)`. If neither holds, auto-resolve
+   (`resolution = "resolved_not_imported"`, same as the existing `new_spool` cleanup) and log it.
+2. **Preventive skip.** Added `if fdb_spool.retired: continue` as the first statement in the
+   FDB→SM new-spool detection loop, mirroring how the SM side is already active-only via
+   `sm_spools`. A retired-only FDB orphan spool no longer gets a Spoolman counterpart
+   auto-conflicted into existence on ongoing sync — consistent with how an archived-only SM orphan
+   spool is already excluded. The Bulk Import Wizard remains the explicit path for importing
+   archived/retired inventory; this only affects background auto-sync detection.
+
+**Why the rule is lifecycle state, not weight (0 g doesn't count as "gone").** The `new_spool`
+cleanup already checks `never_import_empties` + `remaining_weight <= 0` because an empty spool that
+will *never* auto-import (per that explicit user setting) is a dead end. `new_filament` is
+deliberately **not** given the same weight check: a spool sitting at 0 g but still ACTIVE (not
+archived/retired) is normal operational state — printer ran the spool dry, user hasn't retired it
+yet — and the filament is still legitimately in service. Auto-resolving on emptiness would silently
+drop it from the conflict queue while it's still something the user might want to import. Only an
+explicit archived/retired lifecycle transition — a real "this is done" signal — clears the
+conflict.
+
+**Why it's safe to auto-resolve at all.** `new_filament` conflicts are by construction unmapped —
+no `FilamentMapping` exists yet, so nothing has ever been synced for this filament. Auto-resolving
+one is purely a queue-hygiene action; it writes nothing to either upstream and touches no mapped
+data. The mapped-pair lifecycle pass (`engine.py:3633+`, handles a *synced* spool later going
+archived) and the differ are untouched by this change. It also self-heals: if the filament later
+gains a fresh active spool (restock), `_queue_if_new_filament` / the FDB spool-detection loop
+re-queues a new conflict on the very next cycle — nothing is permanently lost.
+
+**Tests.** `backend/tests/test_stale_new_filament_cleanup.py` — SM-side archived-only auto-resolve,
+SM-side active-but-0g conflict survives (guards the product-owner rule), FDB-side retired-only
+auto-resolve, FDB-side preventive skip (no conflict ever queued for a retired-only orphan), and two
+regression cases (SM and FDB) proving a filament with a genuinely live active spool keeps its
+conflict open.
 
 
 ## 2026-07-27 — Wizard variances: existing-FDB-master tare fallback, shared clustering helper, GitHub #78

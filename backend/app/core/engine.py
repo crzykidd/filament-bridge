@@ -3172,6 +3172,47 @@ async def run_sync_cycle(
                     error_message="auto-resolved stale new_spool conflict (spool archived/empty — never imported)",
                 )
 
+        # ---- Clear stale new_filament conflicts whose filament has no active spool ----
+        # A new_filament conflict (queued by _queue_if_new_filament on the SM side or
+        # _handle_new_fdb_filament on the FDB side) never gets a mapping — it's the
+        # "should this even be imported?" gate.  If every spool on that filament later
+        # goes archived (SM) / retired (FDB), the filament will never be imported and the
+        # conflict would otherwise linger forever.  Purely lifecycle-state based (per the
+        # product owner): a filament keeps its conflict as long as ANY spool is active,
+        # even at 0 g remaining — never_import_empties/remaining_weight are NOT considered
+        # here (unlike the new_spool cleanup above), since resolving to 0g would hide a
+        # filament that's still legitimately in service.
+        sm_fil_ids_with_active: set[int] = {
+            sp.filament.id for sp in sm_spools.values() if sp.filament is not None
+        }
+        stale_filament_conflicts = (
+            db.query(Conflict)
+            .filter(
+                Conflict.resolved_at.is_(None),
+                Conflict.entity_type == "filament",
+                Conflict.field_name == "new_filament",
+            )
+            .all()
+        )
+        for stale in stale_filament_conflicts:
+            if stale.spoolman_id is not None:
+                has_active = stale.spoolman_id in sm_fil_ids_with_active
+            elif stale.filamentdb_filament_id is not None:
+                fdb_f = fdb_filaments.get(stale.filamentdb_filament_id)
+                has_active = fdb_f is not None and any(not sp.retired for sp in fdb_f.spools)
+            else:
+                has_active = False
+            if not has_active:
+                stale.resolved_at = _now
+                stale.resolution = "resolved_not_imported"
+                _log(
+                    db, cycle_id, "auto", "info", "filament",
+                    spoolman_id=stale.spoolman_id,
+                    fdb_filament_id=stale.filamentdb_filament_id,
+                    field_name="new_filament",
+                    error_message="auto-resolved stale new_filament conflict (filament has no active/unarchived spool)",
+                )
+
     # Synthetic parents (is_synthetic_parent=True) have no Spoolman counterpart.
     # Exclude them from both lookup dicts so the engine never tries to sync them.
     # They are tracked solely for bridge-side parent relationship bookkeeping.
@@ -4192,6 +4233,8 @@ async def run_sync_cycle(
                     result.skipped += 1
                 continue
             for fdb_spool in fdb_f.spools:
+                if fdb_spool.retired:
+                    continue
                 if fdb_spool.id in mapped_fdb_spool_ids:
                     continue
                 label_val = getattr(fdb_spool, fdb_field_name, None)

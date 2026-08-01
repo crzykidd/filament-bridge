@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.19-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.20-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,15 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.20 (2026-07-31)
+
+- **Fixed: archived/retired spools no longer leave phantom "filament not in sync" conflicts.** If a
+  Spoolman filament's only spool was archived (or a Filament DB filament's only spool was retired),
+  its `new_filament` conflict used to sit in the queue forever with no way to clear it. Those stale
+  conflicts now auto-resolve once a filament has no active spool left — a spool at 0 g still counts
+  as active and keeps its conflict, so only genuinely archived/retired inventory drops off. Restock
+  a spool and the conflict comes back. (#83)
 
 ### v0.6.19 (2026-07-30)
 

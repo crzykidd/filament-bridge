@@ -156,6 +156,26 @@ filament and does not touch the spool until the filament is mapped.
 Both policies default to `manual_review` — new records never appear silently without a
 conflict entry in the queue.
 
+### Stale new-record conflict cleanup
+
+Every cycle, before detection runs, the engine auto-resolves (`resolved_not_imported`) open
+`new_spool` / `new_filament` conflicts that can never be imported:
+
+- **`new_spool`**: the spool is archived (SM) or — when `never_import_empties` is on — at
+  0 g remaining. (Also auto-resolved as `resolved_mapped` once the spool gains a
+  `SpoolMapping`.)
+- **`new_filament`**: the filament has **no active spool left** — every SM spool is
+  archived, or every FDB spool is retired. This is purely lifecycle-state based: unlike the
+  `new_spool` check, `never_import_empties` / remaining weight are **not** considered — a
+  spool at 0 g still counts as active as long as it isn't archived/retired, since resolving
+  the conflict on that basis would hide a filament that's still in service. Symmetrically,
+  the FDB→SM new-spool detection loop skips retired FDB spools outright, so a retired-only
+  FDB orphan filament stops re-queuing a `new_filament` conflict every cycle (mirrors the SM
+  side, which is already active-only via `sm_spools`). Because `new_filament` conflicts are
+  by definition unmapped/never-synced, auto-resolving them touches no upstream data and
+  self-heals on restock (a fresh active spool re-queues the conflict next cycle). See
+  decisions.md 2026-07-31 (#83).
+
 ### Anti-ping-pong after auto-create
 
 After any auto-create, the engine refreshes **both** sides' snapshots to the agreed
