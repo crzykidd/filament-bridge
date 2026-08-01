@@ -95,13 +95,26 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-07-30, clean — v0.6.19 shipped)
+## ⏸️ PICK UP HERE (paused 2026-08-01, clean — v0.6.20 shipped)
 
 **Everything is released and synced — nothing in flight, nothing stranded.**
-- **v0.6.19 is live** (tag `v0.6.19`, GitHub release published, prod image build fired on the
-  `release` event). PR #82 (`dev → main`) merged; `main` == `origin/main`; `dev` == `origin/dev`;
+- **v0.6.20 is live** (tag `v0.6.20`, GitHub release published, prod image build fired on the
+  `release` event). PR #84 (`dev → main`) merged; `main` == `origin/main`; `dev` == `origin/dev`;
   clean tree. On return you're on `dev`. (Reminder: main accumulates the PR merge commits, so
   `dev..main` shows a handful of commits — that's expected divergence, content is identical.)
+- **v0.6.20** shipped **#83** (closed): stale `new_filament` conflicts no longer linger for
+  filaments whose spools are all archived/retired. The stale-conflict cleanup pass in
+  `core/engine.py` (~3172) handled only `new_spool`; a `new_filament` conflict for a filament whose
+  only Spoolman spool went **archived** (or only FDB spool went **retired**) sat in the queue
+  forever with no import path. Two-part fix: (1) **reactive** — the cleanup pass now auto-resolves
+  (`resolved_not_imported`) an open `new_filament` conflict once its filament has **no active
+  spool** (keyed by `spoolman_id` → checks `archived`, or `filamentdb_filament_id` → checks
+  `retired`); **purely lifecycle-state based — a 0 g spool still counts as active and keeps the
+  conflict** (deliberately does NOT consult `never_import_empties`/weight, unlike the adjacent
+  `new_spool` block). (2) **preventive** — the FDB→SM new-spool detection loop (~4234) now skips
+  retired FDB spools (mirrors the SM side's active-only feed). Safe by construction: `new_filament`
+  ⇒ unmapped/never-synced, so the mapped-pair lifecycle pass is untouched; self-heals on restock.
+  6 tests in `test_stale_new_filament_cleanup.py`. Decisions.md 2026-07-31 entry.
 - **v0.6.19** shipped **#81** (closed): OpenPrintTag identity sync made **bidirectional**.
   `_sync_opentag_identity` (core/engine.py) was one-way (Spoolman→FDB), so a filament matched to
   OpenPrintTag *natively on the FDB side* (`settings.openprinttag_slug`/`uuid`) never flowed back
@@ -159,9 +172,12 @@ Spoolman was broken in stacked layers, fixed one per release:
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.19** (2026-07-30) — #81 OpenPrintTag identity sync made bidirectional
+- Latest release: **v0.6.20** (2026-07-31) — #83 stale `new_filament` conflicts auto-resolve when a
+  filament has no active spool (all archived/retired); active-0g still counts as active and keeps
+  the conflict; FDB→SM new-spool detection now skips retired spools.
+  Prior: v0.6.19 (2026-07-30) — #81 OpenPrintTag identity sync made bidirectional
   (FDB-native matches now flow back to Spoolman; divergence queues a `cross_system` conflict).
-  Prior: v0.6.18 (2026-07-27) — #78 wizard variances resolves the existing FDB
+  v0.6.18 (2026-07-27) — #78 wizard variances resolves the existing FDB
   master's tare (no more spurious "required" when attaching to a master that has one) + #79 mobile
   lookup numeric-keypad default. v0.6.17 (#76 master-level group defaults: seed-on-create +
   Master Defaults backfill screen + Conflicts "Add" tare pre-fill; FDB 1.68.1 compat; CI ruff
