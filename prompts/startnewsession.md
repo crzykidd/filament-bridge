@@ -127,11 +127,17 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   against the dev upstreams (FDB→SM fill / idempotent / divergence→conflict-no-overwrite /
   direction-gating all pass; `zzz-*` test records cleaned up). 7 unit tests in
   `test_engine_opentag_identity.py`. Decisions.md 2026-07-27 entry.
-- **Upstream compat reviewed 2026-07-30 (no impact):** FDB latest **1.69.0** (new `Location.
-  desiccantChangedAt` additive field + dry-box label printing — nothing the bridge reads),
-  Spoolman latest **0.25.0** (0.24.0's null-omit change is websockets-only; bridge polls REST).
-  `MIN_FDB` 1.33.0 / `MIN_SPOOLMAN` 0.22.0 unchanged. FDB schemas are `extra="allow"`, so
-  additive fields never break parsing. No code change needed.
+- **Upstream compat reviewed 2026-08-02 (one edge-case filed):** FDB latest **1.72.0**. 1.71.0
+  (inventory swatches) is frontend-only; 1.72.0 (`?shape=spool` slim response) is opt-in and
+  byte-identical when the param is absent (we don't send it) — non-breaking, optional future
+  optimization. **1.70.0 (templates)** is the one with teeth: parents become colorless/inventory-less
+  and FDB now strips/rejects `color`/`totalWeight`/`threshold` writes and new-spool creation on a
+  template. Bridge is safe on common paths (never writes totalWeight/threshold at filament level;
+  synthetic masters excluded), **but** the parent-exclusion guards key on `is_synthetic_parent` not
+  `is_master_fdb`, so a real FDB-native parent directly mapped to a Spoolman filament and then
+  promoted to a template isn't fenced → filed **#85** (fix = switch guards to `is_master_fdb`; not
+  yet implemented). `MIN_FDB` 1.33.0 / `MIN_SPOOLMAN` 0.22.0 unchanged. See decisions.md 2026-08-02.
+  Prior review 2026-07-30 covered ≤1.69.0 / Spoolman ≤0.25.0 (no impact).
 - **v0.6.18** shipped **#78** (Bulk Import Wizard Variances resolves an existing FDB master's
   tare — `resolve_family_tare` via shared `matcher.build_family_tare_by_sm_id`, `tare_source
   "filamentdb_master"`) + **#79** (Mobile Updates lookup defaults to numeric keypad with `#`/`Abc`
@@ -140,6 +146,10 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   compat; CI ruff pinned to 0.15.17).
 
 **Open / next work (ALWAYS ask the user which to take before starting):**
+- **#85** — parent-exclusion guards key on `is_synthetic_parent`, not `is_master_fdb`; a real
+  FDB-native parent mapped to Spoolman then promoted to a 1.70.0 template gets rejected color/spool
+  writes. Fix = switch the guards at `engine.py:1071` (multicolor push) + `engine.py:2787`
+  (new-spool create) to `is_master_fdb` + a regression test. Edge case; surfaced 2026-08-02.
 - **#73** *optional remainder* — background the blocking "Sync now" cycle **only if** it turns out
   to be *timing out* rather than erroring (the new structured 500 will confirm which). Not worth
   doing speculatively.

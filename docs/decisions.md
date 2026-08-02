@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85](#2026-08-02--fdb-17001720-compat-review-template-write-guard-gap-filed-as-85)
 - [2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight](#2026-07-31--stale-new_filament-conflicts-auto-resolve-on-lifecycle-state-not-weight-github-83) — #83
 - [2026-07-27 — OpenPrintTag identity sync made bidirectional](#2026-07-27--openprinttag-identity-sync-made-bidirectional-github-81) — #81
 - [2026-07-19 — Purge stale filament mappings when Spoolman reuses an id](#2026-07-19--purge-stale-filament-mappings-when-spoolman-reuses-an-id-github-70) — #70
@@ -200,6 +201,38 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85
+
+**Context.** Three Filament DB releases landed since the 2026-07-30 review (which covered ≤1.69.0):
+**1.70.0** (filament *templates*), **1.71.0** (inventory swatches), **1.72.0** (`?shape=spool` slim
+spool responses). Reviewed each against what the bridge reads/writes.
+
+**Findings.**
+
+- **1.70.0 — templates.** A filament with color variants becomes an abstract, colorless,
+  inventory-less **template**; the FDB API now **strips/rejects** writes of `color`, `totalWeight`,
+  or low-stock `threshold` onto a template and **rejects new spools** on one. Bridge is safe on the
+  common paths: it never writes `totalWeight`/`threshold` at filament level (both spool-scoped;
+  decrements go through the usage endpoint), master-targeted filament writes are limited to shared
+  material props (type/density/diameter/temps/spoolWeight — none of the three stripped fields), and
+  **synthetic** masters (`FilamentMapping.is_synthetic_parent`, `spoolman_filament_id IS NULL`) are
+  excluded from spool/inventory writes. **One gap:** the parent-exclusion guards key on
+  `is_synthetic_parent`, not the broader `core/masters.py:is_master_fdb` (which also unions
+  `hasVariants`). A *real, FDB-native* parent that is directly mapped to a Spoolman filament and
+  then promoted to a template is NOT fenced — `_sync_multicolor` PUSH_SM_TO_FDB (`engine.py:1071`)
+  would PATCH `color` onto it (stripped → silent no-op → re-detected every cycle) and `create_spool`
+  (`engine.py:2787`) could target it (rejected). Filed as **#85** (fix: switch those guards to
+  `is_master_fdb`; not yet implemented).
+- **1.71.0 — inventory swatches.** FDB frontend only, no API surface. No impact.
+- **1.72.0 — `?shape=spool`.** Opt-in slim spool response; **byte-identical when the param is
+  absent**, and the bridge never sends it. Non-breaking. Noted as an optional future optimization
+  (our FDB spool writes currently pull back the whole filament record incl. photos + usage history).
+
+**No version-floor change.** `MIN_FDB` stays **1.33.0** — none of these releases adds a feature the
+bridge now requires. FDB read schemas remain `extra="allow"`, so the additive fields don't affect
+parsing.
 
 
 ## 2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight, GitHub #83

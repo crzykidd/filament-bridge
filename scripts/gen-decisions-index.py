@@ -39,6 +39,7 @@ MAINTENANCE_NOTE = (
 CATEGORIES = [
     ("Sync engine & anti-ping-pong", [
         # Core engine mechanics, polling loop, snapshot management, scheduler
+        "2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85",
         "2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight, GitHub #83",
         "2026-07-27 — OpenPrintTag identity sync made bidirectional, GitHub #81",
         "2026-07-19 — Purge stale filament mappings when Spoolman reuses an id, GitHub #70",
