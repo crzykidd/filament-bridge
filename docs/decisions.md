@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86](#2026-08-08--fdb-17211750-compat-review-settings-bag-size-cap-edge-filed-as-86)
 - [2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85](#2026-08-02--fdb-17001720-compat-review-template-write-guard-gap-filed-as-85)
 - [2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight](#2026-07-31--stale-new_filament-conflicts-auto-resolve-on-lifecycle-state-not-weight-github-83) — #83
 - [2026-07-27 — OpenPrintTag identity sync made bidirectional](#2026-07-27--openprinttag-identity-sync-made-bidirectional-github-81) — #81
@@ -201,6 +202,40 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86
+
+**Context.** Four FDB releases landed since the 2026-08-02 review (≤1.72.0): **1.72.1**
+(release-pipeline hardening, no app changes), **1.73.0** (the "Next #" spool-roll-number button
+— shipped from our upstream feature request `hyiger/filament-db#1060`), **1.74.0** (PrusaSlicer
+`compatible_printers` fields + `inherits` moved out of the `settings{}` passthrough), **1.75.0**
+(full-codebase audit: `settings{}` wire-canonicalization, print-job refund math, and filament-API
+write-validation hardening `hyiger/filament-db#1072`).
+
+**Findings — no break to normal sync.** The two changes that could have touched us both concern the
+FDB `settings{}` bag, which the bridge only ever writes via the scoped exception
+(`merge_filament_settings` / `remove_filament_settings_keys`, `services/filamentdb.py:216-280`):
+
+- **1.75.0 settings canonicalization** — safe. Those two writers do an *opaque* read-modify-write:
+  they add/remove only the two OpenTag scalar keys and spread every other key through unchanged,
+  never parsing or re-encoding individual values. JSON string round-trips are lossless for multi-line
+  g-code (1.75.0's fix was in the INI *export* path, which the bridge never touches). Normal
+  `update_filament` strips `settings` entirely and never sends it, so it can't trip any settings rule.
+- **1.74.0 `inherits` relocation + new slicer fields** — no impact. The bridge doesn't read
+  `inherits` or the compatibility fields, and FDB read schemas are `extra="allow"`.
+
+**One latent edge — filed #86 (tracking, low priority).** 1.75.0 `#1072` gap 2 added
+`validateSettingsBag()` to the generic `PUT /api/filaments/{id}` (the route the OpenTag writers use),
+rejecting a bag with **>400 keys** or **any value >20 000 chars** with a 400. Because the writers
+re-send the *whole* bag, a filament with an oversized slicer settings bag could make an OpenTag
+identity write 400 → caught per-filament error, OpenTag identity silently won't sync for that one
+filament. Unlikely in practice (slicer-sync bags were already capped; the bridge only adds 2 small
+keys and can't grow a bag past the caps itself), so filed as tracking-only. Fix direction: catch the
+400, log a clean `skip`, continue — never trim user slicer data.
+
+**No version-floor change.** `MIN_FDB` stays **1.33.0** — none of these releases adds a feature the
+bridge now requires.
 
 
 ## 2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85

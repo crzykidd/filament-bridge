@@ -127,17 +127,20 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   against the dev upstreams (FDB→SM fill / idempotent / divergence→conflict-no-overwrite /
   direction-gating all pass; `zzz-*` test records cleaned up). 7 unit tests in
   `test_engine_opentag_identity.py`. Decisions.md 2026-07-27 entry.
-- **Upstream compat reviewed 2026-08-02 (one edge-case filed):** FDB latest **1.72.0**. 1.71.0
-  (inventory swatches) is frontend-only; 1.72.0 (`?shape=spool` slim response) is opt-in and
-  byte-identical when the param is absent (we don't send it) — non-breaking, optional future
-  optimization. **1.70.0 (templates)** is the one with teeth: parents become colorless/inventory-less
-  and FDB now strips/rejects `color`/`totalWeight`/`threshold` writes and new-spool creation on a
-  template. Bridge is safe on common paths (never writes totalWeight/threshold at filament level;
-  synthetic masters excluded), **but** the parent-exclusion guards key on `is_synthetic_parent` not
-  `is_master_fdb`, so a real FDB-native parent directly mapped to a Spoolman filament and then
-  promoted to a template isn't fenced → filed **#85** (fix = switch guards to `is_master_fdb`; not
-  yet implemented). `MIN_FDB` 1.33.0 / `MIN_SPOOLMAN` 0.22.0 unchanged. See decisions.md 2026-08-02.
-  Prior review 2026-07-30 covered ≤1.69.0 / Spoolman ≤0.25.0 (no impact).
+- **Upstream compat reviewed 2026-08-08 (one low-pri edge filed):** FDB latest **1.75.0**. 1.72.1
+  (release-pipeline hardening) no app changes; **1.73.0** shipped the "Next #" spool-roll-number
+  button — our own upstream request `hyiger/filament-db#1060`, now closed; 1.74.0 (slicer
+  `compatible_printers` fields + `inherits` moved out of `settings{}`) and 1.75.0 (`settings{}`
+  wire-canonicalization, refund math, filament-API validation hardening `#1072`) are safe for the
+  bridge: our only `settings{}` writers (`merge_filament_settings`/`remove_filament_settings_keys`)
+  do an opaque read-modify-write of just the two OpenTag keys, and normal `update_filament` strips
+  `settings` entirely. **One latent edge → filed #86 (tracking, LOW PRIORITY):** 1.75.0 `#1072`
+  added a 400-key / 20 000-char settings-bag cap to the generic `PUT /api/filaments/{id}`, so an
+  OpenTag write on a filament with an oversized slicer bag could 400 (caught per-filament; OpenTag
+  identity silently won't sync for it). See decisions.md 2026-08-08.
+  Prior: 2026-08-02 reviewed ≤1.72.0 — **1.70.0 templates** parent-exclusion gap filed **#85**
+  (guards key on `is_synthetic_parent` not `is_master_fdb`; not yet fixed). `MIN_FDB` 1.33.0 /
+  `MIN_SPOOLMAN` 0.22.0 unchanged.
 - **v0.6.18** shipped **#78** (Bulk Import Wizard Variances resolves an existing FDB master's
   tare — `resolve_family_tare` via shared `matcher.build_family_tare_by_sm_id`, `tare_source
   "filamentdb_master"`) + **#79** (Mobile Updates lookup defaults to numeric keypad with `#`/`Abc`
@@ -150,6 +153,11 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   FDB-native parent mapped to Spoolman then promoted to a 1.70.0 template gets rejected color/spool
   writes. Fix = switch the guards at `engine.py:1071` (multicolor push) + `engine.py:2787`
   (new-spool create) to `is_master_fdb` + a regression test. Edge case; surfaced 2026-08-02.
+- **#86** *tracking, LOW PRIORITY* — FDB 1.75.0 (`#1072`) capped the generic filament PUT settings
+  bag (400 keys / 20 000 chars); the OpenTag settings writers re-send the whole bag, so an oversized
+  slicer bag could 400 the write. Fix = catch the 400 in `merge_filament_settings` /
+  `remove_filament_settings_keys` (`services/filamentdb.py:216-280`), log a clean `skip`, continue.
+  No observed failure; don't schedule ahead of active work.
 - **#73** *optional remainder* — background the blocking "Sync now" cycle **only if** it turns out
   to be *timing out* rather than erroring (the new structured 500 will confirm which). Not worth
   doing speculatively.
