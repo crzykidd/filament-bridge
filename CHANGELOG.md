@@ -9,6 +9,19 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Filament DB → Spoolman new-spool detection now keys on the FDB spool GUID, not the
+  user-set `label` field.** `label` is a user-supplied convenience field (e.g. Filament DB
+  1.73.0's "Next #" button) — the bridge only ever stuffed the Spoolman spool ID into it when
+  it was blank. Because detection wrongly treated ANY non-empty `label` as "already synced",
+  a spool the user hand-labeled was skipped and never created in Spoolman. Detection now skips
+  a spool only when it has a `SpoolMapping` or its GUID is already referenced by a Spoolman
+  spool's `filamentdb_spool_id` extra (a cross-ref orphan whose mapping was lost — avoids
+  duplicating rather than rebuilding it). The SM-ID-into-`label` writeback (both the sync
+  engine and the wizard's parallel path) is now conditional on `label` being blank, so a
+  user-set value is never overwritten. Closes #87.
+
 ## [0.6.20] — 2026-07-31
 
 ### Fixed

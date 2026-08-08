@@ -2957,8 +2957,11 @@ async def _handle_new_fdb_spool(
             },
         })
 
-        # Write SM ID back to FDB spool label
-        await filamentdb.update_spool(fdb_filament.id, fdb_spool.id, {fdb_field_name: str(new_sm_spool.id)})
+        # Write SM ID back to FDB spool label — only when blank. `label` is a user-supplied
+        # field; the bridge fills it in as a convenience but never overwrites a user value
+        # (see docs/decisions.md 2026-08-08). The GUID extra above is the real cross-reference.
+        if not getattr(fdb_spool, fdb_field_name, None):
+            await filamentdb.update_spool(fdb_filament.id, fdb_spool.id, {fdb_field_name: str(new_sm_spool.id)})
 
         db.add(SpoolMapping(
             spoolman_spool_id=new_sm_spool.id,
@@ -4207,6 +4210,14 @@ async def run_sync_cycle(
             )
 
     if new_spool_direction in ("two_way", "filamentdb_to_spoolman"):
+        # FDB GUIDs already referenced by a Spoolman spool's filamentdb_spool_id extra — the
+        # real cross-reference (see docs/decisions.md 2026-08-08). A spool whose GUID shows up
+        # here has already been created in Spoolman even if its SpoolMapping row was lost; skip
+        # it rather than duplicate (rebuilding the lost mapping is out of scope — see #87).
+        sm_xref_fdb_spool_ids: set[str] = {
+            gid for s in sm_spools_all
+            if (gid := decode_extra_value(s.extra.get(_settings.spoolman_field_filamentdb_spool_id)))
+        }
         for fdb_f in fdb_filaments_all:
             # Synthetic container parents have no Spoolman counterpart.  A spool
             # on a synthetic parent is a user error (should be on a color variant).
@@ -4237,9 +4248,8 @@ async def run_sync_cycle(
                     continue
                 if fdb_spool.id in mapped_fdb_spool_ids:
                     continue
-                label_val = getattr(fdb_spool, fdb_field_name, None)
-                if label_val:
-                    continue  # has SM ID in configured field — orphan without SpoolMapping, skip
+                if fdb_spool.id in sm_xref_fdb_spool_ids:
+                    continue  # already in Spoolman (SpoolMapping lost) — don't duplicate
                 await _handle_new_fdb_spool(
                     db, cycle_id, result, dry_run,
                     fdb_f, fdb_spool, filament_mappings_by_fdb,

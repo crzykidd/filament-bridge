@@ -2260,9 +2260,12 @@ async def _execute_fdb_to_spoolman(
                         "extra": _cross_ref_extra(fdb_fil.id, fdb_spool.id, parent_id),
                     })
                     new_sm_spool_id = new_sm_spool.id
-                    await filamentdb.update_spool(
-                        fdb_fil.id, fdb_spool.id, {fdb_field_name: str(new_sm_spool_id)}
-                    )
+                    # Only fill the label when blank — it's user-supplied; never overwrite a
+                    # value the user already set (see docs/decisions.md 2026-08-08).
+                    if not getattr(fdb_spool, fdb_field_name, None):
+                        await filamentdb.update_spool(
+                            fdb_fil.id, fdb_spool.id, {fdb_field_name: str(new_sm_spool_id)}
+                        )
                     db.add(SpoolMapping(
                         spoolman_spool_id=new_sm_spool_id,
                         filamentdb_filament_id=fdb_fil.id,

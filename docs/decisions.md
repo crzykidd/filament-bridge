@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`](#2026-08-08--fdbsm-new-spool-detection-keys-on-the-guid-not-the-user-set-label-github-87) — #87
 - [2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86](#2026-08-08--fdb-17211750-compat-review-settings-bag-size-cap-edge-filed-as-86)
 - [2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85](#2026-08-02--fdb-17001720-compat-review-template-write-guard-gap-filed-as-85)
 - [2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight](#2026-07-31--stale-new_filament-conflicts-auto-resolve-on-lifecycle-state-not-weight-github-83) — #83
@@ -202,6 +203,49 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`, GitHub #87
+
+**Context.** The Filament DB → Spoolman new-spool detection loop (`engine.py`, FDB→SM direction)
+decided "already synced?" by checking whether the FDB spool's `label` field was non-empty:
+
+```python
+label_val = getattr(fdb_spool, fdb_field_name, None)
+if label_val:
+    continue  # treated ANY user value as "already synced"
+```
+
+`label` is a **user-supplied** field — the bridge only ever stuffs the Spoolman spool ID into it as
+a convenience, historically unconditionally. The real cross-reference is the **FDB spool GUID**,
+stored on the Spoolman side in the `filamentdb_spool_id` extra and in SQLite `SpoolMapping`. Once a
+user put their own value in `label` — e.g. via Filament DB 1.73.0's new "Next #" roll-number button
+(reviewed 2026-08-08 in the FDB 1.72.1–1.75.0 compat entry above) — the bridge wrongly concluded the
+spool was already synced and **never created it in Spoolman**. Surfaced in a design discussion about
+migrating off Spoolman while the bridge is still syncing (FDB roll numbers / Next #).
+
+**Decision — detect by GUID; treat `label` as opaque user data.**
+
+1. **Detection.** Removed the `label_val` skip entirely. Before the FDB→SM loop, build
+   `sm_xref_fdb_spool_ids` — the set of FDB GUIDs already referenced by any Spoolman spool's
+   `filamentdb_spool_id` extra (`decode_extra_value` over `sm_spools_all`). A spool is skipped only
+   when it has a `SpoolMapping` (`mapped_fdb_spool_ids`) **or** its GUID is already in
+   `sm_xref_fdb_spool_ids` — the latter is a cross-ref orphan whose `SpoolMapping` row was lost (bridge
+   DB reset, manual edit); skipping avoids a duplicate. Rebuilding the lost `SpoolMapping` from the
+   GUID xref is out of scope (reconcile already surfaces these); tracked as a possible follow-up.
+2. **Conditional writeback.** Both places that stuff the new Spoolman spool ID into the FDB `label`
+   (`_handle_new_fdb_spool` in `engine.py`, and the wizard's parallel writeback in `wizard.py`) now
+   write only `if not getattr(fdb_spool, fdb_field_name, None)` — a blank label gets filled in as
+   before, a user-set value is never touched. The wizard's *fresh-create* spool payload (which sets
+   `label` on a brand-new FDB spool document, not an existing one) is unaffected — there's no
+   pre-existing user value to protect there.
+3. **Documented the tradeoff.** Added a README ALERT next to the variant-tracking section: leave
+   `label` blank if you want it to mirror the Spoolman spool ID; a user-set value is kept and the
+   spool still syncs (by GUID), but it will no longer match the Spoolman ID.
+
+**Not done.** Rebuilding a lost `SpoolMapping` purely from the GUID cross-ref, when one is found
+orphaned on the FDB→SM side — today it's just skipped, mirroring the existing SM→FDB orphan-skip
+behavior for the collision case. Reconcile already surfaces these to the user.
 
 
 ## 2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86

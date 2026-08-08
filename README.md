@@ -506,6 +506,14 @@ This is separate from the wizard's **Skip empty & archived spools on import** se
 only controls whether already-dead spools are pulled in during a bulk import — it does not
 affect ongoing lifecycle mirroring.
 
+### Spool labels
+
+> **⚠️ ALERT — spool labels:** If you want the Filament DB spool **label** (friendly spool ID)
+> to equal the Spoolman spool ID, **leave it blank** — the bridge fills a blank label with the
+> Spoolman spool ID on sync. If you put your own value in `label` (e.g. via Filament DB's
+> **Next #** button), the bridge keeps it (never overwrites it) and still syncs the spool via
+> its internal GUID, but that label will no longer match the Spoolman ID.
+
 ### Variant tracking
 
 Filament DB uses parent/variant inheritance (one parent with shared settings, color variants underneath). Spoolman is flat — one filament per color. The bridge tracks the relationship via Spoolman extra fields (`filamentdb_id`, `filamentdb_parent_id`) and builds the hierarchy at import time according to your [variant parent mode](docs/variant-parent-mode.md). When a Spoolman change would override a variant's *inherited* setting, the bridge queues a master-divergence conflict instead of silently detaching the variant from its parent — you decide whether the change applies to the whole line, just that variant, or not at all.
