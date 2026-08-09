@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.21] — 2026-08-09
+
 ### Fixed
 
 - **Filament DB → Spoolman new-spool detection now keys on the FDB spool GUID, not the
