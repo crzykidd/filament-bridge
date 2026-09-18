@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.20-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.21-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,15 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.21 (2026-08-09)
+
+- **Fixed: your Filament DB spool labels are now yours to keep.** The bridge uses the FDB spool
+  `label` field to stash the Spoolman spool ID — but only when it's blank. Previously, if you put
+  your own value there (e.g. Filament DB 1.73.0's "Next #" button), the bridge mistook it for an
+  already-synced spool and never created it in Spoolman. Sync now matches spools by their internal
+  ID, so a hand-labeled spool syncs correctly and your label is never overwritten. Leave `label`
+  blank if you want it to equal the Spoolman ID. (#87)
 
 ### v0.6.20 (2026-07-31)
 
@@ -505,6 +514,14 @@ queues a conflict.
 This is separate from the wizard's **Skip empty & archived spools on import** setting, which
 only controls whether already-dead spools are pulled in during a bulk import — it does not
 affect ongoing lifecycle mirroring.
+
+### Spool labels
+
+> **⚠️ ALERT — spool labels:** If you want the Filament DB spool **label** (friendly spool ID)
+> to equal the Spoolman spool ID, **leave it blank** — the bridge fills a blank label with the
+> Spoolman spool ID on sync. If you put your own value in `label` (e.g. via Filament DB's
+> **Next #** button), the bridge keeps it (never overwrites it) and still syncs the spool via
+> its internal GUID, but that label will no longer match the Spoolman ID.
 
 ### Variant tracking
 

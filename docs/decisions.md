@@ -6,6 +6,9 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`](#2026-08-08--fdbsm-new-spool-detection-keys-on-the-guid-not-the-user-set-label-github-87) — #87
+- [2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86](#2026-08-08--fdb-17211750-compat-review-settings-bag-size-cap-edge-filed-as-86)
+- [2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85](#2026-08-02--fdb-17001720-compat-review-template-write-guard-gap-filed-as-85)
 - [2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight](#2026-07-31--stale-new_filament-conflicts-auto-resolve-on-lifecycle-state-not-weight-github-83) — #83
 - [2026-07-27 — OpenPrintTag identity sync made bidirectional](#2026-07-27--openprinttag-identity-sync-made-bidirectional-github-81) — #81
 - [2026-07-19 — Purge stale filament mappings when Spoolman reuses an id](#2026-07-19--purge-stale-filament-mappings-when-spoolman-reuses-an-id-github-70) — #70
@@ -200,6 +203,115 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`, GitHub #87
+
+**Context.** The Filament DB → Spoolman new-spool detection loop (`engine.py`, FDB→SM direction)
+decided "already synced?" by checking whether the FDB spool's `label` field was non-empty:
+
+```python
+label_val = getattr(fdb_spool, fdb_field_name, None)
+if label_val:
+    continue  # treated ANY user value as "already synced"
+```
+
+`label` is a **user-supplied** field — the bridge only ever stuffs the Spoolman spool ID into it as
+a convenience, historically unconditionally. The real cross-reference is the **FDB spool GUID**,
+stored on the Spoolman side in the `filamentdb_spool_id` extra and in SQLite `SpoolMapping`. Once a
+user put their own value in `label` — e.g. via Filament DB 1.73.0's new "Next #" roll-number button
+(reviewed 2026-08-08 in the FDB 1.72.1–1.75.0 compat entry above) — the bridge wrongly concluded the
+spool was already synced and **never created it in Spoolman**. Surfaced in a design discussion about
+migrating off Spoolman while the bridge is still syncing (FDB roll numbers / Next #).
+
+**Decision — detect by GUID; treat `label` as opaque user data.**
+
+1. **Detection.** Removed the `label_val` skip entirely. Before the FDB→SM loop, build
+   `sm_xref_fdb_spool_ids` — the set of FDB GUIDs already referenced by any Spoolman spool's
+   `filamentdb_spool_id` extra (`decode_extra_value` over `sm_spools_all`). A spool is skipped only
+   when it has a `SpoolMapping` (`mapped_fdb_spool_ids`) **or** its GUID is already in
+   `sm_xref_fdb_spool_ids` — the latter is a cross-ref orphan whose `SpoolMapping` row was lost (bridge
+   DB reset, manual edit); skipping avoids a duplicate. Rebuilding the lost `SpoolMapping` from the
+   GUID xref is out of scope (reconcile already surfaces these); tracked as a possible follow-up.
+2. **Conditional writeback.** Both places that stuff the new Spoolman spool ID into the FDB `label`
+   (`_handle_new_fdb_spool` in `engine.py`, and the wizard's parallel writeback in `wizard.py`) now
+   write only `if not getattr(fdb_spool, fdb_field_name, None)` — a blank label gets filled in as
+   before, a user-set value is never touched. The wizard's *fresh-create* spool payload (which sets
+   `label` on a brand-new FDB spool document, not an existing one) is unaffected — there's no
+   pre-existing user value to protect there.
+3. **Documented the tradeoff.** Added a README ALERT next to the variant-tracking section: leave
+   `label` blank if you want it to mirror the Spoolman spool ID; a user-set value is kept and the
+   spool still syncs (by GUID), but it will no longer match the Spoolman ID.
+
+**Not done.** Rebuilding a lost `SpoolMapping` purely from the GUID cross-ref, when one is found
+orphaned on the FDB→SM side — today it's just skipped, mirroring the existing SM→FDB orphan-skip
+behavior for the collision case. Reconcile already surfaces these to the user.
+
+
+## 2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86
+
+**Context.** Four FDB releases landed since the 2026-08-02 review (≤1.72.0): **1.72.1**
+(release-pipeline hardening, no app changes), **1.73.0** (the "Next #" spool-roll-number button
+— shipped from our upstream feature request `hyiger/filament-db#1060`), **1.74.0** (PrusaSlicer
+`compatible_printers` fields + `inherits` moved out of the `settings{}` passthrough), **1.75.0**
+(full-codebase audit: `settings{}` wire-canonicalization, print-job refund math, and filament-API
+write-validation hardening `hyiger/filament-db#1072`).
+
+**Findings — no break to normal sync.** The two changes that could have touched us both concern the
+FDB `settings{}` bag, which the bridge only ever writes via the scoped exception
+(`merge_filament_settings` / `remove_filament_settings_keys`, `services/filamentdb.py:216-280`):
+
+- **1.75.0 settings canonicalization** — safe. Those two writers do an *opaque* read-modify-write:
+  they add/remove only the two OpenTag scalar keys and spread every other key through unchanged,
+  never parsing or re-encoding individual values. JSON string round-trips are lossless for multi-line
+  g-code (1.75.0's fix was in the INI *export* path, which the bridge never touches). Normal
+  `update_filament` strips `settings` entirely and never sends it, so it can't trip any settings rule.
+- **1.74.0 `inherits` relocation + new slicer fields** — no impact. The bridge doesn't read
+  `inherits` or the compatibility fields, and FDB read schemas are `extra="allow"`.
+
+**One latent edge — filed #86 (tracking, low priority).** 1.75.0 `#1072` gap 2 added
+`validateSettingsBag()` to the generic `PUT /api/filaments/{id}` (the route the OpenTag writers use),
+rejecting a bag with **>400 keys** or **any value >20 000 chars** with a 400. Because the writers
+re-send the *whole* bag, a filament with an oversized slicer settings bag could make an OpenTag
+identity write 400 → caught per-filament error, OpenTag identity silently won't sync for that one
+filament. Unlikely in practice (slicer-sync bags were already capped; the bridge only adds 2 small
+keys and can't grow a bag past the caps itself), so filed as tracking-only. Fix direction: catch the
+400, log a clean `skip`, continue — never trim user slicer data.
+
+**No version-floor change.** `MIN_FDB` stays **1.33.0** — none of these releases adds a feature the
+bridge now requires.
+
+
+## 2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85
+
+**Context.** Three Filament DB releases landed since the 2026-07-30 review (which covered ≤1.69.0):
+**1.70.0** (filament *templates*), **1.71.0** (inventory swatches), **1.72.0** (`?shape=spool` slim
+spool responses). Reviewed each against what the bridge reads/writes.
+
+**Findings.**
+
+- **1.70.0 — templates.** A filament with color variants becomes an abstract, colorless,
+  inventory-less **template**; the FDB API now **strips/rejects** writes of `color`, `totalWeight`,
+  or low-stock `threshold` onto a template and **rejects new spools** on one. Bridge is safe on the
+  common paths: it never writes `totalWeight`/`threshold` at filament level (both spool-scoped;
+  decrements go through the usage endpoint), master-targeted filament writes are limited to shared
+  material props (type/density/diameter/temps/spoolWeight — none of the three stripped fields), and
+  **synthetic** masters (`FilamentMapping.is_synthetic_parent`, `spoolman_filament_id IS NULL`) are
+  excluded from spool/inventory writes. **One gap:** the parent-exclusion guards key on
+  `is_synthetic_parent`, not the broader `core/masters.py:is_master_fdb` (which also unions
+  `hasVariants`). A *real, FDB-native* parent that is directly mapped to a Spoolman filament and
+  then promoted to a template is NOT fenced — `_sync_multicolor` PUSH_SM_TO_FDB (`engine.py:1071`)
+  would PATCH `color` onto it (stripped → silent no-op → re-detected every cycle) and `create_spool`
+  (`engine.py:2787`) could target it (rejected). Filed as **#85** (fix: switch those guards to
+  `is_master_fdb`; not yet implemented).
+- **1.71.0 — inventory swatches.** FDB frontend only, no API surface. No impact.
+- **1.72.0 — `?shape=spool`.** Opt-in slim spool response; **byte-identical when the param is
+  absent**, and the bridge never sends it. Non-breaking. Noted as an optional future optimization
+  (our FDB spool writes currently pull back the whole filament record incl. photos + usage history).
+
+**No version-floor change.** `MIN_FDB` stays **1.33.0** — none of these releases adds a feature the
+bridge now requires. FDB read schemas remain `extra="allow"`, so the additive fields don't affect
+parsing.
 
 
 ## 2026-07-31 — Stale `new_filament` conflicts auto-resolve on lifecycle state, not weight, GitHub #83
