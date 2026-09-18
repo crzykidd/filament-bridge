@@ -1,10 +1,20 @@
 ---
 name: 2026-09-18-location-name-trim
-status: pending          # pending | completed | failed
+status: completed          # pending | completed | failed
 created: 2026-09-18
 model: sonnet
-completed:
-result:
+completed: 2026-09-18
+result: |
+  All three parts implemented. core/locations.py:ensure_fdb_location trims the lookup
+  key, cache key, and create() name; the three inline cache builders (wizard.py,
+  mobile.py, engine.py fdb_location_names) trim too. engine.py's SM->FDB location push
+  and conflict_apply.py:_apply_location now record the TRIMMED value on the FDB-side
+  snapshot baseline (not the raw SM string) — the FDB->SM leg needed no change since it
+  already sources from the (now-trimmed) id->name map. The both-sides-converged check
+  in engine.py compares stripped names via the existing _norm_str helper. Added 4
+  engine-cycle tests, 3 ensure_fdb_location unit tests, 1 conflict_apply test, and 2
+  mobile /locations tests. docs/sync-model.md location row and docs/decisions.md
+  2026-09-18 entry updated. 1500 backend tests pass; ruff clean.
 ---
 
 # Task: Trim location names in the FDB find-or-create (GitHub #90)

@@ -9,6 +9,24 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Spoolman location name with edge whitespace no longer errors every sync cycle.**
+  Filament DB 1.76.0 added `trim: true` to location names and migrates already-stored
+  names on first connect, but the bridge's FDB location find-or-create still matched
+  names byte-exactly and created with the raw Spoolman string — an untrimmed Spoolman
+  name missed its now-trimmed FDB row, and the create that followed collided on the
+  unique name (a 4xx caught per-spool, logged, and repeated forever; that spool's
+  location never synced). `ensure_fdb_location` (and the three call sites that built
+  their own location-name caches) now trims for the lookup key, the cache key, and the
+  create. Fixing only the find-or-create would have traded that repeating error for a
+  repeating ping-pong, so two more pieces went in alongside it: the FDB-side snapshot
+  baseline now records the trimmed value FDB actually stored (not the raw Spoolman
+  string), and the both-sides-changed convergence check now compares stripped names —
+  Spoolman never trims its free-text location, so the two sides could otherwise differ
+  by whitespace forever and queue a bogus conflict. Conflict values, log rows, and
+  preview rows still show the raw values. Fixes #90.
+
 ## [0.6.21] — 2026-08-09
 
 ### Fixed

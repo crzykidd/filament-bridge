@@ -224,6 +224,41 @@ async def test_ensure_fdb_location_uses_cache():
     filamentdb.create_location.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_ensure_fdb_location_trims_lookup_against_trimmed_fdb_name():
+    """FDB >=1.76.0 trims stored location names. An untrimmed name (edge whitespace)
+    must still resolve to the existing trimmed row — no create (GitHub #90)."""
+    filamentdb = _fake_filamentdb(locations=[{"_id": "loc-7", "name": "Drybox 1"}])
+    loc_id = await ensure_fdb_location(filamentdb, "Drybox 1 ")
+    assert loc_id == "loc-7"
+    filamentdb.create_location.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_fdb_location_creates_with_trimmed_name():
+    """An absent, untrimmed name is created with the TRIMMED value (matching what FDB
+    would store anyway) and cached under the trimmed key."""
+    filamentdb = _fake_filamentdb(locations=[])
+    filamentdb.create_location = AsyncMock(return_value={"_id": "loc-99", "name": "New Bin"})
+    cache: dict[str, str] = {}
+    loc_id = await ensure_fdb_location(filamentdb, "  New Bin  ", cache)
+    assert loc_id == "loc-99"
+    filamentdb.create_location.assert_awaited_once_with("New Bin")
+    assert cache["New Bin"] == "loc-99"
+
+
+@pytest.mark.asyncio
+async def test_ensure_fdb_location_uses_cache_with_untrimmed_lookup():
+    """A pre-populated cache (keyed on the trimmed name) is matched by an untrimmed
+    lookup name."""
+    filamentdb = _fake_filamentdb()
+    cache = {"Shelf A": "loc-cached"}
+    loc_id = await ensure_fdb_location(filamentdb, "Shelf A  ", cache)
+    assert loc_id == "loc-cached"
+    filamentdb.get_locations.assert_not_awaited()
+    filamentdb.create_location.assert_not_awaited()
+
+
 # ===========================================================================
 # assemble_spool_detail — by FDB ids; 404 on no mapping
 # ===========================================================================
@@ -395,6 +430,20 @@ def test_get_mobile_locations_merges_and_sorts():
     r = client.get("/api/mobile/locations")
     assert r.status_code == 200
     assert r.json() == ["Bin 9", "Dry Box", "Shelf A"]
+
+
+def test_get_mobile_locations_dedupes_whitespace_only_difference():
+    """An SM location that differs from its FDB counterpart only by edge whitespace
+    must not appear twice in the dropdown list (GitHub #90)."""
+    db = _make_db()
+    set_config_value(db, "mobile_labels_enabled", True)
+    db.commit()
+    spoolman = _fake_spoolman(spools=[_sm_spool(location="Shelf A ")])
+    filamentdb = _fake_filamentdb(locations=[{"_id": "2", "name": "Shelf A"}])
+    client = _client(db, spoolman, filamentdb)
+    r = client.get("/api/mobile/locations")
+    assert r.status_code == 200
+    assert r.json() == ["Shelf A"]
 
 
 # ===========================================================================

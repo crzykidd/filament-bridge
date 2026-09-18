@@ -264,13 +264,19 @@ async def _apply_location(
     fdb_spool_id: str = conflict.filamentdb_spool_id  # type: ignore[assignment]
 
     # FDB: find-or-create the location id for the chosen name (None clears it).
+    # ensure_fdb_location trims the name before lookup/create (FDB >=1.76.0 trims
+    # stored names), so the FDB side actually holds the trimmed value even when
+    # target carries edge whitespace (e.g. resolution="spoolman" with a raw SM
+    # string) — the snapshot below must record that trimmed value, not target,
+    # or the next cycle re-detects the whitespace as a fresh FDB-side change.
     loc_id = await ensure_fdb_location(filamentdb, target) if target else None
+    fdb_target = target.strip() if target else target
     await filamentdb.update_spool(fdb_filament_id, fdb_spool_id, {"locationId": loc_id})
     await spoolman.update_spool(sm_spool_id, {"location": target})
 
     # Refresh both snapshot location names to the converged value (anti-ping-pong).
     _merge_snapshot(db, "spoolman", "spool", str(sm_spool_id), {"location": target})
-    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"location": target})
+    _merge_snapshot(db, "filamentdb", "spool", fdb_spool_id, {"location": fdb_target})
 
     _log(
         db, cycle_id, "conflict_apply", "update", "spool",

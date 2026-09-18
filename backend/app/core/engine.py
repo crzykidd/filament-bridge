@@ -3093,8 +3093,8 @@ async def run_sync_cycle(
         for _loc in await filamentdb.get_locations():
             _lid = _loc.get("_id")
             _lname = _loc.get("name")
-            if _lid and _lname:
-                fdb_location_names[_lid] = _lname
+            if _lid and _lname and _lname.strip():
+                fdb_location_names[_lid] = _lname.strip()
     except Exception as exc:
         logger.warning("Cycle %s: could not fetch FDB locations (location sync skipped): %s", cycle_id, exc)
 
@@ -3851,9 +3851,13 @@ async def run_sync_cycle(
         fdb_location_now = fdb_loc_name
 
         # Both sides changed to the SAME name → no real divergence, converge silently.
+        # Spoolman never trims its free-text location, so compare stripped values —
+        # otherwise a both-sides-changed pair that agrees except for whitespace never
+        # registers as converged and queues a bogus conflict (GitHub #90). Conflict
+        # values / log rows / preview rows below still use the RAW sm/fdb_location_now.
         location_both_converged = (
             location_sm_changed and location_fdb_changed
-            and sm_location_now == fdb_location_now
+            and _norm_str(sm_location_now) == _norm_str(fdb_location_now)
         )
 
         if (location_sm_changed or location_fdb_changed) and not location_both_converged:
@@ -3906,11 +3910,17 @@ async def run_sync_cycle(
                     if not dry_run:
                         loc_id = await ensure_fdb_location(filamentdb, target) if target else None
                         await filamentdb.update_spool(fdb_filament_id, fdb_spool.id, {"locationId": loc_id})
+                        # ensure_fdb_location trims before lookup/create, so FDB actually
+                        # stores the trimmed name even when target carries edge whitespace —
+                        # both the per-cycle id→name map and the FDB-side snapshot below must
+                        # record that trimmed value, or the whitespace re-fires as a fresh
+                        # FDB-side change next cycle (GitHub #90).
+                        fdb_target = target.strip() if target else target
                         # If we created a new location, keep the per-cycle map current so a
                         # later pair (or next reference) resolves the same name → id.
-                        if loc_id and target:
-                            fdb_location_names[loc_id] = target
-                        _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, target, target)
+                        if loc_id and fdb_target:
+                            fdb_location_names[loc_id] = fdb_target
+                        _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, target, fdb_target)
                         _log(
                             db, cycle_id, "spoolman_to_filamentdb", "update", "spool",
                             spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,

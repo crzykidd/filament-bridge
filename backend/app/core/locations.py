@@ -44,8 +44,14 @@ async def ensure_fdb_location(
     if not name or not name.strip():
         return None
 
-    if cache is not None and name in cache:
-        return cache[name]
+    # FDB (>=1.76.0) trims stored names, so the lookup key, the cache key, and
+    # the created name must all be trimmed to match — otherwise an untrimmed
+    # Spoolman name misses its already-trimmed FDB row and the create that
+    # follows collides on the unique name (GitHub #90).
+    trimmed = name.strip()
+
+    if cache is not None and trimmed in cache:
+        return cache[trimmed]
 
     if cache is None:
         # Build a one-shot lookup for this single resolution.
@@ -54,16 +60,16 @@ async def ensure_fdb_location(
             loc_name = loc.get("name")
             loc_id = loc.get("_id")
             if loc_name and loc_id:
-                cache[loc_name] = loc_id
-        if name in cache:
-            return cache[name]
+                cache[loc_name.strip()] = loc_id
+        if trimmed in cache:
+            return cache[trimmed]
 
     if dry_run:
         sentinel = "dry-run-location"
-        cache[name] = sentinel
+        cache[trimmed] = sentinel
         return sentinel
 
-    created = await filamentdb.create_location(name)
+    created = await filamentdb.create_location(trimmed)
     loc_id = created["_id"]
-    cache[name] = loc_id
+    cache[trimmed] = loc_id
     return loc_id

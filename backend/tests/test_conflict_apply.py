@@ -966,3 +966,38 @@ async def test_apply_location_conflict_manual_clear():
     spoolman.update_spool.assert_awaited_once_with(9, {"location": None})
     filamentdb.update_spool.assert_awaited_once_with("fil-9", "spool-9", {"locationId": None})
     filamentdb.create_location.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_apply_location_conflict_spoolman_wins_trims_fdb_snapshot():
+    """Resolution 'spoolman' with an untrimmed SM name: SM keeps the raw value, but the
+    FDB-side snapshot baseline must record the TRIMMED value FDB actually stored (it
+    trims on write, >=1.76.0) — otherwise the whitespace re-fires as a fresh FDB-side
+    change next cycle (GitHub #90 part 2)."""
+    from app.core.conflict_apply import apply_cross_system_conflict
+
+    db = _make_db()
+    c = Conflict(
+        entity_type="spool", field_name="location", conflict_type="cross_system",
+        spoolman_id=9, filamentdb_filament_id="fil-9", filamentdb_spool_id="spool-9",
+        spoolman_value=json.dumps("Shelf B "), filamentdb_value=json.dumps("Shelf C"),
+    )
+    db.add(c)
+    db.add(Snapshot(source="spoolman", entity_type="spool", entity_id="9",
+                    data=json.dumps({"location": "Shelf A"})))
+    db.add(Snapshot(source="filamentdb", entity_type="spool", entity_id="spool-9",
+                    data=json.dumps({"location": "Shelf A"})))
+    db.commit()
+    spoolman, filamentdb = _location_clients([{"_id": "loc-a", "name": "Shelf A"}])
+    filamentdb.create_location = AsyncMock(return_value={"_id": "loc-b", "name": "Shelf B"})
+
+    result = await apply_cross_system_conflict(c, "spoolman", None, db, spoolman, filamentdb)
+    db.commit()
+
+    assert result == "Shelf B "
+    spoolman.update_spool.assert_awaited_once_with(9, {"location": "Shelf B "})
+    filamentdb.create_location.assert_awaited_once_with("Shelf B")
+    sm_snap = db.query(Snapshot).filter_by(source="spoolman", entity_type="spool", entity_id="9").first()
+    fdb_snap = db.query(Snapshot).filter_by(source="filamentdb", entity_type="spool", entity_id="spool-9").first()
+    assert json.loads(sm_snap.data)["location"] == "Shelf B "
+    assert json.loads(fdb_snap.data)["location"] == "Shelf B"

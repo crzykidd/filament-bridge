@@ -245,6 +245,17 @@ cross-entity search, **security hardening**), **0.26.1**.
   small — trim both the cache key and the create, mirroring FDB's own rule — and one helper covers
   every caller (engine, conflict_apply, wizard, mobile).
 
+**#90 implementation note (2026-09-18, same day).** Trimming only, deliberately no case folding —
+FDB's uniqueness is on the trimmed value, not a case-folded one, so trimming alone matches upstream
+semantics; folding case would be a behavior change beyond what the migration requires. The
+FDB-to-SM leg of the location pass (`engine.py`, `PUSH_FDB_TO_SM`) needed no snapshot-asymmetry fix:
+its `target` already comes from the per-cycle `fdb_location_names` id-to-name map, which part 1 of
+the fix now populates with trimmed names, so both the Spoolman write and the snapshot refresh
+already use the same (trimmed) value. Only the SM-to-FDB leg (`engine.py`, `PUSH_SM_TO_FDB`) and the
+conflict-resolution path (`conflict_apply.py:_apply_location`) write a raw Spoolman-origin string
+through `ensure_fdb_location` and therefore needed the FDB-side snapshot value swapped for the
+trimmed one.
+
 **Reviewed and verified safe (checked against the code, not assumed).**
 
 - **Spoolman 0.26.0 trusted-origin (CSRF) guard** — `security.is_trusted_origin()` returns `True`
