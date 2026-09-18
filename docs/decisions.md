@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90](#2026-09-18--fdb-17601820--spoolman-02400261-compat-review-two-findings-filed-as-89--90)
 - [2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`](#2026-08-08--fdbsm-new-spool-detection-keys-on-the-guid-not-the-user-set-label-github-87) — #87
 - [2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86](#2026-08-08--fdb-17211750-compat-review-settings-bag-size-cap-edge-filed-as-86)
 - [2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85](#2026-08-02--fdb-17001720-compat-review-template-write-guard-gap-filed-as-85)
@@ -203,6 +204,88 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 - [2026-05-28 — Canonical version file is `backend/app/__init__.py`](#2026-05-28--canonical-version-file-is-backendapp__init__py)
 
 <!-- decisions-topic-index-end -->
+
+
+## 2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90
+
+**Context.** First review to cover **both** upstreams in one pass. FDB had seven releases since the
+2026-08-08 review (≤1.75.0): **1.76.0** (24-finding UI QA pass — calibration/backup/weight data-loss
+fixes, CSV round-trip + a `trim: true` **name migration**), **1.77.0** (Data health page, OpenPrintTag
+**Change link / Remove link**, hybrid-sync reliability), **1.78.0** (remote-side Data health,
+printer-scoped calibration, slicer settings **arrays** round-trip), **1.79.0** (in-app print-job
+logging, History page + `GET /api/spools/usage-search`, tag-into-variant import), **1.80.0** (nozzle
+Data health, printer-scoped slicer exports, templates excluded from bundles), **1.81.0**
+(`POST /api/labels/print` behind a local token), **1.81.1** (Next.js 16.3.4 — two **critical** RCE
+advisories — plus a glass-transition floor drop), **1.82.0** (color filtering, explicitly no
+API/DB/sync change). Spoolman had never had a dedicated review entry — decisions.md last referenced
+**0.23.1** — so all four since were covered: **0.24.0**, **0.25.0**, **0.26.0** (new web client,
+cross-entity search, **security hardening**), **0.26.1**.
+
+**Two findings, both FDB-side, both filed.**
+
+- **#89 — OpenPrintTag "Remove link" is silently resurrected.** 1.77.0 `#1150` added the first
+  FDB-side way to *clear* an OpenTag link. `_sync_opentag_identity` (`engine.py:4288`) is
+  deliberately **stateless — no snapshot baseline** — and fills whichever side is empty, which is
+  correct only while "empty" can only mean *never linked*. It now also means *deliberately
+  unlinked*, and the pass can't tell them apart, so the next cycle writes the identity straight back
+  from the other side. Symmetric for clearing the Spoolman extras. *Change* link is fine — a genuine
+  `uuid` divergence still queues a deduped `cross_system` conflict (the #81 design). Not a #81
+  regression; an upstream capability the pass predates. Fix needs a **design call**: telling "never
+  had one" from "cleared" requires a per-mapping baseline of the last-synced identity, after which a
+  clear propagates (FDB side via the scoped `remove_filament_settings_keys()`) instead of refilling.
+
+- **#90 — 1.76.0 name-trim breaks the FDB location find-or-create.** `#1116` put `trim: true` on
+  `name` for the five uniquely-named models **and migrates already-stored names on first connect**.
+  `ensure_fdb_location` (`core/locations.py`) matches byte-exactly and creates with the raw Spoolman
+  string, so an untrimmed Spoolman location name (`"Drybox 1 "`) misses the trimmed FDB row, and the
+  create that follows **collides on the unique name → 4xx**. Caught per-spool at `engine.py:3907`
+  and logged, but it **repeats every cycle** and that spool's location never syncs. The upgrade path
+  is the likely trigger, not exotic data: the bridge itself created untrimmed locations (it passes
+  the Spoolman string through verbatim), and FDB's migration trims them out from under it. Fix is
+  small — trim both the cache key and the create, mirroring FDB's own rule — and one helper covers
+  every caller (engine, conflict_apply, wizard, mobile).
+
+**Reviewed and verified safe (checked against the code, not assumed).**
+
+- **Spoolman 0.26.0 trusted-origin (CSRF) guard** — `security.is_trusted_origin()` returns `True`
+  for an **absent** `Origin` header ("non-browser clients such as Moonraker and OctoPrint send no
+  `Origin` at all and are unaffected"). The bridge's httpx clients are server-side and send none.
+  The companion **host guard is opt-in** (`is_host_checking_enabled()`, off by default); if it is
+  ever switched on, the hostname in `SPOOLMAN_URL` has to be among the allowed ones.
+- **Spoolman 0.26.1 `#987` color handling** — `_sanitize_color_hex` strips a leading `#` *and
+  uppercases* on **every filament read** (`api/v1/models.py`). Harmless for us on both legs: we
+  already strip `#` on write (`color.to_sm_color`), and every comparison path normalizes case —
+  `differ.normalize_color` for the mapped color field, `color.multicolor_signature` for the
+  multicolor pass, and `_color_distance` parses hex numerically. Cosmetic only; no ping-pong.
+- **Spoolman 0.26.0 extra-field bounds** — `EXTRA_FIELD_VALUE_MAX_LENGTH` 64 KiB per value and
+  `MAX_EXTRA_FIELDS_PER_ENTITY` 128. We write a handful of short scalars; nowhere near either.
+- **Spoolman 0.24.0 websocket change** (unset fields omitted rather than `null`) — the bridge opens
+  **no websockets at all**; it polls REST. N/A.
+- **Spoolman 0.26.0 new web client / Locations→Dashboard rename / cross-entity search** — frontend
+  and additive endpoints; the v1 API the bridge uses is unchanged.
+- **FDB 1.78.0 `#678` slicer-settings arrays** — values are now wire-canonical all-quoted and parsed
+  element-wise. Our only `settings{}` writers (`merge_filament_settings` /
+  `remove_filament_settings_keys`) do an **opaque** whole-bag read-modify-write of just the two
+  OpenTag keys and never parse a value, so the round-trip stays lossless. **#86** (the 1.75.0
+  400-key / 20 000-char cap) remains the one open settings edge.
+- **FDB 1.76.0 `#1121` legacy single-spool rolls** — such a roll was invisible to the bridge (not in
+  `spools[]`); once a print job migrates it to a real spool subdocument it simply appears as a new
+  FDB spool and takes the normal new-spool path. No duplicate risk, because detection is now
+  GUID-keyed (#87, v0.6.21).
+- **FDB 1.79.0 print-job logging** — a debit lowers `totalWeight` (the normal decrement → Spoolman
+  path) and delete-with-refund raises it (the documented weight-increase path). `usage-search` is
+  additive and unused by the bridge.
+- **FDB 1.80.0 / 1.81.0 / 1.82.0** — template-filtered and printer-scoped slicer exports, the
+  local-token-gated `POST /api/labels/print` (404 in Docker; the bridge has its own LabelForge
+  path), and colour filtering that upstream states changes nothing about the DB, API, backups or
+  sync. All outside our surface.
+- **FDB 1.81.1** — the glass-transition DB floor drops −50 → −150 °C, which only *loosens*
+  validation on a field we sync (`glassTempTransition`, `core/fields.py`). Worth noting
+  operationally that this release carries **Next.js 16.3.4 for two critical RCE advisories** —
+  a reason to upgrade FDB on its own merits where the instance is reachable off-localhost.
+
+**No version-floor change.** `MIN_FDB` stays **1.33.0** and `MIN_SPOOLMAN` stays **0.22.0** — nothing
+in these eleven releases adds a feature the bridge now requires.
 
 
 ## 2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`, GitHub #87
