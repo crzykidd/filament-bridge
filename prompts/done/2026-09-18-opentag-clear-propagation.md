@@ -1,10 +1,19 @@
 ---
 name: 2026-09-18-opentag-clear-propagation
-status: pending          # pending | completed | failed
+status: completed          # pending | completed | failed
 created: 2026-09-18
 model: sonnet
-completed:
-result:
+completed: 2026-09-18
+result: >
+  Converted _sync_opentag_identity from stateless to baselined (per-side
+  _opt_uuid/_opt_slug merged into the existing filament Snapshot row).
+  Implemented the state-machine table exactly as specified, added clear
+  propagation via spoolman.update_filament (blank extras) and
+  FilamentDBClient.remove_filament_settings_keys (scoped exception, no new
+  write path). Extended test_engine_opentag_identity.py from 7 to 15 tests
+  (all passing); full backend suite 1499 passed; ruff clean. Updated
+  docs/sync-model.md and added a 2026-09-18 docs/decisions.md entry (index
+  regenerated). Fixes #89.
 ---
 
 # Task: Make the OpenTag identity sync honor a deliberate unlink (GitHub #89)

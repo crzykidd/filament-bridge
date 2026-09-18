@@ -26,6 +26,20 @@ GitHub release.
   Spoolman never trims its free-text location, so the two sides could otherwise differ
   by whitespace forever and queue a bogus conflict. Conflict values, log rows, and
   preview rows still show the raw values. Fixes #90.
+- **A deliberate OpenTag "Remove link" (or a direct Spoolman extra clear) is no longer silently
+  undone by the next sync cycle.** Filament DB 1.77.0 added **Change link…** / **Remove link** to
+  the OpenPrintTag dialog — the first FDB-side way to clear an OpenTag link. The bidirectional
+  `_sync_opentag_identity` pass was stateless (it filled whichever side was empty every cycle),
+  which was safe only while "empty" could mean nothing but "never linked" — after 1.77.0 it could
+  also mean "just cleared," and the pass couldn't tell the two apart, so it wrote the identity
+  straight back within one sync interval. The pass is now baselined (a per-side `_opt_uuid` value
+  merged into the existing filament snapshot): a side whose baseline had a value that is now empty
+  is read as a deliberate clear and the removal is **propagated** to the other side
+  (direction-gated, via the same scoped `remove_filament_settings_keys()` / Spoolman extra-blank
+  primitives the OpenTag Cleanup "unmatch" action already uses) instead of being refilled; a side
+  that never had a value still fills from the other side exactly as before (#81 unaffected). A
+  genuine divergence (both sides currently set, different) still queues a deduped conflict and
+  never auto-overwrites. Fixes #89.
 
 ## [0.6.21] — 2026-08-09
 

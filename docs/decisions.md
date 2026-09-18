@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-09-18 — OpenTag identity clear now propagates instead of being silently refilled](#2026-09-18--opentag-identity-clear-now-propagates-instead-of-being-silently-refilled-github-89) — #89
 - [2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90](#2026-09-18--fdb-17601820--spoolman-02400261-compat-review-two-findings-filed-as-89--90)
 - [2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`](#2026-08-08--fdbsm-new-spool-detection-keys-on-the-guid-not-the-user-set-label-github-87) — #87
 - [2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86](#2026-08-08--fdb-17211750-compat-review-settings-bag-size-cap-edge-filed-as-86)
@@ -206,6 +207,66 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 <!-- decisions-topic-index-end -->
 
 
+## 2026-09-18 — OpenTag identity clear now propagates instead of being silently refilled, GitHub #89
+
+**Context.** Filament DB 1.77.0 added **Change link…** / **Remove link** to the OpenPrintTag
+*Check for updates* dialog — the first FDB-side way to clear an OpenTag link. The bidirectional
+`_sync_opentag_identity` pass (added 2026-07-27, #81) was deliberately **stateless**: it read both
+sides' current identity every cycle and filled whichever side was empty. That was correct only
+while "empty" could mean nothing but *never linked*. After 1.77.0, "empty" can also mean
+*deliberately unlinked* — a stateless comparison cannot tell the two apart, so the very next sync
+cycle wrote the identity straight back into the cleared side and silently undid the user's action,
+every time, until the user disabled `material_properties` sync or cleared both sides inside one
+interval. The symmetric case (clearing the two OpenTag extras directly on the Spoolman filament)
+was equally affected.
+
+**Decision — propagate the clear, don't queue a conflict.** The pass is now baselined: a per-side
+`_opt_uuid`/`_opt_slug` pair is merged into the same filament-level `Snapshot` row the
+multicolor/cost passes already use (`_merge_snapshot`), recording the last identity value observed
+on each side.
+
+| Baseline for that side | Current value | Action |
+|---|---|---|
+| absent (never seen) | side empty, other side set | **fill** — the original #81 behavior, direction-gated as before |
+| had a value | side now empty | **deliberate clear → propagate the removal to the other side**, direction-gated |
+| both set and equal | — | no-op; refresh baselines |
+| both set and differ | — | conflict, deduped, never overwrite — unchanged from #81 |
+| both now empty | — | converged; refresh baselines to empty, no writes |
+
+Propagating a clear reuses the same two primitives the OpenTag Cleanup "unmatch" endpoint already
+uses (`api/opentag.py:_clear_opentag_identity`): blanking the two Spoolman extras with
+`encode_extra_value("")`, and removing the two identity keys from FDB's `settings{}` bag via the
+approved scoped exception `FilamentDBClient.remove_filament_settings_keys()` — never a new write
+path. Both baselines refresh to the post-write agreed value (including to empty after a clear),
+per the standing "refresh both side snapshots after any propagation" invariant, so the clear
+doesn't ping-pong back on the next cycle.
+
+**Why propagate instead of queuing a conflict (option 2 in the issue).** The user already made an
+explicit choice in the FDB UI (or by editing the Spoolman extra directly) — a conflict row would
+just ask them to make the same decision a second time, for no benefit; the bridge's own OpenTag
+Cleanup "unmatch" action already treats a clear as authoritative and propagates it both ways, so
+this makes a natively-made clear behave the same as a bridge-initiated one. "Do nothing once ever
+linked" (option 3) was rejected because it also breaks the legitimate case where a filament gets
+linked in Spoolman *after* the mapping already exists.
+
+**Non-obvious choices.**
+- **Does NOT adopt the multicolor pass's "first sight → store baseline, no write" rule.** A side
+  that had never been filled would then be baselined as empty and never filled, regressing #81.
+  Absent baseline + empty side is always a fill, per the table above — this pass baselines
+  per-side history for clear-detection, not for the "skip the first diff" reason multicolor does.
+- **Baselines are refreshed even on a queued conflict**, not just on a successful write (unlike the
+  multicolor pass, which leaves a stale baseline until a conflict resolves). Without this, a
+  divergent pair that later has one side cleared while the conflict is still open would read the
+  cleared side's baseline as "absent" (never recorded) and silently refill it from the other,
+  diverging side — resurrecting exactly the bug this fix closes. Recording each side's own current
+  value regardless of outcome keeps per-side history accurate; the existing `_has_open_conflict`
+  dedup is unaffected since it doesn't consult the baseline.
+- **A clear plus an independent change on the other side is a genuine divergence, not a
+  clear-to-propagate.** Only routed as a "clear" when the *other* side is unchanged from its own
+  baseline; two sides moving in different directions at once still goes through
+  `resolve_sync_action` and can queue a conflict, same as before.
+- **No alembic migration.** `Snapshot.data` is a JSON blob; `_opt_uuid`/`_opt_slug` are just two
+  more merged keys, same mechanism as the multicolor pass's `_mc_sig` and the cost pass's `_cost`.
 ## 2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90
 
 **Context.** First review to cover **both** upstreams in one pass. FDB had seven releases since the
