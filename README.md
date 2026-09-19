@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.21-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.22-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,23 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.22 (2026-09-19)
+
+- **Fixed: unlinking an OpenPrintTag match now sticks.** Filament DB 1.77.0 added **Remove link**
+  (and **Change link…**) to its OpenPrintTag dialog. Because the bridge filled in whichever side was
+  missing an OpenTag identity, it read a deliberate unlink as a gap and wrote the link straight back
+  on the next sync — every time. It now remembers what each side last held, so removing a link in
+  either system removes it from the other instead of resurrecting it. Linking a filament that was
+  never matched still fills in the other side exactly as before, and two genuinely different links
+  still raise a conflict for you to decide rather than overwriting either one. (#89)
+- **Fixed: a location name with a stray leading or trailing space no longer breaks location sync.**
+  Filament DB 1.76.0 started trimming stored names, so a Spoolman location like `"Drybox 1 "` stopped
+  matching the Filament DB location it belonged to — the bridge then tried to create a duplicate,
+  Filament DB rejected it as a name that already exists, and that spool's location silently failed to
+  sync on every cycle. Location names are now matched and created trimmed, the way Filament DB stores
+  them. Most likely to bite right after upgrading Filament DB, since its own cleanup trims names the
+  bridge had created. (#90)
 
 ### v0.6.21 (2026-08-09)
 

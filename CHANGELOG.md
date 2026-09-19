@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.22] — 2026-09-19
+
 ### Fixed
 
 - **A Spoolman location name with edge whitespace no longer errors every sync cycle.**
