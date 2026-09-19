@@ -308,15 +308,15 @@ async def get_mobile_locations(request: Request) -> list[str]:
     try:
         for loc in await filamentdb.get_locations():
             n = loc.get("name")
-            if n:
-                names.add(n)
+            if n and n.strip():
+                names.add(n.strip())
     except Exception as exc:  # noqa: BLE001
         logger.warning("mobile/locations: could not fetch FDB locations: %s", exc)
 
     try:
         for sp in await spoolman.get_spools():
-            if sp.location:
-                names.add(sp.location)
+            if sp.location and sp.location.strip():
+                names.add(sp.location.strip())
     except Exception as exc:  # noqa: BLE001
         logger.warning("mobile/locations: could not fetch SM spools: %s", exc)
 

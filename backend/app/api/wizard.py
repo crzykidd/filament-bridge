@@ -1931,11 +1931,11 @@ async def _execute_spoolman_to_fdb(
 
     # Pre-fetch FDB locations once; new names are created on-demand within each spool's
     # try block so a missing location fails only that spool, not the whole run.
-    _fdb_loc_cache: dict[str, str] = {}  # location name → FDB _id
+    _fdb_loc_cache: dict[str, str] = {}  # location name (trimmed) → FDB _id
     try:
         for loc in await filamentdb.get_locations():
             if loc.get("name") and loc.get("_id"):
-                _fdb_loc_cache[loc["name"]] = loc["_id"]
+                _fdb_loc_cache[loc["name"].strip()] = loc["_id"]
     except Exception as exc:
         logger.warning("wizard execute %s: could not prefetch FDB locations: %s", res.cycle_id, exc)
 

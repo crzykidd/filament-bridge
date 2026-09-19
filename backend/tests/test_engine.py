@@ -3673,6 +3673,139 @@ async def test_location_one_way_sm_to_fdb_ignores_fdb_drift(db):
     assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Shelf B"
 
 
+# ---------------------------------------------------------------------------
+# Location name trim (FDB >=1.76.0 trims stored names) — #90
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_location_trim_matches_existing_untrimmed_sm_name(db):
+    """SM location carries edge whitespace ('Drybox 1 ') but the matching FDB location
+    is already trimmed ('Drybox 1') — the find-or-create must resolve to the EXISTING
+    id, never create a duplicate (the bug: FDB 1.76.0 trims stored names, so a
+    byte-exact lookup misses its own row and the create collides)."""
+    sm = _sm_spool_loc(1, 800.0, location="Drybox 1 ")
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-a")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Old"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Drybox 1"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb], locations=[{"_id": "loc-a", "name": "Drybox 1"}])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-trim-1")
+
+    assert r.conflicts == 0
+    assert r.updated == 1
+    # No duplicate created — resolved to the existing (trimmed) FDB location.
+    fdb_client.create_location.assert_not_called()
+    loc_calls = [c for c in fdb_client.update_spool.call_args_list if c.args[2] == {"locationId": "loc-a"}]
+    assert len(loc_calls) == 1
+    # The FDB-side snapshot baseline must record the TRIMMED value actually stored in
+    # FDB, not the raw untrimmed SM string — otherwise the next cycle re-detects the
+    # whitespace as a fresh FDB-side change (part 2 of #90).
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Drybox 1"
+    assert _snap_value(db, "spoolman", "spool", "1", "location") == "Drybox 1 "
+
+
+@pytest.mark.asyncio
+async def test_location_trim_no_ping_pong_second_cycle(db):
+    """Running the location pass again over the same (untrimmed-SM / trimmed-FDB) pair
+    produces NO writes on the second cycle — the anti-ping-pong assertion that is the
+    whole reason parts 2 and 3 of #90 exist."""
+    sm = _sm_spool_loc(1, 800.0, location="Drybox 1 ")
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-a")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Old"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Drybox 1"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb], locations=[{"_id": "loc-a", "name": "Drybox 1"}])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r1 = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-trim-2a")
+    assert r1.updated == 1
+
+    # Second cycle: upstream state is unchanged (SM still "Drybox 1 ", FDB still loc-a
+    # "Drybox 1"). With the trimmed FDB-side snapshot baseline and the stripped
+    # convergence comparison, nothing should be re-detected.
+    spoolman2 = _fake_spoolman(spools=[sm])
+    fdb_client2 = _fake_filamentdb(filaments=[fdb], locations=[{"_id": "loc-a", "name": "Drybox 1"}])
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r2 = await run_sync_cycle(db, spoolman2, fdb_client2, dry_run=False, cycle_id="loc-trim-2b")
+
+    assert r2.updated == 0
+    assert r2.conflicts == 0
+    fdb_client2.update_spool.assert_not_called()
+    fdb_client2.create_location.assert_not_called()
+    spoolman2.update_spool.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_location_trim_ordinary_create_still_creates(db):
+    """A genuinely new location name (not present anywhere, no whitespace involved)
+    still creates exactly once — the trim fix must not disturb the ordinary create
+    path."""
+    sm = _sm_spool_loc(1, 800.0, location="Attic")
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-a")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Drybox 1"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Drybox 1"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb], locations=[{"_id": "loc-a", "name": "Drybox 1"}])
+    fdb_client.create_location = AsyncMock(return_value={"_id": "loc-attic", "name": "Attic"})
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-trim-3")
+
+    assert r.conflicts == 0
+    assert r.updated == 1
+    fdb_client.create_location.assert_called_once_with("Attic")
+
+
+@pytest.mark.asyncio
+async def test_location_trim_both_changed_whitespace_only_converges(db):
+    """Both sides change location in the same cycle, and the new names differ only by
+    whitespace ('Drybox 2 ' vs 'Drybox 2') — this must converge silently, not queue a
+    bogus cross_system conflict (part 3 of #90)."""
+    sm = _sm_spool_loc(1, 800.0, location="Drybox 2 ")
+    fdb = _fdb_filament_loc("fil-1", "spool-1", 1000.0, location_id="loc-b")
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "location": "Old"})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "location": "Old"})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_location_config(db, direction="two_way", policy="manual")
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb], locations=[{"_id": "loc-b", "name": "Drybox 2"}])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="loc-trim-4")
+
+    assert r.conflicts == 0
+    assert r.updated == 0
+    fdb_client.update_spool.assert_not_called()
+    fdb_client.create_location.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+    assert db.query(Conflict).filter_by(entity_type="spool", field_name="location").count() == 0
+    # Each side converges to its OWN actual current value (raw SM / resolved FDB name).
+    assert _snap_value(db, "spoolman", "spool", "1", "location") == "Drybox 2 "
+    assert _snap_value(db, "filamentdb", "spool", "spool-1", "location") == "Drybox 2"
+
+
 def test_fdb_snapshot_dict_resolves_location_name():
     """_fdb_snapshot_dict embeds the location NAME resolved from locationId.
 

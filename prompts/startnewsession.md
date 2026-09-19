@@ -95,13 +95,21 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-08-01, clean — v0.6.20 shipped)
+## ⏸️ PICK UP HERE (paused 2026-09-18, clean — v0.6.21 shipped)
 
 **Everything is released and synced — nothing in flight, nothing stranded.**
-- **v0.6.20 is live** (tag `v0.6.20`, GitHub release published, prod image build fired on the
-  `release` event). PR #84 (`dev → main`) merged; `main` == `origin/main`; `dev` == `origin/dev`;
-  clean tree. On return you're on `dev`. (Reminder: main accumulates the PR merge commits, so
-  `dev..main` shows a handful of commits — that's expected divergence, content is identical.)
+- **v0.6.21 is live** (tag `v0.6.21`, GitHub release published, prod image build fired on the
+  `release` event). PR #88 (`dev → main`) merged; `main` == `origin/main`; clean tree. On return
+  you're on `dev`, which carries two unpushed compat-review docs commits — **push them** (or fold
+  them into the next release). (Reminder: main accumulates the PR merge commits, so `dev..main` shows a
+  handful of commits — that's expected divergence, content is identical.)
+- **v0.6.21** shipped **#87** (closed): FDB→SM new-spool detection keyed on the user-set `label`
+  instead of the GUID. `label` is user data (e.g. FDB 1.73.0's "Next #" button) and the bridge only
+  ever filled it when blank, but detection treated ANY non-empty `label` as "already synced", so a
+  hand-labeled spool was never created in Spoolman. Detection now skips only on a `SpoolMapping` or
+  a GUID already in some Spoolman spool's `filamentdb_spool_id` extra (lost-mapping orphan, not a
+  duplicate); the SM-ID writeback (engine + wizard) is now conditional on `label` being blank.
+  `test_fdb_label_guid_detection.py`. Decisions.md 2026-08-08 entry.
 - **v0.6.20** shipped **#83** (closed): stale `new_filament` conflicts no longer linger for
   filaments whose spools are all archived/retired. The stale-conflict cleanup pass in
   `core/engine.py` (~3172) handled only `new_spool`; a `new_filament` conflict for a filament whose
@@ -127,20 +135,35 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   against the dev upstreams (FDB→SM fill / idempotent / divergence→conflict-no-overwrite /
   direction-gating all pass; `zzz-*` test records cleaned up). 7 unit tests in
   `test_engine_opentag_identity.py`. Decisions.md 2026-07-27 entry.
-- **Upstream compat reviewed 2026-08-08 (one low-pri edge filed):** FDB latest **1.75.0**. 1.72.1
-  (release-pipeline hardening) no app changes; **1.73.0** shipped the "Next #" spool-roll-number
-  button — our own upstream request `hyiger/filament-db#1060`, now closed; 1.74.0 (slicer
-  `compatible_printers` fields + `inherits` moved out of `settings{}`) and 1.75.0 (`settings{}`
-  wire-canonicalization, refund math, filament-API validation hardening `#1072`) are safe for the
-  bridge: our only `settings{}` writers (`merge_filament_settings`/`remove_filament_settings_keys`)
-  do an opaque read-modify-write of just the two OpenTag keys, and normal `update_filament` strips
-  `settings` entirely. **One latent edge → filed #86 (tracking, LOW PRIORITY):** 1.75.0 `#1072`
-  added a 400-key / 20 000-char settings-bag cap to the generic `PUT /api/filaments/{id}`, so an
-  OpenTag write on a filament with an oversized slicer bag could 400 (caught per-filament; OpenTag
-  identity silently won't sync for it). See decisions.md 2026-08-08.
-  Prior: 2026-08-02 reviewed ≤1.72.0 — **1.70.0 templates** parent-exclusion gap filed **#85**
-  (guards key on `is_synthetic_parent` not `is_master_fdb`; not yet fixed). `MIN_FDB` 1.33.0 /
-  `MIN_SPOOLMAN` 0.22.0 unchanged.
+- **Upstream compat reviewed 2026-09-18 — BOTH upstreams, two findings filed (#89, #90).** FDB
+  latest **1.82.0**, Spoolman latest **0.26.1** (Spoolman had never had a dedicated review; the
+  prior reference was 0.23.1). Full detail in decisions.md 2026-09-18.
+  - **#89** — FDB **1.77.0** (`#1150`) added *Change link* / *Remove link* to the OpenPrintTag
+    dialog: the first FDB-side way to CLEAR a link. `_sync_opentag_identity` is **stateless (no
+    baseline)** and fills whichever side is empty, so a deliberate unlink is **refilled next cycle**
+    — silently undone, repeatedly. *Change* is fine (divergence still queues a `cross_system`
+    conflict). Fix needs a **design call**: a per-mapping baseline of the last-synced identity to
+    tell "never linked" from "cleared" (then propagate the clear via the scoped
+    `remove_filament_settings_keys()`).
+  - **#90** — FDB **1.76.0** (`#1116`) added `trim: true` to `name` on the five uniquely-named
+    models **plus a migration that trims stored names**. `ensure_fdb_location`
+    (`core/locations.py`) matches byte-exactly and creates with the raw Spoolman string, so an
+    untrimmed Spoolman location misses its trimmed FDB row → the create **collides on the unique
+    name → 4xx, every cycle** (caught at `engine.py:3907`, that spool's location never syncs). The
+    upgrade itself is the likely trigger — the bridge created those untrimmed names. Fix = trim the
+    cache key AND the create in the one shared helper (covers engine, conflict_apply, wizard,
+    mobile) + a regression test.
+  - **Verified safe:** Spoolman 0.26.0's trusted-origin guard trusts an **absent** `Origin` (our
+    httpx clients send none) and its host guard is **opt-in**; 0.26.1 (`#987`) uppercases colour hex
+    on read but every comparison path already normalises case (`differ.normalize_color`,
+    `multicolor_signature`); extra-field caps (64 KiB/value, 128/entity) are far above what we
+    write; we open **no websockets**. FDB 1.78.0 settings arrays stay lossless through our opaque
+    whole-bag read-modify-write; migrated legacy single-spool rolls take the normal GUID-keyed
+    new-spool path; 1.79.0 print-job debits/refunds map onto the existing decrement and
+    weight-increase paths; 1.80.0–1.82.0 are outside our surface. **1.81.1 ships Next.js 16.3.4 for
+    two CRITICAL RCE advisories — worth upgrading FDB for on its own merits.**
+  - Prior reviews: 2026-08-08 (≤1.75.0) filed **#86**; 2026-08-02 (≤1.72.0) filed **#85**. `MIN_FDB`
+    1.33.0 / `MIN_SPOOLMAN` 0.22.0 unchanged.
 - **v0.6.18** shipped **#78** (Bulk Import Wizard Variances resolves an existing FDB master's
   tare — `resolve_family_tare` via shared `matcher.build_family_tare_by_sm_id`, `tare_source
   "filamentdb_master"`) + **#79** (Mobile Updates lookup defaults to numeric keypad with `#`/`Abc`
@@ -149,6 +172,11 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   compat; CI ruff pinned to 0.15.17).
 
 **Open / next work (ALWAYS ask the user which to take before starting):**
+- **#90** — FDB 1.76.0 name-trim vs. the exact-match location find-or-create: an untrimmed Spoolman
+  location errors every cycle and never syncs. Small, well-understood fix (trim the cache key + the
+  create in `core/locations.py`); surfaced 2026-09-18.
+- **#89** — OpenPrintTag *Remove link* (FDB 1.77.0) is silently resurrected by the stateless
+  identity sync. Needs a design call on the baseline before coding; surfaced 2026-09-18.
 - **#85** — parent-exclusion guards key on `is_synthetic_parent`, not `is_master_fdb`; a real
   FDB-native parent mapped to Spoolman then promoted to a 1.70.0 template gets rejected color/spool
   writes. Fix = switch the guards at `engine.py:1071` (multicolor push) + `engine.py:2787`
@@ -190,10 +218,13 @@ Spoolman was broken in stacked layers, fixed one per release:
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.20** (2026-07-31) — #83 stale `new_filament` conflicts auto-resolve when a
+- Latest release: **v0.6.21** (2026-09-18) — #87 FDB→SM new-spool detection keys on the FDB spool
+  GUID, not the user-set `label`, so a hand-labeled spool is no longer skipped; the SM-ID writeback
+  only fills a blank `label`.
+  Prior: v0.6.20 (2026-07-31) — #83 stale `new_filament` conflicts auto-resolve when a
   filament has no active spool (all archived/retired); active-0g still counts as active and keeps
   the conflict; FDB→SM new-spool detection now skips retired spools.
-  Prior: v0.6.19 (2026-07-30) — #81 OpenPrintTag identity sync made bidirectional
+  v0.6.19 (2026-07-30) — #81 OpenPrintTag identity sync made bidirectional
   (FDB-native matches now flow back to Spoolman; divergence queues a `cross_system` conflict).
   v0.6.18 (2026-07-27) — #78 wizard variances resolves the existing FDB
   master's tare (no more spurious "required" when attaching to a master that has one) + #79 mobile
@@ -204,7 +235,8 @@ Spoolman was broken in stacked layers, fixed one per release:
   crash/stale-mapping GC + FDB 1.67.0 bump), v0.6.14 (#67 spool-create 400), v0.6.13 (#64
   preview-writes), v0.6.12 (#61 diameter-422 + #62 null-scalar-PATCH). Earlier: v0.6.11 (repo
   audit — see below), v0.6.10 (Synced Records Unlink #40 *partial*; net/gross labels #55).
-- Open issues (see `docs/backlog.md`): **#73** *optional* — background the blocking "Sync now"
+- Open issues (see `docs/backlog.md`): **#90** location name-trim collision; **#89** OpenTag
+  unlink resurrection; **#85** template write-guards; **#86** settings-bag cap; **#73** *optional* — background the blocking "Sync now"
   only if it's timing out; **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink needs
   a `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API token
   (design call); **#24** Discord webhooks (FR-20); **#25**

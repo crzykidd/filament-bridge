@@ -39,6 +39,8 @@ MAINTENANCE_NOTE = (
 CATEGORIES = [
     ("Sync engine & anti-ping-pong", [
         # Core engine mechanics, polling loop, snapshot management, scheduler
+        "2026-09-18 — OpenTag identity clear now propagates instead of being silently refilled, GitHub #89",
+        "2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90",
         "2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`, GitHub #87",
         "2026-08-08 — FDB 1.72.1–1.75.0 compat review; settings-bag size-cap edge filed as #86",
         "2026-08-02 — FDB 1.70.0–1.72.0 compat review; template write-guard gap filed as #85",

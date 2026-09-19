@@ -3093,8 +3093,8 @@ async def run_sync_cycle(
         for _loc in await filamentdb.get_locations():
             _lid = _loc.get("_id")
             _lname = _loc.get("name")
-            if _lid and _lname:
-                fdb_location_names[_lid] = _lname
+            if _lid and _lname and _lname.strip():
+                fdb_location_names[_lid] = _lname.strip()
     except Exception as exc:
         logger.warning("Cycle %s: could not fetch FDB locations (location sync skipped): %s", cycle_id, exc)
 
@@ -3851,9 +3851,13 @@ async def run_sync_cycle(
         fdb_location_now = fdb_loc_name
 
         # Both sides changed to the SAME name → no real divergence, converge silently.
+        # Spoolman never trims its free-text location, so compare stripped values —
+        # otherwise a both-sides-changed pair that agrees except for whitespace never
+        # registers as converged and queues a bogus conflict (GitHub #90). Conflict
+        # values / log rows / preview rows below still use the RAW sm/fdb_location_now.
         location_both_converged = (
             location_sm_changed and location_fdb_changed
-            and sm_location_now == fdb_location_now
+            and _norm_str(sm_location_now) == _norm_str(fdb_location_now)
         )
 
         if (location_sm_changed or location_fdb_changed) and not location_both_converged:
@@ -3906,11 +3910,17 @@ async def run_sync_cycle(
                     if not dry_run:
                         loc_id = await ensure_fdb_location(filamentdb, target) if target else None
                         await filamentdb.update_spool(fdb_filament_id, fdb_spool.id, {"locationId": loc_id})
+                        # ensure_fdb_location trims before lookup/create, so FDB actually
+                        # stores the trimmed name even when target carries edge whitespace —
+                        # both the per-cycle id→name map and the FDB-side snapshot below must
+                        # record that trimmed value, or the whitespace re-fires as a fresh
+                        # FDB-side change next cycle (GitHub #90).
+                        fdb_target = target.strip() if target else target
                         # If we created a new location, keep the per-cycle map current so a
                         # later pair (or next reference) resolves the same name → id.
-                        if loc_id and target:
-                            fdb_location_names[loc_id] = target
-                        _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, target, target)
+                        if loc_id and fdb_target:
+                            fdb_location_names[loc_id] = fdb_target
+                        _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, target, fdb_target)
                         _log(
                             db, cycle_id, "spoolman_to_filamentdb", "update", "spool",
                             spoolman_id=sm_spool.id, fdb_filament_id=fdb_filament_id,
@@ -4298,32 +4308,67 @@ async def _sync_opentag_identity(
     matprop_direction: str = "filamentdb_to_spoolman",
     matprop_policy: str = "manual",
 ) -> None:
-    """Bidirectional, stateless reconciliation of the OpenPrintTag identity.
+    """Bidirectional, baselined reconciliation of the OpenPrintTag identity.
 
     Keyed on the canonical ``openprinttag_uuid`` (slug carried alongside so the
-    pair stays consistent). Unlike the OPT material-setting extras, this pass
-    has no snapshot baseline — the two current values are compared directly on
-    every cycle, which is safe because filling the empty side makes both sides
-    equal, so the next cycle's comparison is a no-op (no ping-pong).
+    pair stays consistent). This pass used to be stateless — filling whichever
+    side was empty was safe only while "empty" could only mean *never linked*.
+    Filament DB 1.77.0 added a **Remove link** action, so "empty" can now also
+    mean *deliberately unlinked*, and a stateless comparison cannot tell the
+    two apart — it would silently refill a user's intentional clear on the
+    very next cycle (#89).
+
+    A per-side baseline (``_opt_uuid`` / ``_opt_slug`` merged into the same
+    filament-level ``Snapshot`` row the multicolor/cost passes use — see
+    ``_merge_snapshot``) now records the last identity value observed on each
+    side, so the two "empty" cases can be told apart:
+
+    | Baseline for that side | Current value             | Action |
+    |---|---|---|
+    | absent (never seen)    | side empty, other side set | **fill** — today's behavior, gated as today. Preserves #81. |
+    | had a value            | side now empty              | **deliberate clear -> propagate the removal to the other side**, direction-gated |
+    | both set and equal     | —                            | no-op; refresh baselines |
+    | both set and differ    | —                            | conflict, deduped, never overwrite — unchanged from today |
+    | both now empty         | —                            | converged; refresh baselines to empty, no writes |
+
+    Deliberately does **not** adopt the multicolor pass's "first sight ->
+    store baseline, no write" rule: a side that has never been filled would
+    then be baselined as empty and never filled, which would regress #81.
+    Absent baseline + empty side is always a fill, per the table above.
+
+    A clear on one side plus an independent change on the other (i.e. both
+    sides currently hold different, non-empty values) is a genuine
+    divergence, not a clear-to-propagate — it is routed through
+    ``resolve_sync_action`` exactly like the existing divergence case below.
 
     Per mapping (skipping synthetic container parents, which have no Spoolman
     counterpart):
-    - SM has an identity, FDB doesn't → merge into FDB's settings{} bag via the
-      APPROVED SCOPED EXCEPTION ``FilamentDBClient.merge_filament_settings()``
-      (only the two OpenTag identity keys — see CLAUDE.md / docs/decisions.md).
-      Gated on ``allow_sm_to_fdb``. This is the original one-way behavior.
-    - FDB has an identity, SM doesn't → write both keys into the Spoolman
-      filament's extra fields (the new leg). Gated on ``allow_fdb_to_sm``.
-    - Both set and equal → in sync, no-op.
-    - Both set and different → genuine divergence. Routed through
+    - SM has an identity, FDB doesn't, FDB never had one -> merge into FDB's
+      settings{} bag via the APPROVED SCOPED EXCEPTION
+      ``FilamentDBClient.merge_filament_settings()`` (only the two OpenTag
+      identity keys — see CLAUDE.md / docs/decisions.md). Gated on
+      ``allow_sm_to_fdb``. Original one-way fill behavior.
+    - FDB has an identity, SM doesn't, SM never had one -> write both keys
+      into the Spoolman filament's extra fields. Gated on ``allow_fdb_to_sm``.
+    - FDB had an identity and is now empty, SM still set -> a deliberate FDB
+      clear; blank the Spoolman extras to match, gated on ``allow_fdb_to_sm``.
+    - SM had an identity and is now empty, FDB still set -> a deliberate SM
+      clear; remove the two keys from FDB's settings{} bag via the scoped
+      ``remove_filament_settings_keys()``, gated on ``allow_sm_to_fdb``.
+    - Both set and equal -> in sync, refresh baselines.
+    - Both set and different -> genuine divergence. Routed through
       ``resolve_sync_action`` (same material_properties direction + conflict
       policy as the OPT material fields) — QUEUE_CONFLICT is deduped via
-      ``_has_open_conflict`` and NEVER auto-overwrites; PUSH_* actions perform
-      the same write as the corresponding one-sided leg above.
+      ``_has_open_conflict`` and NEVER auto-overwrites (baselines are still
+      refreshed to the current per-side values so a later one-sided clear is
+      correctly read as "had a value", not "never seen"); PUSH_* actions
+      perform the same write as the corresponding one-sided leg above.
+    - Both now empty -> converged (possibly right after a clear was
+      propagated); refresh baselines to empty, no writes.
 
-    Dry-run: no writes/queues — only ``result.preview`` rows (and increments to
-    ``result.updated``/``result.conflicts``) so the wizard/trigger dry run shows
-    the planned fills/conflicts.
+    Dry-run: no writes/queues/baseline mutations — only ``result.preview``
+    rows (and increments to ``result.updated``/``result.conflicts``) so the
+    wizard/trigger dry run shows the planned fills/clears/conflicts.
     """
     slug_field = _settings.spoolman_field_openprinttag_slug
     uuid_field = _settings.spoolman_field_openprinttag_uuid
@@ -4331,6 +4376,18 @@ async def _sync_opentag_identity(
 
     allow_fdb_to_sm = matprop_direction in ("two_way", "filamentdb_to_spoolman")
     allow_sm_to_fdb = matprop_direction in ("two_way", "spoolman_to_filamentdb")
+
+    def _store_baseline(
+        m: FilamentMapping, sm_uuid_val: Any, sm_slug_val: Any, fdb_uuid_val: Any, fdb_slug_val: Any
+    ) -> None:
+        _merge_snapshot(
+            db, "spoolman", "filament", str(m.spoolman_filament_id),
+            {"_opt_uuid": sm_uuid_val or "", "_opt_slug": sm_slug_val or ""},
+        )
+        _merge_snapshot(
+            db, "filamentdb", "filament", m.filamentdb_id,
+            {"_opt_uuid": fdb_uuid_val or "", "_opt_slug": fdb_slug_val or ""},
+        )
 
     async def _push_sm_to_fdb(m: FilamentMapping, sm_slug: Any, sm_uuid: Any, fdb_uuid: Any, label_name: Any) -> None:
         keys_to_merge: dict[str, str] = {}
@@ -4352,6 +4409,7 @@ async def _sync_opentag_identity(
             return
         try:
             await filamentdb.merge_filament_settings(m.filamentdb_id, keys_to_merge)
+            _store_baseline(m, sm_uuid, sm_slug, sm_uuid, sm_slug)  # FDB now matches SM
             _log(
                 db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -4390,6 +4448,7 @@ async def _sync_opentag_identity(
             return
         try:
             await spoolman.update_filament(m.spoolman_filament_id, {"extra": extra_payload})
+            _store_baseline(m, fdb_uuid, fdb_slug, fdb_uuid, fdb_slug)  # SM now matches FDB
             _log(
                 db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -4403,6 +4462,81 @@ async def _sync_opentag_identity(
             )
             _log(
                 db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, error_message=str(exc),
+            )
+            result.errors += 1
+
+    async def _clear_sm_side(m: FilamentMapping, old_sm_uuid: Any, label_name: Any) -> None:
+        """Propagate a deliberate FDB-side unlink to Spoolman: blank both SM extras."""
+        blank = encode_extra_value("")
+        if dry_run:
+            result.preview.append({
+                "action": "update", "entity_type": "filament",
+                "direction": "filamentdb_to_spoolman", "label": label_name,
+                "field": field_label, "old": old_sm_uuid, "new": None,
+                "reason": "OpenPrintTag link removed in Filament DB",
+                "spoolman_id": m.spoolman_filament_id,
+                "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+            })
+            result.updated += 1
+            return
+        try:
+            await spoolman.update_filament(
+                m.spoolman_filament_id, {"extra": {slug_field: blank, uuid_field: blank}}
+            )
+            _store_baseline(m, None, None, None, None)
+            _log(
+                db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, old_value=old_sm_uuid, new_value=None,
+            )
+            result.updated += 1
+        except Exception as exc:
+            logger.error(
+                "Cycle %s: opentag identity clear-propagation to SM filament %s failed: %s",
+                cycle_id, m.spoolman_filament_id, exc,
+            )
+            _log(
+                db, cycle_id, "filamentdb_to_spoolman", "error", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, error_message=str(exc),
+            )
+            result.errors += 1
+
+    async def _clear_fdb_side(m: FilamentMapping, old_fdb_uuid: Any, label_name: Any) -> None:
+        """Propagate a deliberate SM-side unlink to Filament DB via the scoped
+        settings{} exception (``remove_filament_settings_keys`` — the only
+        permitted removal path, touching only the two OpenTag identity keys)."""
+        if dry_run:
+            result.preview.append({
+                "action": "update", "entity_type": "filament",
+                "direction": "spoolman_to_filamentdb", "label": label_name,
+                "field": field_label, "old": old_fdb_uuid, "new": None,
+                "reason": "OpenPrintTag link removed in Spoolman",
+                "spoolman_id": m.spoolman_filament_id,
+                "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+            })
+            result.updated += 1
+            return
+        try:
+            await filamentdb.remove_filament_settings_keys(
+                m.filamentdb_id, ["openprinttag_slug", "openprinttag_uuid"]
+            )
+            _store_baseline(m, None, None, None, None)
+            _log(
+                db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                field_name=field_label, old_value=old_fdb_uuid, new_value=None,
+            )
+            result.updated += 1
+        except Exception as exc:
+            logger.warning(
+                "Cycle %s: opentag identity clear-propagation to FDB filament %s failed: %s",
+                cycle_id, m.filamentdb_id, exc,
+            )
+            _log(
+                db, cycle_id, "spoolman_to_filamentdb", "error", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
                 field_name=field_label, error_message=str(exc),
             )
@@ -4441,21 +4575,50 @@ async def _sync_opentag_identity(
         fdb_has = bool(fdb_uuid)
         label_name = getattr(sm_fil, "name", None) or getattr(fdb_detail, "name", None)
 
+        # Per-side baseline: the identity value we last observed on that side.
+        # Both "never stored a row" and "stored an explicit empty string" mean
+        # "this side has never held an identity" — bool() treats them alike.
+        sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
+        fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
+        sm_had = bool((sm_snap or {}).get("_opt_uuid"))
+        fdb_had = bool((fdb_snap or {}).get("_opt_uuid"))
+
         if not sm_has and not fdb_has:
+            # Converged (possibly just after a clear propagated) or never
+            # linked. Only worth a baseline write when a side that used to
+            # hold a value just settled to empty.
+            if (sm_had or fdb_had) and not dry_run:
+                _store_baseline(m, None, None, None, None)
             continue
 
         if sm_has and not fdb_has:
+            if fdb_had:
+                # FDB previously held this identity and is now empty — a
+                # deliberate FDB-side clear (#89). Propagate to Spoolman.
+                if allow_fdb_to_sm:
+                    await _clear_sm_side(m, sm_uuid, label_name)
+                continue
+            # FDB never had an identity — the original #81 fill behavior.
             if allow_sm_to_fdb:
                 await _push_sm_to_fdb(m, sm_slug, sm_uuid, fdb_uuid, label_name)
             continue
 
         if fdb_has and not sm_has:
+            if sm_had:
+                # SM previously held this identity and is now empty — a
+                # deliberate SM-side clear (#89). Propagate to Filament DB.
+                if allow_sm_to_fdb:
+                    await _clear_fdb_side(m, fdb_uuid, label_name)
+                continue
+            # SM never had an identity — the original one-way fill behavior.
             if allow_fdb_to_sm:
                 await _push_fdb_to_sm(m, fdb_slug, fdb_uuid, sm_uuid, label_name)
             continue
 
         # Both set.
         if sm_uuid == fdb_uuid:
+            if not dry_run:
+                _store_baseline(m, sm_uuid, sm_slug, fdb_uuid, fdb_slug)
             continue  # in sync — a slug-only mismatch is left alone
 
         # Genuine divergence — never auto-overwrite; route through the same
@@ -4491,6 +4654,10 @@ async def _sync_opentag_identity(
                         conflict_type="cross_system",
                     )
                     result.conflicts += 1
+                # Refresh baselines to the currently-observed values even
+                # though nothing was written, so a later one-sided clear is
+                # read as "had a value" rather than "never seen" (see table).
+                _store_baseline(m, sm_uuid, sm_slug, fdb_uuid, fdb_slug)
             continue
 
         if action == SyncAction.PUSH_FDB_TO_SM:
