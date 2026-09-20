@@ -9,6 +9,8 @@ GitHub release.
 
 ## [Unreleased]
 
+## [0.6.23] — 2026-09-20
+
 ### Security
 
 - **Frontend dependency bumps for two published advisories.** `react-router-dom` 6.30.4 → 6.30.6

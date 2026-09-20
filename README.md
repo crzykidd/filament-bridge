@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.22-blue" alt="version">
+  <img src="https://img.shields.io/badge/version-0.6.23-blue" alt="version">
 </p>
 
 Bidirectional sync between [Filament DB](https://github.com/hyiger/filament-db) and [Spoolman](https://github.com/Donkie/Spoolman) for 3D printing filament management.
@@ -69,6 +69,29 @@ There are **two ways to onboard**: just bridge the two systems and create your F
 ---
 
 ## What's New
+
+### v0.6.23 (2026-09-20)
+
+- **Fixed: a resolved disagreement no longer leaves a ghost in the Conflicts queue.** When both
+  systems ended up agreeing on their own — you fixed one side by hand, or the bridge propagated a
+  deliberate unlink — the conflict that had been raised for them stayed in the queue describing a
+  disagreement that no longer existed. Worse, while it sat there the bridge suppressed any *new*
+  conflict for that same record, so a later genuine disagreement went unreported. The bridge now
+  closes such a conflict by itself the moment it sees both sides holding the same value, across
+  every kind of cross-system conflict (weight, location, archive state, material properties and
+  OpenPrintTag identity). It only ever closes a conflict whose two values already match — it never
+  picks a winner for you. (#91)
+- **Fixed: unlinking an OpenPrintTag match no longer wipes out a link you just made elsewhere.**
+  If you removed the link in one system while adding a different one in the other within the same
+  sync interval, the removal won and silently blanked your new link. The bridge now recognises the
+  two opposing actions and raises a conflict for you to decide instead of picking a side. (#93)
+- **Fixed: OpenPrintTag identity conflicts can now actually be resolved.** Choosing a side on one
+  of these conflicts previously failed with an error — the conflict could be raised but never
+  cleared. Resolving one now writes your chosen link to both systems (or clears it from both, if
+  you resolve to an empty value). (#94)
+- **Security: two frontend dependency updates.** Picks up published fixes in `react-router-dom`
+  (an open redirect that could lead to XSS) and `postcss` (a build-time file-read flaw). No
+  change to how the app behaves.
 
 ### v0.6.22 (2026-09-19)
 
