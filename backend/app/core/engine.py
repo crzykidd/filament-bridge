@@ -37,6 +37,7 @@ from app.core.dates import spool_provenance_dates
 from app.core.differ import diff_spool_pair
 from app.core.fields import (
     OPENTAG_EXTRA_FIELDS,
+    OPENTAG_IDENTITY_FIELD,
     FieldMapping,
     get_fdb_field_value,
     resolve_effective_cost,
@@ -455,6 +456,67 @@ def _has_open_conflict(
     if conflict_type is not None:
         q = q.filter(Conflict.conflict_type == conflict_type)
     return q.first() is not None
+
+
+def _auto_resolve_converged_conflicts(
+    db: Session,
+    cycle_id: str,
+    entity_type: str,
+    field_name: str,
+    *,
+    spoolman_id: int | None = None,
+    fdb_filament_id: str | None = None,
+    fdb_spool_id: str | None = None,
+    converged_value: Any = None,
+) -> int:
+    """Auto-resolve any open ``cross_system`` conflict whose divergence has converged.
+
+    NARROW CONTRACT: call this ONLY from a point in the pass that has just
+    OBSERVED both sides' current values and found them equal (or both empty).
+    It closes a housekeeping row describing a divergence that no longer
+    exists — it never picks a winner for a real divergence, and it must never
+    be called from the ``QUEUE_CONFLICT`` path or any branch where the two
+    current values differ. Mirrors ``auto_stale_purge`` /
+    ``auto_resolved_reappeared`` in spirit: the user is not required to act on
+    an auto-resolved row.
+
+    Matches ``_has_open_conflict``'s filter shape exactly (same optional-id
+    pattern) so the two stay in lockstep for whichever ids a given pass has
+    on hand. Returns the number of conflicts resolved.
+    """
+    q = (
+        db.query(Conflict)
+        .filter(
+            Conflict.resolved_at.is_(None),
+            Conflict.conflict_type == "cross_system",
+            Conflict.entity_type == entity_type,
+            Conflict.field_name == field_name,
+        )
+    )
+    if spoolman_id is not None:
+        q = q.filter(Conflict.spoolman_id == spoolman_id)
+    if fdb_filament_id is not None:
+        q = q.filter(Conflict.filamentdb_filament_id == fdb_filament_id)
+    if fdb_spool_id is not None:
+        q = q.filter(Conflict.filamentdb_spool_id == fdb_spool_id)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    resolved_count = 0
+    for stale in q.all():
+        stale.resolved_at = now
+        stale.resolution = "auto_resolved_converged"
+        if converged_value is not None:
+            stale.resolved_value = json.dumps(converged_value)
+        _log(
+            db, cycle_id, "auto", "info", entity_type,
+            spoolman_id=spoolman_id,
+            fdb_filament_id=fdb_filament_id,
+            fdb_spool_id=fdb_spool_id,
+            field_name=field_name,
+            error_message="auto-resolved conflict (both sides observed equal — divergence converged)",
+        )
+        resolved_count += 1
+    return resolved_count
 
 
 # ---------------------------------------------------------------------------
@@ -1488,6 +1550,11 @@ async def _sync_material_props(
             # Both changed into agreement → refresh baseline silently.
             if sm_changed and fdb_changed and sm_now == fdb_now:
                 if not dry_run:
+                    _auto_resolve_converged_conflicts(
+                        db, cycle_id, "filament", label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        converged_value=sm_now,
+                    )
                     _store(sm_now, fdb_now)
                 continue
 
@@ -1692,6 +1759,11 @@ async def _sync_material_scalars(
             # Both changed into agreement → refresh baseline silently.
             if sm_changed and fdb_changed and sm_now == fdb_now:
                 if not dry_run:
+                    _auto_resolve_converged_conflicts(
+                        db, cycle_id, "filament", label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        converged_value=sm_now,
+                    )
                     _store(sm_now, fdb_now)
                 continue
 
@@ -2001,6 +2073,11 @@ async def _sync_opentag_material_fields(
             # Both changed into agreement → refresh baseline silently.
             if sm_changed and fdb_changed and sm_now == fdb_now:
                 if not dry_run:
+                    _auto_resolve_converged_conflicts(
+                        db, cycle_id, "filament", ef.label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        converged_value=sm_now,
+                    )
                     _store(sm_now, fdb_now)
                 continue
 
@@ -3834,6 +3911,11 @@ async def run_sync_cycle(
         elif both_changed_converged and not dry_run:
             # Both sides flipped to the same state in one cycle — no write needed, just
             # converge the snapshot lifecycle bits so it doesn't re-fire next cycle.
+            _auto_resolve_converged_conflicts(
+                db, cycle_id, "spool", "lifecycle",
+                spoolman_id=sm_spool.id, fdb_spool_id=fdb_spool.id,
+                converged_value=sm_archived_now,
+            )
             _refresh_lifecycle_snapshots(db, sm_spool.id, fdb_spool.id, sm_archived_now, fdb_retired_now)
 
         # ---- Location sync ----
@@ -3996,6 +4078,11 @@ async def run_sync_cycle(
 
         elif location_both_converged and not dry_run:
             # Both sides changed to the same name in one cycle — no write, just converge.
+            _auto_resolve_converged_conflicts(
+                db, cycle_id, "spool", "location",
+                spoolman_id=sm_spool.id, fdb_spool_id=fdb_spool.id,
+                converged_value=sm_location_now,
+            )
             _refresh_location_snapshots(db, sm_spool.id, fdb_spool.id, sm_location_now, fdb_location_now)
 
         # ---- Field mapping sync (FR-11) ----
@@ -4323,23 +4410,44 @@ async def _sync_opentag_identity(
     ``_merge_snapshot``) now records the last identity value observed on each
     side, so the two "empty" cases can be told apart:
 
-    | Baseline for that side | Current value             | Action |
-    |---|---|---|
-    | absent (never seen)    | side empty, other side set | **fill** — today's behavior, gated as today. Preserves #81. |
-    | had a value            | side now empty              | **deliberate clear -> propagate the removal to the other side**, direction-gated |
-    | both set and equal     | —                            | no-op; refresh baselines |
-    | both set and differ    | —                            | conflict, deduped, never overwrite — unchanged from today |
-    | both now empty         | —                            | converged; refresh baselines to empty, no writes |
+    | Baseline for that side | Current value             | Surviving side | Action |
+    |---|---|---|---|
+    | absent (never seen)    | side empty, other side set | —              | **fill** — today's behavior, gated as today. Preserves #81. |
+    | had a value            | side now empty              | unchanged from its own baseline | **deliberate clear -> propagate the removal to the other side**, direction-gated |
+    | had a value            | side now empty              | ALSO moved off its own baseline | **clear-plus-relink race (#93)** -> not a clear to propagate; routed through ``resolve_sync_action`` like a genuine divergence, baselines left untouched (see B4 rationale below) |
+    | both set and equal     | —                            | —              | no-op; auto-resolve any open conflict for this pair (#91), refresh baselines |
+    | both set and differ    | —                            | —              | conflict, deduped, never overwrite — unchanged from today |
+    | both now empty         | —                            | —              | converged; auto-resolve any open conflict for this pair (#91), refresh baselines to empty, no writes |
 
     Deliberately does **not** adopt the multicolor pass's "first sight ->
     store baseline, no write" rule: a side that has never been filled would
     then be baselined as empty and never filled, which would regress #81.
     Absent baseline + empty side is always a fill, per the table above.
 
-    A clear on one side plus an independent change on the other (i.e. both
-    sides currently hold different, non-empty values) is a genuine
-    divergence, not a clear-to-propagate — it is routed through
-    ``resolve_sync_action`` exactly like the existing divergence case below.
+    A clear on one side plus an independent change on the other is a genuine
+    divergence, not a clear-to-propagate — it is routed through the shared
+    nested ``_resolve_divergence`` helper, same as the both-set-and-differ
+    case. The two cases differ only in ``refresh_baselines``: the
+    both-set-and-differ case refreshes both baselines to the observed values
+    (today's behavior — a later one-sided clear must read as "had a value");
+    the clear-plus-relink race (#93) leaves BOTH baselines untouched, which
+    is LOAD-BEARING (see the call-site comments and docs/decisions.md
+    2026-09-20) — refreshing to the observed values would make the cleared
+    side read as "never linked" next cycle and silently refill it; refreshing
+    only the surviving side would make it read as "unchanged" next cycle and
+    silently propagate the clear. Leaving both alone keeps the pair stably on
+    the conflict path (deduped by ``_has_open_conflict``) until a human
+    resolves it via the conflict UI (#94), which writes both sides and
+    refreshes both baselines itself.
+
+    Any open ``cross_system`` conflict for this pair is auto-resolved
+    (``_auto_resolve_converged_conflicts``, resolution
+    ``auto_resolved_converged``) the moment the pass itself observes both
+    sides equal — whether that's a pre-existing agreement, a push making them
+    agree, or a propagated clear converging both to empty — so a stale
+    conflict describing a divergence that no longer exists does not linger
+    and block future ones (#91). This never picks a winner: it only fires
+    where the pass has just observed the two current values are equal.
 
     Per mapping (skipping synthetic container parents, which have no Spoolman
     counterpart):
@@ -4350,21 +4458,32 @@ async def _sync_opentag_identity(
       ``allow_sm_to_fdb``. Original one-way fill behavior.
     - FDB has an identity, SM doesn't, SM never had one -> write both keys
       into the Spoolman filament's extra fields. Gated on ``allow_fdb_to_sm``.
-    - FDB had an identity and is now empty, SM still set -> a deliberate FDB
-      clear; blank the Spoolman extras to match, gated on ``allow_fdb_to_sm``.
-    - SM had an identity and is now empty, FDB still set -> a deliberate SM
-      clear; remove the two keys from FDB's settings{} bag via the scoped
-      ``remove_filament_settings_keys()``, gated on ``allow_sm_to_fdb``.
-    - Both set and equal -> in sync, refresh baselines.
+    - FDB had an identity and is now empty, SM still set, SM unchanged from
+      its own baseline -> a deliberate FDB clear; blank the Spoolman extras
+      to match, gated on ``allow_fdb_to_sm``.
+    - FDB had an identity and is now empty, SM still set, SM ALSO changed
+      from its own baseline (#93) -> clear-plus-relink race; routed through
+      ``_resolve_divergence`` with ``refresh_baselines=False`` instead of
+      propagating.
+    - SM had an identity and is now empty, FDB still set, FDB unchanged from
+      its own baseline -> a deliberate SM clear; remove the two keys from
+      FDB's settings{} bag via the scoped ``remove_filament_settings_keys()``,
+      gated on ``allow_sm_to_fdb``.
+    - SM had an identity and is now empty, FDB still set, FDB ALSO changed
+      from its own baseline (#93) -> mirror of the case above.
+    - Both set and equal -> in sync; auto-resolve any open conflict (#91),
+      refresh baselines.
     - Both set and different -> genuine divergence. Routed through
-      ``resolve_sync_action`` (same material_properties direction + conflict
-      policy as the OPT material fields) — QUEUE_CONFLICT is deduped via
-      ``_has_open_conflict`` and NEVER auto-overwrites (baselines are still
-      refreshed to the current per-side values so a later one-sided clear is
-      correctly read as "had a value", not "never seen"); PUSH_* actions
-      perform the same write as the corresponding one-sided leg above.
+      ``_resolve_divergence`` -> ``resolve_sync_action`` (same
+      material_properties direction + conflict policy as the OPT material
+      fields) — QUEUE_CONFLICT is deduped via ``_has_open_conflict`` and
+      NEVER auto-overwrites (baselines are still refreshed to the current
+      per-side values so a later one-sided clear is correctly read as "had a
+      value", not "never seen"); PUSH_* actions perform the same write as the
+      corresponding one-sided leg above.
     - Both now empty -> converged (possibly right after a clear was
-      propagated); refresh baselines to empty, no writes.
+      propagated); auto-resolve any open conflict (#91), refresh baselines to
+      empty, no writes.
 
     Dry-run: no writes/queues/baseline mutations — only ``result.preview``
     rows (and increments to ``result.updated``/``result.conflicts``) so the
@@ -4372,7 +4491,7 @@ async def _sync_opentag_identity(
     """
     slug_field = _settings.spoolman_field_openprinttag_slug
     uuid_field = _settings.spoolman_field_openprinttag_uuid
-    field_label = "OpenPrintTag identity"
+    field_label = OPENTAG_IDENTITY_FIELD
 
     allow_fdb_to_sm = matprop_direction in ("two_way", "filamentdb_to_spoolman")
     allow_sm_to_fdb = matprop_direction in ("two_way", "spoolman_to_filamentdb")
@@ -4410,6 +4529,11 @@ async def _sync_opentag_identity(
         try:
             await filamentdb.merge_filament_settings(m.filamentdb_id, keys_to_merge)
             _store_baseline(m, sm_uuid, sm_slug, sm_uuid, sm_slug)  # FDB now matches SM
+            _auto_resolve_converged_conflicts(
+                db, cycle_id, "filament", field_label,
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                converged_value=sm_uuid,
+            )
             _log(
                 db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -4449,6 +4573,11 @@ async def _sync_opentag_identity(
         try:
             await spoolman.update_filament(m.spoolman_filament_id, {"extra": extra_payload})
             _store_baseline(m, fdb_uuid, fdb_slug, fdb_uuid, fdb_slug)  # SM now matches FDB
+            _auto_resolve_converged_conflicts(
+                db, cycle_id, "filament", field_label,
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                converged_value=fdb_uuid,
+            )
             _log(
                 db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -4486,6 +4615,11 @@ async def _sync_opentag_identity(
                 m.spoolman_filament_id, {"extra": {slug_field: blank, uuid_field: blank}}
             )
             _store_baseline(m, None, None, None, None)
+            _auto_resolve_converged_conflicts(
+                db, cycle_id, "filament", field_label,
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                converged_value=None,
+            )
             _log(
                 db, cycle_id, "filamentdb_to_spoolman", "update", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -4524,6 +4658,11 @@ async def _sync_opentag_identity(
                 m.filamentdb_id, ["openprinttag_slug", "openprinttag_uuid"]
             )
             _store_baseline(m, None, None, None, None)
+            _auto_resolve_converged_conflicts(
+                db, cycle_id, "filament", field_label,
+                spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                converged_value=None,
+            )
             _log(
                 db, cycle_id, "spoolman_to_filamentdb", "update", "filament",
                 spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
@@ -4541,6 +4680,79 @@ async def _sync_opentag_identity(
                 field_name=field_label, error_message=str(exc),
             )
             result.errors += 1
+
+    async def _resolve_divergence(
+        m: FilamentMapping, sm_slug: Any, sm_uuid: Any, fdb_slug: Any, fdb_uuid: Any, label_name: Any,
+        *, reason: str, refresh_baselines: bool,
+    ) -> None:
+        """Route a genuine OpenPrintTag identity divergence through the same
+        direction/policy resolver as every other bidirectional pass. Never
+        auto-overwrites: ``QUEUE_CONFLICT`` is deduped via ``_has_open_conflict``
+        exactly as before. Shared by the both-set-and-differ case (today's
+        behavior, ``refresh_baselines=True``) and the clear-plus-relink race
+        (#93, ``refresh_baselines=False`` — see the call sites below for why
+        that is load-bearing).
+        """
+        action = resolve_sync_action(
+            sm_changed=True, fdb_changed=True,
+            direction=matprop_direction, policy=matprop_policy,
+        )
+
+        if action == SyncAction.NOOP:
+            return
+
+        if action == SyncAction.QUEUE_CONFLICT:
+            if dry_run:
+                result.preview.append({
+                    "action": "conflict", "entity_type": "filament", "direction": None,
+                    "label": label_name, "field": field_label, "old": sm_uuid, "new": fdb_uuid,
+                    "reason": reason,
+                    "spoolman_id": m.spoolman_filament_id,
+                    "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
+                })
+                result.conflicts += 1
+            else:
+                if not _has_open_conflict(
+                    db, "filament", field_label,
+                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                    conflict_type="cross_system",
+                ):
+                    _queue_conflict(
+                        db, cycle_id, "filament", field_label,
+                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                        spoolman_value=sm_uuid, filamentdb_value=fdb_uuid,
+                        conflict_type="cross_system",
+                    )
+                    result.conflicts += 1
+                if refresh_baselines:
+                    # Refresh baselines to the currently-observed values even
+                    # though nothing was written, so a later one-sided clear is
+                    # read as "had a value" rather than "never seen" (see table).
+                    _store_baseline(m, sm_uuid, sm_slug, fdb_uuid, fdb_slug)
+                # else: refresh_baselines=False is LOAD-BEARING (#93) — see the
+                # clear-plus-relink call sites below for why both baselines must
+                # stay untouched until a human resolves this via the conflict UI.
+            return
+
+        # A PUSH whose WINNING side is empty is the clear-plus-relink race
+        # (#93) resolved by policy/direction in favour of the side that was
+        # unlinked — the winner's decision is "no link", so propagate the
+        # removal. ``_push_*`` would build an empty payload and silently
+        # no-op here, leaving the pair stuck forever with no conflict and no
+        # log row; route it to the matching clear helper instead.
+        if action == SyncAction.PUSH_FDB_TO_SM:
+            if fdb_uuid:
+                await _push_fdb_to_sm(m, fdb_slug, fdb_uuid, sm_uuid, label_name)
+            else:
+                await _clear_sm_side(m, sm_uuid, label_name)
+            return
+
+        if action == SyncAction.PUSH_SM_TO_FDB:
+            if sm_uuid:
+                await _push_sm_to_fdb(m, sm_slug, sm_uuid, fdb_uuid, label_name)
+            else:
+                await _clear_fdb_side(m, fdb_uuid, label_name)
+            return
 
     for m in filament_mappings:
         # Synthetic container parents have no Spoolman counterpart — skip.
@@ -4578,23 +4790,49 @@ async def _sync_opentag_identity(
         # Per-side baseline: the identity value we last observed on that side.
         # Both "never stored a row" and "stored an explicit empty string" mean
         # "this side has never held an identity" — bool() treats them alike.
+        # The baseline VALUES (not just the booleans) are kept too: the two
+        # clear branches below must compare the *surviving* side's current
+        # value against its own baseline to tell a genuine one-sided clear
+        # apart from "cleared here AND changed there" (#93).
         sm_snap = _get_snapshot(db, "spoolman", "filament", str(m.spoolman_filament_id))
         fdb_snap = _get_snapshot(db, "filamentdb", "filament", m.filamentdb_id)
-        sm_had = bool((sm_snap or {}).get("_opt_uuid"))
-        fdb_had = bool((fdb_snap or {}).get("_opt_uuid"))
+        sm_base = (sm_snap or {}).get("_opt_uuid") or ""
+        fdb_base = (fdb_snap or {}).get("_opt_uuid") or ""
+        sm_had = bool(sm_base)
+        fdb_had = bool(fdb_base)
 
         if not sm_has and not fdb_has:
             # Converged (possibly just after a clear propagated) or never
             # linked. Only worth a baseline write when a side that used to
             # hold a value just settled to empty.
             if (sm_had or fdb_had) and not dry_run:
+                _auto_resolve_converged_conflicts(
+                    db, cycle_id, "filament", field_label,
+                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                    converged_value=None,
+                )
                 _store_baseline(m, None, None, None, None)
             continue
 
         if sm_has and not fdb_has:
             if fdb_had:
                 # FDB previously held this identity and is now empty — a
-                # deliberate FDB-side clear (#89). Propagate to Spoolman.
+                # deliberate FDB-side clear (#89) UNLESS Spoolman's surviving
+                # value has ALSO moved off its own baseline in the same
+                # interval (#93): FDB was unlinked AND Spoolman was re-linked
+                # (possibly to a new material) — two opposing actions, not a
+                # clear to propagate. Propagating here would silently blank
+                # the re-link with no conflict.
+                if (sm_uuid or "") != sm_base:
+                    await _resolve_divergence(
+                        m, sm_slug, sm_uuid, fdb_slug, fdb_uuid, label_name,
+                        reason=(
+                            "OpenPrintTag link removed in Filament DB while "
+                            "Spoolman was re-linked"
+                        ),
+                        refresh_baselines=False,
+                    )
+                    continue
                 if allow_fdb_to_sm:
                     await _clear_sm_side(m, sm_uuid, label_name)
                 continue
@@ -4606,7 +4844,19 @@ async def _sync_opentag_identity(
         if fdb_has and not sm_has:
             if sm_had:
                 # SM previously held this identity and is now empty — a
-                # deliberate SM-side clear (#89). Propagate to Filament DB.
+                # deliberate SM-side clear (#89) UNLESS Filament DB's
+                # surviving value has ALSO moved off its own baseline (#93,
+                # mirror of the branch above).
+                if (fdb_uuid or "") != fdb_base:
+                    await _resolve_divergence(
+                        m, sm_slug, sm_uuid, fdb_slug, fdb_uuid, label_name,
+                        reason=(
+                            "OpenPrintTag link removed in Spoolman while "
+                            "Filament DB was re-linked"
+                        ),
+                        refresh_baselines=False,
+                    )
+                    continue
                 if allow_sm_to_fdb:
                     await _clear_fdb_side(m, fdb_uuid, label_name)
                 continue
@@ -4618,51 +4868,18 @@ async def _sync_opentag_identity(
         # Both set.
         if sm_uuid == fdb_uuid:
             if not dry_run:
+                _auto_resolve_converged_conflicts(
+                    db, cycle_id, "filament", field_label,
+                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
+                    converged_value=sm_uuid,
+                )
                 _store_baseline(m, sm_uuid, sm_slug, fdb_uuid, fdb_slug)
             continue  # in sync — a slug-only mismatch is left alone
 
         # Genuine divergence — never auto-overwrite; route through the same
         # direction/policy resolver as every other bidirectional pass.
-        action = resolve_sync_action(
-            sm_changed=True, fdb_changed=True,
-            direction=matprop_direction, policy=matprop_policy,
+        await _resolve_divergence(
+            m, sm_slug, sm_uuid, fdb_slug, fdb_uuid, label_name,
+            reason="both sides have a different OpenPrintTag identity",
+            refresh_baselines=True,
         )
-
-        if action == SyncAction.NOOP:
-            continue
-
-        if action == SyncAction.QUEUE_CONFLICT:
-            if dry_run:
-                result.preview.append({
-                    "action": "conflict", "entity_type": "filament", "direction": None,
-                    "label": label_name, "field": field_label, "old": sm_uuid, "new": fdb_uuid,
-                    "reason": "both sides have a different OpenPrintTag identity",
-                    "spoolman_id": m.spoolman_filament_id,
-                    "fdb_filament_id": m.filamentdb_id, "fdb_spool_id": None,
-                })
-                result.conflicts += 1
-            else:
-                if not _has_open_conflict(
-                    db, "filament", field_label,
-                    spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
-                    conflict_type="cross_system",
-                ):
-                    _queue_conflict(
-                        db, cycle_id, "filament", field_label,
-                        spoolman_id=m.spoolman_filament_id, fdb_filament_id=m.filamentdb_id,
-                        spoolman_value=sm_uuid, filamentdb_value=fdb_uuid,
-                        conflict_type="cross_system",
-                    )
-                    result.conflicts += 1
-                # Refresh baselines to the currently-observed values even
-                # though nothing was written, so a later one-sided clear is
-                # read as "had a value" rather than "never seen" (see table).
-                _store_baseline(m, sm_uuid, sm_slug, fdb_uuid, fdb_slug)
-            continue
-
-        if action == SyncAction.PUSH_FDB_TO_SM:
-            await _push_fdb_to_sm(m, fdb_slug, fdb_uuid, sm_uuid, label_name)
-            continue
-
-        if action == SyncAction.PUSH_SM_TO_FDB:
-            await _push_sm_to_fdb(m, sm_slug, sm_uuid, fdb_uuid, label_name)

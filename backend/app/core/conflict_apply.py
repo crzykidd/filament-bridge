@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.engine import _log, _merge_snapshot
-from app.core.fields import OPENTAG_EXTRA_FIELDS
+from app.core.fields import OPENTAG_EXTRA_FIELDS, OPENTAG_IDENTITY_FIELD
 from app.core.weight_ops import apply_absolute_weight
 from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping
@@ -688,6 +688,9 @@ async def apply_cross_system_conflict(
     if field == "cost":
         return await _apply_cost(conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id)
 
+    if field == OPENTAG_IDENTITY_FIELD:
+        return await _apply_opentag_identity(conflict, resolution, manual_value, db, spoolman, filamentdb, cycle_id)
+
     if field in _TEMP_LABELS:
         fdb_attr, sm_field = _TEMP_LABELS[field]
         return await _apply_temperature(
@@ -934,6 +937,96 @@ async def _apply_opentag_field(
     )
     _resolve_conflict_row(conflict, resolution, value, db)
     return value
+
+
+async def _apply_opentag_identity(
+    conflict: Conflict, resolution: str, manual_value: Any,
+    db: Session, spoolman: SpoolmanClient, filamentdb: FilamentDBClient, cycle_id: str,
+) -> Any:
+    """Converge an OpenPrintTag identity conflict (GitHub #94).
+
+    The conflict row stores only the canonical ``openprinttag_uuid`` on each
+    side.  The slug that accompanies the chosen uuid is recovered from a LIVE
+    fetch of both sides (the conflict row predates whichever slug the chosen
+    side currently carries), so the uuid/slug pair stays consistent.  A
+    manual value — or a stale conflict row — that matches neither side's
+    live uuid writes the uuid alone rather than inventing a slug.
+
+    Writes BOTH sides idempotently via the same primitives the engine pass
+    uses: Spoolman extras (blanked with ``encode_extra_value("")`` when the
+    chosen value is empty), and Filament DB via the APPROVED SCOPED
+    EXCEPTION ``merge_filament_settings()`` / ``remove_filament_settings_keys()``
+    — those two keys only.  Refreshes BOTH ``_opt_uuid``/``_opt_slug``
+    snapshot baselines to the converged value (same shape as the engine's
+    ``_store_baseline``), so the next cycle sees agreement (anti-ping-pong)
+    and a later one-sided clear still reads as "had a value" (#89/#91/#93).
+
+    Upstream write failures propagate — the endpoint maps them to 502 and
+    leaves the conflict open.
+    """
+    from app.config import settings as _settings
+    from app.schemas.spoolman import decode_extra_value, encode_extra_value
+
+    sm_fil_id: int = conflict.spoolman_id  # type: ignore[assignment]
+    fdb_fil_id: str = conflict.filamentdb_filament_id  # type: ignore[assignment]
+    chosen_uuid = _resolve_value(conflict, resolution, manual_value) or None
+
+    slug_field = _settings.spoolman_field_openprinttag_slug
+    uuid_field = _settings.spoolman_field_openprinttag_uuid
+
+    # Recover the slug that accompanies the chosen uuid from a live fetch of
+    # both sides — the conflict row stores only the uuid, and the pair must
+    # stay consistent. Neither side matching (a stale conflict, or a manual
+    # value that matches neither) leaves chosen_slug None: write the uuid alone.
+    chosen_slug: str | None = None
+    if chosen_uuid:
+        sm_fil = await spoolman.get_filament(sm_fil_id)
+        sm_extra = getattr(sm_fil, "extra", None) or {}
+        sm_live_uuid = decode_extra_value(sm_extra.get(uuid_field))
+        sm_live_slug = decode_extra_value(sm_extra.get(slug_field))
+        if sm_live_uuid == chosen_uuid and isinstance(sm_live_slug, str):
+            chosen_slug = sm_live_slug
+        else:
+            fdb_detail = await filamentdb.get_filament(fdb_fil_id)
+            fdb_settings = getattr(fdb_detail, "settings", None) or {}
+            fdb_live_uuid = fdb_settings.get("openprinttag_uuid")
+            fdb_live_slug = fdb_settings.get("openprinttag_slug")
+            if fdb_live_uuid == chosen_uuid and isinstance(fdb_live_slug, str):
+                chosen_slug = fdb_live_slug
+
+    if chosen_uuid:
+        sm_payload: dict[str, str] = {uuid_field: encode_extra_value(chosen_uuid)}
+        if chosen_slug:
+            sm_payload[slug_field] = encode_extra_value(chosen_slug)
+        await spoolman.update_filament(sm_fil_id, {"extra": sm_payload})
+
+        fdb_keys: dict[str, str] = {"openprinttag_uuid": chosen_uuid}
+        if chosen_slug:
+            fdb_keys["openprinttag_slug"] = chosen_slug
+        await filamentdb.merge_filament_settings(fdb_fil_id, fdb_keys)
+    else:
+        blank = encode_extra_value("")
+        await spoolman.update_filament(sm_fil_id, {"extra": {slug_field: blank, uuid_field: blank}})
+        await filamentdb.remove_filament_settings_keys(
+            fdb_fil_id, ["openprinttag_slug", "openprinttag_uuid"]
+        )
+
+    _merge_snapshot(
+        db, "spoolman", "filament", str(sm_fil_id),
+        {"_opt_uuid": chosen_uuid or "", "_opt_slug": chosen_slug or ""},
+    )
+    _merge_snapshot(
+        db, "filamentdb", "filament", fdb_fil_id,
+        {"_opt_uuid": chosen_uuid or "", "_opt_slug": chosen_slug or ""},
+    )
+
+    _log(
+        db, cycle_id, "conflict_apply", "update", "filament",
+        spoolman_id=sm_fil_id, fdb_filament_id=fdb_fil_id,
+        field_name=OPENTAG_IDENTITY_FIELD, new_value=chosen_uuid,
+    )
+    _resolve_conflict_row(conflict, resolution, chosen_uuid, db)
+    return chosen_uuid
 
 
 def _fdb_field_payload_rmw(fdb_detail: Any, fdb_path: str, value: Any) -> dict:

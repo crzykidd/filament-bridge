@@ -27,6 +27,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import conflicts as conflicts_router
 from app.api.config import set_config_value
+from app.core.conflict_apply import apply_cross_system_conflict
 from app.core.engine import run_sync_cycle
 from app.db import Base, get_db
 from app.models.config import seed_defaults
@@ -34,7 +35,7 @@ from app.models.conflict import Conflict
 from app.models.mapping import FilamentMapping, SpoolMapping
 from app.models.snapshot import Snapshot
 from app.schemas.filamentdb import FDBFilament, FDBFilamentDetail
-from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor
+from app.schemas.spoolman import SpoolmanFilament, SpoolmanSpool, SpoolmanVendor, encode_extra_value
 
 CYCLE1 = "xres-c1"
 CYCLE2 = "xres-c2"
@@ -676,3 +677,157 @@ async def test_field_mapping_resolve_converges_no_requeue():
         r2 = await run_sync_cycle(db, spoolman, fdb, dry_run=False, cycle_id=CYCLE2)
     assert r2.conflicts == 0
     assert not _open_conflicts(db)
+
+
+# ===========================================================================
+# OpenPrintTag identity (filament) — GitHub #94, apply_cross_system_conflict
+# had no branch for this field until now.  Exercised directly against
+# ``apply_cross_system_conflict`` (rather than a full engine cycle) since the
+# queueing side of this conflict is already covered end-to-end by
+# test_engine_opentag_identity.py.
+# ===========================================================================
+
+IDENTITY_SM_FIL_ID = 70
+IDENTITY_FDB_FIL_ID = "fil-identity"
+SLUG_FIELD = "openprinttag_slug"
+UUID_FIELD = "openprinttag_uuid"
+
+
+def _identity_conflict(sm_uuid: str | None, fdb_uuid: str | None) -> Conflict:
+    return Conflict(
+        entity_type="filament",
+        spoolman_id=IDENTITY_SM_FIL_ID,
+        filamentdb_filament_id=IDENTITY_FDB_FIL_ID,
+        field_name="OpenPrintTag identity",
+        spoolman_value=json.dumps(sm_uuid) if sm_uuid is not None else None,
+        filamentdb_value=json.dumps(fdb_uuid) if fdb_uuid is not None else None,
+        conflict_type="cross_system",
+    )
+
+
+def _identity_sm_filament(uuid: str | None, slug: str | None) -> SpoolmanFilament:
+    return SpoolmanFilament(
+        id=IDENTITY_SM_FIL_ID, name="Identity PLA", vendor=SpoolmanVendor(id=1, name="E"),
+        extra={
+            UUID_FIELD: encode_extra_value(uuid or ""),
+            SLUG_FIELD: encode_extra_value(slug or ""),
+        },
+    )
+
+
+def _identity_fdb_detail(uuid: str | None, slug: str | None) -> FDBFilamentDetail:
+    return FDBFilamentDetail.model_validate({
+        "_id": IDENTITY_FDB_FIL_ID, "name": "Identity PLA",
+        "settings": {"openprinttag_uuid": uuid, "openprinttag_slug": slug} if uuid else None,
+        "spools": [],
+    })
+
+
+def _identity_baseline(db, source: str, entity_id: str) -> dict:
+    row = db.query(Snapshot).filter_by(source=source, entity_type="filament", entity_id=entity_id).first()
+    return json.loads(row.data) if row else {}
+
+
+@pytest.mark.asyncio
+async def test_identity_apply_resolve_to_spoolman():
+    """resolve=spoolman: Spoolman's uuid+slug win, written to BOTH sides,
+    both baselines refreshed, conflict resolved."""
+    db = _make_db()
+    conflict = _identity_conflict("uuid-SM", "uuid-FDB")
+    db.add(conflict)
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=[_identity_sm_filament("uuid-SM", "slug-sm")])
+    fdb = _fake_filamentdb(detail=_identity_fdb_detail("uuid-FDB", "slug-fdb"))
+
+    value = await apply_cross_system_conflict(conflict, "spoolman", None, db, spoolman, fdb)
+
+    assert value == "uuid-SM"
+    spoolman.update_filament.assert_awaited_with(
+        IDENTITY_SM_FIL_ID,
+        {"extra": {UUID_FIELD: encode_extra_value("uuid-SM"), SLUG_FIELD: encode_extra_value("slug-sm")}},
+    )
+    fdb.merge_filament_settings.assert_awaited_with(
+        IDENTITY_FDB_FIL_ID, {"openprinttag_uuid": "uuid-SM", "openprinttag_slug": "slug-sm"},
+    )
+    fdb.remove_filament_settings_keys.assert_not_called()
+
+    sm_base = _identity_baseline(db, "spoolman", str(IDENTITY_SM_FIL_ID))
+    fdb_base = _identity_baseline(db, "filamentdb", IDENTITY_FDB_FIL_ID)
+    assert sm_base["_opt_uuid"] == "uuid-SM" and sm_base["_opt_slug"] == "slug-sm"
+    assert fdb_base["_opt_uuid"] == "uuid-SM" and fdb_base["_opt_slug"] == "slug-sm"
+
+    assert conflict.resolved_at is not None
+    assert conflict.resolution == "spoolman"
+    assert json.loads(conflict.resolved_value) == "uuid-SM"
+
+
+@pytest.mark.asyncio
+async def test_identity_apply_resolve_to_filamentdb():
+    """resolve=filamentdb: Filament DB's uuid+slug win, written to BOTH
+    sides via the scoped ``merge_filament_settings`` exception, both
+    baselines refreshed, conflict resolved."""
+    db = _make_db()
+    conflict = _identity_conflict("uuid-SM", "uuid-FDB")
+    db.add(conflict)
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=[_identity_sm_filament("uuid-SM", "slug-sm")])
+    fdb = _fake_filamentdb(detail=_identity_fdb_detail("uuid-FDB", "slug-fdb"))
+
+    value = await apply_cross_system_conflict(conflict, "filamentdb", None, db, spoolman, fdb)
+
+    assert value == "uuid-FDB"
+    spoolman.update_filament.assert_awaited_with(
+        IDENTITY_SM_FIL_ID,
+        {"extra": {UUID_FIELD: encode_extra_value("uuid-FDB"), SLUG_FIELD: encode_extra_value("slug-fdb")}},
+    )
+    fdb.merge_filament_settings.assert_awaited_with(
+        IDENTITY_FDB_FIL_ID, {"openprinttag_uuid": "uuid-FDB", "openprinttag_slug": "slug-fdb"},
+    )
+    fdb.remove_filament_settings_keys.assert_not_called()
+
+    sm_base = _identity_baseline(db, "spoolman", str(IDENTITY_SM_FIL_ID))
+    fdb_base = _identity_baseline(db, "filamentdb", IDENTITY_FDB_FIL_ID)
+    assert sm_base["_opt_uuid"] == "uuid-FDB" and sm_base["_opt_slug"] == "slug-fdb"
+    assert fdb_base["_opt_uuid"] == "uuid-FDB" and fdb_base["_opt_slug"] == "slug-fdb"
+
+    assert conflict.resolved_at is not None
+    assert conflict.resolution == "filamentdb"
+    assert json.loads(conflict.resolved_value) == "uuid-FDB"
+
+
+@pytest.mark.asyncio
+async def test_identity_apply_resolve_to_empty_removes_both_sides():
+    """resolve=manual with an empty value: the removal path — both SM
+    extras blanked, FDB's two settings keys removed via
+    ``remove_filament_settings_keys``, both baselines cleared, conflict
+    resolved with no value chosen."""
+    db = _make_db()
+    conflict = _identity_conflict("uuid-SM", "uuid-FDB")
+    db.add(conflict)
+    db.commit()
+
+    spoolman = _fake_spoolman(filaments=[_identity_sm_filament("uuid-SM", "slug-sm")])
+    fdb = _fake_filamentdb(detail=_identity_fdb_detail("uuid-FDB", "slug-fdb"))
+
+    value = await apply_cross_system_conflict(conflict, "manual", "", db, spoolman, fdb)
+
+    assert value is None
+    spoolman.update_filament.assert_awaited_with(
+        IDENTITY_SM_FIL_ID,
+        {"extra": {SLUG_FIELD: encode_extra_value(""), UUID_FIELD: encode_extra_value("")}},
+    )
+    fdb.remove_filament_settings_keys.assert_awaited_with(
+        IDENTITY_FDB_FIL_ID, ["openprinttag_slug", "openprinttag_uuid"],
+    )
+    fdb.merge_filament_settings.assert_not_called()
+
+    sm_base = _identity_baseline(db, "spoolman", str(IDENTITY_SM_FIL_ID))
+    fdb_base = _identity_baseline(db, "filamentdb", IDENTITY_FDB_FIL_ID)
+    assert sm_base["_opt_uuid"] == "" and sm_base["_opt_slug"] == ""
+    assert fdb_base["_opt_uuid"] == "" and fdb_base["_opt_slug"] == ""
+
+    assert conflict.resolved_at is not None
+    assert conflict.resolution == "manual"
+    assert json.loads(conflict.resolved_value) is None

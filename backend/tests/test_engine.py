@@ -3357,6 +3357,47 @@ async def test_lifecycle_both_flip_same_state_noop(db):
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_both_flip_same_state_auto_resolves_open_conflict(db):
+    """GitHub #91 (non-identity coverage): a stale open ``cross_system``
+    lifecycle conflict for this pair is auto-resolved once the pass observes
+    both sides converged to the SAME state in one cycle — proving the shared
+    convergence helper, not just the identity pass, closes stale rows."""
+    sm = _sm_spool_arch(1, 800.0, archived=True)
+    fdb = _fdb_filament_ret("fil-1", "spool-1", 1000.0, retired=True)
+    _add_spool_mapping(db, 1, "fil-1", "spool-1")
+    _store_snapshot(db, "spoolman", "spool", "1", {"remaining_weight": 800.0, "archived": False})
+    _store_snapshot(db, "filamentdb", "spool", "spool-1", {"totalWeight": 1000.0, "retired": False})
+    _seed_weight_config(db, direction="two_way", policy="manual")
+    _seed_archive_config(db, direction="two_way", policy="manual")
+
+    stale = Conflict(
+        entity_type="spool", spoolman_id=1, filamentdb_filament_id="fil-1",
+        filamentdb_spool_id="spool-1", field_name="lifecycle",
+        spoolman_value=json.dumps(False), filamentdb_value=json.dumps(True),
+        conflict_type="cross_system",
+    )
+    db.add(stale)
+    db.commit()
+    stale_id = stale.id
+
+    spoolman = _fake_spoolman(spools=[sm])
+    fdb_client = _fake_filamentdb(filaments=[fdb])
+
+    with patch("app.core.engine._settings") as ms:
+        _patch_settings(ms)
+        r = await run_sync_cycle(db, spoolman, fdb_client, dry_run=False, cycle_id="lc-both-autoresolve")
+
+    assert r.conflicts == 0
+    fdb_client.update_spool.assert_not_called()
+    spoolman.update_spool.assert_not_called()
+
+    resolved = db.query(Conflict).filter_by(id=stale_id).one()
+    assert resolved.resolved_at is not None
+    assert resolved.resolution == "auto_resolved_converged"
+    assert json.loads(resolved.resolved_value) is True
+
+
+@pytest.mark.asyncio
 async def test_lifecycle_divergence_queues_cross_system_conflict(db):
     """Genuine divergence (SM archives, FDB un-retires) with policy=manual → one
     cross_system lifecycle conflict queued; no writes; no re-queue next cycle."""

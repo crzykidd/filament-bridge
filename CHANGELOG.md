@@ -9,6 +9,34 @@ GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A converged `cross_system` conflict no longer lingers in the queue and blocks future ones.**
+  Every `cross_system` conflict producer (material-property scalars/temps, OpenTag extra fields,
+  lifecycle, location, and the OpenPrintTag identity pass) has a convergence branch — the point
+  where a pass observes both sides, having each changed, now agree — but none of them auto-resolved
+  an open conflict for that pair; it lingered describing a divergence that no longer existed and, via
+  `_has_open_conflict`'s dedup, silently suppressed any future conflict for the same pair. A new
+  shared helper (`_auto_resolve_converged_conflicts`) is now wired into every convergence point; it
+  only closes a row whose two current values the pass has just observed to be equal (resolution
+  `auto_resolved_converged`) — it never picks a winner for a real divergence. Fixes #91.
+- **A deliberate OpenPrintTag unlink no longer beats a simultaneous re-link on the other side.**
+  The clear-propagation shipped in #89 routed a clear based only on whether a side ever held a value,
+  never on whether the *surviving* side had also changed — so an FDB "Remove link" landing in the
+  same sync interval as an independent Spoolman re-link (or vice versa) silently blanked the new
+  value with no conflict. The two clear branches in `_sync_opentag_identity` now compare the
+  surviving side's current value against its own baseline: unchanged is still a genuine one-sided
+  clear (propagated as before); changed routes through the same conflict resolver as a genuine
+  divergence instead, queuing a `cross_system` conflict rather than picking a side. Fixes #93.
+- **An OpenPrintTag identity conflict can now be resolved from the Conflicts UI.** `POST
+  /api/conflicts/{id}/resolve` (and bulk-resolve) previously returned 422 for a `field_name ==
+  "OpenPrintTag identity"` conflict — the producer added by #81 had no matching apply path. A new
+  `_apply_opentag_identity` handler resolves the chosen uuid, recovers the accompanying slug from a
+  live fetch of both sides so the pair stays consistent, writes both systems (Spoolman extras / the
+  scoped `merge_filament_settings()` or `remove_filament_settings_keys()` exception), and refreshes
+  both snapshot baselines. This unblocks #91 and #93, both of which end in a queued identity conflict
+  a human previously had no way to action. Fixes #94.
+
 ## [0.6.22] — 2026-09-19
 
 ### Fixed
