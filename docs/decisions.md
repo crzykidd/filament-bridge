@@ -283,7 +283,7 @@ linked in Spoolman *after* the mapping already exists.
   **both** sides are currently non-empty and differ; it cannot see a divergence where one side is
   empty. Narrow — it needs two opposing user actions on the same filament within one interval — and
   the blanked value is recoverable by re-linking, so it was accepted rather than fixed alongside
-  #89.
+  #89 — **tracked as GitHub #93**.
 
   **If it ever needs fixing:** compare the surviving side against its own baseline in the two clear
   branches and route "cleared here AND changed there" through `resolve_sync_action` instead of

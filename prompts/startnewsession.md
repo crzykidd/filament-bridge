@@ -201,6 +201,15 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   `cross_system` producers** (weight, location, material props) for a divergence-vanishes-by-itself
   path, which decides whether the fix belongs in the identity pass or in a shared convergence check.
   **Only ever close conflicts whose two values became equal — never auto-resolve a real divergence.**
+- **#93** — *the other #89 fallout.* The clear branches key only on "did this side ever hold a
+  value" + "is the other side non-empty" — they never compare the surviving side against its own
+  baseline, so an FDB unlink **wins over a simultaneous Spoolman re-link**, blanking the new value
+  with no conflict (the divergence path only sees both-sides-non-empty). Narrow (two opposing
+  actions on one filament inside one interval) and recoverable by re-linking. Fix = compare the
+  surviving side to its baseline and route "cleared here AND changed there" through
+  `resolve_sync_action`; the existing divergence test covers only the both-set case, so it needs its
+  own. **Worth doing with [[#91]]** — same pass, same conflict handling. Decisions.md 2026-09-18
+  entry (known-limitation bullet, corrected 2026-09-20).
 - **#85** — parent-exclusion guards key on `is_synthetic_parent`, not `is_master_fdb`; a real
   FDB-native parent mapped to Spoolman then promoted to a 1.70.0 template gets rejected color/spool
   writes. Fix = switch the guards at `engine.py:1071` (multicolor push) + `engine.py:2787`
