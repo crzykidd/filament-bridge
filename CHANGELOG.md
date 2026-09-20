@@ -9,6 +9,16 @@ GitHub release.
 
 ## [Unreleased]
 
+### Security
+
+- **Frontend dependency bumps for two published advisories.** `react-router-dom` 6.30.4 → 6.30.6
+  (GHSA-jjmj-jmhj-qwj2 / CVE-2026-53668 — open redirect leading to XSS, affects 6.30.2–6.30.4;
+  this is a runtime dependency that ships in the SPA) and `postcss` 8.5.15 → 8.5.28
+  (path traversal reading arbitrary `.map` files via a crafted `sourceMappingURL` — build-time
+  only, so not exposed by the deployed image, but the patch is free). Both were already within
+  the declared ranges; the `package.json` floors were raised alongside the lockfile so a fresh
+  install cannot resolve back below the fixes. No application-code change.
+
 ### Fixed
 
 - **A converged `cross_system` conflict no longer lingers in the queue and blocks future ones.**
