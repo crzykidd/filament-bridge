@@ -95,14 +95,32 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
 - `handoff-prompt-workflow`: scoped tasks live in `prompts/` (from `TEMPLATE.md`),
   completed → `prompts/done/`; log non-obvious decisions in `docs/decisions.md`.
 
-## ⏸️ PICK UP HERE (paused 2026-09-19, clean — v0.6.22 shipped)
+## ⏸️ PICK UP HERE (paused 2026-09-20 — v0.6.23 PREPPED, PR #97 OPEN, NOT yet merged/tagged)
 
-**Everything is released and synced — nothing in flight, nothing stranded.**
-- **v0.6.22 is live** (tag `v0.6.22`, GitHub release published, prod image build **succeeded** —
-  `:latest` / `:0.6.22` / `:0`). PR #92 (`dev → main`) merged; `main` == `origin/main`; `dev` ==
-  `origin/dev`; clean tree; **nothing unpushed**. On return you're on `dev`. (Reminder: main
-  accumulates the PR merge commits, so `dev..main` shows a handful of commits — that's expected
-  divergence, content is identical.)
+**One thing in flight: the v0.6.23 release PR. Finish that before starting new work.**
+- **v0.6.23 is prepped but NOT released.** `chore(release): prepare v0.6.23` is committed and
+  pushed; **PR #97 (`dev → main`) is open** with the `[0.6.23]` changelog section as its body and
+  `Fixes #91` / `Fixes #93` / `Fixes #94` closing keywords. Tree is clean, `dev` == `origin/dev`,
+  nothing unpushed. **Remaining steps (human + command):** review PR #97 → wait for CI green →
+  merge → wait for the push-to-`main` build to publish `:latest` → run **`/release-cut 0.6.23`**
+  to tag + publish the GitHub release (which triggers the production image build). Do NOT re-run
+  `/release-prep`. (Reminder: main accumulates the PR merge commits, so `dev..main` shows a
+  handful of commits — expected divergence, content is identical.)
+- **v0.6.23 contents** — **#91** a converged `cross_system` conflict now auto-resolves
+  (`auto_resolved_converged`) via a **shared** `_auto_resolve_converged_conflicts` helper wired
+  into all five producers (material scalars, material temps, OpenTag extra fields, lifecycle,
+  location, identity) — the #91 audit found the hole in every one of them, not just identity, so
+  the fix is shared rather than identity-local; **#93** the two clear branches now compare the
+  **surviving** side to its own baseline and route "cleared here AND changed there" through
+  `_resolve_divergence` with `refresh_baselines=False` (load-bearing — refreshing either side
+  would make the next cycle read the pair as a fill or a plain clear and undo the conflict); a
+  `PUSH_*` whose winning side is EMPTY routes to the matching `_clear_*` helper (found in review —
+  `_push_*` builds its payload from the winner and would otherwise no-op silently forever under a
+  non-manual policy); **#94** (filed from this session) `_apply_opentag_identity` — identity
+  conflicts returned **422** with no apply path since #81, so both fixes above would have queued a
+  conflict no human could action. 14 new tests, suite 1508 → 1522. Decisions.md 2026-09-20 entry.
+  Also in the release: **`react-router-dom` 6.30.4 → 6.30.6** (GHSA-jjmj-jmhj-qwj2 open redirect →
+  XSS, ships in the SPA) and **`postcss` 8.5.15 → 8.5.28**, from a full-stack dependency audit.
 - **v0.6.22** shipped **#89** + **#90** (both closed), the two findings from the 2026-09-18 compat
   review — see that bullet below for the analysis. **#89:** `_sync_opentag_identity` is no longer
   stateless — a per-side `_opt_uuid`/`_opt_slug` baseline lives in the existing **filament-level**
@@ -152,7 +170,7 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   direction-gating all pass; `zzz-*` test records cleaned up). 7 unit tests in
   `test_engine_opentag_identity.py`. Decisions.md 2026-07-27 entry.
 - **Upstream compat reviewed 2026-09-18 — BOTH upstreams; both findings (#89, #90) SHIPPED in
-  v0.6.22; follow-up #91 open.** FDB
+  v0.6.22; its follow-ups #91 / #93 / #94 are in v0.6.23 (PR #97).** FDB
   latest **1.82.0**, Spoolman latest **0.26.1** (Spoolman had never had a dedicated review; the
   prior reference was 0.23.1). Full detail in decisions.md 2026-09-18.
   - **#89** — FDB **1.77.0** (`#1150`) added *Change link* / *Remove link* to the OpenPrintTag
@@ -189,27 +207,13 @@ documented REST APIs + Spoolman extra fields. Conflicts are never auto-resolved.
   compat; CI ruff pinned to 0.15.17).
 
 **Open / next work (ALWAYS ask the user which to take before starting):**
-- **#91** — *fallout from #89, found reviewing it.* Now that the engine can converge an OpenTag
-  identity divergence **by itself** (a clear propagates, leaving both sides empty), the
-  `cross_system` conflict queued for that pair is never auto-resolved — it lingers describing a
-  divergence that no longer exists, **and** `_has_open_conflict` then suppresses any future identity
-  conflict for that pair until a human clears it. The stale-conflict cleanup (`engine.py:3129`) is
-  scoped to `entity_type="spool"` / `new_spool` (+ #83's `new_filament`); the engine's only other
-  auto-resolutions are `auto_stale_purge` and `auto_resolved_reappeared`. Same *class* as #83. Fix =
-  auto-resolve the identity conflict when the pass observes both sides converged
-  (`auto_resolved_converged` + a sync-log row, dry-run aware) — and first **audit the other
-  `cross_system` producers** (weight, location, material props) for a divergence-vanishes-by-itself
-  path, which decides whether the fix belongs in the identity pass or in a shared convergence check.
-  **Only ever close conflicts whose two values became equal — never auto-resolve a real divergence.**
-- **#93** — *the other #89 fallout.* The clear branches key only on "did this side ever hold a
-  value" + "is the other side non-empty" — they never compare the surviving side against its own
-  baseline, so an FDB unlink **wins over a simultaneous Spoolman re-link**, blanking the new value
-  with no conflict (the divergence path only sees both-sides-non-empty). Narrow (two opposing
-  actions on one filament inside one interval) and recoverable by re-linking. Fix = compare the
-  surviving side to its baseline and route "cleared here AND changed there" through
-  `resolve_sync_action`; the existing divergence test covers only the both-set case, so it needs its
-  own. **Worth doing with [[#91]]** — same pass, same conflict handling. Decisions.md 2026-09-18
-  entry (known-limitation bullet, corrected 2026-09-20).
+- **#95** + **#96** — *dependency hygiene, filed 2026-09-20 from the audit; worth doing together,
+  both restructure `requirements.txt`.* **#95:** the backend has **no lockfile** — every dep is a
+  `>=floor,<ceiling` range and CI, the Docker build and local dev each resolve independently, so
+  the same commit can install different versions in each; fix = `pip-compile`/`uv pip compile` from
+  a `requirements.in`, install the compiled file in CI + Dockerfile. **#96:** `requirements.txt`
+  mixes test deps into the runtime install, so **the production image ships pytest**; fix = split
+  `requirements-dev.txt` (image hygiene, not a vulnerability). Neither is urgent.
 - **#85** — parent-exclusion guards key on `is_synthetic_parent`, not `is_master_fdb`; a real
   FDB-native parent mapped to Spoolman then promoted to a 1.70.0 template gets rejected color/spool
   writes. Fix = switch the guards at `engine.py:1071` (multicolor push) + `engine.py:2787`
@@ -251,9 +255,13 @@ Spoolman was broken in stacked layers, fixed one per release:
 
 ## Current state (update as it moves)
 
-- Latest release: **v0.6.22** (2026-09-19) — #89 a deliberate OpenTag unlink now propagates instead
-  of being refilled next cycle (the pass is baselined), + #90 FDB location names are matched and
-  created trimmed, so an untrimmed Spoolman location no longer errors every cycle.
+- **In flight: v0.6.23** (prepped 2026-09-20, **PR #97 open, not merged, not tagged**) — #91 shared
+  converged-conflict auto-resolve + #93 clear-plus-relink race + #94 the missing identity apply
+  path, plus the `react-router-dom` / `postcss` security bumps. See PICK UP HERE for the remaining
+  merge → `/release-cut 0.6.23` steps.
+- Latest *released*: **v0.6.22** (2026-09-19) — #89 a deliberate OpenTag unlink now propagates
+  instead of being refilled next cycle (the pass is baselined), + #90 FDB location names are matched
+  and created trimmed, so an untrimmed Spoolman location no longer errors every cycle.
   Prior: v0.6.21 (2026-09-18) — #87 FDB→SM new-spool detection keys on the FDB spool
   GUID, not the user-set `label`, so a hand-labeled spool is no longer skipped; the SM-ID writeback
   only fills a blank `label`.
@@ -271,8 +279,9 @@ Spoolman was broken in stacked layers, fixed one per release:
   crash/stale-mapping GC + FDB 1.67.0 bump), v0.6.14 (#67 spool-create 400), v0.6.13 (#64
   preview-writes), v0.6.12 (#61 diameter-422 + #62 null-scalar-PATCH). Earlier: v0.6.11 (repo
   audit — see below), v0.6.10 (Synced Records Unlink #40 *partial*; net/gross labels #55).
-- Open issues (see `docs/backlog.md`): **#91** stale converged OpenTag identity conflict
-  (follow-up to #89); **#85** template write-guards; **#86** settings-bag cap; **#73** *optional* — background the blocking "Sync now"
+- Open issues (see `docs/backlog.md`): **#95** backend lockfile + **#96** test deps in the runtime
+  image (both filed 2026-09-20 from the dependency audit); **#85** template write-guards; **#86**
+  settings-bag cap; **#73** *optional* — background the blocking "Sync now"
   only if it's timing out; **#40** RELINK in Synced Records (Unlink shipped v0.6.10; relink needs
   a `filament-suggestions-by-mapping` endpoint + ranked picker); **#47** read-only API token
   (design call); **#24** Discord webhooks (FR-20); **#25**
