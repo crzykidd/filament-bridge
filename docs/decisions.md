@@ -261,10 +261,35 @@ linked in Spoolman *after* the mapping already exists.
   diverging side — resurrecting exactly the bug this fix closes. Recording each side's own current
   value regardless of outcome keeps per-side history accurate; the existing `_has_open_conflict`
   dedup is unaffected since it doesn't consult the baseline.
-- **A clear plus an independent change on the other side is a genuine divergence, not a
-  clear-to-propagate.** Only routed as a "clear" when the *other* side is unchanged from its own
-  baseline; two sides moving in different directions at once still goes through
-  `resolve_sync_action` and can queue a conflict, same as before.
+- **A clear plus an independent change on the other side — KNOWN LIMITATION, corrected
+  2026-09-20.** An earlier revision of this entry claimed a clear is "only routed as a clear when
+  the *other* side is unchanged from its own baseline". **That is not what the code does**, and the
+  claim was wrong when written — it is corrected here rather than left to mislead a future reader.
+  The clear branches key solely on `fdb_had`/`sm_had` (did this side ever hold a value) and on the
+  other side being non-empty; they never compare the surviving side's current value against its own
+  baseline:
+
+  ```python
+  if sm_has and not fdb_has:
+      if fdb_had:                      # FDB cleared -> propagate
+          if allow_fdb_to_sm:
+              await _clear_sm_side(...)   # blanks SM regardless of whether SM also changed
+          continue
+  ```
+
+  **Consequence:** if FDB is unlinked *and* Spoolman is linked to a new material inside the same
+  sync interval, the clear wins and Spoolman's newly-set identity is blanked without a conflict.
+  The genuine-divergence path (`resolve_sync_action` -> queued conflict) only covers the case where
+  **both** sides are currently non-empty and differ; it cannot see a divergence where one side is
+  empty. Narrow — it needs two opposing user actions on the same filament within one interval — and
+  the blanked value is recoverable by re-linking, so it was accepted rather than fixed alongside
+  #89.
+
+  **If it ever needs fixing:** compare the surviving side against its own baseline in the two clear
+  branches and route "cleared here AND changed there" through `resolve_sync_action` instead of
+  propagating. That is a behavior change with its own tests, not a comment fix — the existing
+  `test_identity_divergence_after_baseline_still_conflicts_not_fills` covers only the both-set case
+  and would not catch a regression here.
 - **No alembic migration.** `Snapshot.data` is a JSON blob; `_opt_uuid`/`_opt_slug` are just two
   more merged keys, same mechanism as the multicolor pass's `_mc_sig` and the cost pass's `_cost`.
 ## 2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90
