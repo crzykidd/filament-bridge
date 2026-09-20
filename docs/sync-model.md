@@ -176,6 +176,28 @@ Every cycle, before detection runs, the engine auto-resolves (`resolved_not_impo
   self-heals on restock (a fresh active spool re-queues the conflict next cycle). See
   decisions.md 2026-07-31 (#83).
 
+### Stale cross_system conflict cleanup (#91)
+
+Every `cross_system` conflict producer — material-property scalars/temps, OpenTag extra
+fields, lifecycle, location, and the OpenPrintTag identity pass — has a convergence branch:
+the point where a pass observes that both sides, having each changed since the last
+snapshot, landed on the SAME current value (or, for the identity pass, both landed on
+*empty*). Historically this branch only refreshed baselines and moved on; if an OPEN
+`cross_system` conflict existed for that same entity+field, it was left describing a
+divergence that no longer existed — lingering in the queue with nothing left for a human to
+decide, and (via `_has_open_conflict`'s dedup) silently suppressing any *future* conflict for
+that same pair.
+
+`_auto_resolve_converged_conflicts` (`engine.py`, next to `_has_open_conflict`) closes that
+gap: every convergence branch calls it (guarded by `if not dry_run:`) right where it has just
+observed the two current values equal. It resolves any matching open `cross_system` Conflict
+row with `resolution="auto_resolved_converged"` and, when a value was involved, records it as
+`resolved_value` — never a *chosen* value, since the two sides were already equal. This is
+the same housekeeping class as `auto_stale_purge` / `auto_resolved_reappeared` /
+`resolved_not_imported` above, not a relaxation of "conflicts are never auto-resolved" (see
+`docs/prd.md`'s FR-13 clarification). See `docs/decisions.md`, 2026-09-20, for the audit that
+found this and the identity-pass specifics (#91/#93/#94).
+
 ### Anti-ping-pong after auto-create
 
 After any auto-create, the engine refreshes **both** sides' snapshots to the agreed

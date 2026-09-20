@@ -6,6 +6,7 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 
 ### Sync engine & anti-ping-pong
 
+- [2026-09-20 — OpenPrintTag identity conflict follow-ups: shared convergence auto-resolve, clear-plus-relink race, missing apply path](#2026-09-20--openprinttag-identity-conflict-follow-ups-shared-convergence-auto-resolve-clear-plus-relink-race-missing-apply-path-github-91--93--94) — #91
 - [2026-09-18 — OpenTag identity clear now propagates instead of being silently refilled](#2026-09-18--opentag-identity-clear-now-propagates-instead-of-being-silently-refilled-github-89) — #89
 - [2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90](#2026-09-18--fdb-17601820--spoolman-02400261-compat-review-two-findings-filed-as-89--90)
 - [2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`](#2026-08-08--fdbsm-new-spool-detection-keys-on-the-guid-not-the-user-set-label-github-87) — #87
@@ -207,6 +208,146 @@ _New entries: add a line to the matching area below, or re-run `scripts/gen-deci
 <!-- decisions-topic-index-end -->
 
 
+## 2026-09-20 — OpenPrintTag identity conflict follow-ups: shared convergence auto-resolve, clear-plus-relink race, missing apply path, GitHub #91 / #93 / #94
+
+**Context.** Three related gaps in the OpenPrintTag identity conflict path, found while
+reviewing the #89 clear-propagation implementation (2026-09-18) and shipped together since
+all three touch the same conflict machinery.
+
+### #91 — a converged `cross_system` conflict is never auto-resolved, and it's not identity-specific
+
+**The audit.** With #89 shipped, the engine can converge an identity divergence *by itself*
+(a deliberate unlink propagating to the other side leaves both empty), but the open
+`cross_system` conflict queued for that pair was never auto-resolved — it lingered in the
+queue describing a divergence that no longer existed, and (via `_has_open_conflict`'s dedup)
+silently blocked any *future* identity conflict for that pair. The question worth checking
+before writing an identity-only fix: is this identity-specific, or a hole in every
+`cross_system` producer? Auditing every convergence branch in `engine.py` found the same
+shape everywhere — a branch that refreshes baselines and `continue`s without touching an open
+conflict for that entity+field:
+
+| Pass | Convergence branch |
+|---|---|
+| Material-prop scalars/temps (`_sync_material_props`, `_sync_material_scalars`) | `if sm_changed and fdb_changed and sm_now == fdb_now:` → `_store(...)`, `continue` |
+| OpenTag extra fields | same shape |
+| Lifecycle | `both_changed_converged` → conflict block skipped, snapshots refreshed |
+| Location | `location_both_converged` (added by #90) → same |
+| OpenTag identity | both-empty / both-set-equal branches → `continue` |
+
+Identity was only special in that the **engine itself** can now converge it (via #89's clear
+propagation), which is what made the stale row reachable without any user action at all. The
+other passes are reachable too, just by a user converging both sides upstream by hand instead.
+
+**Decision — a shared helper, wired into every convergence point, not an identity-pass
+special case.** Added `_auto_resolve_converged_conflicts(db, cycle_id, entity_type,
+field_name, *, spoolman_id=None, fdb_filament_id=None, fdb_spool_id=None,
+converged_value=None)` next to `_has_open_conflict` in `engine.py` (mirrors its optional-id
+filter shape exactly). For each open `cross_system` Conflict row matching the given
+entity_type/field_name/ids, it sets `resolved_at`, `resolution="auto_resolved_converged"`, and
+`resolved_value` (only when `converged_value is not None` — a converged-to-empty identity
+legitimately has no value), and logs one `_log(...)` row per resolved conflict (mirrors the
+`auto_resolved_reappeared` log at engine.py:~3423 in tone). Callers guard the call with
+`if not dry_run:`; the helper itself never checks dry-run, matching every other engine
+helper's convention.
+
+Wired into all five convergence points named in the audit table above, plus (for identity)
+the success path of each of `_push_sm_to_fdb`, `_push_fdb_to_sm`, `_clear_sm_side`,
+`_clear_fdb_side` — right after `_store_baseline`, so a stale conflict for that pair closes
+in the SAME cycle the pass converges it, rather than lagging one cycle. This is the same
+housekeeping class as `auto_stale_purge` / `auto_resolved_reappeared` /
+`resolved_not_imported` — it never picks a winner for a real divergence, only closes a row
+whose two current values the pass has itself just observed to be equal. `docs/prd.md`'s FR-13
+clarification and `docs/sync-model.md` are updated to name it alongside the other two.
+
+### #93 — a clear must not beat a simultaneous re-link on the other side
+
+**The bug.** The two clear branches in `_sync_opentag_identity` keyed only on `fdb_had` /
+`sm_had` ("did this side ever hold a value") plus "is the other side currently non-empty".
+Neither consulted the **surviving** side's own baseline, so if FDB was unlinked *and*
+Spoolman was independently re-linked to a new material inside the same sync interval, the
+clear branch blanked Spoolman's brand-new identity with no conflict — silently discarding a
+user action. This was flagged as a known limitation when #89 shipped (see the 2026-09-18
+entry below, corrected same day) and tracked as #93 rather than fixed immediately.
+
+**Decision.** Capture the baseline VALUES, not just the had/didn't-have booleans
+(`sm_base`/`fdb_base` alongside `sm_had`/`fdb_had`). The both-set divergence resolution
+(`resolve_sync_action` → NOOP / QUEUE_CONFLICT / PUSH_*) is extracted into a shared nested
+`_resolve_divergence(m, sm_slug, sm_uuid, fdb_slug, fdb_uuid, label_name, *, reason,
+refresh_baselines)` helper. The existing both-set-and-differ path calls it with
+`refresh_baselines=True` (today's behavior, unchanged). Each one-sided clear branch now
+additionally checks whether the surviving side has ALSO moved off its own baseline
+(`(sm_uuid or "") != sm_base` / mirror for FDB) before treating the situation as a clear to
+propagate; if it has, the branch routes through `_resolve_divergence` with
+`refresh_baselines=False` instead of propagating, queuing a `cross_system` conflict (deduped,
+same as any other divergence) rather than picking a side.
+
+**`refresh_baselines=False` on this path is LOAD-BEARING.** Refreshing baselines to the
+*observed* values would make the cleared side's baseline empty → next cycle reads "never
+linked" → the pass would **fill** it, silently resolving the conflict it just queued.
+Refreshing only the surviving side would make that side's baseline match its current value →
+next cycle reads "surviving side unchanged" → the pass would **propagate the clear**,
+blanking the value — the exact bug #93 fixes. Leaving BOTH baselines untouched keeps the pair
+stably on the conflict path every cycle (deduped by `_has_open_conflict`, so nothing
+accumulates) until a human resolves it via #94's new apply path, which writes both sides and
+refreshes both baselines itself.
+
+**One intentional behavior change, called out rather than left implicit.** Routing the race
+case through `resolve_sync_action` replaces the explicit `allow_fdb_to_sm` / `allow_sm_to_fdb`
+direction gate that governed the plain one-sided clear. Under a one-way direction (e.g.
+`direction=spoolman_to_filamentdb`), FDB cleared + SM re-linked now PUSHES SM's new identity
+to FDB instead of doing nothing, because the resolver returns the push in the configured
+source direction regardless of which side happened to clear. This is consistent with the
+direction setting and is arguably an improvement (a one-way pass should still converge a
+genuine divergence in its configured direction), but it is a behavior change on this
+sub-case specifically — the plain one-sided-clear case (surviving side unchanged) keeps its
+existing `allow_*` gate and behavior exactly as before.
+
+**A PUSH whose winning side is EMPTY must clear, not push.** Caught in review of the first
+implementation of the above. `_resolve_divergence`'s `PUSH_*` legs delegate to `_push_fdb_to_sm`
+/ `_push_sm_to_fdb`, which build their payload from the winning side's values and return early
+on an empty one (`if not extra_payload: return`). In the race case the winning side is
+frequently the side that was just *unlinked*, so under any non-manual resolution
+(`policy=filamentdb_wins` / `spoolman_wins`, or a one-way direction) the pass would have
+silently done nothing at all — no write, no conflict, no log row — and repeated that no-op
+every cycle, leaving the pair permanently stuck. The winner's decision in that state is "no
+link", so each `PUSH_*` leg now routes an empty winner to the matching `_clear_*` helper
+instead. Only reachable from the race branches: the both-set-and-differ path has two non-empty
+sides by construction. Two regression tests
+(`test_identity_clear_relink_race_policy_winner_empty_still_applies` and its mirror) cover both
+legs, since the other race tests all run the default `policy=manual`, which takes the
+`QUEUE_CONFLICT` path and would not have caught it.
+
+### #94 — the missing identity conflict apply path
+
+**The bug.** `apply_cross_system_conflict` (`core/conflict_apply.py`) dispatches on
+`conflict.field_name` and had no branch for `"OpenPrintTag identity"` — added by #81
+(v0.6.19) with no matching consumer — so resolving it from the UI fell through to
+`UnsupportedConflictField` → 422, for both the single-resolve and bulk-resolve paths. This
+compounded #91 and blocked #93: both end in "queue a conflict for a human," and the human had
+no way to action it.
+
+**Decision.** Added `OPENTAG_IDENTITY_FIELD = "OpenPrintTag identity"` to `core/fields.py`
+(the string value is unchanged — existing conflict rows carry it — only the literal moved to
+one shared constant used by both `engine.py` and `conflict_apply.py`). Added
+`_apply_opentag_identity(...)` modelled on `_apply_opentag_field`: resolves the chosen uuid
+via `_resolve_value`, then — since the conflict row stores only the uuid on each side —
+fetches BOTH sides LIVE (`spoolman.get_filament` / `filamentdb.get_filament`) to recover the
+slug that accompanies the chosen uuid, so the written pair stays consistent. A value (manual
+or otherwise) that matches neither side's live uuid writes the uuid alone rather than
+inventing a slug. Writes both sides idempotently — Spoolman extras via `update_filament`
+(blanked with `encode_extra_value("")` when the chosen value is empty), Filament DB via the
+APPROVED SCOPED EXCEPTION `merge_filament_settings()` (or `remove_filament_settings_keys()`
+for the removal path) — then refreshes BOTH `_opt_uuid`/`_opt_slug` snapshot baselines to the
+converged value via `_merge_snapshot`, same shape as the engine's own `_store_baseline`, so
+the next cycle sees agreement and a later one-sided clear still reads as "had a value."
+Upstream write failures propagate (the endpoint maps them to 502, conflict stays open).
+
+**Net effect of the three together.** A stale identity conflict from a divergence that has
+since disappeared closes itself (#91); a clear-plus-relink race is queued as a conflict
+instead of silently discarding the re-link (#93); and that conflict — like every other
+identity conflict — can now actually be resolved from the UI (#94).
+
+
 ## 2026-09-18 — OpenTag identity clear now propagates instead of being silently refilled, GitHub #89
 
 **Context.** Filament DB 1.77.0 added **Change link…** / **Remove link** to the OpenPrintTag
@@ -261,10 +402,38 @@ linked in Spoolman *after* the mapping already exists.
   diverging side — resurrecting exactly the bug this fix closes. Recording each side's own current
   value regardless of outcome keeps per-side history accurate; the existing `_has_open_conflict`
   dedup is unaffected since it doesn't consult the baseline.
-- **A clear plus an independent change on the other side is a genuine divergence, not a
-  clear-to-propagate.** Only routed as a "clear" when the *other* side is unchanged from its own
-  baseline; two sides moving in different directions at once still goes through
-  `resolve_sync_action` and can queue a conflict, same as before.
+- **A clear plus an independent change on the other side — KNOWN LIMITATION, corrected
+  2026-09-20, then FIXED the same day (GitHub #93 — see the 2026-09-20 entry above; the
+  "if it ever needs fixing" plan at the end of this bullet is what was implemented).** The
+  description below is of the code as #89 shipped it, kept for the record.
+  An earlier revision of this entry claimed a clear is "only routed as a clear when
+  the *other* side is unchanged from its own baseline". **That is not what the code does**, and the
+  claim was wrong when written — it is corrected here rather than left to mislead a future reader.
+  The clear branches key solely on `fdb_had`/`sm_had` (did this side ever hold a value) and on the
+  other side being non-empty; they never compare the surviving side's current value against its own
+  baseline:
+
+  ```python
+  if sm_has and not fdb_has:
+      if fdb_had:                      # FDB cleared -> propagate
+          if allow_fdb_to_sm:
+              await _clear_sm_side(...)   # blanks SM regardless of whether SM also changed
+          continue
+  ```
+
+  **Consequence:** if FDB is unlinked *and* Spoolman is linked to a new material inside the same
+  sync interval, the clear wins and Spoolman's newly-set identity is blanked without a conflict.
+  The genuine-divergence path (`resolve_sync_action` -> queued conflict) only covers the case where
+  **both** sides are currently non-empty and differ; it cannot see a divergence where one side is
+  empty. Narrow — it needs two opposing user actions on the same filament within one interval — and
+  the blanked value is recoverable by re-linking, so it was accepted rather than fixed alongside
+  #89 — **tracked as GitHub #93**.
+
+  **If it ever needs fixing:** compare the surviving side against its own baseline in the two clear
+  branches and route "cleared here AND changed there" through `resolve_sync_action` instead of
+  propagating. That is a behavior change with its own tests, not a comment fix — the existing
+  `test_identity_divergence_after_baseline_still_conflicts_not_fills` covers only the both-set case
+  and would not catch a regression here.
 - **No alembic migration.** `Snapshot.data` is a JSON blob; `_opt_uuid`/`_opt_slug` are just two
   more merged keys, same mechanism as the multicolor pass's `_mc_sig` and the cost pass's `_cost`.
 ## 2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90

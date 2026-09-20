@@ -39,6 +39,7 @@ MAINTENANCE_NOTE = (
 CATEGORIES = [
     ("Sync engine & anti-ping-pong", [
         # Core engine mechanics, polling loop, snapshot management, scheduler
+        "2026-09-20 — OpenPrintTag identity conflict follow-ups: shared convergence auto-resolve, clear-plus-relink race, missing apply path, GitHub #91 / #93 / #94",
         "2026-09-18 — OpenTag identity clear now propagates instead of being silently refilled, GitHub #89",
         "2026-09-18 — FDB 1.76.0–1.82.0 + Spoolman 0.24.0–0.26.1 compat review; two findings filed as #89 / #90",
         "2026-08-08 — FDB→SM new-spool detection keys on the GUID, not the user-set `label`, GitHub #87",

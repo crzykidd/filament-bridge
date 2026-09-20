@@ -58,6 +58,13 @@ class OpenTagExtraField:
     fdb_path: str | None = None  # dotted FDB field path (None = Spoolman-only, no FDB sync)
 
 
+#: The ``Conflict.field_name`` value used by the OpenPrintTag identity pass
+#: (``_sync_opentag_identity`` in engine.py) and its conflict-apply consumer
+#: (``_apply_opentag_identity`` in conflict_apply.py). Shared so both stay in
+#: lockstep — do NOT change the string value, existing conflict rows carry it.
+OPENTAG_IDENTITY_FIELD = "OpenPrintTag identity"
+
+
 #: The fifteen OpenPrintTag material-setting extra fields.  Order is stable.
 #: Entries with fdb_path are synced bidirectionally with Filament DB by
 #: _sync_opentag_material_fields.  Entries without fdb_path are Spoolman-only:

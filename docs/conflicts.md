@@ -8,7 +8,7 @@ answer differs by type.
 
 | Badge | When it fires |
 |---|---|
-| **Weight / Property / Multicolor / Lifecycle / Location** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). Lifecycle fires on opposite archive/retire states; Location fires when both sides move to different location names. |
+| **Weight / Property / Multicolor / Lifecycle / Location / OpenPrintTag identity** (cross-system) | The same field changed on *both* sides between sync cycles while the category is `two_way` with `manual` policy (or `newest_wins` couldn't determine a winner). Lifecycle fires on opposite archive/retire states; Location fires when both sides move to different location names; OpenPrintTag identity fires when both sides hold a different `openprinttag_uuid` — including the clear-plus-relink race where one side was unlinked while the other was independently re-linked in the same interval (GitHub #93). |
 | **Master divergence** | A Spoolman value would override a Filament DB variant's *inherited* setting (the variant currently gets the value from its parent). Writing it silently would detach the field from the parent, so the bridge asks first. |
 | **Deleted record** | A previously-synced spool was deleted on one side, and the surviving side is still linked to it. The bridge protects the survivor and asks what you want. |
 | **New filament** | An unmapped filament appeared on one side and `new_filament_policy` is `manual_review`. Actionable — use the "Add" button to create it on the other side and map it. Once a filament is mapped, any held spools belonging to it are released for normal new-spool handling. |
@@ -66,6 +66,14 @@ Each field family reuses its sync pass's exact write + conversion + snapshot key
   sides: Spoolman `location` (the string) and Filament DB `locationId` (found-or-created from
   the name via `ensure_fdb_location`). Fires only when both sides change to *different* names;
   *Manual* lets you type a name (or clear it). Both snapshot location names refresh on resolve.
+- **OpenPrintTag identity** (`field_name="OpenPrintTag identity"`) — newly resolvable as of
+  GitHub #94 (previously returned a 422 with no apply path — #81 added the conflict producer
+  without a matching consumer). The conflict row stores only the `openprinttag_uuid`; resolving
+  fetches BOTH sides live to recover the **slug that accompanies the chosen uuid** so the pair
+  stays consistent, then writes both sides: Spoolman extras via `update_filament`, Filament DB
+  via the scoped `merge_filament_settings()` exception (or `remove_filament_settings_keys()` when
+  the chosen value is empty — the removal path). *Manual* with an empty value clears both sides.
+  Both `_opt_uuid`/`_opt_slug` snapshot baselines refresh to the converged value.
 
 If an upstream write fails, the resolve returns an error and **leaves the conflict open**
 (no partial snapshot advance). A conflict whose field has no known apply path is rejected
@@ -105,6 +113,15 @@ Note the bridge only queues a deletion conflict when there is a live, still-link
 to protect. If both sides are gone, or the survivor's cross-reference was already cleared,
 the stale link is purged automatically (logged in the Sync Log as `auto_stale_purge`) —
 no conflict appears.
+
+**A `cross_system` conflict can also close itself, with no action needed.** If the sync pass
+later observes both sides' current values are equal (or, for OpenPrintTag identity, both now
+empty) — for example a divergence that a user resolved directly in one of the upstream UIs,
+or a deliberate-unlink that propagated and converged both sides to empty — the open conflict
+is auto-resolved as `auto_resolved_converged` (Sync Log) and disappears from the queue with no
+value chosen. This is the same housekeeping class as `auto_stale_purge`: it never picks a
+winner for a divergence that still exists, only closes a row whose divergence has already
+gone away (GitHub #91). See `docs/decisions.md`, 2026-09-20.
 
 ### New filament — "Add" or Dismiss
 
