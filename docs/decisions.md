@@ -403,7 +403,10 @@ linked in Spoolman *after* the mapping already exists.
   value regardless of outcome keeps per-side history accurate; the existing `_has_open_conflict`
   dedup is unaffected since it doesn't consult the baseline.
 - **A clear plus an independent change on the other side — KNOWN LIMITATION, corrected
-  2026-09-20.** An earlier revision of this entry claimed a clear is "only routed as a clear when
+  2026-09-20, then FIXED the same day (GitHub #93 — see the 2026-09-20 entry above; the
+  "if it ever needs fixing" plan at the end of this bullet is what was implemented).** The
+  description below is of the code as #89 shipped it, kept for the record.
+  An earlier revision of this entry claimed a clear is "only routed as a clear when
   the *other* side is unchanged from its own baseline". **That is not what the code does**, and the
   claim was wrong when written — it is corrected here rather than left to mislead a future reader.
   The clear branches key solely on `fdb_had`/`sm_had` (did this side ever hold a value) and on the
